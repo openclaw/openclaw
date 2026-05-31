@@ -11,7 +11,7 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         "mistral",
         "moonshot",
         "openai",
-        "openai-codex",
+        "openai",
         "opencode",
         "opencode-go",
         "openrouter",
@@ -36,11 +36,16 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         autoPriority: { image: 30, audio: 40, video: 10 },
         nativeDocumentInputs: ["pdf"],
       },
-      minimax: { capabilities: ["image"], autoPriority: { image: 40 } },
+      minimax: {
+        capabilities: ["image"],
+        autoPriority: { image: 40 },
+        documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      },
       "minimax-portal": {
         capabilities: ["image"],
         defaultModels: { image: "MiniMax-VL-01" },
         autoPriority: { image: 50 },
+        documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
       },
       mistral: {
         capabilities: ["audio"],
@@ -53,11 +58,6 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         autoPriority: { video: 30 },
       },
       openai: {
-        capabilities: ["image", "audio"],
-        defaultModels: { image: "gpt-5.4-mini", audio: "gpt-4o-transcribe" },
-        autoPriority: { image: 10, audio: 10 },
-      },
-      "openai-codex": {
         capabilities: ["image", "audio"],
         defaultModels: { image: "gpt-5.5", audio: "gpt-4o-transcribe" },
         autoPriority: { image: 20, audio: 20 },
@@ -105,6 +105,7 @@ import {
   providerSupportsNativePdfDocument,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
+  resolveDocumentMediaModel,
 } from "./defaults.js";
 
 describe("resolveDefaultMediaModel", () => {
@@ -112,7 +113,7 @@ describe("resolveDefaultMediaModel", () => {
     expect(resolveDefaultMediaModel({ providerId: "mistral", capability: "audio" })).toBe(
       "voxtral-mini-latest",
     );
-    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "audio" })).toBe(
+    expect(resolveDefaultMediaModel({ providerId: "openai", capability: "audio" })).toBe(
       "gpt-4o-transcribe",
     );
     expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "audio" })).toBe(
@@ -124,9 +125,7 @@ describe("resolveDefaultMediaModel", () => {
     expect(resolveDefaultMediaModel({ providerId: "minimax-portal", capability: "image" })).toBe(
       "MiniMax-VL-01",
     );
-    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "image" })).toBe(
-      "gpt-5.5",
-    );
+    expect(resolveDefaultMediaModel({ providerId: "openai", capability: "image" })).toBe("gpt-5.5");
     expect(resolveDefaultMediaModel({ providerId: "moonshot", capability: "image" })).toBe(
       "kimi-k2.6",
     );
@@ -170,7 +169,6 @@ describe("resolveAutoMediaKeyProviders", () => {
   it("keeps the bundled audio fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
-      "openai-codex",
       "xai",
       "openrouter",
       "google",
@@ -180,9 +178,8 @@ describe("resolveAutoMediaKeyProviders", () => {
 
   it("keeps the bundled image fallback order", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
-      "openai",
       "anthropic",
-      "openai-codex",
+      "openai",
       "google",
       "minimax",
       "minimax-portal",
@@ -245,5 +242,31 @@ describe("providerSupportsNativePdfDocument", () => {
     expect(providerSupportsNativePdfDocument({ providerId: "openai", providerRegistry })).toBe(
       false,
     );
+  });
+});
+
+describe("resolveDocumentMediaModel", () => {
+  it("reads document model hints from provider metadata", () => {
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "minimax-portal-cn",
+        document: "pdf",
+        mode: "textExtraction",
+      }),
+    ).toBe("MiniMax-M2.7");
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "minimax",
+        document: "pdf",
+        mode: "image",
+      }),
+    ).toBe(false);
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "openai",
+        document: "pdf",
+        mode: "textExtraction",
+      }),
+    ).toBeUndefined();
   });
 });

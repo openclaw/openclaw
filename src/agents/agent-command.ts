@@ -1,3 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
@@ -11,6 +14,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
   clearAgentRunContext,
@@ -18,7 +22,13 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  resolveAgentDeliveryPlan,
+  resolveAgentOutboundTarget,
+} from "../infra/outbound/agent-delivery.js";
+import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
@@ -37,11 +47,20 @@ import {
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
+import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
+import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveMessageChannel } from "../utils/message-channel.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  resolveMessageChannel,
+} from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -51,10 +70,10 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
+  resolveAgentConfig,
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
-  resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
@@ -71,9 +90,11 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
+import { prepareInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
@@ -92,10 +113,8 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -113,10 +132,10 @@ type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
 type CliDepsRuntime = typeof import("../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
-type SkillsRuntime = typeof import("./skills.js");
-type SkillsFilterRuntime = typeof import("./skills/filter.js");
-type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
-type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
+type SkillsRuntime = {
+  getRemoteSkillEligibility: typeof getRemoteSkillEligibility;
+  resolveReusableWorkspaceSkillSnapshot: typeof resolveReusableWorkspaceSkillSnapshot;
+};
 
 const attemptExecutionRuntimeLoader = createLazyImportLoader<AttemptExecutionRuntime>(
   () => import("./command/attempt-execution.runtime.js"),
@@ -149,16 +168,16 @@ const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(() => import
 const execDefaultsRuntimeLoader = createLazyImportLoader<ExecDefaultsRuntime>(
   () => import("./exec-defaults.js"),
 );
-const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(() => import("./skills.js"));
-const skillsFilterRuntimeLoader = createLazyImportLoader<SkillsFilterRuntime>(
-  () => import("./skills/filter.js"),
-);
-const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStateRuntime>(
-  () => import("./skills/refresh-state.js"),
-);
-const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
-  () => import("../infra/skills-remote.js"),
-);
+const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(async () => {
+  const [remote, sessionSnapshot] = await Promise.all([
+    import("../skills/runtime/remote.js"),
+    import("../skills/runtime/session-snapshot.js"),
+  ]);
+  return {
+    getRemoteSkillEligibility: remote.getRemoteSkillEligibility,
+    resolveReusableWorkspaceSkillSnapshot: sessionSnapshot.resolveReusableWorkspaceSkillSnapshot,
+  };
+});
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
   return attemptExecutionRuntimeLoader.load();
@@ -206,18 +225,6 @@ function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {
 
 function loadSkillsRuntime(): Promise<SkillsRuntime> {
   return skillsRuntimeLoader.load();
-}
-
-function loadSkillsFilterRuntime(): Promise<SkillsFilterRuntime> {
-  return skillsFilterRuntimeLoader.load();
-}
-
-function loadSkillsRefreshStateRuntime(): Promise<SkillsRefreshStateRuntime> {
-  return skillsRefreshStateRuntimeLoader.load();
-}
-
-function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
-  return skillsRemoteRuntimeLoader.load();
 }
 
 async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
@@ -292,6 +299,115 @@ function clearPendingFinalDeliveryFields(entry: SessionEntry, updatedAt: number)
   };
 }
 
+async function resolveCurrentRunDeliveryContext(params: {
+  cfg: OpenClawConfig;
+  opts: AgentCommandOpts;
+  sessionEntry?: SessionEntry;
+}): Promise<DeliveryContext | undefined> {
+  const { cfg, opts, sessionEntry } = params;
+  if (opts.deliver !== true) {
+    return undefined;
+  }
+  // Restart recovery only needs durable route fields; final delivery resolves plugin-specific routes.
+  const deliveryPlan = resolveAgentDeliveryPlan({
+    sessionEntry,
+    requestedChannel: opts.replyChannel ?? opts.channel,
+    explicitTo: opts.replyTo ?? opts.to,
+    explicitThreadId: opts.threadId,
+    accountId: opts.replyAccountId ?? opts.accountId,
+    wantsDelivery: true,
+    turnSourceChannel: opts.runContext?.messageChannel ?? opts.messageChannel,
+    turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
+    turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
+    turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
+  });
+  const explicitChannelHint = normalizeOptionalString(opts.replyChannel ?? opts.channel);
+  const explicitThreadId =
+    opts.threadId != null && opts.threadId !== "" ? opts.threadId : undefined;
+  let effectivePlan = deliveryPlan;
+  if (deliveryPlan.resolvedChannel === INTERNAL_MESSAGE_CHANNEL && !explicitChannelHint) {
+    try {
+      const selection = await resolveMessageChannelSelection({ cfg });
+      effectivePlan = {
+        ...deliveryPlan,
+        resolvedChannel: selection.channel,
+        deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? "implicit",
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  if (!isDeliverableMessageChannel(effectivePlan.resolvedChannel)) {
+    return undefined;
+  }
+  const targetMode =
+    opts.deliveryTargetMode ??
+    effectivePlan.deliveryTargetMode ??
+    (opts.to ? "explicit" : "implicit");
+  const resolvedTo =
+    effectivePlan.resolvedTo ??
+    resolveAgentOutboundTarget({
+      cfg,
+      plan: effectivePlan,
+      targetMode,
+      validateExplicitTarget: false,
+    }).resolvedTo;
+  if (!resolvedTo) {
+    return undefined;
+  }
+  const threadId =
+    targetMode === "explicit"
+      ? (explicitThreadId ??
+        (effectivePlan.baseDelivery.threadIdSource === "explicit"
+          ? effectivePlan.resolvedThreadId
+          : undefined))
+      : effectivePlan.resolvedThreadId;
+  return normalizeDeliveryContext({
+    channel: effectivePlan.resolvedChannel,
+    to: resolvedTo,
+    accountId: effectivePlan.resolvedAccountId,
+    threadId,
+  });
+}
+
+function shouldPersistCurrentRunSessionCleanup(
+  current: SessionEntry | undefined,
+  sessionId: string,
+): boolean {
+  return (
+    current !== undefined && current.sessionId === sessionId && current.abortedLastRun !== true
+  );
+}
+
+function shouldPersistRestartRecoveryContextClaim(
+  current: SessionEntry | undefined,
+  sessionId: string,
+  runId: string,
+  allowCreate: boolean,
+): boolean {
+  if (!current) {
+    return allowCreate;
+  }
+  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
+    return false;
+  }
+  return (
+    current.restartRecoveryDeliveryRunId === undefined ||
+    current.restartRecoveryDeliveryRunId === runId
+  );
+}
+
+function shouldPersistRestartRecoveryCleanup(
+  current: SessionEntry | undefined,
+  sessionId: string,
+  runId: string,
+): boolean {
+  return (
+    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
+    current?.restartRecoveryDeliveryRunId === runId
+  );
+}
+
 function containsControlCharacters(value: string): boolean {
   for (const char of value) {
     const code = char.codePointAt(0);
@@ -318,6 +434,52 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
     throw new Error(`${label} override contains invalid control characters.`);
   }
   return trimmed;
+}
+
+function createAgentCommandSessionWorkingCopy(params: {
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+}): {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+} {
+  const result: {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  } = {};
+  if (params.sessionEntry) {
+    result.sessionEntry = { ...params.sessionEntry };
+  }
+  if (params.sessionStore || params.sessionKey) {
+    result.sessionStore = {};
+  }
+  if (params.sessionKey && result.sessionEntry && result.sessionStore) {
+    result.sessionStore[params.sessionKey] = result.sessionEntry;
+  }
+  return result;
+}
+
+function resolveExplicitAgentCommandSessionKey(params: {
+  rawExplicitSessionKey?: string;
+  agentIdOverride?: string;
+  shouldScopeDefaultAgentKey?: boolean;
+  cfg: OpenClawConfig;
+}): string | undefined {
+  if (
+    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
+    !params.agentIdOverride &&
+    !params.shouldScopeDefaultAgentKey
+  ) {
+    return params.rawExplicitSessionKey;
+  }
+  return scopeLegacySessionKeyToAgent({
+    agentId:
+      params.agentIdOverride ??
+      (params.shouldScopeDefaultAgentKey ? resolveDefaultAgentId(params.cfg) : undefined),
+    sessionKey: params.rawExplicitSessionKey,
+    mainKey: params.cfg.session?.mainKey,
+  });
 }
 
 async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
@@ -353,16 +515,17 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
       );
     }
   }
-  const shouldScopeDefaultAgentKey =
+  const shouldScopeDefaultAgentKey = Boolean(
     rawExplicitSessionKey &&
     !agentIdOverride &&
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
-    !isUnscopedSessionKeySentinel(rawExplicitSessionKey);
-  const explicitSessionKey = scopeLegacySessionKeyToAgent({
-    agentId:
-      agentIdOverride ?? (shouldScopeDefaultAgentKey ? resolveDefaultAgentId(cfg) : undefined),
-    sessionKey: rawExplicitSessionKey,
-    mainKey: cfg.session?.mainKey,
+    !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
+  );
+  const explicitSessionKey = resolveExplicitAgentCommandSessionKey({
+    rawExplicitSessionKey,
+    agentIdOverride,
+    shouldScopeDefaultAgentKey,
+    cfg,
   });
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
@@ -392,7 +555,11 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const subagentLane: string = AGENT_LANE_SUBAGENT;
   const isSubagentLane = laneRaw === subagentLane;
   const timeoutSecondsRaw =
-    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : isSubagentLane ? 0 : undefined;
+    opts.timeout !== undefined
+      ? (parseStrictNonNegativeInteger(opts.timeout) ?? Number.NaN)
+      : isSubagentLane
+        ? 0
+        : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -410,18 +577,16 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionId: opts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
+    clone: false,
   });
 
-  const {
-    sessionId,
+  const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
+    sessionResolution;
+  const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
     sessionKey,
-    sessionEntry: sessionEntryRaw,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-  } = sessionResolution;
+    sessionEntry: sessionResolution.sessionEntry,
+    sessionStore: sessionResolution.sessionStore,
+  });
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({
@@ -437,6 +602,8 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const cwd =
+    normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
@@ -514,6 +681,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd: cwd ? resolveUserPath(cwd) : undefined,
     agentDir,
     modelManifestContext,
     runId,
@@ -529,6 +697,8 @@ async function agentCommandInternal(
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
+  const suppressVisibleSessionEffects = opts.sessionEffects === "internal";
+  const preserveUserFacingSessionModelState = opts.preserveUserFacingSessionModelState === true;
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
@@ -551,13 +721,17 @@ async function agentCommandInternal(
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd,
     agentDir,
     runId,
     acpManager,
     acpResolution,
     modelManifestContext,
   } = prepared;
+  const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
+  let trackedRestartRecoveryDeliveryContext = false;
+  let currentRunDeliveryContext: DeliveryContext | undefined;
 
   try {
     if (opts.deliver === true) {
@@ -577,12 +751,60 @@ async function agentCommandInternal(
       throw acpResolution.error;
     }
 
+    if (
+      sessionStore &&
+      sessionKey &&
+      !suppressVisibleSessionEffects &&
+      !isSubagentSessionKey(sessionKey)
+    ) {
+      const now = Date.now();
+      const currentStoreEntry = sessionStore[sessionKey];
+      const allowCreateRestartRecoveryEntry =
+        currentStoreEntry === undefined && sessionEntry === undefined;
+      const entry = currentStoreEntry ??
+        sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
+      currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
+        cfg,
+        opts,
+        sessionEntry: entry,
+      });
+      const next: SessionEntry = {
+        ...entry,
+        sessionId,
+        updatedAt: now,
+        restartRecoveryDeliveryContext: currentRunDeliveryContext,
+        restartRecoveryDeliveryRunId: currentRunDeliveryContext ? runId : undefined,
+      };
+      const persisted = await persistSessionEntry({
+        sessionStore,
+        sessionKey,
+        storePath,
+        entry: next,
+        shouldPersist: (current) =>
+          shouldPersistRestartRecoveryContextClaim(
+            current,
+            sessionId,
+            runId,
+            allowCreateRestartRecoveryEntry,
+          ),
+      });
+      sessionEntry = persisted ?? sessionEntry;
+      trackedRestartRecoveryDeliveryContext =
+        Boolean(persisted?.restartRecoveryDeliveryContext) &&
+        persisted?.restartRecoveryDeliveryRunId === runId;
+    }
+
     if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
       const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
       const startedAt = Date.now();
-      registerAgentRunContext(runId, {
-        sessionKey,
-      });
+      registerAgentRunContext(
+        runId,
+        suppressVisibleSessionEffects
+          ? { isControlUiVisible: false }
+          : {
+              sessionKey,
+            },
+      );
       attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt });
 
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
@@ -608,10 +830,12 @@ async function agentCommandInternal(
           throw agentPolicyError;
         }
 
+        const acpImageAttachments = resolveInlineAgentImageAttachments(opts.images);
         await acpManager.runTurn({
           cfg,
           sessionKey,
           text: body,
+          attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
           mode: "prompt",
           requestId: runId,
           signal: opts.abortSignal,
@@ -676,21 +900,53 @@ async function agentCommandInternal(
       const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
       try {
-        const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
+        const [{ resolveAcpSessionCwd }, { resolveSessionTranscriptFile }] = await Promise.all([
+          loadAcpSessionIdentifiersRuntime(),
+          loadTranscriptResolveRuntime(),
+        ]);
+        const internalSource = suppressVisibleSessionEffects
+          ? await resolveSessionTranscriptFile({
+              sessionId,
+              sessionKey,
+              sessionEntry,
+              agentId: sessionAgentId,
+              threadId: opts.threadId,
+            })
+          : undefined;
+        const internalSessionFile = suppressVisibleSessionEffects
+          ? await prepareInternalSessionEffectsTranscript({
+              sessionFile: internalSource?.sessionFile,
+              runId,
+            })
+          : undefined;
+        const transcriptSessionEntry: SessionEntry | undefined = internalSessionFile
+          ? {
+              ...(sessionEntry ?? {
+                sessionId,
+                updatedAt: Date.now(),
+                sessionStartedAt: Date.now(),
+              }),
+              sessionId,
+              sessionFile: internalSessionFile,
+            }
+          : sessionEntry;
         sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
           transcriptBody,
           finalText: finalTextRaw,
           sessionId,
           sessionKey,
-          sessionEntry,
-          sessionStore,
-          storePath,
+          sessionEntry: transcriptSessionEntry,
+          sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+          storePath: suppressVisibleSessionEffects ? undefined : storePath,
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
           config: cfg,
         });
+        if (internalSessionFile) {
+          sessionEntry = prepared.sessionEntry;
+        }
       } catch (error) {
         log.warn(
           `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
@@ -722,57 +978,49 @@ async function agentCommandInternal(
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
 
-    if (sessionKey) {
+    if (sessionKey || suppressVisibleSessionEffects) {
       registerAgentRunContext(runId, {
-        sessionKey,
+        ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey } : {}),
         verboseLevel: resolvedVerboseLevel,
+        isControlUiVisible: !suppressVisibleSessionEffects,
       });
     }
 
-    const [{ getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion }, { matchesSkillFilter }] =
-      await Promise.all([loadSkillsRefreshStateRuntime(), loadSkillsFilterRuntime()]);
-    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+    const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
-    const shouldRefreshSkillsSnapshot =
-      !currentSkillsSnapshot ||
-      shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
-      !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
-    const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
-    const buildSkillsSnapshot = async () => {
-      const [
-        { buildWorkspaceSkillSnapshot },
-        { getRemoteSkillEligibility },
-        { canExecRequestNode },
-      ] = await Promise.all([
-        loadSkillsRuntime(),
-        loadSkillsRemoteRuntime(),
-        loadExecDefaultsRuntime(),
-      ]);
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        eligibility: {
-          remote: getRemoteSkillEligibility({
-            advertiseExecNode: canExecRequestNode({
-              cfg,
-              sessionEntry,
-              sessionKey,
-              agentId: sessionAgentId,
-            }),
+    const [
+      { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
+      { canExecRequestNode },
+    ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
+    const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir,
+      config: cfg,
+      agentId: sessionAgentId,
+      existingSnapshot: isNewSession ? undefined : currentSkillsSnapshot,
+      skillFilter,
+      eligibility: {
+        remote: getRemoteSkillEligibility({
+          advertiseExecNode: canExecRequestNode({
+            cfg,
+            sessionEntry,
+            sessionKey,
+            agentId: sessionAgentId,
           }),
-        },
-        snapshotVersion: skillsSnapshotVersion,
-        skillFilter,
-        agentId: sessionAgentId,
-      });
-    };
-    const skillsSnapshot = needsSkillsSnapshot
-      ? await buildSkillsSnapshot()
-      : !currentSkillsSnapshot
-        ? undefined
-        : await hydrateResolvedSkillsAsync(currentSkillsSnapshot, buildSkillsSnapshot);
+        }),
+      },
+      watch: false,
+    });
+    const needsSkillsSnapshot =
+      isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;
+    const skillsSnapshot = skillSnapshotState.snapshot;
 
-    if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
+    if (
+      skillsSnapshot &&
+      sessionStore &&
+      sessionKey &&
+      needsSkillsSnapshot &&
+      !suppressVisibleSessionEffects
+    ) {
       const now = Date.now();
       const current = sessionEntry ?? {
         sessionId,
@@ -796,7 +1044,15 @@ async function agentCommandInternal(
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
-    if (sessionStore && sessionKey) {
+    const hasInitialSessionOverrides = Boolean(thinkOverride || verboseOverride);
+    const shouldPersistInitialSessionTouch =
+      opts.skipInitialSessionTouch !== true || hasInitialSessionOverrides;
+    if (
+      sessionStore &&
+      sessionKey &&
+      !suppressVisibleSessionEffects &&
+      shouldPersistInitialSessionTouch
+    ) {
       const now = Date.now();
       const entry = sessionStore[sessionKey] ??
         sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
@@ -861,6 +1117,8 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
+      allowManifestNormalization: true,
+      allowPluginNormalization: true,
       ...modelManifestContext,
     });
 
@@ -872,12 +1130,20 @@ async function agentCommandInternal(
         defaultProvider,
         defaultModel,
         agentId: sessionAgentId,
+        allowManifestNormalization: true,
+        allowPluginNormalization: true,
         ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
     }
 
-    if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      hasStoredOverride &&
+      !suppressVisibleSessionEffects
+    ) {
       const entry = sessionEntry;
       const repaired = repairProviderWrappedModelOverride({
         entry,
@@ -1029,7 +1295,7 @@ async function agentCommandInternal(
               authProfileOverrideSource: undefined,
               authProfileOverrideCompactionCount: undefined,
             };
-          } else if (sessionStore && sessionKey) {
+          } else if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,
               sessionStore,
@@ -1049,12 +1315,14 @@ async function agentCommandInternal(
           : configuredThinkingCatalog;
     const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
-      resolvedThinkLevel = resolveThinkingDefault({
-        cfg,
-        provider,
-        model,
-        catalog: thinkingCatalog,
-      });
+      resolvedThinkLevel =
+        normalizeThinkLevel(resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault) ??
+        resolveThinkingDefault({
+          cfg,
+          provider,
+          model,
+          catalog: thinkingCatalog,
+        });
     }
     if (
       !isThinkingLevelSupported({
@@ -1083,7 +1351,8 @@ async function agentCommandInternal(
           sessionEntry &&
           sessionStore &&
           sessionKey &&
-          sessionEntry.thinkingLevel === previousThinkLevel
+          sessionEntry.thinkingLevel === previousThinkLevel &&
+          !suppressVisibleSessionEffects
         ) {
           const entry = sessionEntry;
           entry.thinkingLevel = fallbackThinkLevel;
@@ -1103,8 +1372,8 @@ async function agentCommandInternal(
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey,
-        sessionStore,
-        storePath,
+        sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+        storePath: suppressVisibleSessionEffects ? undefined : storePath,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
@@ -1124,6 +1393,9 @@ async function agentCommandInternal(
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
     }
+    const attemptSessionFile = suppressVisibleSessionEffects
+      ? await prepareInternalSessionEffectsTranscript({ sessionFile, runId })
+      : sessionFile;
 
     const startedAt = Date.now();
     const attemptLifecycleState = {
@@ -1257,11 +1529,12 @@ async function agentCommandInternal(
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
           },
           classifyResult: ({ provider, model, result }) =>
-            classifyEmbeddedPiRunResultForModelFallback({
+            classifyEmbeddedAgentRunResultForModelFallback({
               provider,
               model,
               result,
             }),
+          abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
             const isAutoFallbackPrimaryProbeCandidate =
               autoFallbackPrimaryProbe &&
@@ -1295,8 +1568,9 @@ async function agentCommandInternal(
               sessionId,
               sessionKey,
               sessionAgentId,
-              sessionFile,
+              sessionFile: attemptSessionFile,
               workspaceDir,
+              cwd,
               body,
               isFallbackRetry,
               resolvedThinkLevel,
@@ -1317,11 +1591,12 @@ async function agentCommandInternal(
               resolvedVerboseLevel,
               agentDir,
               authProfileProvider: providerForAuthProfileValidation,
-              sessionStore,
-              storePath,
+              sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+              storePath: suppressVisibleSessionEffects ? undefined : storePath,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
-                !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
+                !isNewSession ||
+                (await attemptExecutionRuntime.sessionFileHasContent(attemptSessionFile)),
               suppressPromptPersistenceOnRetry:
                 opts.suppressPromptPersistence === true ||
                 (isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
@@ -1340,6 +1615,8 @@ async function agentCommandInternal(
           sessionEntry &&
           sessionStore &&
           sessionKey &&
+          !suppressVisibleSessionEffects &&
+          !preserveUserFacingSessionModelState &&
           entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe)
         ) {
           const nextSessionEntry = { ...sessionEntry };
@@ -1492,13 +1769,19 @@ async function agentCommandInternal(
     try {
       await fallbackTrajectoryRecorder?.flush();
 
+      const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
+      const effectiveSessionId = rotatedSessionFile
+        ? (result.meta.agentMeta?.sessionId ?? sessionId)
+        : sessionId;
+      const effectiveSessionFile = rotatedSessionFile ?? attemptSessionFile;
+
       // Update token+model fields in the session store.
-      if (sessionStore && sessionKey) {
+      if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
         await updateSessionStoreAfterAgentRun({
           cfg,
           contextTokensOverride: agentCfg?.contextTokens,
-          sessionId,
+          sessionId: effectiveSessionId,
           sessionKey,
           storePath,
           sessionStore,
@@ -1511,7 +1794,9 @@ async function agentCommandInternal(
             opts.bootstrapContextRunKind !== "cron" &&
             opts.bootstrapContextRunKind !== "heartbeat" &&
             !opts.internalEvents?.length,
-          preserveRuntimeModel: opts.bootstrapContextRunKind === "heartbeat",
+          preserveRuntimeModel:
+            opts.bootstrapContextRunKind === "heartbeat" || preserveUserFacingSessionModelState,
+          preserveUserFacingSessionModelState,
         });
         sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       }
@@ -1524,39 +1809,54 @@ async function agentCommandInternal(
       if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
         let persistedCliTurnTranscript = false;
         try {
+          const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
+            ? {
+                ...(sessionEntry ?? {
+                  sessionId: effectiveSessionId,
+                  updatedAt: Date.now(),
+                  sessionStartedAt: Date.now(),
+                }),
+                sessionId: effectiveSessionId,
+                sessionFile: effectiveSessionFile,
+              }
+            : sessionEntry;
           sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
             body,
             transcriptBody,
             result,
-            sessionId,
-            sessionKey: sessionKey ?? sessionId,
-            sessionEntry,
-            sessionStore,
-            storePath,
+            sessionId: effectiveSessionId,
+            sessionKey: sessionKey ?? effectiveSessionId,
+            sessionEntry: transcriptSessionEntry,
+            sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+            storePath: suppressVisibleSessionEffects ? undefined : storePath,
             sessionAgentId,
             threadId: opts.threadId,
-            sessionCwd: workspaceDir,
+            sessionCwd: effectiveCwd,
             config: cfg,
             embeddedAssistantGapFill,
           });
+          if (suppressVisibleSessionEffects) {
+            sessionEntry = prepared.sessionEntry;
+          }
           persistedCliTurnTranscript = true;
         } catch (error) {
           log.warn(
             `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-        if (persistedCliTurnTranscript) {
+        if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
           sessionEntry = await (
             await loadCliCompactionRuntime()
           ).runCliTurnCompactionLifecycle({
             cfg,
-            sessionId,
-            sessionKey: sessionKey ?? sessionId,
+            sessionId: effectiveSessionId,
+            sessionKey: sessionKey ?? effectiveSessionId,
             sessionEntry,
             sessionStore,
             storePath,
             sessionAgentId,
             workspaceDir,
+            cwd: effectiveCwd,
             agentDir,
             provider: result.meta.agentMeta?.provider ?? provider,
             model: result.meta.agentMeta?.model ?? model,
@@ -1579,6 +1879,7 @@ async function agentCommandInternal(
         opts.deliver === true &&
         sessionStore &&
         sessionKey &&
+        !suppressVisibleSessionEffects &&
         payloads.length > 0 &&
         !isSubagentSessionKey(sessionKey)
       ) {
@@ -1597,22 +1898,24 @@ async function agentCommandInternal(
             ...entry,
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: combinedPayload,
+            pendingFinalDeliveryContext: currentRunDeliveryContext,
             pendingFinalDeliveryCreatedAt: now,
             updatedAt: now,
           };
-          await persistSessionEntry({
+          const persisted = await persistSessionEntry({
             sessionStore,
             sessionKey,
             storePath,
             entry: next,
+            shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
           });
-          sessionEntry = next;
+          sessionEntry = persisted ?? sessionEntry;
         }
       }
 
       const { deliverAgentCommandResult } = await loadDeliveryRuntime();
       const resolveFreshSessionEntryForDelivery =
-        sessionStore && sessionKey
+        sessionStore && sessionKey && !suppressVisibleSessionEffects
           ? async (): Promise<SessionEntry | undefined> => {
               const { loadSessionStore } = await loadSessionStoreRuntime();
               const freshStore = loadSessionStore(storePath, {
@@ -1620,7 +1923,7 @@ async function agentCommandInternal(
                 clone: false,
               });
               const freshEntry = freshStore[sessionKey];
-              if (!freshEntry || freshEntry.sessionId !== sessionId) {
+              if (!freshEntry || freshEntry.sessionId !== effectiveSessionId) {
                 return undefined;
               }
               sessionStore[sessionKey] = freshEntry;
@@ -1641,14 +1944,19 @@ async function agentCommandInternal(
         resolveFreshSessionEntryForDelivery
           ? {
               ...deliveryParams,
-              expectedSessionIdForFreshDelivery: sessionId,
+              expectedSessionIdForFreshDelivery: effectiveSessionId,
               resolveFreshSessionEntryForDelivery,
             }
           : deliveryParams,
       );
 
       // Phase 2: Clear pending delivery payload after successful delivery.
-      if (sessionStore && sessionKey && !isSubagentSessionKey(sessionKey)) {
+      if (
+        sessionStore &&
+        sessionKey &&
+        !isSubagentSessionKey(sessionKey) &&
+        !suppressVisibleSessionEffects
+      ) {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         const noPendingTextForThisRun =
           opts.deliver === true &&
@@ -1657,13 +1965,14 @@ async function agentCommandInternal(
           !entry.pendingFinalDeliveryText;
         if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
           const next = clearPendingFinalDeliveryFields(entry, Date.now());
-          await persistSessionEntry({
+          const persisted = await persistSessionEntry({
             sessionStore,
             sessionKey,
             storePath,
             entry: next,
+            shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
           });
-          sessionEntry = next;
+          sessionEntry = persisted ?? sessionEntry;
         }
       }
 
@@ -1674,6 +1983,34 @@ async function agentCommandInternal(
       throw error;
     }
   } finally {
+    if (trackedRestartRecoveryDeliveryContext && sessionStore && sessionKey) {
+      try {
+        const entry = sessionStore[sessionKey] ?? sessionEntry;
+        if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {
+          const next: SessionEntry = {
+            ...entry,
+            restartRecoveryDeliveryContext: undefined,
+            restartRecoveryDeliveryRunId: undefined,
+            updatedAt: Date.now(),
+          };
+          const persisted = await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry: next,
+            shouldPersist: (current) =>
+              shouldPersistRestartRecoveryCleanup(current, sessionId, runId),
+          });
+          sessionEntry = persisted ?? sessionEntry;
+        }
+      } catch (error) {
+        log.warn(
+          `failed to clear restart recovery delivery context for ${sessionKey}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
     clearAgentRunContext(runId);
   }
 }
@@ -1724,6 +2061,7 @@ export async function agentCommandFromIngress(
 export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
+  resolveExplicitAgentCommandSessionKey,
 };
 
 /** @deprecated Use `testing`. */

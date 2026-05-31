@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   AgentToolResultMiddleware,
@@ -20,10 +21,6 @@ const NESTED_TOOL_RESULT_BLOCK_TYPES = new Set(["toolresult", "tool_result"]);
 
 type MiddlewareContentBlock = OpenClawAgentToolResult["content"][number];
 type MiddlewareContentCoerceState = { depth: number; seen: Set<object> };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function isValidMiddlewareContentBlock(value: unknown): boolean {
   if (!isRecord(value) || typeof value.type !== "string") {
@@ -443,7 +440,7 @@ export function createAgentToolResultMiddlewareRunner(
       for (const handler of handlersForRun) {
         try {
           const next = await handler({ ...event, result: current }, middlewareContext);
-          // Middleware may mutate event.result in place for legacy Pi parity.
+          // Middleware may mutate event.result in place for legacy runtime parity.
           // Validate the current object after every handler so in-place writes
           // cannot bypass the same shape and size bounds as returned results.
           const candidate = next?.result ?? current;

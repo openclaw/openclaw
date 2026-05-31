@@ -2,12 +2,17 @@ import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveStateDir } from "../config/paths.js";
 import { readStateDirDotEnvVarsFromStateDir } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "../infra/parse-finite-number.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -307,9 +312,7 @@ function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
 }
 
 function parseEnvironmentFileSpecs(raw: string): string[] {
-  return splitArgsPreservingQuotes(raw, { escapeMode: "backslash" })
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(splitArgsPreservingQuotes(raw, { escapeMode: "backslash" }));
 }
 
 function parseEnvironmentFileLine(rawLine: string): { key: string; value: string } | null {
@@ -390,6 +393,10 @@ type SystemdServiceInfo = {
   mainPid?: number;
   execMainStatus?: number;
   execMainCode?: string;
+  unit?: string;
+  killMode?: string;
+  tasksCurrent?: number;
+  memoryCurrent?: number;
 };
 
 export function parseSystemdShow(output: string): SystemdServiceInfo {
@@ -420,6 +427,28 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   const execMainCode = entries.execmaincode;
   if (execMainCode) {
     info.execMainCode = execMainCode;
+  }
+  const unit = entries.id;
+  if (unit) {
+    info.unit = unit;
+  }
+  const killMode = entries.killmode;
+  if (killMode) {
+    info.killMode = killMode;
+  }
+  const tasksCurrentValue = entries.taskscurrent;
+  if (tasksCurrentValue) {
+    const tasksCurrent = parseStrictNonNegativeInteger(tasksCurrentValue);
+    if (tasksCurrent !== undefined) {
+      info.tasksCurrent = tasksCurrent;
+    }
+  }
+  const memoryCurrentValue = entries.memorycurrent;
+  if (memoryCurrentValue) {
+    const memoryCurrent = parseStrictNonNegativeInteger(memoryCurrentValue);
+    if (memoryCurrent !== undefined) {
+      info.memoryCurrent = memoryCurrent;
+    }
   }
   return info;
 }
@@ -1092,7 +1121,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
+    "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
   ]);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
@@ -1113,6 +1142,12 @@ export async function readSystemdServiceRuntime(
     pid: parsed.mainPid,
     lastExitStatus: parsed.execMainStatus,
     lastExitReason: parsed.execMainCode,
+    systemd: {
+      unit: parsed.unit ?? unitName,
+      killMode: parsed.killMode,
+      tasksCurrent: parsed.tasksCurrent,
+      memoryCurrent: parsed.memoryCurrent,
+    },
   };
 }
 type LegacySystemdUnit = {

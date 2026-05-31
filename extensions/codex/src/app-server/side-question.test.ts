@@ -30,6 +30,9 @@ vi.mock("./session-binding.js", () => ({
 
 vi.mock("./shared-client.js", () => ({
   getSharedCodexAppServerClient: (...args: unknown[]) => getSharedCodexAppServerClientMock(...args),
+  getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
+    getSharedCodexAppServerClientMock(...args),
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
 
 vi.mock("./auth-bridge.js", () => ({
@@ -305,7 +308,7 @@ function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQu
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
     workspaceDir: "/tmp/workspace",
-    authProfileId: "openai-codex:work",
+    authProfileId: "openai:work",
     authProfileIdSource: "user",
     ...overrides,
   } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0];
@@ -339,7 +342,7 @@ describe("runCodexAppServerSideQuestion", () => {
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
       cwd: "/tmp/workspace",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       model: "gpt-5.5",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
@@ -385,12 +388,14 @@ describe("runCodexAppServerSideQuestion", () => {
       "developerInstructions",
       "ephemeral",
       "model",
+      "personality",
       "sandbox",
       "threadId",
       "threadSource",
     ]);
     expect(forkParams?.threadId).toBe("parent-thread");
     expect(forkParams?.model).toBe("gpt-5.5");
+    expect(forkParams?.personality).toBe("none");
     expect(forkParams?.approvalPolicy).toBe("on-request");
     expect(forkParams?.sandbox).toBe("workspace-write");
     expect(forkParams?.ephemeral).toBe(true);
@@ -400,6 +405,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
     expect(forkParams?.developerInstructions).toContain("You are in a side conversation");
     expect(forkParams?.developerInstructions).toContain(
@@ -435,6 +441,7 @@ describe("runCodexAppServerSideQuestion", () => {
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
         cwd: "/tmp/workspace",
         model: "gpt-5.5",
+        personality: "none",
         effort: null,
         collaborationMode: {
           mode: "default",
@@ -505,6 +512,21 @@ describe("runCodexAppServerSideQuestion", () => {
       ),
     ).rejects.toThrow(
       "Codex-native /btw side-question mode is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects /btw before forking when exec host=node is active", async () => {
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { exec: { host: "node", node: "worker-1" } } } as never,
+          sessionKey: "node-session",
+        }),
+      ),
+    ).rejects.toThrow(
+      "Codex-native /btw side-question mode is unavailable because OpenClaw exec host=node is active for this session.",
     );
 
     expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
@@ -661,6 +683,7 @@ describe("runCodexAppServerSideQuestion", () => {
       },
       threadId: "side-thread",
       turnId: "turn-1",
+      autoApprove: false,
       paramsForRun: {
         messageChannel: "discord",
         messageProvider: "discord-voice",
@@ -693,7 +716,13 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     await expect(
-      runCodexAppServerSideQuestion(sideParams(), { nativeHookRelay: { enabled: true } }),
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
+          sessionKey: "agent:main:session-1",
+        }),
+        { nativeHookRelay: { enabled: true } },
+      ),
     ).rejects.toThrow("fork failed");
 
     expect(relayIdDuringFork).toBeDefined();
@@ -708,7 +737,7 @@ describe("runCodexAppServerSideQuestion", () => {
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
       cwd: "/tmp/workspace",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       model: "gpt-5.5",
       approvalPolicy: "never",
       sandbox: "workspace-write",
@@ -719,7 +748,13 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     await expect(
-      runCodexAppServerSideQuestion(sideParams(), { nativeHookRelay: { enabled: true } }),
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
+          sessionKey: "agent:main:session-1",
+        }),
+        { nativeHookRelay: { enabled: true } },
+      ),
     ).resolves.toEqual({ text: "Side answer." });
 
     const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
@@ -772,6 +807,7 @@ describe("runCodexAppServerSideQuestion", () => {
       "features.hooks": false,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],
@@ -836,15 +872,21 @@ describe("runCodexAppServerSideQuestion", () => {
 
     startedAtMs = Date.now();
     await expect(
-      runCodexAppServerSideQuestion(sideParams(), {
-        pluginConfig: {
-          appServer: {
-            requestTimeoutMs,
-            turnCompletionIdleTimeoutMs: completionTimeoutMs,
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
+          sessionKey: "agent:main:session-1",
+        }),
+        {
+          pluginConfig: {
+            appServer: {
+              requestTimeoutMs,
+              turnCompletionIdleTimeoutMs: completionTimeoutMs,
+            },
           },
+          nativeHookRelay: { enabled: true },
         },
-        nativeHookRelay: { enabled: true },
-      }),
+      ),
     ).resolves.toEqual({ text: "Side answer." });
 
     expect(relayIdDuringFork).toBeDefined();
@@ -1138,6 +1180,21 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(120_000);
   });
 
+  it("uses a 90 second default for generic side-thread dynamic tool calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "session_status",
+        arguments: { sessionKey: "current" },
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(90_000);
+  });
+
   it("cleans up notification handlers when side tool setup fails", async () => {
     const client = createFakeClient();
     createOpenClawCodingToolsMock.mockImplementation(() => {
@@ -1176,7 +1233,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
     expect(refreshCodexAppServerAuthTokensMock).toHaveBeenCalledWith({
       agentDir: "/tmp/agent",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       config: {},
     });
   });

@@ -1,8 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestChannelConfig,
@@ -122,11 +123,13 @@ function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
-  return [
-    normalizeOptionalString(manifest?.plugin?.id),
-    normalizeOptionalString(manifest?.channel?.id),
-    normalizeOptionalString(manifest?.providers?.[0]?.id),
-  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+  return uniqueStrings(
+    [
+      normalizeOptionalString(manifest?.plugin?.id),
+      normalizeOptionalString(manifest?.channel?.id),
+      normalizeOptionalString(manifest?.providers?.[0]?.id),
+    ].filter((value): value is string => Boolean(value)),
+  );
 }
 
 export function resolveOfficialExternalPluginLabel(

@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -23,6 +24,18 @@ let tarRuntimePromise: Promise<TarRuntime> | undefined;
 function loadTarRuntime(): Promise<TarRuntime> {
   tarRuntimePromise ??= import("tar");
   return tarRuntimePromise;
+}
+
+type BackupLinkCacheKey = `${number}:${number}`;
+
+class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
+  override get(_key: BackupLinkCacheKey): undefined {
+    return undefined;
+  }
+
+  override set(_key: BackupLinkCacheKey, _value: string): this {
+    return this;
+  }
 }
 
 export type BackupCreateOptions = {
@@ -434,7 +447,7 @@ export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: s
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
-  const nowMs = opts.nowMs ?? Date.now();
+  const nowMs = resolveDateTimestampMs(opts.nowMs);
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
@@ -543,6 +556,7 @@ export async function createBackupArchive(
             gzip: true,
             portable: true,
             preservePaths: true,
+            linkCache: new BackupLinkCache(),
             filter: tarFilter,
             onWriteEntry: (entry) => {
               entry.path = remapArchiveEntryPath({

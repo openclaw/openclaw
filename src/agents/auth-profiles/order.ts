@@ -1,6 +1,9 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
@@ -25,7 +28,7 @@ export type AuthProfileEligibility = {
 };
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   cfg?: OpenClawConfig;
@@ -130,10 +133,7 @@ function resolveProviderAuthMode(
 
 function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: string): boolean {
   const authMode = resolveProviderAuthMode(cfg, provider);
-  return (
-    authMode === "aws-sdk" ||
-    (authMode === undefined && normalizeProviderId(provider) === "amazon-bedrock")
-  );
+  return authMode === "aws-sdk";
 }
 
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {

@@ -1,5 +1,6 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import type {
   AgentPromptGuidance,
   AgentPromptSurfaceKind,
@@ -10,6 +11,7 @@ export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
   pluginName?: string;
   pluginRoot?: string;
+  trustedOwnerStatusExposure?: true;
 };
 
 type PluginCommandState = {
@@ -58,6 +60,13 @@ export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand):
   return command.ownership === "reserved";
 }
 
+export function canExposeSenderIsOwner(command: RegisteredPluginCommand): boolean {
+  return (
+    (Array.isArray(command.requiredScopes) && command.requiredScopes.length > 0) ||
+    command.trustedOwnerStatusExposure === true
+  );
+}
+
 export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
   return Array.from(pluginCommands.values());
 }
@@ -71,7 +80,7 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
   for (const command of pluginCommands.values()) {
     for (const entry of command.agentPromptGuidance ?? []) {
       const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, {
-        surface: params?.surface,
+        surface: params?.surface ? normalizeAgentPromptSurfaceKind(params.surface) : undefined,
         includeLegacyGlobalGuidance: params?.includeLegacyGlobalGuidance ?? true,
       });
       if (!trimmed || seen.has(trimmed)) {

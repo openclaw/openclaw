@@ -1,5 +1,6 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { mimeTypeFromFilePath } from "../../media/mime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
@@ -41,7 +42,7 @@ function isHistoryImageMedia(media: HistoryMediaEntry): boolean {
 }
 
 function resolveTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function resolveHistoryEntries(ctx: MsgContext): HistoryEntry[] {

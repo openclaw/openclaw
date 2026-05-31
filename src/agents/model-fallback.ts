@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -6,14 +8,24 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
+import {
+  getActivePluginRegistryWorkspaceDirFromState,
+  getPluginRegistryState,
+} from "../plugins/runtime-state.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import {
   FailoverError,
   coerceToFailoverError,
@@ -51,8 +63,6 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
@@ -134,6 +144,20 @@ function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
+function isTerminalAbort(signal: AbortSignal | undefined): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  const reason = signal.reason;
+  if (!(reason instanceof Error)) {
+    return false;
+  }
+  if (reason.name === "TimeoutError") {
+    return true;
+  }
+  return reason.name === "ClientDisconnectError";
+}
+
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
   candidates: ModelCandidate[];
   addExplicitCandidate: (candidate: ModelCandidate) => void;
@@ -211,6 +235,8 @@ type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js"
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
   () => import("./model-fallback-auth.runtime.js"),
 );
+const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
+const fallbackCandidateCache = new Map<string, ModelCandidate[]>();
 
 async function loadModelFallbackAuthRuntime() {
   return await modelFallbackAuthRuntimeLoader.load();
@@ -236,6 +262,7 @@ async function runFallbackCandidate<T>(params: {
   model: string;
   options?: ModelFallbackRunOptions;
   attribution?: FailoverAttribution;
+  abortSignal?: AbortSignal;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
     const result = params.options
@@ -247,6 +274,12 @@ async function runFallbackCandidate<T>(params: {
     };
   } catch (err) {
     if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
+    if (isNonProviderRuntimeCoordinationError(err)) {
+      throw err;
+    }
+    if (isTerminalAbort(params.abortSignal)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
@@ -274,6 +307,7 @@ async function runFallbackAttempt<T>(params: {
   attempt: number;
   total: number;
   attribution?: FailoverAttribution;
+  abortSignal?: AbortSignal;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
@@ -281,6 +315,7 @@ async function runFallbackAttempt<T>(params: {
     model: params.model,
     options: params.options,
     attribution: params.attribution,
+    abortSignal: params.abortSignal,
   });
   if (runResult.ok) {
     const classification = await params.classifyResult?.({
@@ -296,6 +331,9 @@ async function runFallbackAttempt<T>(params: {
       attribution: params.attribution,
     });
     if (classifiedError) {
+      if (isTerminalAbort(params.abortSignal)) {
+        throw classifiedError;
+      }
       return { error: classifiedError };
     }
     return {
@@ -361,7 +399,7 @@ async function assertModelFallbackCandidateHarnessAvailable(
   if (isCliProvider(params.provider, params.cfg)) {
     return;
   }
-  const agentRuntimeOverride = normalizeOptionalString(agentHarnessRuntimeOverride);
+  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
@@ -369,9 +407,22 @@ async function assertModelFallbackCandidateHarnessAvailable(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const agentRuntime = agentRuntimeOverride ?? harnessPolicy.runtime;
-  const agentRuntimeSource = agentRuntimeOverride ? "model" : harnessPolicy.runtimeSource;
+  const agentRuntime =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? agentRuntimeOverride
+      : harnessPolicy.runtime;
+  const agentRuntimeSource =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? "model"
+      : harnessPolicy.runtimeSource;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
+    return;
+  }
+  if (
+    agentRuntime === "auto" ||
+    agentRuntime === "openclaw" ||
+    (agentRuntime === "codex" && agentRuntimeSource === "implicit")
+  ) {
     return;
   }
   await params.prepareAgentHarnessRuntime?.({
@@ -381,12 +432,27 @@ async function assertModelFallbackCandidateHarnessAvailable(
   });
   if (
     agentRuntime !== "auto" &&
-    agentRuntime !== "pi" &&
+    agentRuntime !== "openclaw" &&
     !(agentRuntime === "codex" && agentRuntimeSource === "implicit") &&
     !getRegisteredAgentHarness(agentRuntime)
   ) {
     throw new MissingAgentHarnessError(agentRuntime);
   }
+}
+
+function resolveCandidateAttemptError(
+  described: ReturnType<typeof describeFailoverError>,
+  candidate: ModelCandidate,
+): string {
+  if (
+    described.rawError &&
+    (!described.provider ||
+      (described.provider === candidate.provider &&
+        (!described.model || described.model === candidate.model)))
+  ) {
+    return described.rawError;
+  }
+  return described.message;
 }
 
 function recordFailedCandidateAttempt(params: {
@@ -406,10 +472,11 @@ function recordFailedCandidateAttempt(params: {
   fallbackConfigured: boolean;
 }): ModelFallbackStepFields | undefined {
   const described = describeFailoverError(params.error);
+  const error = resolveCandidateAttemptError(described, params.candidate);
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.rawError ?? described.message,
+    error,
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
@@ -427,7 +494,7 @@ function recordFailedCandidateAttempt(params: {
     reason: described.reason,
     status: described.status,
     code: described.code,
-    error: described.rawError ?? described.message,
+    error,
     nextCandidate: params.nextCandidate,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,
@@ -444,7 +511,7 @@ function appendFailedCandidateAttempt(params: {
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.rawError ?? described.message,
+    error: resolveCandidateAttemptError(described, params.candidate),
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
@@ -546,7 +613,7 @@ function resolveFallbackSoonestCooldownExpiry(params: {
   return soonest;
 }
 
-function resolveImageFallbackCandidates(
+export function resolveImageFallbackCandidates(
   params: {
     cfg: OpenClawConfig | undefined;
     defaultProvider: string;
@@ -603,7 +670,7 @@ function resolveImageFallbackCandidates(
   return candidates;
 }
 
-function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
+export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
   const configuredPrimary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
   if (configuredPrimary?.trim()) {
     const aliasIndex = buildModelAliasIndex({
@@ -623,13 +690,122 @@ function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): s
 }
 
 export const testing = {
-  resolveFallbackCandidates,
+  resolveFallbackCandidates: resolveModelCandidateChain,
   resolveImageFallbackCandidates,
   resolveCooldownDecision,
   resolveSessionSuspensionReason,
 } as const;
 
-function resolveFallbackCandidates(
+export function resolveModelCandidateChain(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    provider: string;
+    model: string;
+    /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+    fallbacksOverride?: string[];
+  } & ModelManifestNormalizationContext,
+): ModelCandidate[] {
+  const cacheKey = resolveFallbackCandidateCacheKey(params);
+  if (cacheKey) {
+    const cached = fallbackCandidateCache.get(cacheKey);
+    if (cached) {
+      return cached.map(cloneModelCandidate);
+    }
+  }
+  const candidates = resolveFallbackCandidatesUncached(params);
+  if (cacheKey) {
+    fallbackCandidateCache.set(cacheKey, candidates.map(cloneModelCandidate));
+    while (fallbackCandidateCache.size > MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES) {
+      const oldest = fallbackCandidateCache.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      fallbackCandidateCache.delete(oldest.value);
+    }
+  }
+  return candidates;
+}
+
+function cloneModelCandidate(candidate: ModelCandidate): ModelCandidate {
+  return {
+    provider: candidate.provider,
+    model: candidate.model,
+  };
+}
+
+function resolveFallbackCandidateCacheKey(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    provider: string;
+    model: string;
+    fallbacksOverride?: string[];
+  } & ModelManifestNormalizationContext,
+): string | null {
+  if (params.manifestPlugins) {
+    return null;
+  }
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  const env = process.env;
+  const pluginMetadata = getCurrentPluginMetadataSnapshot({
+    env,
+    workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  const providerLoadMetadata = getCurrentPluginMetadataSnapshot({
+    config: params.cfg,
+    env,
+    workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  if (
+    isPluginProvidersLoadInFlight({
+      config: params.cfg,
+      workspaceDir,
+      env,
+      ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
+      activate: false,
+      bundledProviderVitestCompat: true,
+    })
+  ) {
+    return null;
+  }
+  const registryState = getPluginRegistryState();
+  return JSON.stringify({
+    provider: params.provider,
+    model: params.model,
+    fallbacksOverride: params.fallbacksOverride,
+    agentsDefaultsModel: params.cfg?.agents?.defaults?.model,
+    agentsDefaultsModels: params.cfg?.agents?.defaults?.models,
+    modelProviders: resolveFallbackCandidateModelProviderCacheParts(params.cfg),
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params.cfg,
+      env,
+      workspaceDir,
+    }),
+    pluginMetadataFingerprint: pluginMetadata?.configFingerprint ?? null,
+    pluginRegistryKey: registryState?.key ?? null,
+    pluginRegistryVersion: registryState?.activeVersion ?? null,
+    pluginWorkspaceDir: workspaceDir ?? null,
+  });
+}
+
+function resolveFallbackCandidateModelProviderCacheParts(cfg: OpenClawConfig | undefined): unknown {
+  const providers = cfg?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  return Object.entries(providers).map(([providerId, providerConfig]) => ({
+    providerId,
+    api: typeof providerConfig?.api === "string" ? providerConfig.api : undefined,
+    models: Array.isArray(providerConfig?.models)
+      ? providerConfig.models
+          .map((entry) => (typeof entry?.id === "string" ? entry.id : undefined))
+          .filter((id): id is string => id !== undefined)
+      : [],
+  }));
+}
+
+function resolveFallbackCandidatesUncached(
   params: {
     cfg: OpenClawConfig | undefined;
     provider: string;
@@ -768,9 +944,31 @@ function markProbeAttempt(now: number, throttleKey: string): void {
   enforceProbeStateCap();
 }
 
+function hasActiveProviderRateLimitResetWindow(params: {
+  authStore: AuthProfileStore;
+  profileIds: string[];
+  now: number;
+  model: string;
+}): boolean {
+  return params.profileIds.some((profileId) => {
+    const stats = params.authStore.usageStats?.[profileId];
+    if (!stats) {
+      return false;
+    }
+    if (!isActiveUnusableWindow(stats.blockedUntil, params.now)) {
+      return false;
+    }
+    if (stats.blockedReason !== "subscription_limit" || !stats.blockedSource) {
+      return false;
+    }
+    return !stats.blockedModel || stats.blockedModel === params.model;
+  });
+}
+
 function shouldProbePrimaryDuringCooldown(params: {
   isPrimary: boolean;
   hasFallbackCandidates: boolean;
+  reason: FailoverReason | null | undefined;
   now: number;
   throttleKey: string;
   authRuntime: ModelFallbackAuthRuntime;
@@ -790,6 +988,20 @@ function shouldProbePrimaryDuringCooldown(params: {
     now: params.now,
     forModel: params.model,
   });
+  // Generic 429 backoff can become stale before its local cooldown expires.
+  // Provider-recorded reset windows still remain authoritative until near expiry.
+  if (
+    params.reason === "rate_limit" &&
+    !hasActiveProviderRateLimitResetWindow({
+      authStore: params.authStore,
+      profileIds: params.profileIds,
+      now: params.now,
+      model: params.model,
+    })
+  ) {
+    return true;
+  }
+
   if (soonest === null || !Number.isFinite(soonest)) {
     return true;
   }
@@ -839,9 +1051,16 @@ function resolveCooldownDecision(params: {
   authStore: AuthProfileStore;
   profileIds: string[];
 }): CooldownDecision {
+  const inferredReason =
+    params.authRuntime.resolveProfilesUnavailableReason({
+      store: params.authStore,
+      profileIds: params.profileIds,
+      now: params.now,
+    }) ?? "unknown";
   const shouldProbe = shouldProbePrimaryDuringCooldown({
     isPrimary: params.isPrimary,
     hasFallbackCandidates: params.hasFallbackCandidates,
+    reason: inferredReason,
     now: params.now,
     throttleKey: params.probeThrottleKey,
     authRuntime: params.authRuntime,
@@ -850,12 +1069,6 @@ function resolveCooldownDecision(params: {
     model: params.candidate.model,
   });
 
-  const inferredReason =
-    params.authRuntime.resolveProfilesUnavailableReason({
-      store: params.authStore,
-      profileIds: params.profileIds,
-      now: params.now,
-    }) ?? "unknown";
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
   if (isPersistentAuthIssue) {
     return {
@@ -926,9 +1139,10 @@ export async function runWithModelFallback<T>(
     onFallbackStep?: ModelFallbackStepHandler;
     classifyResult?: ModelFallbackResultClassifier<T>;
     skipAuthProfileRuntime?: boolean;
+    abortSignal?: AbortSignal;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
-  const candidates = resolveFallbackCandidates({
+  const candidates = resolveModelCandidateChain({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
@@ -1168,6 +1382,7 @@ export async function runWithModelFallback<T>(
       attempt: i + 1,
       total: candidates.length,
       attribution: { sessionId: params.sessionId, lane: params.lane },
+      abortSignal: params.abortSignal,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {

@@ -106,12 +106,22 @@ export type AgentCommandOpts = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
+  /** Internal runs can execute against a session without updating visible status/model/usage. */
+  sessionEffects?: "visible" | "internal";
+  /** Internal handoffs can write transcript turns without changing user-facing model/usage state. */
+  preserveUserFacingSessionModelState?: boolean;
   /** Visible source replies must be sent through the message tool when set. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Internal runs can omit the channel message tool entirely. */
+  disableMessageTool?: boolean;
+  /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
+  skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */
+  cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */

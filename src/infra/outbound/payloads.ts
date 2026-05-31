@@ -19,6 +19,7 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import { type SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -65,16 +66,18 @@ export type OutboundPayloadMirror = {
   mediaUrls: string[];
 };
 
-function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
-  if (!presentation) {
-    return [];
-  }
+type MirrorTextBlock = MessagePresentation["blocks"][number] | InteractiveReply["blocks"][number];
+
+function collectBlockMirrorText(
+  blocks: readonly MirrorTextBlock[],
+  options: { includeContext?: boolean } = {},
+): string[] {
   const lines: string[] = [];
-  if (presentation.title?.trim()) {
-    lines.push(presentation.title.trim());
-  }
-  for (const block of presentation.blocks) {
-    if ((block.type === "text" || block.type === "context") && block.text.trim()) {
+  for (const block of blocks) {
+    if (
+      (block.type === "text" || (options.includeContext === true && block.type === "context")) &&
+      block.text.trim()
+    ) {
       lines.push(block.text.trim());
       continue;
     }
@@ -100,36 +103,23 @@ function collectPresentationMirrorText(presentation: MessagePresentation | undef
   return lines;
 }
 
+function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
+  if (!presentation) {
+    return [];
+  }
+  const lines: string[] = [];
+  if (presentation.title?.trim()) {
+    lines.push(presentation.title.trim());
+  }
+  lines.push(...collectBlockMirrorText(presentation.blocks, { includeContext: true }));
+  return lines;
+}
+
 function collectInteractiveMirrorText(interactive: InteractiveReply | undefined): string[] {
   if (!interactive) {
     return [];
   }
-  const lines: string[] = [];
-  for (const block of interactive.blocks) {
-    if (block.type === "text" && block.text.trim()) {
-      lines.push(block.text.trim());
-      continue;
-    }
-    if (block.type === "buttons") {
-      for (const button of block.buttons) {
-        if (button.label.trim()) {
-          lines.push(button.label.trim());
-        }
-      }
-      continue;
-    }
-    if (block.type === "select") {
-      if (block.placeholder?.trim()) {
-        lines.push(block.placeholder.trim());
-      }
-      for (const option of block.options) {
-        if (option.label.trim()) {
-          lines.push(option.label.trim());
-        }
-      }
-    }
-  }
-  return lines;
+  return collectBlockMirrorText(interactive.blocks);
 }
 
 function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
@@ -220,11 +210,14 @@ function createOutboundPayloadPlanEntry(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
   );
-  const parsedText = parsed.text ?? "";
+  const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
+  const strippedParsed =
+    strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
+  const parsedText = strippedParsed.text ?? "";
   if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
     return null;
   }
-  const isSilent = parsed.isSilent && mergedMedia.length === 0;
+  const isSilent = strippedParsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
@@ -358,16 +351,21 @@ export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
-  const spokenText = payload.spokenText?.trim() ? payload.spokenText : undefined;
+  const text = stripUnsupportedCitationControlMarkers(parts.text);
+  const strippedSpokenText =
+    typeof payload.spokenText === "string"
+      ? stripUnsupportedCitationControlMarkers(payload.spokenText)
+      : undefined;
+  const spokenText = strippedSpokenText?.trim() ? strippedSpokenText : undefined;
   return {
-    text: parts.text,
+    text,
     mediaUrls: parts.mediaUrls,
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     presentation: payload.presentation,
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
-    ...(parts.text || !spokenText ? {} : { hookContent: spokenText }),
+    ...(text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
 
@@ -399,7 +397,7 @@ export function formatOutboundPayloadLog(
     lines.push(payload.text.trimEnd());
   }
   for (const url of payload.mediaUrls) {
-    lines.push(`MEDIA:${url}`);
+    lines.push(`Attachment: ${url}`);
   }
   return lines.join("\n");
 }

@@ -2,8 +2,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
 import {
   applyNpmFreshnessBypassEnv,
@@ -92,27 +92,6 @@ function stripPrimaryPackageAlias(spec: string): string {
   return normalized.toLowerCase().startsWith(prefix)
     ? normalized.slice(prefix.length).trim()
     : normalized;
-}
-
-export function isOpenClawSourcePackageInstallSpec(value: string): boolean {
-  if (isMainPackageTarget(value)) {
-    return true;
-  }
-  const target = stripPrimaryPackageAlias(value);
-  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
-  if (!normalizedTarget) {
-    return false;
-  }
-  if (/^github:openclaw\/openclaw(?:$|[#/])/u.test(normalizedTarget)) {
-    return true;
-  }
-  const gitUrl = normalizedTarget.replace(/^git\+/u, "");
-  return (
-    /^https?:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
-    /^ssh:\/\/git@github\.com[:/]openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
-    /^git:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
-    /^git@github\.com:openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl)
-  );
 }
 
 function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {

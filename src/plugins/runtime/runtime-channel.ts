@@ -1,3 +1,4 @@
+import { convertMarkdownTables } from "../../../packages/markdown-core/src/tables.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
   chunkByNewline,
@@ -40,6 +41,7 @@ import {
   shouldAckReaction,
 } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
@@ -51,11 +53,9 @@ import {
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
-  buildChannelInboundEventContext,
-  runChannelTurn,
-  runPreparedChannelTurn,
-  runResolvedChannelTurn,
-  dispatchAssembledChannelTurn,
+  dispatchChannelInboundReply,
+  runChannelInboundEvent,
+  runPreparedInboundReply,
 } from "../../channels/turn/kernel.js";
 import {
   resolveChannelGroupPolicy,
@@ -69,7 +69,6 @@ import {
   updateLastRoute,
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import { convertMarkdownTables } from "../../markdown/tables.js";
 import {
   fetchRemoteMedia,
   readRemoteMediaBuffer,
@@ -180,13 +179,11 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     outbound: {
       loadAdapter: loadChannelOutboundAdapter,
     },
-    turn: {
-      run: runChannelTurn,
-      runAssembled: dispatchAssembledChannelTurn,
-      runResolved: runResolvedChannelTurn,
+    inbound: {
       buildContext: buildChannelInboundEventContext,
-      runPrepared: runPreparedChannelTurn,
-      dispatchAssembled: dispatchAssembledChannelTurn,
+      run: runChannelInboundEvent,
+      runPreparedReply: runPreparedInboundReply,
+      dispatchReply: dispatchChannelInboundReply,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

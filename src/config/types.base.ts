@@ -100,11 +100,6 @@ export type ChannelPreviewStreamingConfig = Pick<
   "mode" | "chunkMode" | "preview" | "progress" | "block"
 >;
 
-export type SlackChannelStreamingConfig = Pick<
-  ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "progress" | "block" | "nativeTransport"
->;
-
 export type MarkdownTableMode = "off" | "bullets" | "code" | "block";
 
 export type MarkdownConfig = {
@@ -298,6 +293,7 @@ export type DiagnosticsOtelConfig = {
         toolInputs?: boolean;
         toolOutputs?: boolean;
         systemPrompt?: boolean;
+        toolDefinitions?: boolean;
       };
 };
 

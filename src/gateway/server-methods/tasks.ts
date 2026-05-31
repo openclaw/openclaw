@@ -1,13 +1,4 @@
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
-import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
-import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import {
-  TASK_STATUS_DETAIL_MAX_CHARS,
-  formatTaskStatusTitle,
-  sanitizeTaskStatusText,
-} from "../../tasks/task-status.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -17,7 +8,16 @@ import {
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
+import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import {
+  TASK_STATUS_DETAIL_MAX_CHARS,
+  formatTaskStatusTitle,
+  sanitizeTaskStatusText,
+} from "../../tasks/task-status.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;

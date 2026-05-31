@@ -4,6 +4,7 @@ import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
@@ -184,7 +185,7 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
-  it("defaults provider to auto when unspecified", () => {
+  it("defaults provider to openai when unspecified", () => {
     const cfg = asConfig({
       agents: {
         defaults: {
@@ -195,8 +196,16 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.provider).toBe("auto");
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.fallback).toBe("none");
+  });
+
+  it("normalizes legacy auto provider config to openai", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("auto"), "main");
+
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.model).toBe("text-embedding-3-small");
   });
 
   it("resolves custom provider ids through their configured api owner", () => {
@@ -431,6 +440,49 @@ describe("memory search config", () => {
     );
   });
 
+  it("rejects multimodal memory on generic OpenAI-compatible providers", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai-compatible",
+            model: "text-embedding-bge-m3",
+            remote: { baseUrl: "http://127.0.0.1:1234/v1" },
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
+      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+    );
+  });
+
+  it("rejects multimodal memory on baseUrl-only OpenAI-compatible custom providers", () => {
+    const cfg = asConfig({
+      models: {
+        providers: {
+          localEmbeddings: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "localEmbeddings",
+            model: "text-embedding-bge-m3",
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
+      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+    );
+  });
+
   it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
     clearMemoryEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders({ includeGemini: false });
@@ -476,6 +528,50 @@ describe("memory search config", () => {
     const cfg = configWithDefaultProvider("openai");
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expectDefaultRemoteBatch(resolved);
+  });
+
+  it("normalizes remote batch timer config once before provider adapters receive it", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              batch: {
+                pollIntervalMs: Number.MAX_SAFE_INTEGER,
+                timeoutMinutes: Number.MAX_SAFE_INTEGER,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote?.batch?.pollIntervalMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolved?.remote?.batch?.timeoutMinutes).toBe(Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000));
+  });
+
+  it("keeps the default remote batch poll delay for zero intervals", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              batch: {
+                pollIntervalMs: 0,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote?.batch?.pollIntervalMs).toBe(2000);
   });
 
   it("keeps remote unset for local provider without overrides", () => {

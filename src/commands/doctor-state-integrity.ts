@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   clearWedgedSubagentRecoveryAbort,
@@ -29,9 +33,6 @@ import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asNullableObjectRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
@@ -852,7 +853,10 @@ export async function noteStateIntegrity(
     );
   }
 
-  const store = loadSessionStore(storePath);
+  // Read-only diagnostic load: skip the cache and the defensive return clone so a
+  // very large monolithic sessions.json is materialized once, not several times.
+  // Re-cloning a multi-hundred-MB store here is what made `doctor` OOM (#56827).
+  const store = loadSessionStore(storePath, { skipCache: true, clone: false });
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
@@ -926,12 +930,12 @@ export async function noteStateIntegrity(
         }
       }
 
-      const wedgedReasons = wedgedSubagentSessions
-        .map(([, entry]) => formatSubagentRecoveryWedgedReason(entry))
-        .filter((reason, index, all) => all.indexOf(reason) === index)
-        .slice(0, 2);
-      if (wedgedReasons.length > 0) {
-        warnings.push(wedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
+      const wedgedReasons = wedgedSubagentSessions.map(([, entry]) =>
+        formatSubagentRecoveryWedgedReason(entry),
+      );
+      const visibleWedgedReasons = uniqueStrings(wedgedReasons).slice(0, 2);
+      if (visibleWedgedReasons.length > 0) {
+        warnings.push(visibleWedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
       }
     }
 

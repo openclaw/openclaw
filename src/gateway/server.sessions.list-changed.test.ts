@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
@@ -254,6 +254,42 @@ test("sessions.list marks sessions with active abortable runs", async () => {
   expect(session.hasActiveRun).toBe(true);
 });
 
+test("sessions.list ignores terminal abortable runs kept for retry guards", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  await sessionsHandlers["sessions.list"]({
+    req: {
+      type: "req",
+      id: "req-sessions-list-terminal-run",
+      method: "sessions.list",
+      params: {},
+    },
+    params: {},
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
+      chatAbortControllers: new Map([
+        ["run-1", { sessionKey: "agent:main:main", projectSessionActive: false }],
+      ]),
+    } as never,
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expect(session.hasActiveRun).toBe(false);
+});
+
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
   const { dir } = await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
@@ -371,7 +407,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         id: "msg-usage-zero",
         message: {
           role: "assistant",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.3-codex-spark",
           usage: {
             input: 5_107,
@@ -389,7 +425,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.3-codex-spark",
         contextTokens: 123_456,
         totalTokens: 0,
@@ -428,7 +464,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     totalTokensFresh: true,
     contextTokens: 123_456,
     estimatedCostUsd: 0,
-    modelProvider: "openai-codex",
+    modelProvider: "openai",
     model: "gpt-5.3-codex-spark",
   });
 });
@@ -525,6 +561,268 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
   });
 });
 
+test("sessions.patch scopes selected global mutations and events to the requested agent", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  await writeSessionStore({
+    entries: {},
+    storePath: path.join(dir, "prime-sessions.json"),
+  });
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-main-global") }, null, 2),
+    "utf-8",
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
+    "utf-8",
+  );
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required");
+  }
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
+    await getGatewayConfigModule();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  const broadcastToConnIds = vi.fn();
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  await sessionsHandlers["sessions.patch"]({
+    req: {} as never,
+    params: {
+      key: "global",
+      agentId: "work",
+      label: "Work global",
+    },
+    respond,
+    context: {
+      broadcastToConnIds,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      loadGatewayModelCatalog: async () => ({ providers: [] }),
+      getRuntimeConfig,
+    } as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+
+  const responsePayload = expectRespondPayload(respond);
+  expectFields(responsePayload, { ok: true, key: "global" });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "global",
+    agentId: "work",
+    reason: "patch",
+    label: "Work global",
+  });
+  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as {
+    global?: { label?: string };
+  };
+  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as {
+    global?: { label?: string };
+  };
+  expect(mainStore.global?.label).toBeUndefined();
+  expect(workStore.global?.label).toBe("Work global");
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  await fs.writeFile(configPath, "{}\n", "utf-8");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
+test("sessions.compact scopes selected global truncation to the requested agent", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const mainTranscript = path.join(path.dirname(mainStorePath), "sess-main-global.jsonl");
+  const workTranscript = path.join(path.dirname(workStorePath), "sess-work-global.jsonl");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+  await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
+  await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify(
+      { global: sessionStoreEntry("sess-main-global", { sessionFile: mainTranscript }) },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify(
+      { global: sessionStoreEntry("sess-work-global", { sessionFile: workTranscript }) },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required");
+  }
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
+    await getGatewayConfigModule();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  const broadcastToConnIds = vi.fn();
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  await sessionsHandlers["sessions.compact"]({
+    req: {} as never,
+    params: {
+      key: "global",
+      agentId: "work",
+      maxLines: 1,
+    },
+    respond,
+    context: {
+      broadcastToConnIds,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getRuntimeConfig,
+    } as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+
+  const responsePayload = expectRespondPayload(respond);
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 1 });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "global",
+    agentId: "work",
+    reason: "compact",
+    compacted: true,
+  });
+  await expect(fs.readFile(mainTranscript, "utf-8")).resolves.toBe("main one\nmain two\n");
+  await expect(fs.readFile(workTranscript, "utf-8")).resolves.toBe("work two\n");
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  await fs.writeFile(configPath, "{}\n", "utf-8");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
+test("sessions.compact passes the selected global agent into embedded compaction", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const mainTranscript = path.join(path.dirname(mainStorePath), "sess-main-global.jsonl");
+  const workTranscript = path.join(path.dirname(workStorePath), "sess-work-global.jsonl");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+  await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
+  await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify(
+      { global: sessionStoreEntry("sess-main-global", { sessionFile: mainTranscript }) },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify(
+      { global: sessionStoreEntry("sess-work-global", { sessionFile: workTranscript }) },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required");
+  }
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
+    await getGatewayConfigModule();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  const respond = vi.fn();
+  const sessionsHandlers = await getSessionsHandlers();
+  await sessionsHandlers["sessions.compact"]({
+    req: {} as never,
+    params: {
+      key: "global",
+      agentId: "work",
+    },
+    respond,
+    context: {
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set(),
+      getRuntimeConfig,
+    } as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+
+  const responsePayload = expectRespondPayload(respond);
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true });
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+  expect(embeddedRunMock.compactEmbeddedAgentSession.mock.calls[0]?.[0]).toMatchObject({
+    sessionId: "sess-work-global",
+    sessionKey: "global",
+    agentId: "work",
+  });
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  await fs.writeFile(configPath, "{}\n", "utf-8");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
 test("sessions.changed mutation events include subagent ownership metadata", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
@@ -532,6 +830,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
       "subagent:child": sessionStoreEntry("sess-child", {
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        spawnedCwd: "/tmp/task-repo",
         forkedFromParent: true,
         spawnDepth: 2,
         subagentRole: "orchestrator",
@@ -568,6 +867,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     reason: "patch",
     spawnedBy: "agent:main:main",
     spawnedWorkspaceDir: "/tmp/subagent-workspace",
+    spawnedCwd: "/tmp/task-repo",
     forkedFromParent: true,
     spawnDepth: 2,
     subagentRole: "orchestrator",

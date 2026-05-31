@@ -102,6 +102,7 @@ export class CodexAppServerClient {
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  private activeSharedLeaseCountProvider: (() => number | undefined) | undefined;
   private nextId = 1;
   private initialized = false;
   private closed = false;
@@ -260,7 +261,7 @@ export class CodexAppServerClient {
         return;
       }
       try {
-        this.writeMessage(message);
+        this.writeMessage(message, (error) => rejectPending(error));
       } catch (error) {
         rejectPending(error instanceof Error ? error : new Error(String(error)));
       }
@@ -279,6 +280,16 @@ export class CodexAppServerClient {
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);
+  }
+
+  setActiveSharedLeaseCountProviderForUnscopedNotifications(
+    provider: (() => number | undefined) | undefined,
+  ): void {
+    this.activeSharedLeaseCountProvider = provider;
+  }
+
+  getActiveSharedLeaseCountForUnscopedNotifications(): number | undefined {
+    return this.activeSharedLeaseCountProvider?.();
   }
 
   addCloseHandler(handler: (client: CodexAppServerClient) => void): () => void {
@@ -301,7 +312,7 @@ export class CodexAppServerClient {
     await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
-  private writeMessage(message: RpcRequest | RpcResponse): void {
+  private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
     if (this.closed) {
       return;
     }
@@ -312,6 +323,7 @@ export class CodexAppServerClient {
       (error?: Error | null) => {
         if (error) {
           embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+          onError?.(error);
         }
       },
     );
@@ -353,6 +365,7 @@ export class CodexAppServerClient {
     } catch (error) {
       const lineCount = pending.lineCount + 1;
       if (
+        shouldBufferCodexAppServerParseFailure(candidate.trim(), error) &&
         candidate.length <= CODEX_APP_SERVER_PARSE_BUFFER_MAX &&
         lineCount <= CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES
       ) {

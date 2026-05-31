@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type {
   MessagePresentation,
   MessagePresentationBlock,
@@ -81,9 +82,9 @@ function fallbackListBlock(params: {
   labels: readonly string[];
   maxLabelLength?: number;
 }): MessagePresentationBlock | undefined {
-  const labels = params.labels
-    .map((label) => truncateText(label, params.maxLabelLength).trim())
-    .filter(Boolean);
+  const labels = normalizeStringEntries(
+    params.labels.map((label) => truncateText(label, params.maxLabelLength)),
+  );
   return labels.length > 0
     ? {
         type: params.blockType,

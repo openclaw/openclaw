@@ -333,6 +333,40 @@ describe("runMessageAction media behavior", () => {
     });
   });
 
+  it("sends structured mediaUrls arrays", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          mediaUrls: ["./one.png", "/workspace/two.png"],
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "one.png"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "one.png"),
+        path.join(sandboxDir, "two.png"),
+      ]);
+    });
+  });
+
   describe("sendAttachment hydration", () => {
     const cfg = {
       channels: {
@@ -719,6 +753,102 @@ describe("runMessageAction media behavior", () => {
       expect(handlerParams.contentType).toBe("image/png");
     });
 
+    it("hydrates buffer and metadata from attachments[] before the reply handler runs", async () => {
+      const result = await runMessageAction({
+        cfg,
+        action: "reply",
+        params: {
+          channel: "replychat",
+          target: "+15551234567",
+          messageId: "parent-id",
+          text: "look at this",
+          attachments: [
+            {
+              url: "https://example.com/pic.png",
+              name: "reply.png",
+              mimeType: "image/png",
+            },
+          ],
+        },
+      });
+
+      expect(result.kind).toBe("action");
+      expect(loadWebMedia).toHaveBeenCalledWith("https://example.com/pic.png", expect.any(Object));
+      expect(handleActionMock).toHaveBeenCalledTimes(1);
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
+      expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
+      expect(handlerParams.filename).toBe("reply.png");
+      expect(handlerParams.contentType).toBe("image/png");
+    });
+
+    it("does not copy metadata from attachments[] when top-level media wins", async () => {
+      await runMessageAction({
+        cfg,
+        action: "reply",
+        params: {
+          channel: "replychat",
+          target: "+15551234567",
+          messageId: "parent-id",
+          text: "look at this",
+          media: "https://example.com/pic.png",
+          attachments: [
+            {
+              url: "https://example.com/ignored.pdf",
+              name: "ignored.pdf",
+              mimeType: "application/pdf",
+            },
+          ],
+        },
+      });
+
+      expect(loadWebMedia).toHaveBeenCalledWith("https://example.com/pic.png", expect.any(Object));
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
+      expect(handlerParams.filename).toBe("pic.png");
+      expect(handlerParams.contentType).toBe("image/png");
+    });
+
+    it("routes attachments[] host paths into local-root expansion", async () => {
+      const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
+        "../../media/web-media.js",
+      );
+      vi.mocked(loadWebMedia).mockImplementation(actual.loadWebMedia);
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-reply-attachment-path-"));
+      try {
+        const attachmentPath = path.join(tempDir, "photo.png");
+        await fs.writeFile(attachmentPath, onePixelPng);
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "reply",
+          params: {
+            channel: "replychat",
+            target: "+15551234567",
+            messageId: "parent-id",
+            text: "look at this",
+            attachments: [
+              {
+                path: attachmentPath,
+                name: "photo.png",
+                mimeType: "image/png",
+              },
+            ],
+          },
+        });
+
+        expect(result.kind).toBe("action");
+        const handlerParams = firstMockArg(handleActionMock, "handleAction");
+        expect(handlerParams.filename).toBe("photo.png");
+        expect(handlerParams.contentType).toBe("image/png");
+        expect(typeof handlerParams.buffer).toBe("string");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it("rejects host paths outside mediaLocalRoots before invoking the reply handler", async () => {
       // Use the real loader so its localRoots/workspaceOnly enforcement runs.
       const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
@@ -1004,11 +1134,6 @@ describe("runMessageAction media behavior", () => {
           media: "/workspace/data/file.txt",
           message: "",
           expectedRelativePath: path.join("data", "file.txt"),
-        },
-        {
-          name: "MEDIA directive",
-          message: "Hello\nMEDIA: ./data/note.ogg",
-          expectedRelativePath: path.join("data", "note.ogg"),
         },
       ] as const) {
         await withSandbox(async (sandboxDir) => {

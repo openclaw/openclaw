@@ -1,8 +1,13 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveModelCatalogScope } from "../agents/model-catalog-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
+  PluginLruCache,
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
@@ -10,7 +15,10 @@ import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-con
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import {
+  getActivePluginRegistryWorkspaceDirFromState,
+  getPluginRegistryState,
+} from "./runtime-state.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -21,16 +29,17 @@ import type {
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
-const providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
+let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
+const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
 const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
 
 export type ProviderRuntimePluginLookupParams = {
   provider: string;
+  modelId?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
 };
 
@@ -41,6 +50,11 @@ export type ProviderRuntimePluginHandle = ProviderRuntimePluginLookupParams & {
 export type ProviderRuntimePluginHandleParams = ProviderRuntimePluginLookupParams & {
   runtimeHandle?: ProviderRuntimePluginHandle;
 };
+
+export function clearProviderRuntimePluginCacheForTest(): void {
+  providerRuntimePluginCache = new WeakMap();
+  defaultProviderRuntimePluginCache.clear();
+}
 
 function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -55,9 +69,13 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   );
 }
 
-function resolveProviderRuntimePluginCacheKey(params: ProviderRuntimePluginLookupParams): string {
+function resolveProviderRuntimePluginCacheKey(
+  params: ProviderRuntimePluginLookupParams,
+  registryState = getPluginRegistryState(),
+): string {
   return JSON.stringify({
     provider: normalizeLowercaseStringOrEmpty(params.provider),
+    modelId: resolveProviderRuntimeLookupModelId(params) ?? null,
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.config,
       env: params.env,
@@ -67,14 +85,46 @@ function resolveProviderRuntimePluginCacheKey(params: ProviderRuntimePluginLooku
     models: params.config?.models?.providers,
     workspaceDir: params.workspaceDir ?? "",
     applyAutoEnable: params.applyAutoEnable ?? null,
-    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? null,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
+    pluginRegistryKey: registryState?.key ?? null,
+    pluginRegistryVersion: registryState?.activeVersion ?? null,
   });
 }
 
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(providerId);
   return !!normalized && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
+}
+
+function resolveProviderRuntimeLookupModelId(
+  params: ProviderRuntimePluginLookupParams & { context?: { modelId?: unknown } },
+): string | undefined {
+  return normalizeOptionalString(
+    params.modelId ??
+      (typeof params.context?.modelId === "string" ? params.context.modelId : undefined),
+  );
+}
+
+function resolveProviderRuntimeLookupScope(
+  params: ProviderRuntimePluginLookupParams,
+  apiOwnerHint?: string,
+): {
+  providerRefs: string[];
+  modelRefs?: string[];
+} {
+  const providerRefs = apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider];
+  const modelId = resolveProviderRuntimeLookupModelId(params);
+  if (!modelId) {
+    return { providerRefs };
+  }
+  return {
+    providerRefs,
+    modelRefs: resolveModelCatalogScope({
+      cfg: params.config,
+      provider: params.provider,
+      model: modelId,
+    }).modelRefs,
+  };
 }
 
 function findProviderRuntimePluginInLoadedRegistries(params: {
@@ -139,8 +189,8 @@ export function resolveProviderPluginsForHooks(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   providerRefs?: readonly string[];
+  modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
@@ -152,7 +202,6 @@ export function resolveProviderPluginsForHooks(params: {
       env,
       activate: false,
       applyAutoEnable: params.applyAutoEnable,
-      bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
       bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     })
   ) {
@@ -164,7 +213,6 @@ export function resolveProviderPluginsForHooks(params: {
     env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
-    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
   });
   return resolved;
@@ -173,44 +221,77 @@ export function resolveProviderPluginsForHooks(params: {
 export function resolveProviderRuntimePlugin(
   params: ProviderRuntimePluginLookupParams,
 ): ProviderPlugin | undefined {
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const env = params.env ?? process.env;
+  const lookup = { ...params, workspaceDir, env };
   const apiOwnerHint = resolveProviderConfigApiOwnerHint({
     provider: params.provider,
     config: params.config,
   });
+  const providerRefs = apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider];
   const loadedPlugin = findProviderRuntimePluginInLoadedRegistries({
-    lookup: params,
+    lookup,
     apiOwnerHint,
   });
   if (loadedPlugin) {
     return loadedPlugin;
   }
+  if (
+    isPluginProvidersLoadInFlight({
+      ...params,
+      workspaceDir,
+      env,
+      providerRefs,
+      activate: false,
+      applyAutoEnable: params.applyAutoEnable,
+      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
+    })
+  ) {
+    return undefined;
+  }
   const cacheConfig = params.env && params.env !== process.env ? undefined : params.config;
-  const plugin = resolveConfigScopedRuntimeCacheValue({
-    cache: providerRuntimePluginCache,
-    config: cacheConfig,
-    key: resolveProviderRuntimePluginCacheKey(params),
-    load: () => {
-      return (
-        resolveProviderPluginsForHooks({
-          config: params.config,
-          workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
-          env: params.env,
-          providerRefs: apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider],
-          applyAutoEnable: params.applyAutoEnable,
-          bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
-          bundledProviderVitestCompat: params.bundledProviderVitestCompat,
-        }).find((plugin) => {
-          if (apiOwnerHint) {
-            return (
-              matchesProviderLiteralId(plugin, params.provider) ||
-              matchesProviderId(plugin, apiOwnerHint)
-            );
+  const registryState = getPluginRegistryState();
+  const cacheKey = resolveProviderRuntimePluginCacheKey(lookup, registryState);
+  const load = () => {
+    const lookupScope = resolveProviderRuntimeLookupScope(params, apiOwnerHint);
+    return (
+      resolveProviderPluginsForHooks({
+        config: params.config,
+        workspaceDir,
+        env,
+        providerRefs: lookupScope.providerRefs,
+        modelRefs: lookupScope.modelRefs,
+        applyAutoEnable: params.applyAutoEnable,
+        bundledProviderVitestCompat: params.bundledProviderVitestCompat,
+      }).find((plugin) => {
+        if (apiOwnerHint) {
+          return (
+            matchesProviderLiteralId(plugin, params.provider) ||
+            matchesProviderId(plugin, apiOwnerHint)
+          );
+        }
+        return matchesProviderId(plugin, params.provider);
+      }) ?? null
+    );
+  };
+  const plugin = cacheConfig
+    ? resolveConfigScopedRuntimeCacheValue({
+        cache: providerRuntimePluginCache,
+        config: cacheConfig,
+        key: cacheKey,
+        load,
+      })
+    : !registryState?.key
+      ? load()
+      : (() => {
+          const cached = defaultProviderRuntimePluginCache.getResult(cacheKey);
+          if (cached.hit) {
+            return cached.value;
           }
-          return matchesProviderId(plugin, params.provider);
-        }) ?? null
-      );
-    },
-  });
+          const loaded = load();
+          defaultProviderRuntimePluginCache.set(cacheKey, loaded);
+          return loaded;
+        })();
   return plugin ?? undefined;
 }
 
@@ -265,7 +346,22 @@ export function resolveProviderRuntimePluginHandle(
 export function ensureProviderRuntimePluginHandle(
   params: ProviderRuntimePluginHandleParams,
 ): ProviderRuntimePluginHandle {
-  return params.runtimeHandle ?? resolveProviderRuntimePluginHandle(params);
+  const modelId = resolveProviderRuntimeLookupModelId(params);
+  if (
+    !params.runtimeHandle ||
+    (modelId && !params.runtimeHandle.plugin && params.runtimeHandle.modelId !== modelId)
+  ) {
+    return resolveProviderRuntimePluginHandle({
+      provider: params.provider,
+      modelId,
+      config: params.config ?? params.runtimeHandle?.config,
+      workspaceDir: params.workspaceDir ?? params.runtimeHandle?.workspaceDir,
+      env: params.env ?? params.runtimeHandle?.env,
+      applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
+      bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
+    });
+  }
+  return params.runtimeHandle;
 }
 
 export function prepareProviderExtraParams(params: {

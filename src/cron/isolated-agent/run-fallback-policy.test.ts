@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
-import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
+import {
+  resolveCronFallbacksOverride,
+  resolveCronPreflightCandidates,
+} from "./run-fallback-policy.js";
 
 function makeJob(payload: CronJob["payload"]): CronJob {
   return {
@@ -84,7 +88,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2", "zai/glm-5"],
+                  fallbacks: ["openai/gpt-5.2", "zai/glm-5"],
                 },
               },
             },
@@ -97,7 +101,7 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
         }),
       }),
-    ).toEqual(["openai-codex/gpt-5.2", "zai/glm-5"]);
+    ).toEqual(["openai/gpt-5.2", "zai/glm-5"]);
   });
 
   it("keeps a selected agent primary model strict ahead of default subagent fallbacks", () => {
@@ -109,7 +113,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2"],
+                  fallbacks: ["openai/gpt-5.2"],
                 },
               },
             },
@@ -174,7 +178,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.2"],
+                  fallbacks: ["openai/gpt-5.2"],
                 },
               },
             },
@@ -229,7 +233,7 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
-                  fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+                  fallbacks: ["openai/gpt-5.4", "zai/glm-5"],
                 },
               },
             },
@@ -256,5 +260,57 @@ describe("resolveCronFallbacksOverride", () => {
         }),
       }),
     ).toBeUndefined();
+  });
+
+  it("plans the full configured candidate chain for cron preflight", () => {
+    expect(
+      resolveCronPreflightCandidates({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "ollama/qwen3:32b",
+                fallbacks: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-5.4"],
+              },
+            },
+          },
+        },
+        agentId: "main",
+        provider: "ollama",
+        model: "qwen3:32b",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual([
+      { provider: "ollama", model: "qwen3:32b" },
+      { provider: "openrouter", model: "nvidia/nemotron-3-super-120b-a12b:free" },
+      { provider: "openai", model: "gpt-5.4" },
+    ]);
+  });
+
+  it("keeps cron preflight strict when payload fallbacks are explicitly empty", () => {
+    expect(
+      resolveCronPreflightCandidates({
+        cfg: makeConfig(["openai/gpt-5.4"]),
+        agentId: "main",
+        provider: "ollama",
+        model: "qwen3:32b",
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+          fallbacks: [],
+        }),
+      }),
+    ).toStrictEqual([{ provider: "ollama", model: "qwen3:32b" }]);
+  });
+
+  it("documents that cron preflight walks fallbacks before skipping", () => {
+    const cliDocs = readFileSync("docs/cli/cron.md", "utf8");
+    const automationDocs = readFileSync("docs/automation/cron-jobs.md", "utf8");
+
+    expect(cliDocs).toContain("Local-provider preflight checks walk configured fallbacks");
+    expect(automationDocs).toContain("Local-provider preflight checks walk configured fallbacks");
   });
 });

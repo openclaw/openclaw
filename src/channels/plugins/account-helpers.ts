@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAccountEntry,
@@ -8,7 +10,6 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ChannelAccountSnapshot } from "./types.core.js";
 
 export function createAccountListHelpers(
@@ -70,7 +71,7 @@ export function createAccountListHelpers(
     if (!normalizeConfiguredAccountId) {
       return ids;
     }
-    return [...new Set(ids.map((id) => normalizeConfiguredAccountId(id)).filter(Boolean))];
+    return normalizeUniqueStringEntries(ids.map((id) => normalizeConfiguredAccountId(id)));
   }
 
   function listAccountIds(cfg: OpenClawConfig): string[] {

@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringEntries,
+  sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
@@ -44,7 +50,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
 };
 
 function uniqSorted(values: string[]): string[] {
-  return [...new Set(values.map((v) => v.trim()).filter(Boolean))].toSorted();
+  return sortUniqueStrings(normalizeStringEntries(values));
 }
 
 function resolveCommandsForGroup(group: ArmGroup): string[] {
@@ -73,7 +79,8 @@ function parseDurationMs(input: string | undefined): number | null {
   }
   const unit = m[2];
   const mult = unit === "s" ? 1000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
-  return n * mult;
+  const durationMs = n * mult;
+  return Number.isSafeInteger(durationMs) ? durationMs : null;
 }
 
 function formatDuration(ms: number): string {
@@ -280,24 +287,49 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   return null;
 }
 
-function requiresAdminToMutatePhoneControl(
-  channel: string,
-  gatewayClientScopes?: readonly string[],
-): boolean {
+function lacksAdminToMutatePhoneControl(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  const { senderIsOwner, gatewayClientScopes } = params;
   if (Array.isArray(gatewayClientScopes)) {
     return !gatewayClientScopes.includes(PHONE_ADMIN_SCOPE);
   }
-  return channel === "webchat";
+  return senderIsOwner !== true;
+}
+
+function resolveArmExpiryStatus(state: ArmStateFile, nowRaw = Date.now()): string {
+  if (state.expiresAtMs == null) {
+    return "manual disarm required";
+  }
+  const now = asDateTimestampMs(nowRaw);
+  if (now === undefined) {
+    return "expiry unavailable";
+  }
+  const expiresAt = asDateTimestampMs(state.expiresAtMs);
+  if (expiresAt === undefined || expiresAt <= now) {
+    return "expired";
+  }
+  return `expires in ${formatDuration(expiresAt - now)}`;
+}
+
+function isArmStateExpired(state: ArmStateFile, nowRaw = Date.now()): boolean {
+  if (state.expiresAtMs == null) {
+    return false;
+  }
+  const now = asDateTimestampMs(nowRaw);
+  if (now === undefined) {
+    return false;
+  }
+  const expiresAt = asDateTimestampMs(state.expiresAtMs);
+  return expiresAt === undefined || expiresAt <= now;
 }
 
 function formatStatus(state: ArmStateFile | null): string {
   if (!state) {
     return "Phone control: disarmed.";
   }
-  const until =
-    state.expiresAtMs == null
-      ? "manual disarm required"
-      : `expires in ${formatDuration(Math.max(0, state.expiresAtMs - Date.now()))}`;
+  const until = resolveArmExpiryStatus(state);
   const cmds = uniqSorted(
     state.version === 1
       ? state.removedFromDeny
@@ -325,7 +357,7 @@ export default definePluginEntry({
           if (!state || state.expiresAtMs == null) {
             return;
           }
-          if (Date.now() < state.expiresAtMs) {
+          if (!isArmStateExpired(state)) {
             return;
           }
           await disarmNow({
@@ -361,6 +393,7 @@ export default definePluginEntry({
       name: "phone",
       description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
@@ -380,7 +413,12 @@ export default definePluginEntry({
         }
 
         if (action === "disarm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutatePhoneControl({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: "⚠️ /phone disarm requires operator.admin.",
             };
@@ -402,7 +440,12 @@ export default definePluginEntry({
         }
 
         if (action === "arm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutatePhoneControl({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: "⚠️ /phone arm requires operator.admin.",
             };
@@ -411,8 +454,18 @@ export default definePluginEntry({
           if (!group) {
             return { text: `Usage: /phone arm <group> [duration]\nGroups: ${formatGroupList()}` };
           }
-          const durationMs = parseDurationMs(tokens[2]) ?? 10 * 60_000;
-          const expiresAtMs = Date.now() + durationMs;
+          const durationMs = tokens[2] === undefined ? 10 * 60_000 : parseDurationMs(tokens[2]);
+          if (durationMs === null) {
+            return { text: "Invalid duration. Use values like 30s, 10m, 2h, or 1d." };
+          }
+          const armedAtMs = asDateTimestampMs(Date.now());
+          const expiresAtMs =
+            armedAtMs === undefined
+              ? undefined
+              : resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: armedAtMs });
+          if (armedAtMs === undefined || expiresAtMs === undefined) {
+            return { text: "Invalid duration. Use values like 30s, 10m, 2h, or 1d." };
+          }
 
           const commands = resolveCommandsForGroup(group);
           const cfg = api.runtime.config.current() as OpenClawConfig;
@@ -443,7 +496,7 @@ export default definePluginEntry({
 
           await writeArmState(statePath, {
             version: STATE_VERSION,
-            armedAtMs: Date.now(),
+            armedAtMs,
             expiresAtMs,
             group,
             armedCommands: uniqSorted(commands),

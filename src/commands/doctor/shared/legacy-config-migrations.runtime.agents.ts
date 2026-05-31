@@ -1,5 +1,9 @@
-import { listLegacyRuntimeModelProviderAliases } from "../../../agents/model-runtime-aliases.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
+import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
+import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
+import { expandToolGroups, mergeAlsoAllowPolicy } from "../../../agents/tool-policy.js";
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -9,6 +13,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",
@@ -39,6 +44,27 @@ const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   message:
     'top-level memorySearch was moved; use agents.defaults.memorySearch instead. Run "openclaw doctor --fix".',
 };
+
+const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
+  {
+    path: ["memorySearch", "provider"],
+    message:
+      'memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+    match: isLegacyMemorySearchAutoProvider,
+  },
+  {
+    path: ["agents", "defaults", "memorySearch", "provider"],
+    message:
+      'agents.defaults.memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+    match: isLegacyMemorySearchAutoProvider,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+    match: hasAgentListLegacyMemorySearchAutoProvider,
+  },
+];
 
 const HEARTBEAT_RULE: LegacyConfigRule = {
   path: ["heartbeat"],
@@ -93,6 +119,21 @@ const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const DEPRECATED_EMBEDDED_AGENT_KEY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "embeddedPi"],
+    message:
+      'agents.defaults.embeddedPi is legacy; use agents.defaults.embeddedAgent instead. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].embeddedPi is legacy; use agents.list[].embeddedAgent instead. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAgentListEmbeddedAgentKey(value),
+  },
+];
+
 const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "llm"],
@@ -123,6 +164,39 @@ const IGNORED_AGENT_MODEL_TIMEOUT_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const PROFILE_CONFIGURED_TOOL_SECTION_RULES: LegacyConfigRule[] = [
+  {
+    path: ["tools"],
+    message:
+      'tools.profile filters explicit configured-section tool grants; run "openclaw doctor --fix" to rewrite the explicit grants into a valid allowlist.',
+    match: (value) => toolProfileConfiguredSectionsNeedExplicitRepair(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].tools.profile filters explicit configured-section tool grants; run "openclaw doctor --fix" to rewrite the explicit grants into a valid allowlist.',
+    match: (value, root) => {
+      const globalTools = getRecord(root.tools);
+      const inheritedProfile =
+        typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
+      const inheritedAlsoAllow = readToolPolicyGrantList(globalTools, "alsoAllow");
+      return (
+        Array.isArray(value) &&
+        value.some((agent) => {
+          const agentTools = getRecord(getRecord(agent)?.tools);
+          return toolProfileConfiguredSectionsNeedExplicitRepair(
+            agentTools,
+            inheritedProfile,
+            inheritedAlsoAllow,
+            collectEffectiveConfiguredToolSectionGrants(globalTools, agentTools),
+            getRecord(globalTools?.byProvider),
+          );
+        })
+      );
+    },
+  },
+];
+
 const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "silentReplyRewrite"],
@@ -146,6 +220,20 @@ const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
     message:
       'surfaces.*.silentReply.direct was removed; direct chats never receive NO_REPLY prompt guidance. Run "openclaw doctor --fix" to remove it.',
     match: (value) => hasSurfaceSilentReplyDirect(value),
+  },
+];
+
+const SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "systemPromptOverride"],
+    message:
+      'agents.defaults.systemPromptOverride was removed; OpenClaw owns the generated system prompt. Run "openclaw doctor --fix" to remove it.',
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].systemPromptOverride was removed; OpenClaw owns the generated system prompt. Run "openclaw doctor --fix" to remove it.',
+    match: (value) => hasAgentListSystemPromptOverride(value),
   },
 ];
 
@@ -226,11 +314,27 @@ function hasLegacyAgentListEmbeddedHarness(value: unknown): boolean {
   return value.some((agent) => getRecord(getRecord(agent)?.embeddedHarness) !== null);
 }
 
+function hasLegacyAgentListEmbeddedAgentKey(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => getRecord(getRecord(agent)?.embeddedPi) !== null);
+}
+
 function hasAgentListRuntimePolicy(value: unknown): boolean {
   if (!Array.isArray(value)) {
     return false;
   }
   return value.some((agent) => getRecord(getRecord(agent)?.agentRuntime) !== null);
+}
+
+function hasAgentListSystemPromptOverride(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) =>
+    Object.prototype.hasOwnProperty.call(getRecord(agent) ?? {}, "systemPromptOverride"),
+  );
 }
 
 function hasOwnTimeoutMs(value: unknown): boolean {
@@ -249,6 +353,55 @@ function hasAgentListModelTimeout(value: unknown): boolean {
       hasOwnTimeoutMs(getRecord(agentRecord?.subagents)?.model)
     );
   });
+}
+
+function migrateLegacyEmbeddedAgentKey(
+  container: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const legacy = getRecord(container.embeddedPi);
+  if (!legacy) {
+    return;
+  }
+  const existing = getRecord(container.embeddedAgent);
+  if (!existing) {
+    container.embeddedAgent = legacy;
+    changes.push(`Moved ${pathLabel}.embeddedPi → ${pathLabel}.embeddedAgent.`);
+  } else {
+    const merged = structuredClone(existing);
+    mergeMissing(merged, legacy);
+    container.embeddedAgent = merged;
+    changes.push(
+      `Merged ${pathLabel}.embeddedPi → ${pathLabel}.embeddedAgent (filled missing fields from legacy; kept explicit embeddedAgent values).`,
+    );
+  }
+  delete container.embeddedPi;
+}
+
+function isLegacyMemorySearchAutoProvider(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "auto";
+}
+
+function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) =>
+    isLegacyMemorySearchAutoProvider(getRecord(getRecord(agent)?.memorySearch)?.provider),
+  );
+}
+
+function rewriteLegacyMemorySearchAutoProvider(
+  memorySearch: Record<string, unknown> | null,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!memorySearch || !isLegacyMemorySearchAutoProvider(memorySearch.provider)) {
+    return;
+  }
+  memorySearch.provider = "openai";
+  changes.push(`Moved ${pathLabel}.provider from legacy "auto" to "openai".`);
 }
 
 function migrateLegacySandboxPerSession(
@@ -294,7 +447,7 @@ function resolveLegacyAgentRuntimeIntent(raw: unknown): LegacyAgentRuntimeIntent
     return undefined;
   }
   const runtime = typeof record.id === "string" ? record.id.trim().toLowerCase() : "";
-  if (!runtime || runtime === "auto" || runtime === "pi") {
+  if (!runtime || runtime === "auto" || runtime === "openclaw") {
     return undefined;
   }
   const alias = listLegacyRuntimeModelProviderAliases().find(
@@ -472,12 +625,583 @@ function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: st
   }
 }
 
+function removeLegacySystemPromptOverride(raw: Record<string, unknown>, changes: string[]): void {
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  if (defaults && Object.prototype.hasOwnProperty.call(defaults, "systemPromptOverride")) {
+    delete defaults.systemPromptOverride;
+    changes.push("Removed agents.defaults.systemPromptOverride.");
+  }
+
+  if (!Array.isArray(agents?.list)) {
+    return;
+  }
+  for (const [index, agent] of agents.list.entries()) {
+    const agentRecord = getRecord(agent);
+    if (
+      !agentRecord ||
+      !Object.prototype.hasOwnProperty.call(agentRecord, "systemPromptOverride")
+    ) {
+      continue;
+    }
+    delete agentRecord.systemPromptOverride;
+    changes.push(`Removed agents.list.${index}.systemPromptOverride.`);
+  }
+}
+
+const CONFIGURED_TOOL_SECTION_GRANTS = [
+  { key: "exec", grants: ["exec", "process"] },
+  { key: "fs", grants: ["read", "write", "edit"] },
+] as const;
+
+function readToolPolicyGrantList(value: unknown, key: "allow" | "alsoAllow"): string[] {
+  return readOwnToolPolicyGrantList(value, key) ?? [];
+}
+
+function readOwnToolPolicyGrantList(
+  value: unknown,
+  key: "allow" | "alsoAllow",
+): string[] | undefined {
+  const tools = getRecord(value);
+  return Array.isArray(tools?.[key])
+    ? tools[key].filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+}
+
+function resolveToolProfileForMigration(
+  tools: Record<string, unknown>,
+  inheritedProfile?: string,
+): string | undefined {
+  return typeof tools.profile === "string" ? tools.profile : inheritedProfile;
+}
+
+function collectProfileConfiguredSectionRepairGrants(params: {
+  value: unknown;
+  inheritedProfile?: string;
+  inheritedAlsoAllow?: string[];
+  configuredGrants: string[];
+}): string[] {
+  const tools = getRecord(params.value);
+  if (!tools) {
+    return [];
+  }
+  const profile = resolveToolProfileForMigration(tools, params.inheritedProfile);
+  if (!profile || profile === "full") {
+    return [];
+  }
+  const ownAllow = readToolPolicyGrantList(tools, "allow");
+  if (ownAllow.length === 0) {
+    return [];
+  }
+  const explicitAlsoAllow = readOwnToolPolicyGrantList(tools, "alsoAllow");
+  const explicitPolicy = {
+    allow: uniqueStrings([...ownAllow, ...(explicitAlsoAllow ?? [])]),
+  };
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile),
+    explicitAlsoAllow ?? params.inheritedAlsoAllow ?? [],
+  );
+  return uniqueStrings(
+    params.configuredGrants.filter(
+      (toolName) =>
+        isToolAllowedByPolicyName(toolName, explicitPolicy) &&
+        (!isToolAllowedByPolicyName(toolName, profilePolicy) ||
+          (explicitAlsoAllow
+            ? isToolAllowedByPolicyName(toolName, { allow: explicitAlsoAllow })
+            : false)),
+    ),
+  );
+}
+
+function toolProfileConfiguredSectionsNeedExplicitRepair(
+  value: unknown,
+  inheritedProfile?: string,
+  inheritedAlsoAllow?: string[],
+  configuredGrantsOverride?: string[],
+  inheritedByProvider?: Record<string, unknown> | null,
+): boolean {
+  const tools = getRecord(value);
+  if (!tools) {
+    return false;
+  }
+  const configuredGrants = configuredGrantsOverride ?? collectConfiguredToolSectionGrants(tools);
+  return (
+    scopeToolProfileConfiguredSectionsNeedMigration({
+      value,
+      inheritedProfile,
+      inheritedAlsoAllow,
+      configuredGrants,
+    }) ||
+    byProviderToolProfilesNeedConfiguredSectionMigration(
+      tools,
+      configuredGrants,
+      readOwnToolPolicyGrantList(tools, "alsoAllow") ?? inheritedAlsoAllow,
+      inheritedByProvider,
+    )
+  );
+}
+
+function collectConfiguredToolSectionGrants(tools: Record<string, unknown>): string[] {
+  const grants: string[] = [];
+  for (const section of CONFIGURED_TOOL_SECTION_GRANTS) {
+    if (getRecord(tools[section.key])) {
+      grants.push(...section.grants);
+    }
+  }
+  return uniqueStrings(grants);
+}
+
+function collectEffectiveConfiguredToolSectionGrants(
+  inheritedTools: Record<string, unknown> | null | undefined,
+  tools: Record<string, unknown> | null | undefined,
+): string[] {
+  const includeInheritedSections = typeof tools?.profile !== "string";
+  return uniqueStrings([
+    ...(includeInheritedSections && inheritedTools
+      ? collectConfiguredToolSectionGrants(inheritedTools)
+      : []),
+    ...(tools ? collectConfiguredToolSectionGrants(tools) : []),
+  ]);
+}
+
+function toolProfileAllowRequiresFull(params: {
+  value: unknown;
+  inheritedProfile?: string;
+  inheritedAlsoAllow?: string[];
+  configuredGrants: string[];
+}): boolean {
+  return collectProfileConfiguredSectionRepairGrants(params).length > 0;
+}
+
+function resolveProfileBoundAllowGrants(params: {
+  tools: Record<string, unknown>;
+  profile: string;
+  allow: string[];
+  inheritedAlsoAllow?: string[];
+  configuredGrants: string[];
+}): string[] {
+  const explicitAlsoAllow = readOwnToolPolicyGrantList(params.tools, "alsoAllow");
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(params.profile),
+    explicitAlsoAllow ?? params.inheritedAlsoAllow ?? [],
+  );
+  const profileAllow = expandToolGroups(profilePolicy?.allow);
+  const coreAllow = profileAllow.includes("*")
+    ? expandToolGroups(params.allow)
+    : profileAllow.filter((toolName) =>
+        isToolAllowedByPolicyName(toolName, { allow: params.allow }),
+      );
+  const pluginAllow = expandToolGroups(params.allow).filter((entry) => {
+    if (entry === "*" || isKnownCoreToolId(entry)) {
+      return false;
+    }
+    return !profileAllow.some((toolName) =>
+      isToolAllowedByPolicyName(toolName, { allow: [entry] }),
+    );
+  });
+  return uniqueStrings([...coreAllow, ...pluginAllow, ...params.configuredGrants]);
+}
+
+function scopeToolProfileConfiguredSectionsNeedMigration(params: {
+  value: unknown;
+  inheritedProfile?: string;
+  inheritedAlsoAllow?: string[];
+  configuredGrants: string[];
+}): boolean {
+  return toolProfileAllowRequiresFull(params);
+}
+
+function byProviderToolProfilesNeedConfiguredSectionMigration(
+  tools: Record<string, unknown>,
+  configuredGrants: string[],
+  inheritedAlsoAllow?: string[],
+  inheritedByProvider?: Record<string, unknown> | null,
+): boolean {
+  const byProvider = getRecord(tools.byProvider);
+  const ownProviderNeedsMigration = Boolean(
+    byProvider &&
+    Object.entries(byProvider).some(([providerKey, policy]) => {
+      const inheritedProviderPolicy = resolveInheritedProviderPolicy(
+        inheritedByProvider,
+        providerKey,
+      );
+      const inheritedProviderProfile =
+        typeof inheritedProviderPolicy?.profile === "string"
+          ? inheritedProviderPolicy.profile
+          : undefined;
+      const hasProviderProfile =
+        typeof getRecord(policy)?.profile === "string" || Boolean(inheritedProviderProfile);
+      if (!hasProviderProfile) {
+        return false;
+      }
+      return scopeToolProfileConfiguredSectionsNeedMigration({
+        value: policy,
+        inheritedProfile: inheritedProviderProfile,
+        inheritedAlsoAllow:
+          readOwnToolPolicyGrantList(inheritedProviderPolicy, "alsoAllow") ?? inheritedAlsoAllow,
+        configuredGrants,
+      });
+    }),
+  );
+  if (ownProviderNeedsMigration) {
+    return true;
+  }
+  const localConfiguredGrants = collectConfiguredToolSectionGrants(tools);
+  if (localConfiguredGrants.length === 0) {
+    return false;
+  }
+  const handledProviders = new Set(
+    Object.keys(byProvider ?? {}).map((providerKey) => normalizeToolProviderPolicyKey(providerKey)),
+  );
+  return listInheritedProviderPoliciesWithProfiles(inheritedByProvider).some(
+    (inheritedProvider) =>
+      !handledProviders.has(inheritedProvider.normalizedKey) &&
+      scopeToolProfileConfiguredSectionsNeedMigration({
+        value: {},
+        inheritedProfile: inheritedProvider.profile,
+        inheritedAlsoAllow: readOwnToolPolicyGrantList(inheritedProvider.policy, "alsoAllow"),
+        configuredGrants: localConfiguredGrants,
+      }),
+  );
+}
+
+function addProfileConfiguredSectionGrants(
+  value: unknown,
+  pathLabel: string,
+  changes: string[],
+  inheritedProfile?: string,
+  inheritedAlsoAllow?: string[],
+  configuredGrantsOverride?: string[],
+): void {
+  const tools = getRecord(value);
+  if (!tools) {
+    return;
+  }
+  const profile = resolveToolProfileForMigration(tools, inheritedProfile);
+  if (!profile) {
+    return;
+  }
+  const configuredGrants = configuredGrantsOverride ?? collectConfiguredToolSectionGrants(tools);
+  const repairGrants = collectProfileConfiguredSectionRepairGrants({
+    value: tools,
+    inheritedProfile,
+    inheritedAlsoAllow,
+    configuredGrants,
+  });
+  const allow = readToolPolicyGrantList(tools, "allow");
+  if (repairGrants.length === 0 || allow.length === 0 || profile === "full") {
+    return;
+  }
+  const ownAlsoAllow = readOwnToolPolicyGrantList(tools, "alsoAllow");
+  tools.allow = resolveProfileBoundAllowGrants({
+    tools,
+    profile,
+    allow: uniqueStrings([...allow, ...(ownAlsoAllow ?? [])]),
+    inheritedAlsoAllow,
+    configuredGrants: repairGrants,
+  });
+  changes.push(
+    `Replaced ${pathLabel}.allow entries with profile "${profile}" grants plus explicit configured-section grants.`,
+  );
+  if (ownAlsoAllow) {
+    delete tools.alsoAllow;
+    changes.push(`Merged ${pathLabel}.alsoAllow into ${pathLabel}.allow.`);
+  }
+  tools.profile = "full";
+  changes.push(
+    `Set ${pathLabel}.profile to "full" so ${pathLabel}.allow controls explicit configured-section grants directly.`,
+  );
+}
+
+function addByProviderProfileConfiguredSectionGrants(
+  value: unknown,
+  pathLabel: string,
+  changes: string[],
+  configuredGrantsOverride?: string[],
+  inheritedProfile?: string,
+  inheritedByProvider?: Record<string, unknown> | null,
+): void {
+  const tools = getRecord(value);
+  if (!tools) {
+    return;
+  }
+  const configuredGrants = configuredGrantsOverride ?? collectConfiguredToolSectionGrants(tools);
+  if (configuredGrants.length === 0) {
+    return;
+  }
+  const byProvider = getRecord(tools.byProvider);
+  const handledProviders = new Set<string>();
+  for (const [providerKey, providerPolicy] of Object.entries(byProvider ?? {})) {
+    if (isBlockedObjectKey(providerKey)) {
+      continue;
+    }
+    addHandledProviderPolicyKey(handledProviders, providerKey);
+    const inheritedProviderPolicy = resolveInheritedProviderPolicy(
+      inheritedByProvider,
+      providerKey,
+    );
+    const ownsProviderProfile = typeof getRecord(providerPolicy)?.profile === "string";
+    const inheritedProviderProfile =
+      typeof inheritedProviderPolicy?.profile === "string"
+        ? inheritedProviderPolicy.profile
+        : undefined;
+    const providerInheritedProfile = inheritedProviderProfile ?? inheritedProfile;
+    const providerInheritedAlsoAllow = readOwnToolPolicyGrantList(
+      inheritedProviderPolicy,
+      "alsoAllow",
+    );
+    addProfileConfiguredSectionGrantsWithConfiguredGrants(
+      providerPolicy,
+      `${pathLabel}.byProvider.${providerKey}`,
+      changes,
+      configuredGrants,
+      providerInheritedProfile,
+      providerInheritedAlsoAllow,
+      ownsProviderProfile || Boolean(inheritedProviderProfile),
+    );
+  }
+  const localConfiguredGrants = collectConfiguredToolSectionGrants(tools);
+  if (localConfiguredGrants.length === 0) {
+    return;
+  }
+  for (const inheritedProvider of listInheritedProviderPoliciesWithProfiles(inheritedByProvider)) {
+    if (handledProviders.has(inheritedProvider.normalizedKey)) {
+      continue;
+    }
+    const providerPolicy: Record<string, unknown> = {};
+    const changeCount = changes.length;
+    addProfileConfiguredSectionGrantsWithConfiguredGrants(
+      providerPolicy,
+      `${pathLabel}.byProvider.${inheritedProvider.key}`,
+      changes,
+      localConfiguredGrants,
+      inheritedProvider.profile,
+      readOwnToolPolicyGrantList(inheritedProvider.policy, "alsoAllow"),
+    );
+    if (changes.length > changeCount) {
+      if (!getRecord(tools.byProvider)) {
+        tools.byProvider = {};
+      }
+      getRecord(tools.byProvider)![inheritedProvider.key] = providerPolicy;
+      addHandledProviderPolicyKey(handledProviders, inheritedProvider.normalizedKey);
+    }
+  }
+}
+
+function addHandledProviderPolicyKey(handledProviders: Set<string>, providerKey: string): void {
+  handledProviders.add(normalizeToolProviderPolicyKey(providerKey));
+}
+
+function normalizeToolProviderPolicyKey(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0) {
+    return normalizeProviderId(normalized);
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
+  const modelId = normalized.slice(slashIndex + 1);
+  return modelId ? `${provider}/${modelId}` : provider;
+}
+
+function isCanonicalToolProviderPolicyKey(value: string): boolean {
+  return value.trim().toLowerCase() === normalizeToolProviderPolicyKey(value);
+}
+
+function buildInheritedProviderPolicyLookup(
+  inheritedByProvider: Record<string, unknown> | null | undefined,
+): Map<
+  string,
+  {
+    key: string;
+    policy: Record<string, unknown>;
+    canonical: boolean;
+  }
+> {
+  const lookup = new Map<
+    string,
+    {
+      key: string;
+      policy: Record<string, unknown>;
+      canonical: boolean;
+    }
+  >();
+  for (const [key, value] of Object.entries(inheritedByProvider ?? {})) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    const policy = getRecord(value);
+    if (!policy) {
+      continue;
+    }
+    const normalized = normalizeToolProviderPolicyKey(key);
+    if (!normalized) {
+      continue;
+    }
+    const canonical = isCanonicalToolProviderPolicyKey(key);
+    const existing = lookup.get(normalized);
+    if (!existing || (canonical && !existing.canonical)) {
+      lookup.set(normalized, { key, policy, canonical });
+    }
+  }
+  return lookup;
+}
+
+function resolveInheritedProviderPolicy(
+  inheritedByProvider: Record<string, unknown> | null | undefined,
+  providerKey: string,
+): Record<string, unknown> | null {
+  const lookup = buildInheritedProviderPolicyLookup(inheritedByProvider);
+  const normalized = normalizeToolProviderPolicyKey(providerKey);
+  const slashIndex = normalized.indexOf("/");
+  const candidates = slashIndex > 0 ? [normalized, normalized.slice(0, slashIndex)] : [normalized];
+  for (const candidate of candidates) {
+    const match = lookup.get(candidate);
+    if (match) {
+      return match.policy;
+    }
+  }
+  return null;
+}
+
+function listInheritedProviderPoliciesWithProfiles(
+  inheritedByProvider: Record<string, unknown> | null | undefined,
+): Array<{
+  key: string;
+  normalizedKey: string;
+  policy: Record<string, unknown>;
+  profile: string;
+}> {
+  const entries: Array<{
+    key: string;
+    normalizedKey: string;
+    policy: Record<string, unknown>;
+    profile: string;
+  }> = [];
+  for (const [normalizedKey, match] of buildInheritedProviderPolicyLookup(inheritedByProvider)) {
+    if (typeof match.policy.profile !== "string") {
+      continue;
+    }
+    entries.push({
+      key: match.key,
+      normalizedKey,
+      policy: match.policy,
+      profile: match.policy.profile,
+    });
+  }
+  return entries;
+}
+
+function addProfileConfiguredSectionGrantsWithConfiguredGrants(
+  value: unknown,
+  pathLabel: string,
+  changes: string[],
+  configuredGrants: string[],
+  inheritedProfile?: string,
+  inheritedAlsoAllow?: string[],
+  materializeProfile = true,
+): void {
+  const tools = getRecord(value);
+  if (!tools) {
+    return;
+  }
+  const profile = resolveToolProfileForMigration(tools, inheritedProfile);
+  if (!profile) {
+    return;
+  }
+  if (!materializeProfile) {
+    return;
+  }
+  const repairGrants = collectProfileConfiguredSectionRepairGrants({
+    value: tools,
+    inheritedProfile,
+    inheritedAlsoAllow,
+    configuredGrants,
+  });
+  const allow = readToolPolicyGrantList(tools, "allow");
+  if (repairGrants.length === 0 || allow.length === 0 || profile === "full") {
+    return;
+  }
+  const ownAlsoAllow = readOwnToolPolicyGrantList(tools, "alsoAllow");
+  tools.allow = resolveProfileBoundAllowGrants({
+    tools,
+    profile,
+    allow: uniqueStrings([...allow, ...(ownAlsoAllow ?? [])]),
+    inheritedAlsoAllow,
+    configuredGrants: repairGrants,
+  });
+  changes.push(
+    `Replaced ${pathLabel}.allow entries with profile "${profile}" grants plus explicit configured-section grants.`,
+  );
+  if (ownAlsoAllow) {
+    delete tools.alsoAllow;
+    changes.push(`Merged ${pathLabel}.alsoAllow into ${pathLabel}.allow.`);
+  }
+  if (materializeProfile) {
+    tools.profile = "full";
+    changes.push(
+      `Set ${pathLabel}.profile to "full" so ${pathLabel}.allow controls explicit configured-section grants directly.`,
+    );
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "tools.profile-configured-sections-alsoAllow",
+    describe: "Repair explicit configured-section tool grants filtered by profiles",
+    legacyRules: PROFILE_CONFIGURED_TOOL_SECTION_RULES,
+    apply: (raw, changes) => {
+      const globalTools = getRecord(raw.tools);
+      const inheritedProfile =
+        typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
+      const inheritedAlsoAllow = readToolPolicyGrantList(globalTools, "alsoAllow");
+      addProfileConfiguredSectionGrants(raw.tools, "tools", changes);
+      addByProviderProfileConfiguredSectionGrants(
+        raw.tools,
+        "tools",
+        changes,
+        undefined,
+        inheritedProfile,
+      );
+      const agents = getRecord(raw.agents);
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentTools = getRecord(getRecord(agent)?.tools);
+        const configuredGrants = collectEffectiveConfiguredToolSectionGrants(
+          globalTools,
+          agentTools,
+        );
+        addProfileConfiguredSectionGrants(
+          agentTools,
+          `agents.list.${index}.tools`,
+          changes,
+          inheritedProfile,
+          inheritedAlsoAllow,
+          configuredGrants,
+        );
+        addByProviderProfileConfiguredSectionGrants(
+          agentTools,
+          `agents.list.${index}.tools`,
+          changes,
+          configuredGrants,
+          resolveToolProfileForMigration(agentTools ?? {}, inheritedProfile),
+          getRecord(globalTools?.byProvider),
+        );
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "silentReplyRewrite-removed",
     describe: "Remove legacy silent reply rewrite and direct-chat silent reply config",
     legacyRules: SILENT_REPLY_LEGACY_RULES,
     apply: removeLegacySilentReplyConfig,
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.systemPromptOverride-removed",
+    describe: "Remove legacy agent system prompt override config",
+    legacyRules: SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES,
+    apply: removeLegacySystemPromptOverride,
   }),
   defineLegacyConfigMigration({
     id: "agents.defaults.llm->models.providers.timeoutSeconds",
@@ -524,6 +1248,29 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           `agents.list.${index}.subagents.model`,
           changes,
         );
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.embeddedPi->embeddedAgent",
+    describe: "Move legacy embedded agent config key to embeddedAgent",
+    legacyRules: DEPRECATED_EMBEDDED_AGENT_KEY_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      if (defaults) {
+        migrateLegacyEmbeddedAgentKey(defaults, "agents.defaults", changes);
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        if (!agentRecord) {
+          continue;
+        }
+        migrateLegacyEmbeddedAgentKey(agentRecord, `agents.list.${index}`, changes);
       }
     },
   }),
@@ -595,6 +1342,30 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
       });
       delete raw.memorySearch;
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "memorySearch.provider-auto->openai",
+    describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
+    legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      rewriteLegacyMemorySearchAutoProvider(
+        getRecord(getRecord(agents?.defaults)?.memorySearch),
+        "agents.defaults.memorySearch",
+        changes,
+      );
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        rewriteLegacyMemorySearchAutoProvider(
+          getRecord(getRecord(agent)?.memorySearch),
+          `agents.list.${index}.memorySearch`,
+          changes,
+        );
+      }
     },
   }),
   defineLegacyConfigMigration({

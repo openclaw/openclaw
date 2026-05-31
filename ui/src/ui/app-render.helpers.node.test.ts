@@ -7,6 +7,7 @@ const {
   loadChatHistoryMock,
   createSessionAndRefreshMock,
   loadSessionsMock,
+  syncSelectedSessionMessageSubscriptionMock,
 } = vi.hoisted(() => ({
   refreshChatMock: vi.fn(),
   refreshChatAvatarMock: vi.fn(),
@@ -14,11 +15,40 @@ const {
   loadChatHistoryMock: vi.fn(),
   createSessionAndRefreshMock: vi.fn(),
   loadSessionsMock: vi.fn(),
+  syncSelectedSessionMessageSubscriptionMock: vi.fn(),
 }));
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 120,
-  CHAT_SESSIONS_REFRESH_LIMIT: 100,
+  CHAT_SESSIONS_REFRESH_LIMIT: 50,
+  createChatSessionsLoadOverrides: () => ({
+    activeMinutes: 120,
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: true,
+    showArchived: false,
+  }),
+  scopedAgentParamsForSession: (state: unknown, sessionKey: string) => {
+    if (sessionKey === "global") {
+      return {
+        agentId: (state as { assistantAgentId?: string | null }).assistantAgentId ?? "main",
+      };
+    }
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
+  scopedAgentListParamsForSession: (state: unknown, sessionKey: string) => {
+    if (sessionKey === "global") {
+      return {
+        agentId: (state as { assistantAgentId?: string | null }).assistantAgentId ?? "main",
+      };
+    }
+    if (sessionKey === "unknown") {
+      return {};
+    }
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : { agentId: "main" };
+  },
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -34,6 +64,7 @@ vi.mock("./controllers/chat.ts", () => ({
 vi.mock("./controllers/sessions.ts", () => ({
   createSessionAndRefresh: createSessionAndRefreshMock,
   loadSessions: loadSessionsMock,
+  syncSelectedSessionMessageSubscription: syncSelectedSessionMessageSubscriptionMock,
 }));
 
 import {
@@ -60,6 +91,7 @@ beforeEach(() => {
   loadChatHistoryMock.mockReset();
   createSessionAndRefreshMock.mockReset();
   loadSessionsMock.mockReset();
+  syncSelectedSessionMessageSubscriptionMock.mockReset();
 });
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
@@ -771,7 +803,7 @@ describe("createChatSession", () => {
       },
       {
         activeMinutes: 120,
-        limit: 100,
+        limit: 50,
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
@@ -786,6 +818,45 @@ describe("createChatSession", () => {
     ]);
     expect(state.chatMessages).toStrictEqual([]);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+  });
+
+  it("creates selected global sessions under the same agent used for refresh", async () => {
+    const state = createChatSessionState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "global", kind: "global" })],
+      },
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:work:dashboard:new-chat");
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "work",
+        parentSessionKey: "global",
+        emitCommandHooks: true,
+      },
+      {
+        activeMinutes: 120,
+        limit: 50,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+        agentId: "work",
+      },
+    );
+    expect(state.sessionKey).toBe("agent:work:dashboard:new-chat");
   });
 
   it("preserves draft and attachment edits made while session creation is in flight", async () => {
@@ -971,9 +1042,10 @@ describe("switchChatSession", () => {
       agentId: "main",
     });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(syncSelectedSessionMessageSubscriptionMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
       activeMinutes: 120,
-      limit: 100,
+      limit: 50,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,

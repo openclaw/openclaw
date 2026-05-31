@@ -10,6 +10,7 @@ import SwiftUI
 @main
 struct OpenClawApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @Environment(\.openWindow) private var openWindow
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
     private let gatewayManager = GatewayProcessManager.shared
@@ -49,7 +50,9 @@ struct OpenClawApp: App {
                 sendCelebrationTick: self.state.sendCelebrationTick,
                 gatewayStatus: self.gatewayManager.status,
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
-                iconState: self.effectiveIconState)
+                iconState: self.effectiveIconState,
+                voiceWakeMeterActive: self.state.voiceWakeMeterActive)
+                .background(SettingsWindowOpenRegistrar())
         }
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
             self.statusItem = item
@@ -73,18 +76,30 @@ struct OpenClawApp: App {
         .onChange(of: self.gatewayManager.status) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
         }
+        .onChange(of: self.state.voiceWakeMeterActive) { _, _ in
+            self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
+        }
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
         }
 
-        Settings {
+        Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
             SettingsRootView(state: self.state, updater: self.delegate.updaterController)
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
                 .environment(self.tailscaleService)
         }
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    self.openWindow(id: SettingsWindowOpener.windowID)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+            SidebarCommands()
+        }
         .onChange(of: self.isMenuPresented) { _, _ in
             self.updateStatusHighlight()
             self.updateHoverHUDSuppression()
@@ -96,6 +111,9 @@ struct OpenClawApp: App {
         // The SwiftUI label already renders those states; AppKit's disabled appearance can
         // leak into menu item validation and grey out app-level commands like Settings.
         self.statusItem?.button?.appearsDisabled = false
+        self.statusItem?.button?.toolTip = self.state.voiceWakeMeterActive
+            ? "OpenClaw - Voice Wake live meter active"
+            : "OpenClaw"
     }
 
     private static func applyAttachOnlyOverrideIfNeeded() {
@@ -229,6 +247,21 @@ private final class StatusItemMouseHandlerView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         self.onHoverChanged?(false)
+    }
+}
+
+private struct SettingsWindowOpenRegistrar: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                let openWindow = self.openWindow
+                SettingsWindowOpener.shared.register {
+                    openWindow(id: SettingsWindowOpener.windowID)
+                }
+            }
     }
 }
 

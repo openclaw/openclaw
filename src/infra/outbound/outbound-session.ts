@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -9,7 +11,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RoutePeer } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
@@ -69,9 +70,22 @@ function inferPeerKindFromPlugin(params: {
 }): ChatType | undefined {
   for (const target of params.targets) {
     const inferred = normalizeInferredPeerKind(
-      params.plugin?.messaging?.parseExplicitTarget?.({ raw: target })?.chatType ??
-        params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
+      params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
     );
+    if (inferred) {
+      return inferred;
+    }
+  }
+  return undefined;
+}
+
+function inferPeerKindFromLegacyParser(params: {
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
+  targets: readonly string[];
+}): ChatType | undefined {
+  for (const target of params.targets) {
+    const parsed = params.plugin?.messaging?.parseExplicitTarget?.({ raw: target });
+    const inferred = normalizeInferredPeerKind(parsed?.chatType);
     if (inferred) {
       return inferred;
     }
@@ -114,12 +128,10 @@ function inferPeerKind(params: {
   }
   const plugin = resolveOutboundChannelPlugin(params.channel);
   const strippedTarget = stripProviderPrefix(params.target, params.channel).trim();
-  const targets = [params.target, strippedTarget].filter(
-    (target, index, values): target is string =>
-      Boolean(target) && values.indexOf(target) === index,
-  );
+  const targets = uniqueStrings([params.target, strippedTarget].filter(Boolean));
   return (
     inferPeerKindFromPlugin({ plugin, targets }) ??
+    inferPeerKindFromLegacyParser({ plugin, targets }) ??
     inferPeerKindFromFallbackPrefixes(targets) ??
     "direct"
   );

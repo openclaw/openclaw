@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -18,6 +19,10 @@ const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
 type FinalizeRetryBudget = Map<string, Map<string, number>>;
+
+export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
+  return getGlobalHookRunner();
+}
 
 function getFinalizeRetryBudget(): FinalizeRetryBudget {
   return resolveGlobalSingleton<FinalizeRetryBudget>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
@@ -226,12 +231,4 @@ function isBeforeAgentFinalizeRetry(
   value: unknown,
 ): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }

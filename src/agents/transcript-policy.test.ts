@@ -24,7 +24,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
           "mistral",
           "moonshot",
           "openai",
-          "openai-codex",
+          "openai",
           "opencode",
           "opencode-go",
           "ollama",
@@ -132,7 +132,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 toolCallIdMode: "strict9",
               };
             case "openai":
-            case "openai-codex":
               return {
                 sanitizeMode: "images-only",
                 sanitizeToolCallIds: context?.modelApi === "openai-completions",
@@ -616,6 +615,24 @@ describe("resolveTranscriptPolicy", () => {
       }),
     ).toBe(true);
   });
+
+  it.each(["anthropic", "amazon-bedrock"] as const)(
+    "allows provider-owned thinking replay for signed-thinking %s recovery policies",
+    (provider) => {
+      expect(
+        shouldAllowProviderOwnedThinkingReplay({
+          provider,
+          modelApi:
+            provider === "amazon-bedrock" ? "bedrock-converse-stream" : "anthropic-messages",
+          policy: {
+            validateAnthropicTurns: true,
+            preserveSignatures: false,
+            dropThinkingBlocks: false,
+          },
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("does not allow immutable provider-owned thinking replay for github-copilot claude models", () => {
     const policy = resolveTranscriptPolicy({

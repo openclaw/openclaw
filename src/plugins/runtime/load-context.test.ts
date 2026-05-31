@@ -22,6 +22,7 @@ const metadataSnapshot = {
 const loadPluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
 const getCurrentPluginMetadataSnapshotMock = vi.fn(() => undefined);
 const setCurrentPluginMetadataSnapshotMock = vi.fn();
+const clearCurrentPluginMetadataSnapshotMock = vi.fn();
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
@@ -44,10 +45,15 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  resolvePluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
 
 vi.mock("../current-plugin-metadata-snapshot.js", () => ({
+  clearCurrentPluginMetadataSnapshot: clearCurrentPluginMetadataSnapshotMock,
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
+  isReusableCurrentPluginMetadataSnapshot: (
+    _snapshot: typeof metadataSnapshot & { registrySource?: "derived" },
+  ) => true,
   setCurrentPluginMetadataSnapshot: setCurrentPluginMetadataSnapshotMock,
 }));
 
@@ -65,6 +71,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     loadPluginMetadataSnapshotMock.mockClear();
     getCurrentPluginMetadataSnapshotMock.mockClear();
     setCurrentPluginMetadataSnapshotMock.mockClear();
+    clearCurrentPluginMetadataSnapshotMock.mockClear();
     resolveAgentWorkspaceDirMock.mockClear();
     resolveDefaultAgentIdMock.mockClear();
 
@@ -115,6 +122,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       installRecords: {},
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      allowWorkspaceScopedCurrent: true,
       config: rawConfig,
       env,
       workspaceDir: "/resolved-workspace",
@@ -132,6 +140,27 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
     expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
     expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, "default");
+  });
+
+  it("stores derived metadata as the reusable runtime snapshot", () => {
+    const derivedSnapshot = { ...metadataSnapshot } as typeof metadataSnapshot & {
+      registrySource: "derived";
+    };
+    derivedSnapshot.registrySource = "derived";
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(derivedSnapshot);
+
+    resolvePluginRuntimeLoadContext({
+      config: { plugins: {} },
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(setCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(derivedSnapshot, {
+      config: { plugins: {} },
+      compatibleConfigs: [{ plugins: {} }, { plugins: {} }],
+      env: { HOME: "/tmp/openclaw-home" },
+      workspaceDir: "/resolved-workspace",
+    });
+    expect(clearCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("uses the source runtime snapshot for plugin activation source config", () => {

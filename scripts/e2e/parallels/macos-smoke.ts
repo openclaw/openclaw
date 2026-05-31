@@ -1,6 +1,7 @@
 #!/usr/bin/env -S pnpm tsx
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
@@ -12,6 +13,9 @@ import {
   parseMode,
   parseProvider,
   modelProviderConfigBatchJson,
+  posixProviderOnlyPluginIsolationScript,
+  parsePositiveInt,
+  readPositiveIntEnv,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
@@ -93,11 +97,12 @@ interface MacosSummary {
 }
 
 const guestPath =
-  "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
-const guestOpenClaw = "/opt/homebrew/bin/openclaw";
-const guestOpenClawEntry = "/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs";
-const guestNode = "/opt/homebrew/bin/node";
-const guestNpm = "/opt/homebrew/bin/npm";
+  "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
+const guestOpenClaw = "openclaw";
+const guestOpenClawEntry = '"$(npm root -g)/openclaw/openclaw.mjs"';
+const guestOpenClawEntryRunner = `node ${guestOpenClawEntry}`;
+const guestNode = "node";
+const guestNpm = "npm";
 
 const defaultOptions = (): MacosOptions => ({
   discordChannelId: undefined,
@@ -115,7 +120,7 @@ const defaultOptions = (): MacosOptions => ({
   modelId: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
-  snapshotHint: "macOS 26.3.1 latest",
+  snapshotHint: "macOS 26.5 latest",
   targetPackageSpec: "",
   vmName: "macOS Tahoe",
 });
@@ -126,7 +131,7 @@ function usage(): string {
 Options:
   --vm <name>                Parallels VM name. Default: "macOS Tahoe"
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "macOS 26.3.1 latest"
+                             Default: "macOS 26.5 latest"
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for the agent-turn smoke.
@@ -149,61 +154,62 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): MacosOptions {
+export function parseArgs(argv: string[]): MacosOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--vm":
-        options.vmName = ensureValue(argv, i, arg);
+        options.vmName = ensureValue(args, i, arg);
         i++;
         break;
       case "--snapshot-hint":
-        options.snapshotHint = ensureValue(argv, i, arg);
+        options.snapshotHint = ensureValue(args, i, arg);
         i++;
         break;
       case "--mode":
-        options.mode = parseMode(ensureValue(argv, i, arg));
+        options.mode = parseMode(ensureValue(args, i, arg));
         i++;
         break;
       case "--provider":
-        options.provider = parseProvider(ensureValue(argv, i, arg));
+        options.provider = parseProvider(ensureValue(args, i, arg));
         i++;
         break;
       case "--model":
-        options.modelId = ensureValue(argv, i, arg);
+        options.modelId = ensureValue(args, i, arg);
         i++;
         break;
       case "--api-key-env":
       case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(argv, i, arg);
+        options.apiKeyEnv = ensureValue(args, i, arg);
         i++;
         break;
       case "--install-url":
-        options.installUrl = ensureValue(argv, i, arg);
+        options.installUrl = ensureValue(args, i, arg);
         i++;
         break;
       case "--host-port":
-        options.hostPort = Number(ensureValue(argv, i, arg));
+        options.hostPort = parsePositiveInt(ensureValue(args, i, arg), arg);
         options.hostPortExplicit = true;
         i++;
         break;
       case "--host-ip":
-        options.hostIp = ensureValue(argv, i, arg);
+        options.hostIp = ensureValue(args, i, arg);
         i++;
         break;
       case "--latest-version":
-        options.latestVersion = ensureValue(argv, i, arg);
+        options.latestVersion = ensureValue(args, i, arg);
         i++;
         break;
       case "--install-version":
-        options.installVersion = ensureValue(argv, i, arg);
+        options.installVersion = ensureValue(args, i, arg);
         i++;
         break;
       case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(argv, i, arg);
+        options.targetPackageSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--skip-latest-ref-check":
@@ -213,15 +219,15 @@ function parseArgs(argv: string[]): MacosOptions {
         options.keepServer = true;
         break;
       case "--discord-token-env":
-        options.discordTokenEnv = ensureValue(argv, i, arg);
+        options.discordTokenEnv = ensureValue(args, i, arg);
         i++;
         break;
       case "--discord-guild-id":
-        options.discordGuildId = ensureValue(argv, i, arg);
+        options.discordGuildId = ensureValue(args, i, arg);
         i++;
         break;
       case "--discord-channel-id":
-        options.discordChannelId = ensureValue(argv, i, arg);
+        options.discordChannelId = ensureValue(args, i, arg);
         i++;
         break;
       case "--json":
@@ -238,7 +244,12 @@ function parseArgs(argv: string[]): MacosOptions {
   return options;
 }
 
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
 class MacosSmoke {
+  private agentTimeoutSeconds: number;
   private auth: ProviderAuth;
   private discordToken = "";
   private hostIp = "";
@@ -256,6 +267,8 @@ class MacosSmoke {
   private discord: MacosDiscordSmoke | null = null;
   private guestUser = "";
   private guestTransport: "current-user" | "sudo" = "current-user";
+  private modelTimeoutSeconds: number;
+  private updateDevTimeoutSeconds: number;
 
   private status = {
     freshAgent: "skip",
@@ -280,6 +293,12 @@ class MacosSmoke {
       modelId: options.modelId,
       provider: options.provider,
     });
+    this.agentTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S", 2700);
+    this.modelTimeoutSeconds = resolveParallelsModelTimeoutSeconds("macos");
+    this.updateDevTimeoutSeconds = readPositiveIntEnv(
+      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S",
+      1800,
+    );
     this.validateDiscord();
   }
 
@@ -473,15 +492,12 @@ class MacosSmoke {
     this.status.freshGateway = "pass";
     await this.phase("fresh.dashboard-load", 180, () => this.verifyDashboardLoad());
     this.status.freshDashboard = "pass";
-    await this.phase(
-      "fresh.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700),
-      () => this.verifyTurn(),
-    );
+    await this.phase("fresh.first-agent-turn", this.agentTimeoutSeconds, () => this.verifyTurn());
     this.status.freshAgent = "pass";
     if (this.discordEnabled()) {
       this.status.freshDiscord = "fail";
       await this.phase("fresh.discord-config", 600, () => this.configureDiscord());
+      await this.phase("fresh.discord-gateway-ready", 180, () => this.ensureDiscordGatewayReady());
       await this.phase("fresh.discord-roundtrip", 180, () => this.runDiscordRoundtrip("fresh"));
       this.status.freshDiscord = "pass";
     }
@@ -516,10 +532,8 @@ class MacosSmoke {
         this.verifyBundlePermissions(),
       );
     } else {
-      await this.phase(
-        "upgrade.update-dev",
-        Number(process.env.OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S || 1800),
-        () => this.runDevChannelUpdate(),
+      await this.phase("upgrade.update-dev", this.updateDevTimeoutSeconds, () =>
+        this.runDevChannelUpdate(),
       );
       this.status.upgradeVersion = await this.extractLastVersion("upgrade.update-dev");
       await this.phase("upgrade.verify-dev-channel", 60, () => this.verifyDevChannelUpdate());
@@ -530,15 +544,14 @@ class MacosSmoke {
     this.status.upgradeGateway = "pass";
     await this.phase("upgrade.dashboard-load", 180, () => this.verifyDashboardLoad());
     this.status.upgradeDashboard = "pass";
-    await this.phase(
-      "upgrade.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700),
-      () => this.verifyTurn(),
-    );
+    await this.phase("upgrade.first-agent-turn", this.agentTimeoutSeconds, () => this.verifyTurn());
     this.status.upgradeAgent = "pass";
     if (this.discordEnabled()) {
       this.status.upgradeDiscord = "fail";
       await this.phase("upgrade.discord-config", 600, () => this.configureDiscord());
+      await this.phase("upgrade.discord-gateway-ready", 180, () =>
+        this.ensureDiscordGatewayReady(),
+      );
       await this.phase("upgrade.discord-roundtrip", 180, () => this.runDiscordRoundtrip("upgrade"));
       this.status.upgradeDiscord = "pass";
     }
@@ -573,6 +586,19 @@ class MacosSmoke {
     options: { check?: boolean; env?: Record<string, string> } = {},
   ): string {
     return this.guest.exec(args, options);
+  }
+
+  private guestOpenClawEntryExec(
+    args: string[],
+    options: { check?: boolean; env?: Record<string, string> } = {},
+  ): string {
+    const argv = args.map((arg) => shellQuote(arg)).join(" ");
+    return this.guestSh(
+      `set -e
+entry="$(npm root -g)/openclaw/openclaw.mjs"
+exec node "$entry" ${argv}`,
+      options.env,
+    );
   }
 
   private guestSh(script: string, env: Record<string, string> = {}): string {
@@ -789,7 +815,7 @@ ${guestOpenClaw} --version`);
 
   private verifyBundlePermissions(): void {
     this.guestSh(String.raw`set -eu
-root=$(/opt/homebrew/bin/npm root -g)
+root=$(npm root -g)
 check_path() {
   path="$1"
   [ -e "$path" ] || return 0
@@ -851,7 +877,7 @@ fi
 echo "bootstrap-pnpm: install"
 rm -rf "$bootstrap_root"
 mkdir -p "$bootstrap_root"
-/opt/homebrew/bin/node /opt/homebrew/bin/npm install --prefix "$bootstrap_root" --no-save pnpm@11
+npm install --prefix "$bootstrap_root" --no-save pnpm@11
 "$bootstrap_bin/pnpm" --version`);
   }
 
@@ -870,14 +896,14 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 config.update = { ...(config.update || {}), channel: "dev" };
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
-/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
-${guestNode} ${guestOpenClawEntry} --version
-${guestNode} ${guestOpenClawEntry} update status --json`,
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestOpenClawEntryRunner} update --channel dev --yes --json
+${guestOpenClawEntryRunner} --version
+${guestOpenClawEntryRunner} update status --json`,
     );
   }
 
   private verifyDevChannelUpdate(): void {
-    const status = this.guestExec([guestNode, guestOpenClawEntry, "update", "status", "--json"]);
+    const status = this.guestOpenClawEntryExec(["update", "status", "--json"]);
     for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
       if (!status.includes(needle)) {
         throw new Error(`dev update status missing ${needle}`);
@@ -900,7 +926,7 @@ trap '' HUP
         `${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`,
       )} OPENCLAW_HOME=${shellQuote(home)} OPENCLAW_STATE_DIR=${shellQuote(`${home}/.openclaw`)} OPENCLAW_CONFIG_PATH=${shellQuote(
         `${home}/.openclaw/openclaw.json`,
-      )} ${guestNode} ${guestOpenClawEntry} gateway run --bind loopback --port 18789 --force </dev/null >/tmp/openclaw-parallels-macos-gateway.log 2>&1 &
+      )} ${guestOpenClawEntryRunner} gateway run --bind loopback --port 18789 --force </dev/null >/tmp/openclaw-parallels-macos-gateway.log 2>&1 &
 sleep 1`,
     );
   }
@@ -977,29 +1003,41 @@ echo "dashboard HTML did not become ready" >&2
 exit 1`);
   }
 
+  private restrictAgentTurnPlugins(): void {
+    this.guestSh(
+      posixProviderOnlyPluginIsolationScript({
+        fallbackPluginId: this.options.provider,
+        homeFallback: this.guestHome(),
+        modelId: this.auth.modelId,
+        nodeCommand: guestNode,
+      }),
+    );
+  }
+
   private verifyTurn(): void {
-    this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
-    const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "macos");
+    this.guestOpenClawEntryExec(["models", "set", this.auth.modelId]);
+    const modelProviderConfigBatch = modelProviderConfigBatchJson(
+      this.auth.modelId,
+      "macos",
+      this.modelTimeoutSeconds,
+    );
     if (modelProviderConfigBatch) {
       this.guestSh(`provider_config_batch="$(mktemp)"
 cat >"$provider_config_batch" <<'JSON'
 ${modelProviderConfigBatch}
 JSON
-${shellQuote(guestNode)} ${shellQuote(
-        guestOpenClawEntry,
-      )} config set --batch-file "$provider_config_batch" --strict-json
+${guestOpenClawEntryRunner} config set --batch-file "$provider_config_batch" --strict-json
 rm -f "$provider_config_batch"`);
     }
-    this.guestExec([
-      guestNode,
-      guestOpenClawEntry,
+    this.guestOpenClawEntryExec([
       "config",
       "set",
       "agents.defaults.skipBootstrap",
       "true",
       "--strict-json",
     ]);
-    this.guestExec([guestNode, guestOpenClawEntry, "config", "set", "tools.profile", "minimal"]);
+    this.guestOpenClawEntryExec(["config", "set", "tools.profile", "minimal"]);
+    this.restrictAgentTurnPlugins();
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 agent_ok=false
@@ -1009,9 +1047,9 @@ for attempt in 1 2; do
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestOpenClawEntryRunner} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("macos")} --json >"$output_file" 2>&1
+  )} --thinking off --timeout ${this.modelTimeoutSeconds} --json >"$output_file" 2>&1
   rc=$?
   set -e
   cat "$output_file"
@@ -1039,6 +1077,15 @@ fi`,
 
   private configureDiscord(): void {
     this.discord?.configure();
+  }
+
+  private ensureDiscordGatewayReady(): void {
+    this.startManualGatewayIfNeeded();
+    this.verifyGateway();
+    const status = this.guestOpenClawEntryExec(["channels", "status", "--probe", "--json"]);
+    if (!status.includes('"discord"')) {
+      throw new Error("Discord channel unavailable after gateway restart");
+    }
   }
 
   private async runDiscordRoundtrip(phase: "fresh" | "upgrade"): Promise<void> {
@@ -1148,6 +1195,8 @@ fi`,
   }
 }
 
-await new MacosSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
-  die(error instanceof Error ? error.message : String(error));
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await new MacosSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+    die(error instanceof Error ? error.message : String(error));
+  });
+}

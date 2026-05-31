@@ -1,7 +1,7 @@
-import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -14,13 +14,15 @@ type EventHandlerChatLog = {
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
   addSystem: (text: string) => void;
+  addPendingSystem: (runId: string, text: string) => void;
+  dismissPendingSystem: (runId: string) => void;
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
   dropAssistant: (runId: string) => void;
 };
 
 type EventHandlerTui = {
-  requestRender: () => void;
+  requestRender: (force?: boolean) => void;
 };
 
 type EventHandlerBtwPresenter = {
@@ -49,8 +51,9 @@ type EventHandlerContext = {
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const STREAMING_WATCHDOG_USER_MESSAGE =
-  "This response is taking longer than expected. Send another message to continue.";
+  "This response is taking longer than expected. Still waiting for the current run.";
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -70,13 +73,18 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalBtwRunIds,
     localMode,
   } = context;
-  const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const finalizedRuns = new Map<string, number>();
+  const finalizedRunsWithDisplay = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
   let reconnectPendingRunId: string | null = null;
+  const pendingTerminalLifecycleErrors = new Map<
+    string,
+    { errorMessage: string; timer: ReturnType<typeof setTimeout> }
+  >();
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -103,6 +111,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamingWatchdogRunId = null;
   };
 
+  const clearPendingTerminalLifecycleError = (runId: string) => {
+    const pending = pendingTerminalLifecycleErrors.get(runId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pendingTerminalLifecycleErrors.delete(runId);
+  };
+
+  const clearPendingTerminalLifecycleErrors = () => {
+    for (const pending of pendingTerminalLifecycleErrors.values()) {
+      clearTimeout(pending.timer);
+    }
+    pendingTerminalLifecycleErrors.clear();
+  };
+
   const pauseStreamingWatchdog = () => {
     clearStreamingWatchdog();
   };
@@ -121,18 +145,17 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       streamingWatchdogRunId = null;
-      state.activeChatRunId = null;
-      state.activityStatus = "idle";
-      setActivityStatus("idle");
       if (reconnectPendingRunId === runId) {
         reconnectPendingRunId = null;
+        state.activeChatRunId = null;
+        state.activityStatus = "idle";
+        setActivityStatus("idle");
         pendingHistoryRefresh = false;
         void loadHistory?.();
         tui.requestRender();
         return;
       }
-      flushPendingHistoryRefreshIfIdle();
-      chatLog.addSystem(STREAMING_WATCHDOG_USER_MESSAGE);
+      chatLog.addPendingSystem(runId, STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
@@ -170,6 +193,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
+    finalizedRunsWithDisplay.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
@@ -179,15 +203,23 @@ export function createEventHandlers(context: EventHandlerContext) {
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
+    clearPendingTerminalLifecycleErrors();
     btw.clear();
     clearStreamingWatchdog();
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
-    if (!localMode || !isAuthErrorMessage(errorMessage)) {
+    if (!localMode) {
       return undefined;
     }
     const provider = state.sessionInfo.modelProvider?.trim();
+    const failoverReason = classifyFailoverReason(errorMessage, { provider });
+    if (failoverReason === "billing" || failoverReason === "rate_limit") {
+      return undefined;
+    }
+    if (!isAuthErrorMessage(errorMessage)) {
+      return undefined;
+    }
     return provider
       ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
       : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";
@@ -228,11 +260,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     pruneRunMap(sessionRuns);
   };
 
-  const noteFinalizedRun = (runId: string) => {
+  const noteFinalizedRun = (runId: string, opts?: { displayedFinal?: boolean }) => {
     finalizedRuns.set(runId, Date.now());
+    if (opts?.displayedFinal === true) {
+      finalizedRunsWithDisplay.set(runId, Date.now());
+    }
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
+    pruneRunMap(finalizedRunsWithDisplay);
   };
 
   const notePostFinalizingRun = (runId: string) => {
@@ -285,8 +321,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
+    displayedFinal?: boolean;
   }) => {
-    noteFinalizedRun(params.runId);
+    noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
@@ -319,6 +356,46 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
     void refreshSessionInfo?.();
+  };
+
+  const renderTerminalRunError = (params: {
+    runId: string;
+    errorMessage: string;
+    requireActiveOrPending?: boolean;
+  }): boolean => {
+    const { runId, errorMessage } = params;
+    const wasActiveRun = state.activeChatRunId === runId;
+    if (
+      params.requireActiveOrPending === true &&
+      !wasActiveRun &&
+      state.pendingChatRunId !== runId
+    ) {
+      return false;
+    }
+    const renderedError = formatRawAssistantErrorForUi(errorMessage);
+    chatLog.dismissPendingSystem(runId);
+    chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
+    noteFinalizedRun(runId, { displayedFinal: true });
+    terminateRun({ runId, wasActiveRun, status: "error" });
+    maybeRefreshHistoryForRun(runId);
+    return true;
+  };
+
+  const renderTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    if (!renderTerminalRunError({ runId, errorMessage, requireActiveOrPending: true })) {
+      return;
+    }
+    tui.requestRender(true);
+  };
+
+  const scheduleTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    clearPendingTerminalLifecycleError(runId);
+    const timer = setTimeout(() => {
+      pendingTerminalLifecycleErrors.delete(runId);
+      renderTerminalLifecycleError(runId, errorMessage);
+    }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+    timer.unref?.();
+    pendingTerminalLifecycleErrors.set(runId, { errorMessage, timer });
   };
 
   const hasConcurrentActiveRun = (runId: string) => {
@@ -354,6 +431,45 @@ export function createEventHandlers(context: EventHandlerContext) {
     void loadHistory?.();
   };
 
+  const messageHasDisplayableNonTextContent = (message: unknown): boolean => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    const record = message as Record<string, unknown>;
+    if (typeof record.mediaUrl === "string" && record.mediaUrl.trim()) {
+      return true;
+    }
+    if (
+      Array.isArray(record.mediaUrls) &&
+      record.mediaUrls.some((media) => typeof media === "string" && media.trim())
+    ) {
+      return true;
+    }
+    if (!Array.isArray(record.content)) {
+      return false;
+    }
+    return record.content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const type = (block as Record<string, unknown>).type;
+      return typeof type === "string" && type !== "text" && type !== "thinking";
+    });
+  };
+
+  const hasDisplayableFinalEvent = (evt: ChatEvent): boolean => {
+    if (typeof evt.errorMessage === "string" && evt.errorMessage.trim()) {
+      return true;
+    }
+    if (!evt.message) {
+      return false;
+    }
+    if (extractTextFromMessage(evt.message, { includeThinking: state.showThinking }).trim()) {
+      return true;
+    }
+    return messageHasDisplayableNonTextContent(evt.message);
+  };
+
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
     const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
     const normalizedRight = normalizeLowercaseStringOrEmpty(right);
@@ -377,6 +493,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     return false;
   };
 
+  const isMatchingGlobalAgentEvent = (
+    sessionKey: string | undefined,
+    agentId?: string,
+  ): boolean => {
+    if (normalizeLowercaseStringOrEmpty(sessionKey) !== "global") {
+      return true;
+    }
+    const selectedAgentId = normalizeLowercaseStringOrEmpty(state.currentAgentId);
+    const defaultAgentId = normalizeLowercaseStringOrEmpty(state.agentDefaultId);
+    const eventAgentId = normalizeLowercaseStringOrEmpty(agentId);
+    if (eventAgentId) {
+      return eventAgentId === selectedAgentId;
+    }
+    return selectedAgentId === defaultAgentId;
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -386,18 +518,31 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
       }
-      if (evt.state === "final") {
+      if (evt.state === "error" && finalizedRunsWithDisplay.has(evt.runId)) {
         clearStaleStreamingIfNoTrackedRunRemains();
         return;
+      }
+      if (evt.state === "final") {
+        const hasLateDisplayableFinal =
+          hasDisplayableFinalEvent(evt) && !finalizedRunsWithDisplay.has(evt.runId);
+        if (!hasLateDisplayableFinal) {
+          clearStaleStreamingIfNoTrackedRunRemains();
+          return;
+        }
       }
     }
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
+    clearPendingTerminalLifecycleError(evt.runId);
+    chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
@@ -430,7 +575,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (!evt.message) {
@@ -439,7 +584,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (isCommandMessage(evt.message)) {
@@ -448,8 +593,8 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (text) {
           chatLog.addSystem(text);
         }
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
+        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle", displayedFinal: true });
+        tui.requestRender(true);
         return;
       }
       maybeRefreshHistoryForRun(evt.runId);
@@ -477,6 +622,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         runId: evt.runId,
         wasActiveRun,
         status: stopReason === "error" ? "error" : "idle",
+        displayedFinal: !suppressEmptyExternalPlaceholder,
       });
     }
     if (evt.state === "aborted") {
@@ -488,12 +634,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
-      const errorMessage = evt.errorMessage ?? "unknown";
-      const renderedError = formatRawAssistantErrorForUi(errorMessage);
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
-      maybeRefreshHistoryForRun(evt.runId);
+      renderTerminalRunError({
+        runId: evt.runId,
+        errorMessage: evt.errorMessage ?? "unknown",
+      });
     }
     tui.requestRender();
   };
@@ -572,6 +716,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase && phase !== "error") {
+        clearPendingTerminalLifecycleError(evt.runId);
+      }
       const isPostFinalizingRun = postFinalizingRuns.has(evt.runId);
       const isPostFinalTerminalPhase =
         isPostFinalizingRun && (phase === "end" || phase === "error");
@@ -608,7 +755,19 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (!canUpdateActivityStatus) {
           return;
         }
-        setActivityStatus("error");
+        const isTerminalLifecycleError = typeof evt.data?.endedAt === "number";
+        if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
+          const errorMessage =
+            typeof evt.data?.error === "string"
+              ? evt.data.error
+              : typeof evt.data?.errorMessage === "string"
+                ? evt.data.errorMessage
+                : "unknown";
+          scheduleTerminalLifecycleError(evt.runId, errorMessage);
+          setActivityStatus("error");
+        } else {
+          setActivityStatus("error");
+        }
       }
       tui.requestRender();
     }
@@ -621,6 +780,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     const evt = payload as BtwEvent;
     syncSessionKey();
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
     if (evt.kind !== "btw") {
@@ -641,6 +803,7 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const dispose = () => {
     clearStreamingWatchdog();
+    clearPendingTerminalLifecycleErrors();
   };
 
   return {

@@ -1,6 +1,25 @@
 import { randomUUID } from "node:crypto";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  buildRealtimeVoiceAgentConsultWorkingResponse,
+} from "../talk/agent-consult-tool.js";
+import {
+  buildRealtimeVoiceAgentControlSpeechMessage,
+  controlRealtimeVoiceAgentRun,
+  shouldAutoControlRealtimeVoiceAgentText,
+  type RealtimeVoiceAgentControlResult,
+} from "../talk/agent-run-control.js";
+import { readSpeakableRealtimeVoiceToolResult } from "../talk/consult-question.js";
+import {
+  createRealtimeVoiceForcedConsultCoordinator,
+  type RealtimeVoiceForcedConsultCoordinator,
+} from "../talk/forced-consult-coordinator.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -9,6 +28,11 @@ import {
   type RealtimeVoiceTool,
   type RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
+import {
+  isLikelyRealtimeVoiceAssistantEchoTranscript,
+  recordRealtimeVoiceTranscript,
+  type RealtimeVoiceTranscriptEntry,
+} from "../talk/session-log-runtime.js";
 import {
   createRealtimeVoiceBridgeSession,
   type RealtimeVoiceBridgeSession,
@@ -28,11 +52,21 @@ const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.event";
+const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
+const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
+const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
 
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
-  | { relaySessionId: string; type: "audio"; audioBase64: string }
+  | {
+      relaySessionId: string;
+      type: "audio";
+      audioBase64: string;
+      itemId?: string;
+      responseId?: string;
+    }
+  | { relaySessionId: string; type: "audioDone"; itemId?: string; responseId?: string }
   | { relaySessionId: string; type: "clear" }
   | { relaySessionId: string; type: "mark"; markName: string }
   | {
@@ -49,8 +83,10 @@ type TalkRealtimeRelayEventPayload =
       callId: string;
       name: string;
       args: unknown;
+      forced?: boolean;
     }
   | { relaySessionId: string; type: "toolResult"; callId: string }
+  | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
   | { relaySessionId: string; type: "error"; message: string }
   | { relaySessionId: string; type: "close"; reason: "completed" | "error" };
 
@@ -62,9 +98,14 @@ type RelaySession = {
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
   talk: TalkSessionController;
+  sessionKey?: string;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
+  activeAgentToolCalls: Map<string, string>;
+  completedAgentToolCalls: Set<string>;
+  forcedConsults: RealtimeVoiceForcedConsultCoordinator;
+  transcript: RealtimeVoiceTranscriptEntry[];
 };
 
 type CreateTalkRealtimeRelaySessionParams = {
@@ -76,7 +117,9 @@ type CreateTalkRealtimeRelaySessionParams = {
   instructions: string;
   tools: RealtimeVoiceTool[];
   model?: string;
+  sessionKey?: string;
   voice?: string;
+  forceAgentConsultOnFinalTranscript?: boolean;
 };
 
 type TalkRealtimeRelaySessionResult = {
@@ -93,6 +136,54 @@ const relaySessions = new Map<string, RelaySession>();
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isWorkingToolResult(result: unknown): boolean {
+  return (
+    Boolean(result) &&
+    typeof result === "object" &&
+    !Array.isArray(result) &&
+    (result as Record<string, unknown>).status === "working"
+  );
+}
+
+function isRelayAssistantEchoTranscript(session: RelaySession | undefined, text: string): boolean {
+  if (!session) {
+    return false;
+  }
+  return isLikelyRealtimeVoiceAssistantEchoTranscript({
+    transcript: session.transcript,
+    text,
+    lookbackMs: RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
+  });
+}
+function buildForcedConsultCheckingPrompt(): string {
+  return [
+    "Briefly tell the person that you are checking with OpenClaw.",
+    "Do not answer the request yet. Wait for the OpenClaw result before giving the actual answer.",
+  ].join(" ");
+}
+
+function buildForcedConsultSpeechPrompt(text: string): string {
+  return [
+    "OpenClaw finished checking. Speak this result naturally and concisely.",
+    "Do not mention tool calls, JSON, or internal routing.",
+    "",
+    text,
+  ].join("\n");
+}
+
+function buildAlreadyDeliveredToolResult(): Record<string, string> {
+  return {
+    status: "already_delivered",
+    message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
+  };
+}
+
+function cancelForcedConsults(session: RelaySession): void {
+  for (const handle of session.forcedConsults.handles()) {
+    session.forcedConsults.markCancelled(handle);
+  }
 }
 
 function broadcastToOwner(
@@ -112,9 +203,64 @@ function abortRelayAgentRuns(session: RelaySession, reason: string): void {
     });
   }
   session.activeAgentRuns.clear();
+  session.activeAgentToolCalls.clear();
+}
+
+function pruneInactiveRelayAgentRuns(session: RelaySession): number {
+  for (const runId of session.activeAgentRuns.keys()) {
+    if (!session.context.chatAbortControllers.has(runId)) {
+      session.activeAgentRuns.delete(runId);
+    }
+  }
+  for (const [callId, runId] of session.activeAgentToolCalls) {
+    if (!session.activeAgentRuns.has(runId)) {
+      session.activeAgentToolCalls.delete(callId);
+    }
+  }
+  return session.activeAgentRuns.size;
+}
+
+function submitRelayAgentControlProviderResults(
+  session: RelaySession,
+  result: RealtimeVoiceAgentControlResult,
+  turnId: string,
+): void {
+  if (result.mode !== "cancel" || !result.ok || !result.providerResult) {
+    return;
+  }
+  const activeCallIds = [...session.activeAgentToolCalls.keys()];
+  for (const callId of activeCallIds) {
+    const forcedConsult = session.forcedConsults.handles().find((handle) => handle.id === callId);
+    if (forcedConsult) {
+      session.forcedConsults.markCancelled(forcedConsult);
+      for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
+        session.bridge.submitToolResult(nativeCallId, result.providerResult, {
+          suppressResponse: true,
+        });
+      }
+    } else {
+      session.bridge.submitToolResult(callId, result.providerResult, { suppressResponse: true });
+    }
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "toolResult",
+      callId,
+      talkEvent: session.talk.emit({
+        type: "tool.result",
+        callId,
+        turnId,
+        payload: { result: result.providerResult },
+        final: true,
+      }),
+    });
+    session.activeAgentToolCalls.delete(callId);
+    session.completedAgentToolCalls.add(callId);
+  }
+  session.activeAgentRuns.clear();
 }
 
 function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
+  session.forcedConsults.clear();
   relaySessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
@@ -133,8 +279,13 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
 }
 
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
+  const validNowMs = asDateTimestampMs(nowMs);
+  if (validNowMs === undefined) {
+    return;
+  }
   for (const session of relaySessions.values()) {
-    if (nowMs > session.expiresAtMs) {
+    const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
+    if (expiresAtMs === undefined || validNowMs > expiresAtMs) {
       closeRelaySession(session, "completed");
     }
   }
@@ -164,8 +315,12 @@ export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
   enforceRelaySessionLimits(params.connId);
+  const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
-  const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
+  if (expiresAtMs === undefined) {
+    throw new Error("Realtime relay session expiry is outside the supported Date range");
+  }
   const talk = createTalkSessionController(
     {
       sessionId: relaySessionId,
@@ -177,20 +332,21 @@ export function createTalkRealtimeRelaySession(
     { onEvent: recordTalkObservabilityEvent },
   );
   let relay: RelaySession | undefined;
-  let bridgeSession: RealtimeVoiceBridgeSession | undefined;
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
     broadcastToOwner(params.context, params.connId, {
       ...event,
       ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
     });
+  let currentOutputItemId: string | undefined;
+  let currentOutputResponseId: string | undefined;
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
     cfg: params.cfg,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
-    autoRespondToAudio: false,
-    interruptResponseOnInputAudio: false,
+    autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
+    interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
     tools: params.tools,
     markStrategy: "ack-immediately",
     audioSink: {
@@ -202,6 +358,8 @@ export function createTalkRealtimeRelaySession(
             relaySessionId,
             type: "audio",
             audioBase64: audio.toString("base64"),
+            ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
+            ...(currentOutputResponseId ? { responseId: currentOutputResponseId } : {}),
           },
           {
             type: "output.audio.delta",
@@ -235,8 +393,45 @@ export function createTalkRealtimeRelaySession(
         );
       },
     },
+    onEvent: (event) => {
+      if (event.direction !== "server") {
+        return;
+      }
+      if (
+        event.type === "conversation.output_audio.delta" ||
+        event.type === "response.audio.delta" ||
+        event.type === "response.output_audio.delta"
+      ) {
+        currentOutputItemId = event.itemId ?? currentOutputItemId;
+        currentOutputResponseId = event.responseId ?? currentOutputResponseId;
+        return;
+      }
+      if (
+        event.type === "response.audio.done" ||
+        event.type === "response.output_audio.done" ||
+        event.type === "conversation.output_audio.done" ||
+        event.type === "response.done" ||
+        event.type === "response.cancelled"
+      ) {
+        emit({
+          relaySessionId,
+          type: "audioDone",
+          ...((event.itemId ?? currentOutputItemId)
+            ? { itemId: event.itemId ?? currentOutputItemId }
+            : {}),
+          ...((event.responseId ?? currentOutputResponseId)
+            ? { responseId: event.responseId ?? currentOutputResponseId }
+            : {}),
+        });
+        currentOutputItemId = undefined;
+        currentOutputResponseId = undefined;
+      }
+    },
     onTranscript: (role, text, final) => {
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
+      if (final && relay) {
+        recordRealtimeVoiceTranscript(relay.transcript, role, text);
+      }
       const eventType =
         role === "assistant"
           ? final
@@ -256,11 +451,59 @@ export function createTalkRealtimeRelaySession(
         },
       );
       if (role === "user" && final && text.trim()) {
-        bridgeSession?.sendUserMessage(text.trim());
+        const question = text.trim();
+        if (isRelayAssistantEchoTranscript(relay, question)) {
+          return;
+        }
+        if (
+          relay &&
+          pruneInactiveRelayAgentRuns(relay) > 0 &&
+          shouldAutoControlRealtimeVoiceAgentText(question)
+        ) {
+          void steerTalkRealtimeRelayAgentRun({
+            relaySessionId,
+            connId: params.connId,
+            text: question,
+          })
+            .then((result) => {
+              if (result.speak && !result.suppress && result.message.trim()) {
+                bridge.sendUserMessage(buildRealtimeVoiceAgentControlSpeechMessage(result.message));
+              }
+            })
+            .catch((error: unknown) => {
+              emit(
+                { relaySessionId, type: "error", message: formatError(error) },
+                {
+                  type: "session.error",
+                  payload: { message: formatError(error) },
+                  final: true,
+                },
+              );
+            });
+          return;
+        }
+        if (forceAgentConsultOnFinalTranscript) {
+          scheduleForcedAgentConsult(relay, question);
+        }
       }
     },
     onToolCall: (toolCall) => {
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
+      if (relay && toolCall.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+        const forcedConsult = relay.forcedConsults.recordNativeConsult(
+          toolCall.args,
+          toolCall.callId,
+        );
+        if (forcedConsult.kind === "in_flight" || forcedConsult.kind === "already_delivered") {
+          if (forcedConsult.kind === "already_delivered") {
+            submitAlreadyDeliveredToolResult(relay, toolCall.callId, turnId);
+          } else {
+            submitRealtimeAgentConsultWorkingResponse(relay, toolCall.callId, turnId);
+          }
+          return;
+        }
+        submitRealtimeAgentConsultWorkingResponse(relay, toolCall.callId, turnId);
+      }
       emit(
         {
           relaySessionId,
@@ -291,6 +534,7 @@ export function createTalkRealtimeRelaySession(
       if (!active) {
         return;
       }
+      active.forcedConsults.clear();
       relaySessions.delete(relaySessionId);
       forgetUnifiedTalkSession(relaySessionId);
       clearTimeout(active.cleanupTimer);
@@ -301,13 +545,13 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
-  bridgeSession = bridge;
   relay = {
     id: relaySessionId,
     connId: params.connId,
     context: params.context,
     bridge,
     talk,
+    sessionKey: params.sessionKey?.trim() || undefined,
     expiresAtMs,
     cleanupTimer: setTimeout(() => {
       const active = relaySessions.get(relaySessionId);
@@ -316,6 +560,10 @@ export function createTalkRealtimeRelaySession(
       }
     }, RELAY_SESSION_TTL_MS),
     activeAgentRuns: new Map(),
+    activeAgentToolCalls: new Map(),
+    completedAgentToolCalls: new Set(),
+    forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
+    transcript: [],
   };
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);
@@ -343,6 +591,100 @@ export function createTalkRealtimeRelaySession(
   };
 }
 
+function scheduleForcedAgentConsult(session: RelaySession | undefined, question: string): void {
+  if (!session || !question.trim()) {
+    return;
+  }
+  if (session.forcedConsults.hasRecentNativeConsult(question)) {
+    return;
+  }
+  session.forcedConsults.clearPending();
+  const handle = session.forcedConsults.prepare(question);
+  if (!handle) {
+    return;
+  }
+  session.forcedConsults.schedule(handle, FORCED_CONSULT_FALLBACK_DELAY_MS, () => {
+    if (!relaySessions.has(session.id)) {
+      return;
+    }
+    const turnId = ensureRelayTurn(session);
+    const callId = handle.id;
+    const itemId = `forced-consult-item-${randomUUID()}`;
+    session.forcedConsults.markStarted(handle);
+    session.bridge.handleBargeIn({ audioPlaybackActive: true, force: true });
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "toolCall",
+      itemId,
+      callId,
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      forced: true,
+      args: {
+        question: handle.question,
+        context:
+          "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult for realtime Talk.",
+        responseStyle: "Reply in a concise spoken tone.",
+      },
+      talkEvent: session.talk.emit({
+        type: "tool.call",
+        itemId,
+        callId,
+        turnId,
+        payload: {
+          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          args: { question: handle.question },
+          forced: true,
+        },
+      }),
+    });
+  });
+}
+
+function submitAlreadyDeliveredToolResult(
+  session: RelaySession,
+  callId: string,
+  turnId = ensureRelayTurn(session),
+): void {
+  const result = buildAlreadyDeliveredToolResult();
+  session.bridge.submitToolResult(callId, result, { suppressResponse: true });
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "toolResult",
+    callId,
+    talkEvent: session.talk.emit({
+      type: "tool.result",
+      callId,
+      turnId,
+      payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, result },
+      final: true,
+    }),
+  });
+}
+
+function submitRealtimeAgentConsultWorkingResponse(
+  session: RelaySession,
+  callId: string,
+  turnId = ensureRelayTurn(session),
+): void {
+  if (!session.bridge.bridge.supportsToolResultContinuation) {
+    return;
+  }
+  session.bridge.submitToolResult(callId, buildRealtimeVoiceAgentConsultWorkingResponse("person"), {
+    willContinue: true,
+  });
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "toolResult",
+    callId,
+    talkEvent: session.talk.emit({
+      type: "tool.progress",
+      callId,
+      turnId,
+      payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, status: "working" },
+    }),
+  });
+}
+
 function ensureRelayTurn(session: RelaySession): string {
   const turn = session.talk.ensureTurn();
   if (turn.event) {
@@ -358,7 +700,15 @@ function ensureRelayTurn(session: RelaySession): string {
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   const session = relaySessions.get(relaySessionId);
-  if (!session || session.connId !== connId || Date.now() > session.expiresAtMs) {
+  const nowMs = asDateTimestampMs(Date.now());
+  const expiresAtMs = session ? asDateTimestampMs(session.expiresAtMs) : undefined;
+  if (
+    !session ||
+    session.connId !== connId ||
+    nowMs === undefined ||
+    expiresAtMs === undefined ||
+    nowMs > expiresAtMs
+  ) {
     if (session) {
       closeRelaySession(session, "completed");
     }
@@ -403,9 +753,61 @@ export function submitTalkRealtimeRelayToolResult(params: {
   options?: RealtimeVoiceToolResultOptions;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
+  if (session.completedAgentToolCalls.has(params.callId)) {
+    return;
+  }
+  const forcedConsult = session.forcedConsults
+    .handles()
+    .find((handle) => handle.id === params.callId);
+  if (forcedConsult) {
+    const turnId = ensureRelayTurn(session);
+    const cancelled = session.forcedConsults.isCancelled(forcedConsult);
+    if (cancelled) {
+      if (params.options?.willContinue !== true) {
+        session.forcedConsults.markCancelled(forcedConsult);
+      }
+    } else if (isWorkingToolResult(params.result)) {
+      session.bridge.sendUserMessage(buildForcedConsultCheckingPrompt());
+    } else {
+      session.forcedConsults.markDelivered(forcedConsult);
+      const text = readSpeakableRealtimeVoiceToolResult(params.result, {
+        maxChars: FORCED_CONSULT_RESULT_MAX_CHARS,
+      });
+      for (const nativeCallId of session.forcedConsults.nativeCallIds(forcedConsult)) {
+        submitAlreadyDeliveredToolResult(session, nativeCallId, turnId);
+      }
+      if (text) {
+        session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+      }
+    }
+    const final = params.options?.willContinue !== true;
+    if (final && !cancelled && !isWorkingToolResult(params.result)) {
+      session.forcedConsults.markDelivered(forcedConsult);
+    }
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "toolResult",
+      callId: params.callId,
+      talkEvent: session.talk.emit({
+        type: "tool.result",
+        callId: params.callId,
+        turnId,
+        payload: { result: params.result, forced: true },
+        final,
+      }),
+    });
+    return;
+  }
   session.bridge.submitToolResult(params.callId, params.result, params.options);
   const turnId = ensureRelayTurn(session);
   const final = params.options?.willContinue !== true;
+  if (final) {
+    const runId = session.activeAgentToolCalls.get(params.callId);
+    if (runId) {
+      session.activeAgentRuns.delete(runId);
+      session.activeAgentToolCalls.delete(params.callId);
+    }
+  }
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "toolResult",
@@ -425,9 +827,58 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   connId: string;
   sessionKey: string;
   runId: string;
+  callId?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
   session.activeAgentRuns.set(params.runId, params.sessionKey);
+  if (params.callId?.trim()) {
+    session.activeAgentToolCalls.set(params.callId.trim(), params.runId);
+  }
+  if (!session.sessionKey) {
+    session.sessionKey = params.sessionKey;
+  }
+}
+
+export async function steerTalkRealtimeRelayAgentRun(params: {
+  relaySessionId: string;
+  connId: string;
+  sessionKey?: string;
+  text: string;
+  mode?: string;
+}): Promise<RealtimeVoiceAgentControlResult> {
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  const sessionKey = session.sessionKey;
+  if (!sessionKey) {
+    throw new Error("Realtime relay steering requires a session key");
+  }
+  const requestedSessionKey = params.sessionKey?.trim();
+  if (requestedSessionKey && requestedSessionKey !== sessionKey) {
+    throw new Error("Realtime relay steering session key does not match the relay session");
+  }
+  const result = await controlRealtimeVoiceAgentRun({
+    sessionKey,
+    text: params.text,
+    mode: params.mode,
+    recentEvents: session.talk.recentEvents,
+  });
+  const turnId = ensureRelayTurn(session);
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "toolProgress",
+    result,
+    talkEvent: session.talk.emit({
+      type: "tool.progress",
+      turnId,
+      payload: {
+        name: "openclaw_agent_control",
+        phase: result.mode,
+        result,
+      },
+      final: result.mode === "cancel" || result.mode === "status",
+    }),
+  });
+  submitRelayAgentControlProviderResults(session, result, turnId);
+  return result;
 }
 
 export function cancelTalkRealtimeRelayTurn(params: {
@@ -438,6 +889,7 @@ export function cancelTalkRealtimeRelayTurn(params: {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const turnId = ensureRelayTurn(session);
   const reason = params.reason ?? "client-cancelled";
+  cancelForcedConsults(session);
   session.bridge.handleBargeIn({ audioPlaybackActive: true });
   abortRelayAgentRuns(session, reason);
   const cancelled = session.talk.cancelTurn({
@@ -461,6 +913,7 @@ export function stopTalkRealtimeRelaySession(params: {
 
 export function clearTalkRealtimeRelaySessionsForTest(): void {
   for (const session of relaySessions.values()) {
+    session.forcedConsults.clear();
     clearTimeout(session.cleanupTimer);
     forgetUnifiedTalkSession(session.id);
     session.bridge.close();

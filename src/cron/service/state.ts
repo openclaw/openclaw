@@ -1,6 +1,7 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -158,18 +159,13 @@ export type CronServiceState = {
   op: Promise<unknown>;
   warnedDisabled: boolean;
   /**
-   * Job ids whose missing `sessionTarget` was defaulted at load and warned
-   * about. Used to suppress duplicate warns across forceReload ticks so a
-   * single broken job does not spam the log on every scheduler cycle.
-   */
-  warnedMissingSessionTargetJobIds: Set<string>;
-  /**
    * Persisted job rows with non-canonical storage shape are skipped in memory
-   * until doctor/fix or an explicit config write repairs the store.
+   * until the runtime can quarantine and sanitize the active store.
    */
   warnedInvalidPersistedJobKeys: Set<string>;
+  pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
+  lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
-  storeFileMtimeMs: number | null;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -180,10 +176,10 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
-    warnedMissingSessionTargetJobIds: new Set<string>(),
     warnedInvalidPersistedJobKeys: new Set<string>(),
+    pendingQuarantineConfigJobs: [],
+    lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
-    storeFileMtimeMs: null,
   };
 }
 

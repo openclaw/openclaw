@@ -1,14 +1,14 @@
-import type { Command } from "commander";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import { defaultRuntime } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../../terminal/safe-text.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import { defaultRuntime } from "../../runtime.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -427,10 +427,6 @@ export function registerNodesStatusCommands(nodes: Command) {
           });
           const filteredLabel =
             hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
-          defaultRuntime.log(
-            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
-          );
-
           if (opts.json) {
             defaultRuntime.writeJson({
               pending: pendingRows,
@@ -438,6 +434,10 @@ export function registerNodesStatusCommands(nodes: Command) {
             });
             return;
           }
+
+          defaultRuntime.log(
+            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
+          );
 
           if (pendingRows.length > 0) {
             const rendered = renderPendingPairingRequestsTable({

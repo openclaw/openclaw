@@ -1,7 +1,8 @@
+import { asOptionalRecord as toRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
@@ -173,13 +174,6 @@ function normalizePresentationTone(value: unknown): MessagePresentationTone | un
     tone === "neutral"
     ? tone
     : undefined;
-}
-
-function toRecord(raw: unknown): Record<string, unknown> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  return raw as Record<string, unknown>;
 }
 
 function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {

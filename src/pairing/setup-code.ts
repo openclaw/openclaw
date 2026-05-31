@@ -1,4 +1,16 @@
 import os from "node:os";
+import {
+  isCarrierGradeNatIpv4Address,
+  isIpv4Address,
+  isIpv6Address,
+  isLoopbackIpAddress,
+  isRfc1918Ipv4Address,
+  parseCanonicalIpAddress,
+} from "@openclaw/net-policy/ip";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
@@ -11,18 +23,6 @@ import {
 } from "../infra/network-interfaces.js";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
-import {
-  isCarrierGradeNatIpv4Address,
-  isIpv4Address,
-  isIpv6Address,
-  isLoopbackIpAddress,
-  isRfc1918Ipv4Address,
-  parseCanonicalIpAddress,
-} from "../shared/net/ip.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {

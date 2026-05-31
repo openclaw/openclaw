@@ -1,9 +1,10 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   addDurableCommandApproval,
-  analyzeShellCommand,
+  commandRequiresSecurityAuditSuppressionApproval,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
   type ExecSecurity,
@@ -15,7 +16,13 @@ import {
   resolveApprovalAuditTrustPath,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
+import {
+  defaultExecAutoReviewer,
+  type ExecAutoReviewer,
+  type ExecAutoReviewInput,
+} from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -47,6 +54,7 @@ import type {
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
@@ -59,6 +67,8 @@ export type ProcessGatewayAllowlistParams = {
   defaultTimeoutSec: number;
   security: ExecSecurity;
   ask: ExecAsk;
+  autoReview?: boolean;
+  autoReviewer?: ExecAutoReviewer;
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   strictInlineEval?: boolean;
@@ -87,6 +97,7 @@ export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
   pendingResult?: AgentToolResult<ExecToolDetails>;
+  deniedResult?: AgentToolResult<ExecToolDetails>;
 };
 
 function hasGatewayAllowlistMiss(params: {
@@ -102,117 +113,39 @@ function hasGatewayAllowlistMiss(params: {
   );
 }
 
-function normalizeCommandName(value: string | undefined): string {
-  return (value ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
-}
-
-function textMentionsSecurityAuditSuppressions(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return (
-    normalized.includes("security.audit.suppressions") ||
-    /["']?security["']?[\s\S]{0,200}["']?audit["']?[\s\S]{0,200}["']?suppressions["']?/.test(
-      normalized,
-    )
-  );
-}
-
-function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
-  const command = normalizeCommandName(argv[0]);
-  let offset = command === "pnpm" && argv[1] === "openclaw" ? 1 : 0;
-  if (normalizeCommandName(argv[offset]) !== "openclaw") {
-    return false;
+function resolveGatewayAutoReviewReason(params: {
+  requiresInlineEvalApproval: boolean;
+  requiresHeredocApproval: boolean;
+  requiresAllowlistPlanApproval: boolean;
+  hostSecurity: ExecSecurity;
+  analysisOk: boolean;
+  allowlistSatisfied: boolean;
+  durableApprovalSatisfied: boolean;
+}): ExecAutoReviewInput["reason"] {
+  if (params.requiresInlineEvalApproval) {
+    return "strict-inline-eval";
   }
-  offset += 1;
-  while (offset < argv.length) {
-    const arg = argv[offset];
-    if (["--dev", "--no-color"].includes(arg ?? "")) {
-      offset += 1;
-      continue;
-    }
-    if (["--profile", "--container", "--log-level"].includes(arg ?? "")) {
-      offset += 2;
-      continue;
-    }
-    if (
-      arg?.startsWith("--profile=") ||
-      arg?.startsWith("--container=") ||
-      arg?.startsWith("--log-level=")
-    ) {
-      offset += 1;
-      continue;
-    }
-    break;
+  if (params.requiresHeredocApproval) {
+    return "heredoc";
   }
-  return (
-    argv[offset] === "config" && ["get", "schema", "validate"].includes(argv[offset + 1] ?? "")
-  );
-}
-
-function removeParsedSegmentText(command: string, segments: Array<{ raw?: string }>): string {
-  let remaining = command;
-  for (const segment of segments) {
-    const raw = segment.raw?.trim();
-    if (!raw) {
-      continue;
-    }
-    remaining = remaining.replace(raw, " ");
+  if (params.requiresAllowlistPlanApproval) {
+    return "execution-plan-miss";
   }
-  return remaining;
-}
-
-function commandRequiresSecurityAuditSuppressionApproval(params: {
-  command: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  segments: Array<{ argv: string[]; raw?: string }>;
-}): boolean {
-  let sawSegmentMention = false;
-  for (const segment of params.segments) {
-    const segmentText = `${segment.raw ?? ""} ${segment.argv.join(" ")}`;
-    if (!textMentionsSecurityAuditSuppressions(segmentText)) {
-      continue;
-    }
-    sawSegmentMention = true;
-    if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
-      return true;
-    }
+  if (
+    hasGatewayAllowlistMiss({
+      hostSecurity: params.hostSecurity,
+      analysisOk: params.analysisOk,
+      allowlistSatisfied: params.allowlistSatisfied,
+      durableApprovalSatisfied: params.durableApprovalSatisfied,
+    })
+  ) {
+    return "allowlist-miss";
   }
-  if (sawSegmentMention) {
-    const rawAnalysis = analyzeShellCommand({
-      command: params.command,
-      cwd: params.cwd,
-      env: params.env,
-      platform: process.platform,
-    });
-    if (!rawAnalysis.ok) {
-      return textMentionsSecurityAuditSuppressions(params.command);
-    }
-    for (const segment of rawAnalysis.segments) {
-      if (
-        textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`) &&
-        !isReadOnlySecurityAuditSuppressionInspection(segment.argv)
-      ) {
-        return true;
-      }
-    }
-    if (
-      textMentionsSecurityAuditSuppressions(
-        removeParsedSegmentText(params.command, rawAnalysis.segments),
-      )
-    ) {
-      return true;
-    }
-    return false;
-  }
-  return textMentionsSecurityAuditSuppressions(params.command);
+  return "approval-required";
 }
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
   return outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function formatBytes(value: unknown): string | null {
@@ -347,6 +280,36 @@ function buildGatewayExecApprovalFollowupSummary(params: {
     : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
 }
 
+function shouldAwaitGatewayApprovalInline(params: {
+  turnSourceChannel?: string;
+  approvalFollowupMode?: "agent" | "direct";
+}): boolean {
+  if (params.approvalFollowupMode === "direct") {
+    return false;
+  }
+  return normalizeMessageChannel(params.turnSourceChannel) === INTERNAL_MESSAGE_CHANNEL;
+}
+
+function buildGatewayExecApprovalDeniedToolResult(params: {
+  approvalId: string;
+  deniedReason: string;
+  command: string;
+  cwd: string;
+}): AgentToolResult<ExecToolDetails> {
+  const text = `Exec denied (gateway id=${params.approvalId}, ${params.deniedReason}): ${params.command}`;
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      status: "failed",
+      exitCode: null,
+      durationMs: 0,
+      aggregated: text,
+      timedOut: params.deniedReason.includes("timeout"),
+      cwd: params.cwd,
+    },
+  };
+}
+
 async function resolveGatewayExecApprovalFollowupText(params: {
   approvalFollowup?: ExecApprovalFollowupFactory;
   approvalId: string;
@@ -403,7 +366,7 @@ export async function processGatewayAllowlist(
     params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
   if (inlineEvalHit) {
     params.warnings.push(
-      `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
+      `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
         inlineEvalHit,
       )}.`,
     );
@@ -463,12 +426,12 @@ export async function processGatewayAllowlist(
     requiresSecurityAuditSuppressionApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
-      "Warning: heredoc execution requires explicit approval in allowlist mode.",
+      "Warning: heredoc execution requires reviewer or explicit approval in allowlist mode.",
     );
   }
   if (requiresAllowlistPlanApproval) {
     params.warnings.push(
-      `Warning: allowlist auto-execution is unavailable on ${process.platform}; explicit approval is required.`,
+      `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
   }
   if (requiresSecurityAuditSuppressionApproval) {
@@ -476,8 +439,73 @@ export async function processGatewayAllowlist(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
     );
   }
-
   if (requiresAsk) {
+    const [autoReviewSegment] = allowlistEval.segments;
+    const autoReviewArgv =
+      allowlistEval.segments.length === 1 &&
+      (autoReviewSegment?.raw === undefined ||
+        autoReviewSegment.raw.trim() === params.command.trim())
+        ? autoReviewSegment.argv
+        : undefined;
+    const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
+    const canAutoReviewApprovalMiss =
+      params.autoReview === true &&
+      hostAsk !== "always" &&
+      autoReviewHasBoundCommand &&
+      !requiresSecurityAuditSuppressionApproval;
+    let autoReviewRequiresHumanApproval =
+      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
+      requiresSecurityAuditSuppressionApproval;
+    if (canAutoReviewApprovalMiss) {
+      const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
+      const decision = await reviewer({
+        command: params.command,
+        argv: autoReviewArgv,
+        cwd: params.workdir,
+        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+        host: "gateway",
+        reason: resolveGatewayAutoReviewReason({
+          requiresInlineEvalApproval,
+          requiresHeredocApproval,
+          requiresAllowlistPlanApproval,
+          hostSecurity,
+          analysisOk,
+          allowlistSatisfied,
+          durableApprovalSatisfied,
+        }),
+        analysis: {
+          parsed: analysisOk,
+          allowlistMatched: allowlistSatisfied,
+          durableApprovalMatched: durableApprovalSatisfied,
+          inlineEval: requiresInlineEvalApproval,
+          heredoc: requiresHeredocApproval,
+        },
+        agent: {
+          id: params.agentId,
+          sessionKey: params.sessionKey,
+        },
+      });
+      if (decision.decision === "allow-once") {
+        params.warnings.push(
+          `Exec auto-review allowed once (risk=${decision.risk}): ${decision.rationale}`,
+        );
+        recordMatchedAllowlistUse(
+          resolveApprovalAuditTrustPath(
+            allowlistEval.segments[0]?.resolution ?? null,
+            params.workdir,
+          ),
+        );
+        return {
+          execCommandOverride: enforcedCommand,
+          allowWithoutEnforcedCommand: enforcedCommand === undefined,
+        };
+      }
+      params.warnings.push(
+        `Exec auto-review deferred to human approval (risk=${decision.risk}): ${decision.rationale}`,
+      );
+      autoReviewRequiresHumanApproval = true;
+    }
+
     const requestArgs = buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
@@ -535,6 +563,7 @@ export async function processGatewayAllowlist(
         approvedByAsk,
         deniedReason,
         requiresInlineEvalApproval,
+        requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
       });
 
       if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
@@ -564,31 +593,14 @@ export async function processGatewayAllowlist(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     );
-    const effectiveTimeout =
-      typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-    const followupTarget = buildExecApprovalFollowupTarget({
-      approvalId,
-      sessionKey: params.notifySessionKey ?? params.sessionKey,
-      bashElevated: params.bashElevated,
-      turnSourceChannel: params.turnSourceChannel,
-      turnSourceTo: params.turnSourceTo,
-      turnSourceAccountId: params.turnSourceAccountId,
-      turnSourceThreadId: params.turnSourceThreadId,
-      direct: params.approvalFollowupMode === "direct",
-    });
-
-    void (async () => {
+    const resolveApprovalForExecution = async (onFailure: () => void) => {
       const decision = await resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
-        onFailure: () =>
-          void sendExecApprovalFollowupResult(
-            followupTarget,
-            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-          ),
+        onFailure,
       });
       if (decision === undefined) {
-        return;
+        return { deniedReason: "approval-request-failed", requestFailed: true };
       }
 
       const {
@@ -604,7 +616,10 @@ export async function processGatewayAllowlist(
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
-          deniedReason = "approval-timeout (allowlist-miss)";
+          // Use a colon separator rather than nested parens so the
+          // `Exec denied (gateway id=..., <deniedReason>): cmd` wire format
+          // stays unambiguous for parsers that close on the first `):`.
+          deniedReason = "approval-timeout: allowlist-miss";
         } else {
           approvedByAsk = true;
         }
@@ -633,6 +648,7 @@ export async function processGatewayAllowlist(
         approvedByAsk,
         deniedReason,
         requiresInlineEvalApproval,
+        requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
       }));
 
       if (
@@ -647,10 +663,58 @@ export async function processGatewayAllowlist(
         deniedReason = deniedReason ?? "allowlist-miss";
       }
 
-      if (deniedReason) {
+      return { deniedReason, requestFailed: false };
+    };
+
+    if (unavailableReason === null && shouldAwaitGatewayApprovalInline(params)) {
+      const approvalDecision = await resolveApprovalForExecution(() => undefined);
+      if (approvalDecision.deniedReason) {
+        return {
+          deniedResult: buildGatewayExecApprovalDeniedToolResult({
+            approvalId,
+            deniedReason: approvalDecision.deniedReason,
+            command: params.command,
+            cwd: params.workdir,
+          }),
+        };
+      }
+
+      recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      return {
+        execCommandOverride: enforcedCommand,
+        allowWithoutEnforcedCommand: enforcedCommand === undefined,
+      };
+    }
+
+    const effectiveTimeout =
+      typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
+    const followupTarget = buildExecApprovalFollowupTarget({
+      approvalId,
+      sessionKey: params.notifySessionKey ?? params.sessionKey,
+      bashElevated: params.bashElevated,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceTo: params.turnSourceTo,
+      turnSourceAccountId: params.turnSourceAccountId,
+      turnSourceThreadId: params.turnSourceThreadId,
+      direct: params.approvalFollowupMode === "direct",
+    });
+
+    void (async () => {
+      const approvalDecision = await resolveApprovalForExecution(
+        () =>
+          void sendExecApprovalFollowupResult(
+            followupTarget,
+            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
+          ),
+      );
+      if (approvalDecision.requestFailed) {
+        return;
+      }
+
+      if (approvalDecision.deniedReason) {
         await sendExecApprovalFollowupResult(
           followupTarget,
-          `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
+          `Exec denied (gateway id=${approvalId}, ${approvalDecision.deniedReason}): ${params.command}`,
         );
         return;
       }
@@ -695,10 +759,10 @@ export async function processGatewayAllowlist(
         trigger: params.trigger,
         outcome,
       });
-      const approvalFollowupText = [params.approvalFollowupText, dynamicFollowupText]
-        .map((text) => text?.trim())
-        .filter(Boolean)
-        .join("\n\n");
+      const approvalFollowupText = normalizeStringEntries([
+        params.approvalFollowupText ?? "",
+        dynamicFollowupText ?? "",
+      ]).join("\n\n");
       const summary = buildGatewayExecApprovalFollowupSummary({
         approvalId,
         sessionId: run.session.id,

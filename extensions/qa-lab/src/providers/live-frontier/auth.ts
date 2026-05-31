@@ -9,6 +9,7 @@ import {
   resolveEnvApiKey,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaAgentAuthDir, writeQaAuthProfiles } from "../shared/auth-store.js";
 
 export const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
@@ -17,12 +18,10 @@ const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SE
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
 const QA_LIVE_API_KEY_AGENT_IDS = Object.freeze(["main", "qa"] as const);
 const QA_OPENAI_PROVIDER_ID = "openai";
-const QA_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const QA_LIVE_API_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
   anthropic: ["OPENCLAW_LIVE_ANTHROPIC_KEY"],
   gemini: ["OPENCLAW_LIVE_GEMINI_KEY"],
-  openai: ["OPENCLAW_LIVE_OPENAI_KEY", "OPENAI_API_KEY"],
-  "openai-codex": [
+  openai: [
     "CODEX_API_KEY",
     "OPENCLAW_LIVE_CODEX_API_KEY",
     "OPENCLAW_LIVE_OPENAI_KEY",
@@ -35,9 +34,7 @@ function buildQaLiveApiKeyProfileId(provider: string): string {
 }
 
 function normalizeQaLiveProviderIds(providerIds: readonly string[]) {
-  return [...new Set(providerIds.map((providerId) => providerId.trim()))]
-    .filter((providerId) => providerId.length > 0)
-    .toSorted();
+  return uniqueStrings(normalizeStringEntries(providerIds)).toSorted();
 }
 
 function isQaLiveOfficialOpenAiBaseUrl(baseUrl: unknown): boolean {
@@ -70,12 +67,8 @@ function expandQaLiveApiKeyProviderIds(params: {
   providerIds: readonly string[];
 }) {
   const expanded = new Set(normalizeQaLiveProviderIds(params.providerIds));
-  if (
-    expanded.has(QA_OPENAI_CODEX_PROVIDER_ID) ||
-    (expanded.has(QA_OPENAI_PROVIDER_ID) && qaLiveOpenAiUsesCodexByDefault(params.cfg))
-  ) {
+  if (expanded.has(QA_OPENAI_PROVIDER_ID) && qaLiveOpenAiUsesCodexByDefault(params.cfg)) {
     expanded.add(QA_OPENAI_PROVIDER_ID);
-    expanded.add(QA_OPENAI_CODEX_PROVIDER_ID);
   }
   return [...expanded].toSorted();
 }
@@ -161,14 +154,11 @@ function qaLiveRequiresCodexAuth(params: {
   env: NodeJS.ProcessEnv;
 }) {
   const providerIds = normalizeQaLiveProviderIds(params.providerIds);
-  if (providerIds.includes(QA_OPENAI_CODEX_PROVIDER_ID)) {
-    return true;
-  }
   if (!providerIds.includes(QA_OPENAI_PROVIDER_ID)) {
     return false;
   }
   const forcedRuntime = params.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
-  if (forcedRuntime === "pi") {
+  if (forcedRuntime === "openclaw") {
     return false;
   }
   if (forcedRuntime === "codex") {
@@ -231,9 +221,7 @@ export async function stageQaLiveApiKeyProfiles(params: {
   agentIds?: readonly string[];
 }): Promise<OpenClawConfig> {
   const env = params.env ?? process.env;
-  const providerIds = [...new Set(params.providerIds.map((providerId) => providerId.trim()))]
-    .filter((providerId) => providerId.length > 0)
-    .toSorted();
+  const providerIds = uniqueStrings(normalizeStringEntries(params.providerIds)).toSorted();
   const profiles: Record<
     string,
     {
@@ -267,7 +255,7 @@ export async function stageQaLiveApiKeyProfiles(params: {
   if (Object.keys(profiles).length === 0) {
     return next;
   }
-  const agentIds = [...new Set(params.agentIds ?? QA_LIVE_API_KEY_AGENT_IDS)];
+  const agentIds = uniqueStrings(params.agentIds ?? QA_LIVE_API_KEY_AGENT_IDS);
   await Promise.all(
     agentIds.map((agentId) =>
       writeQaAuthProfiles({
@@ -291,10 +279,7 @@ export function assertQaLiveCodexAuthAvailable(params: {
   }
   if (
     resolveQaLiveEnvApiKey({ providerId: QA_OPENAI_PROVIDER_ID, env, cfg: params.cfg })?.apiKey ||
-    resolveQaLiveEnvApiKey({ providerId: QA_OPENAI_CODEX_PROVIDER_ID, env, cfg: params.cfg })
-      ?.apiKey ||
-    hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_PROVIDER_ID }) ||
-    hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_CODEX_PROVIDER_ID })
+    hasQaLiveStagedApiKeyProfile({ cfg: params.cfg, providerId: QA_OPENAI_PROVIDER_ID })
   ) {
     return;
   }

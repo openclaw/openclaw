@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -21,7 +22,6 @@ import {
   setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 

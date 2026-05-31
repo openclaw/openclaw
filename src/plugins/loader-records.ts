@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginFormat } from "./manifest-types.js";
@@ -61,6 +61,7 @@ export function createPluginRecord(params: {
     realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
     realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
     mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
+    transcriptSourceProviderIds: [...(params.contracts?.transcriptSourceProviders ?? [])],
     imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],
     videoGenerationProviderIds: [...(params.contracts?.videoGenerationProviders ?? [])],
     musicGenerationProviderIds: [...(params.contracts?.musicGenerationProviders ?? [])],

@@ -1,3 +1,4 @@
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -29,7 +30,7 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
         if (Array.isArray(existing.enum) && Array.isArray(incoming.enum)) {
           mergedProps[key] = {
             ...existing,
-            enum: [...new Set([...(existing.enum as unknown[]), ...(incoming.enum as unknown[])])],
+            enum: uniqueValues([...(existing.enum as unknown[]), ...(incoming.enum as unknown[])]),
           };
           continue;
         }

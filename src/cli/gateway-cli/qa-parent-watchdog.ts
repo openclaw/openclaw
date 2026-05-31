@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 export const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
@@ -39,7 +40,7 @@ function resolveQaParentPid(env: NodeJS.ProcessEnv, ownPid: number): number | nu
   if (!raw) {
     return null;
   }
-  const parentPid = Number(raw);
+  const parentPid = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
   if (!Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === ownPid) {
     return null;
   }
@@ -59,12 +60,12 @@ function resolveQaCleanupRoot(rawValue: string | undefined): string | null {
 }
 
 function resolveQaCleanupRoots(env: NodeJS.ProcessEnv): string[] {
-  return [
-    resolveQaCleanupRoot(env[QA_TEMP_ROOT_ENV]),
-    resolveQaCleanupRoot(env[QA_STAGED_RUNTIME_ROOT_ENV]),
-  ].filter((target, index, array): target is string => {
-    return target !== null && array.indexOf(target) === index;
-  });
+  return uniqueStrings(
+    [
+      resolveQaCleanupRoot(env[QA_TEMP_ROOT_ENV]),
+      resolveQaCleanupRoot(env[QA_STAGED_RUNTIME_ROOT_ENV]),
+    ].filter((target): target is string => target !== null),
+  );
 }
 
 function pathContains(root: string, candidate: string): boolean {

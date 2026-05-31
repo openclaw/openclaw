@@ -2,12 +2,13 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { sanitizeInboundSystemTags } from "../security/system-tags.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -101,7 +102,9 @@ function findDuplicateInQueue(
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  const cleaned = text.trim();
+  // These entries are rendered as `System:` lines, so strip nested system-marker
+  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
+  const cleaned = sanitizeInboundSystemTags(text).trim();
   if (!cleaned) {
     return false;
   }

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runIMessageCatchup } from "./catchup-bridge.js";
-import { resolveCatchupConfig } from "./catchup.js";
+import { resolveCatchupConfig, saveIMessageCatchupCursor } from "./catchup.js";
 import type { IMessagePayload } from "./types.js";
 
 type RpcCall = {
@@ -107,6 +107,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.querySucceeded).toBe(true);
+    expect(summary.fullyCaughtUp).toBe(true);
     expect(summary.replayed).toBe(3);
     expect(dispatched.map((m) => m.guid)).toEqual(["g-100", "g-101", "g-102"]);
     expect(calls[0]?.method).toBe("chats.list");
@@ -156,6 +157,32 @@ describe("runIMessageCatchup", () => {
     expect(summary.replayed).toBe(1);
   });
 
+  it("does not crash on Date-invalid persisted cursor timestamps", async () => {
+    const log = vi.fn();
+    await saveIMessageCatchupCursor("default", {
+      lastSeenMs: 8_700_000_000_000_000,
+      lastSeenRowid: 10,
+    });
+    const { client, calls } = makeFakeClient(() => {
+      throw new Error("unexpected rpc");
+    });
+
+    const summary = await runIMessageCatchup({
+      client: client as never,
+      accountId: "default",
+      config: resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 }),
+      includeAttachments: false,
+      dispatchPayload: async () => {},
+      runtime: { log },
+    });
+
+    expect(summary.querySucceeded).toBe(false);
+    expect(calls).toEqual([]);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("imessage catchup: invalid since timestamp"),
+    );
+  });
+
   it("returns querySucceeded=false when chats.list throws", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
@@ -177,6 +204,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.querySucceeded).toBe(false);
+    expect(summary.fullyCaughtUp).toBe(false);
     expect(summary.replayed).toBe(0);
   });
 
@@ -220,6 +248,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.querySucceeded).toBe(true);
+    expect(summary.fullyCaughtUp).toBe(false);
     expect(summary.replayed).toBe(1);
     expect(dispatched).toEqual(["g-300"]);
   });
@@ -267,6 +296,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.fetchedCount).toBe(5);
+    expect(summary.fullyCaughtUp).toBe(false);
     expect(summary.replayed).toBe(5);
     // Oldest-first by rowid: 100, 101, 102, 103, 200 (chat 1's first 4, then chat 2's first).
     expect(dispatched).toEqual(["g-100", "g-101", "g-102", "g-103", "g-200"]);

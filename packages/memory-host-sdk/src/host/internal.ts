@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
@@ -28,6 +29,7 @@ import {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
+import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -74,17 +76,26 @@ export function normalizeRelPath(value: string): string {
   return trimmed.replace(/\\/g, "/");
 }
 
+function expandHomePath(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(homedir(), value.slice(2));
+  }
+  return value;
+}
+
 export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
   if (!extraPaths?.length) {
     return [];
   }
-  const resolved = extraPaths
-    .map((value) => value.trim())
-    .filter(Boolean)
+  const resolved = normalizeStringEntries(extraPaths)
+    .map((value) => expandHomePath(value))
     .map((value) =>
       path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
     );
-  return Array.from(new Set(resolved));
+  return uniqueStrings(resolved);
 }
 
 export function isMemoryPath(relPath: string): boolean {

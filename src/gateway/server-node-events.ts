@@ -1,18 +1,22 @@
 import { randomUUID } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+  scopedHeartbeatWakeOptionsForPolicy,
+} from "../infra/event-session-routing.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { resolveEventSessionKey } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -38,7 +42,6 @@ import {
   resolveSessionAgentId,
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
-  scopedHeartbeatWakeOptions,
   sendDurableMessageBatch,
   updateSessionStore,
 } from "./server-node-events.runtime.js";
@@ -720,6 +723,9 @@ export const handleNodeEvent = async (
       if (obj.suppressNotifyOnExit === true) {
         return undefined;
       }
+      if (evt.event === "exec.denied") {
+        return undefined;
+      }
       const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
@@ -727,7 +733,15 @@ export const handleNodeEvent = async (
           : undefined;
       const timedOut = obj.timedOut === true;
       const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      const reason = sanitizeInboundSystemTags(normalizeOptionalString(obj.reason) ?? "");
+      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
+      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
+      // matching the first balanced `(...)` and stray parens in user-supplied
+      // input would break the metadata/body boundary. We strip pre-sanitize so
+      // that legitimate `[System Message]` style tags can still be converted to
+      // `(System Message)` by sanitizeInboundSystemTags afterward.
+      const reason = sanitizeInboundSystemTags(
+        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
+      );
 
       let text = "";
       if (evt.event === "exec.started") {
@@ -763,8 +777,9 @@ export const handleNodeEvent = async (
         }
       }
 
+      const eventRouting = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
       const queued = enqueueSystemEvent(text, {
-        sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey, cfg.session?.scope),
+        sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
         contextKey: runId ? `exec:${runId}` : "exec",
       });
       if (queued) {
@@ -772,7 +787,7 @@ export const handleNodeEvent = async (
         // keys should keep legacy unscoped behavior so enabled non-main heartbeat
         // agents still run when no explicit agent session is provided.
         requestHeartbeat(
-          scopedHeartbeatWakeOptions(
+          scopedHeartbeatWakeOptionsForPolicy(
             sessionKey,
             {
               source: "exec-event",
@@ -780,8 +795,7 @@ export const handleNodeEvent = async (
               reason: "exec-event",
               coalesceMs: 0,
             },
-            cfg.session?.mainKey,
-            cfg.session?.scope,
+            eventRouting,
           ),
         );
       }
@@ -814,6 +828,7 @@ export const handleNodeEvent = async (
             topic,
             environment,
             distribution: obj.distribution,
+            relayOrigin: obj.relayOrigin,
             tokenDebugSuffix: obj.tokenDebugSuffix,
           });
         } else {

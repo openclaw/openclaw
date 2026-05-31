@@ -1,3 +1,4 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -25,17 +26,7 @@ type ExecuteWithApiKeyRotationOptions<T> = {
 };
 
 function dedupeApiKeys(raw: string[]): string[] {
-  const seen = new Set<string>();
-  const keys: string[] = [];
-  for (const value of raw) {
-    const apiKey = value.trim();
-    if (!apiKey || seen.has(apiKey)) {
-      continue;
-    }
-    seen.add(apiKey);
-    keys.push(apiKey);
-  }
-  return keys;
+  return normalizeUniqueStringEntries(raw);
 }
 
 export function collectProviderApiKeysForExecution(params: {

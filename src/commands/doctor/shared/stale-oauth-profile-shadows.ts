@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveAgentDir,
   resolveDefaultAgentDir,
@@ -28,10 +29,6 @@ type StaleOAuthProfileShadow = {
 
 const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
 const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function isLegacyOAuthRef(value: unknown): boolean {
   return (

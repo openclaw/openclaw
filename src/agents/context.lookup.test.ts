@@ -32,7 +32,7 @@ vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
-vi.mock("./pi-model-discovery-runtime.js", () => ({
+vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: contextTestState.discoverAuthStorage,
   discoverModels: contextTestState.discoverModels,
 }));
@@ -158,7 +158,7 @@ describe("lookupContextTokens", () => {
     mockContextModuleDeps(() => ({
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
           },
         },
@@ -271,7 +271,10 @@ describe("lookupContextTokens", () => {
     expect(
       path.normalize(discoverAgentDir).endsWith(path.join(".openclaw", "agents", "main", "agent")),
     ).toBe(true);
-    expect(discoverCall[2]).toEqual({ normalizeModels: false });
+    expect(discoverCall[2]).toEqual({
+      normalizeModels: false,
+      workspaceDir: expect.any(String),
+    });
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
   });
 
@@ -380,7 +383,7 @@ describe("lookupContextTokens", () => {
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
     // When both "bedrock" and "amazon-bedrock" exist as config keys (alias pattern),
     // resolveConfiguredProviderContextWindow must return the exact-key match first,
-    // not the first normalized hit — mirroring pi-embedded-runner/model.ts behaviour.
+    // not the first normalized hit — mirroring embedded-agent-runner/model.ts behaviour.
     mockDiscoveryDeps([]);
 
     const cfg = {
@@ -481,7 +484,7 @@ describe("lookupContextTokens", () => {
     expect(result).toBe(1_048_576);
   });
 
-  it("resolveContextTokensForModel normalizes explicit provider aliases before config lookup", async () => {
+  it("resolveContextTokensForModel does not match explicit provider id variants before config lookup", async () => {
     mockDiscoveryDeps([]);
 
     const cfg = createContextOverrideConfig("z.ai", "glm-5", 256_000);
@@ -492,6 +495,6 @@ describe("lookupContextTokens", () => {
       provider: "z-ai",
       model: "glm-5",
     });
-    expect(result).toBe(256_000);
+    expect(result).toBeUndefined();
   });
 });

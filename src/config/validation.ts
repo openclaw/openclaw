@@ -1,9 +1,10 @@
 import path from "node:path";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
@@ -18,7 +19,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
 import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -32,15 +33,16 @@ import {
   isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
-import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
@@ -48,6 +50,10 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+const LEGACY_CHATGPT_PROVIDER_ID = ["openai", "codex"].join("-");
+const LEGACY_CHATGPT_RESPONSES_API = `${LEGACY_CHATGPT_PROVIDER_ID}-responses`;
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -64,14 +70,79 @@ type AllowedValuesCollection = {
 };
 type JsonSchemaLike = Record<string, unknown>;
 
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+function normalizeLegacyOpenAIProviderForValidation(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.models) || !isRecord(raw.models.providers)) {
     return raw;
   }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
+  let providersChanged = false;
+  const providers = { ...raw.models.providers };
+  const normalizeProviderConfig = (providerConfig: unknown): unknown => {
+    if (!isRecord(providerConfig)) {
+      return providerConfig;
+    }
+    let providerChanged = false;
+    const nextProvider = { ...providerConfig };
+    if (nextProvider.api === LEGACY_CHATGPT_RESPONSES_API) {
+      nextProvider.api = OPENAI_CHATGPT_RESPONSES_API;
+      providerChanged = true;
+    }
+    if (Array.isArray(nextProvider.models)) {
+      const nextModels = nextProvider.models.map((model) => {
+        if (!isRecord(model) || model.api !== LEGACY_CHATGPT_RESPONSES_API) {
+          return model;
+        }
+        providerChanged = true;
+        return { ...model, api: OPENAI_CHATGPT_RESPONSES_API };
+      });
+      if (providerChanged) {
+        nextProvider.models = nextModels;
+      }
+    }
+    return providerChanged ? nextProvider : providerConfig;
+  };
+
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    const normalizedProvider = normalizeLowercaseStringOrEmpty(providerId);
+    const normalizedConfig = normalizeProviderConfig(providerConfig);
+    if (normalizedProvider !== LEGACY_CHATGPT_PROVIDER_ID) {
+      if (normalizedConfig !== providerConfig) {
+        providers[providerId] = normalizedConfig;
+        providersChanged = true;
+      }
+      continue;
+    }
+    if (!Object.hasOwn(providers, OPENAI_PROVIDER_ID)) {
+      providers[OPENAI_PROVIDER_ID] = normalizedConfig;
+    }
+    delete providers[providerId];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return raw;
+  }
   return {
     ...raw,
+    models: {
+      ...raw.models,
+      providers,
+    },
+  };
+}
+
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  const normalizedRaw = normalizeLegacyOpenAIProviderForValidation(raw);
+  if (
+    !isRecord(normalizedRaw) ||
+    !isRecord(normalizedRaw.commands) ||
+    !Object.hasOwn(normalizedRaw.commands, "modelsWrite")
+  ) {
+    return normalizedRaw;
+  }
+  const commands = { ...normalizedRaw.commands };
+  delete commands.modelsWrite;
+  return {
+    ...normalizedRaw,
     commands,
   };
 }
@@ -125,10 +196,38 @@ function stripPreservedLegacyRootKeysForValidation(
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 const bundledChannelSchemaById = new Map<string, unknown>(
-  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).map(
     (entry) => [entry.channelId, entry.schema] as const,
   ),
 );
+const bundledChannelIds = Object.freeze(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false)
+    .map((entry) => normalizeLowercaseStringOrEmpty(entry.channelId))
+    .filter((channelId) => channelId.length > 0),
+);
+const bundledChannelIdSet = new Set(bundledChannelIds);
+const bundledChannelAliases = new Map<string, string>(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).flatMap(
+    (entry) => {
+      const channelId = normalizeLowercaseStringOrEmpty(entry.channelId);
+      if (!channelId) {
+        return [];
+      }
+      return (entry.aliases ?? [])
+        .map((alias) => [normalizeLowercaseStringOrEmpty(alias), channelId] as const)
+        .filter(([alias]) => alias.length > 0);
+    },
+  ),
+);
+
+function normalizeBundledChannelId(raw?: string | null): string | null {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return null;
+  }
+  const resolved = bundledChannelAliases.get(normalized) ?? normalized;
+  return bundledChannelIdSet.has(resolved) ? resolved : null;
+}
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
@@ -552,33 +651,51 @@ function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidatio
   return issues;
 }
 
-function isUnsupportedMutableSecretRefSchemaIssue(params: {
+function formatFilteredUnrecognizedKeyMessage(message: string, keys: string[]): string {
+  const quotedKeys = keys.map((key) => `"${key}"`).join(", ");
+  if (/must not have additional properties/i.test(message)) {
+    return `must not have additional properties: ${quotedKeys}`;
+  }
+  return keys.length === 1 ? `Unrecognized key: ${quotedKeys}` : `Unrecognized keys: ${quotedKeys}`;
+}
+
+function filterUnsupportedMutableSecretRefSchemaIssue(params: {
   issue: ConfigValidationIssue;
   policyIssue: ConfigValidationIssue;
-}): boolean {
+}): ConfigValidationIssue | null {
   const { issue, policyIssue } = params;
   if (issue.path === policyIssue.path) {
-    return /expected string, received object/i.test(issue.message);
+    return /expected string, received object/i.test(issue.message) ? null : issue;
   }
 
   if (!issue.path || !policyIssue.path || !policyIssue.path.startsWith(`${issue.path}.`)) {
-    return false;
+    return issue;
   }
 
   const remainder = policyIssue.path.slice(issue.path.length + 1);
   const childKey = remainder.split(".")[0];
   if (!childKey) {
-    return false;
+    return issue;
   }
 
-  if (!/Unrecognized key/i.test(issue.message)) {
-    return false;
+  if (!/Unrecognized key|must not have additional properties/i.test(issue.message)) {
+    return issue;
   }
   const unrecognizedKeys = [...issue.message.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
   if (unrecognizedKeys.length === 0) {
-    return false;
+    return issue;
   }
-  return unrecognizedKeys.length === 1 && unrecognizedKeys[0] === childKey;
+  if (!unrecognizedKeys.includes(childKey)) {
+    return issue;
+  }
+  const remainingKeys = unrecognizedKeys.filter((key) => key !== childKey);
+  if (remainingKeys.length === 0) {
+    return null;
+  }
+  return {
+    ...issue,
+    message: formatFilteredUnrecognizedKeyMessage(issue.message, remainingKeys),
+  };
 }
 
 function mergeUnsupportedMutableSecretRefIssues(
@@ -588,12 +705,19 @@ function mergeUnsupportedMutableSecretRefIssues(
   if (policyIssues.length === 0) {
     return schemaIssues;
   }
-  const filteredSchemaIssues = schemaIssues.filter(
-    (issue) =>
-      !policyIssues.some((policyIssue) =>
-        isUnsupportedMutableSecretRefSchemaIssue({ issue, policyIssue }),
-      ),
-  );
+  const filteredSchemaIssues = schemaIssues.flatMap((issue) => {
+    let filteredIssue: ConfigValidationIssue | null = issue;
+    for (const policyIssue of policyIssues) {
+      if (!filteredIssue) {
+        return [];
+      }
+      filteredIssue = filterUnsupportedMutableSecretRefSchemaIssue({
+        issue: filteredIssue,
+        policyIssue,
+      });
+    }
+    return filteredIssue ? [filteredIssue] : [];
+  });
   return [...policyIssues, ...filteredSchemaIssues];
 }
 
@@ -802,6 +926,19 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationIssue[] {
+  const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
+  if (!isUnsafeGatewayTailscaleNoAuth({ authMode: config.gateway?.auth?.mode, tailscaleMode })) {
+    return [];
+  }
+  return [
+    {
+      path: "gateway.auth.mode",
+      message: formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
+    },
+  ];
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -861,6 +998,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
+  if (gatewayTailscaleAuthIssues.length > 0) {
+    return { ok: false, issues: gatewayTailscaleAuthIssues };
   }
   return {
     ok: true,
@@ -955,7 +1096,7 @@ function validateConfigObjectWithPluginsBase(
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
     : null;
-  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "skip") {
+  if (opts.applyDefaults && !registryInfo) {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(base.config);
     if (pluginMetadataSnapshot) {
       registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
@@ -1036,10 +1177,11 @@ function validateConfigObjectWithPluginsBase(
       return registryInfo;
     }
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-    const registry = loadPluginMetadataSnapshot({
+    const registry = resolvePluginMetadataSnapshot({
       config,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env ?? process.env,
+      allowWorkspaceScopedCurrent: true,
     }).manifestRegistry;
     registryInfo = { registry };
     return registryInfo;
@@ -1080,17 +1222,8 @@ function validateConfigObjectWithPluginsBase(
       return compatConfig ?? config;
     }
 
-    const allow = config.plugins?.allow;
-    if (!Array.isArray(allow) || allow.length === 0) {
-      compatConfig = config;
-      return config;
-    }
-
-    compatConfig = withBundledPluginAllowlistCompat({
-      config,
-      pluginIds: [...ensureCompatPluginIds()],
-    });
-    return compatConfig ?? config;
+    compatConfig = config;
+    return config;
   };
 
   const ensureRegistry = (): RegistryInfo => {
@@ -1423,7 +1556,7 @@ function validateConfigObjectWithPluginsBase(
     };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
+  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
@@ -1484,7 +1617,7 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const heartbeatChannelIds = new Set<string>();
-  for (const channelId of CHANNEL_IDS) {
+  for (const channelId of bundledChannelIds) {
     heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(channelId));
   }
 
@@ -1501,7 +1634,7 @@ function validateConfigObjectWithPluginsBase(
     if (normalized === "last" || normalized === "none") {
       return;
     }
-    if (normalizeChatChannelId(trimmed)) {
+    if (normalizeBundledChannelId(trimmed)) {
       return;
     }
     if (!heartbeatChannelIds.has(normalized)) {

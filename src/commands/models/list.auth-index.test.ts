@@ -26,6 +26,7 @@ const pluginRegistryMocks = vi.hoisted(() => ({
 
 const envCandidateMocks = vi.hoisted(() => ({
   resolveProviderEnvApiKeyCandidates: vi.fn(),
+  resolveProviderEnvAuthLookupMaps: vi.fn(),
 }));
 
 vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
@@ -33,9 +34,13 @@ vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
   envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockImplementation(
     actual.resolveProviderEnvApiKeyCandidates,
   );
+  envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockImplementation(
+    actual.resolveProviderEnvAuthLookupMaps,
+  );
   return {
     ...actual,
     resolveProviderEnvApiKeyCandidates: envCandidateMocks.resolveProviderEnvApiKeyCandidates,
+    resolveProviderEnvAuthLookupMaps: envCandidateMocks.resolveProviderEnvAuthLookupMaps,
   };
 });
 
@@ -97,6 +102,7 @@ async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
 describe("createModelListAuthIndex", () => {
   beforeEach(() => {
     envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockClear();
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockClear();
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockClear();
   });
 
@@ -134,7 +140,11 @@ describe("createModelListAuthIndex", () => {
   });
 
   it("checks resolver-only env auth on demand", () => {
-    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockReturnValueOnce({});
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockReturnValueOnce({
+      aliasMap: {},
+      envCandidateMap: {},
+      authEvidenceMap: {},
+    });
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: emptyStore,
@@ -147,7 +157,11 @@ describe("createModelListAuthIndex", () => {
   });
 
   it("does not rediscover resolver-only env auth when a command metadata snapshot is supplied", () => {
-    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockReturnValueOnce({});
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockReturnValueOnce({
+      aliasMap: {},
+      envCandidateMap: {},
+      authEvidenceMap: {},
+    });
     const metadataSnapshot = {
       index: { plugins: [] },
       plugins: [],
@@ -228,18 +242,23 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("custom-openai")).toBe(true);
   });
 
-  it("treats OpenAI Codex auth as usable for canonical OpenAI agent routes", () => {
+  it("treats OpenAI OAuth auth as usable for canonical OpenAI agent routes", () => {
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
+          },
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token",
           },
         },
       },
@@ -249,7 +268,26 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("openai")).toBe(true);
   });
 
-  it("does not treat OpenAI Codex auth as usable for custom OpenAI-compatible routes", () => {
+  it("treats OpenAI token auth as usable for canonical OpenAI agent routes", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("openai")).toBe(true);
+  });
+
+  it("does not treat OpenAI OAuth auth as usable for custom OpenAI-compatible routes", () => {
     const index = createModelListAuthIndex({
       cfg: {
         models: {
@@ -265,9 +303,9 @@ describe("createModelListAuthIndex", () => {
       authStore: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,

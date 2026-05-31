@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
@@ -110,9 +111,12 @@ function resolveOfficialExternalInstallRecoveryMetadata(
   const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
   const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
   const values = new Set(
-    [request.rawSpec, request.normalizedSpec, rawNpmPrefixSpec ?? "", normalizedNpmPrefixSpec ?? ""]
-      .map((value) => value.trim())
-      .filter(Boolean),
+    normalizeStringEntries([
+      request.rawSpec,
+      request.normalizedSpec,
+      rawNpmPrefixSpec ?? "",
+      normalizedNpmPrefixSpec ?? "",
+    ]),
   );
   if (values.size === 0) {
     return {};

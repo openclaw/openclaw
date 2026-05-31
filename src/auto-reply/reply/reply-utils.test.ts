@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
@@ -107,6 +108,31 @@ describe("matchesMentionWithExplicit", () => {
 
 // Keep channelData-only payloads so channel-specific replies survive normalization.
 describe("normalizeReplyPayload", () => {
+  it("preserves reply payload metadata across normalization clones", () => {
+    const payload = setReplyPayloadMetadata(
+      {
+        text: " Visible reply ",
+      },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "main",
+          text: " Visible reply ",
+          idempotencyKey: "run-1:source-reply",
+        },
+      },
+    );
+
+    const normalized = normalizeReplyPayload(payload);
+
+    const reply = expectNormalizedReply(normalized);
+    expect(reply).not.toBe(payload);
+    expect(getReplyPayloadMetadata(reply)?.sourceReplyTranscriptMirror).toEqual({
+      sessionKey: "main",
+      text: " Visible reply ",
+      idempotencyKey: "run-1:source-reply",
+    });
+  });
+
   it("keeps channelData-only replies", () => {
     const payload = {
       channelData: {
@@ -126,6 +152,11 @@ describe("normalizeReplyPayload", () => {
   it("records skip reasons for silent/empty payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
+      {
+        name: "repeated silent",
+        payload: { text: `${SILENT_REPLY_TOKEN}\n\n${SILENT_REPLY_TOKEN}` },
+        reason: "silent",
+      },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
     ] as const;
     for (const testCase of cases) {
@@ -195,6 +226,37 @@ describe("normalizeReplyPayload", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
       { text: '{"action":"NO_REPLY"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("suppresses leaked reasoning when the final answer is NO_REPLY (#66701)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "think",
+          "Cav is talking about a follow-up conversation.",
+          "I will stay quiet here.NO_REPLY",
+        ].join("\n"),
+      },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("suppresses tagged leaked reasoning when silence narration ends in NO_REPLY (#66701)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "<think>Cav is talking about a follow-up conversation.</think>",
+          "I will stay quiet here.NO_REPLY",
+        ].join("\n"),
+      },
       { onSkip: (reason) => reasons.push(reason) },
     );
     expect(result).toBeNull();
@@ -558,8 +620,8 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "modelFull",
         template: "[{modelFull}]",
-        values: { modelFull: "openai-codex/gpt-5.4" },
-        expected: "[openai-codex/gpt-5.4]",
+        values: { modelFull: "openai/gpt-5.4" },
+        expected: "[openai/gpt-5.4]",
       },
       {
         name: "provider",
@@ -769,6 +831,19 @@ describe("block reply coalescer", () => {
     return { flushes, coalescer };
   }
 
+  type FlushedPayload = Parameters<Parameters<typeof createBlockReplyCoalescer>[0]["onFlush"]>[0];
+  function createPayloadCoalescerHarness<T>(pick: (payload: FlushedPayload) => T) {
+    const flushes: T[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(pick(payload));
+      },
+    });
+    return { flushes, coalescer };
+  }
+
   it("coalesces chunks within the idle window", async () => {
     vi.useFakeTimers();
     const { flushes, coalescer } = createBlockCoalescerHarness({
@@ -941,26 +1016,107 @@ describe("block reply coalescer", () => {
     }
   });
 
-  it("flushes buffered text before media payloads", () => {
-    const flushes: Array<{ text?: string; mediaUrls?: string[] }> = [];
-    const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
-      shouldAbort: () => false,
-      onFlush: (payload) => {
-        flushes.push({
-          text: payload.text,
-          mediaUrls: payload.mediaUrls,
-        });
-      },
-    });
+  it("merges compatible buffered text into following media payloads", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      replyToId?: string;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      replyToId: payload.replyToId,
+    }));
 
-    coalescer.enqueue({ text: "Hello" });
+    coalescer.enqueue({ text: "Hello", replyToId: "thread-1" });
     coalescer.enqueue({ text: "world" });
     coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
-    void coalescer.flush({ force: true });
+    await coalescer.flush({ force: true });
 
-    expect(flushes[0].text).toBe("Hello world");
-    expect(flushes[1].mediaUrls).toEqual(["https://example.com/a.png"]);
+    expect(flushes).toEqual([
+      {
+        text: "Hello world",
+        mediaUrls: ["https://example.com/a.png"],
+        replyToId: "thread-1",
+      },
+    ]);
+    coalescer.stop();
+  });
+
+  it("keeps reasoning text separate from media payloads", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      isReasoning?: boolean;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      isReasoning: payload.isReasoning,
+    }));
+
+    coalescer.enqueue({ text: "hidden", isReasoning: true });
+    coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "hidden", mediaUrls: undefined, isReasoning: true },
+      {
+        text: undefined,
+        mediaUrls: ["https://example.com/a.png"],
+        isReasoning: undefined,
+      },
+    ]);
+    coalescer.stop();
+  });
+
+  it("keeps buffered text separate when media changes reply target", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      replyToId?: string;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      replyToId: payload.replyToId,
+    }));
+
+    coalescer.enqueue({ text: "Unthreaded caption" });
+    coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"], replyToId: "thread-2" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Unthreaded caption", mediaUrls: undefined, replyToId: undefined },
+      {
+        text: undefined,
+        mediaUrls: ["https://example.com/a.png"],
+        replyToId: "thread-2",
+      },
+    ]);
+    coalescer.stop();
+  });
+
+  it("keeps text separate from voice media payloads", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      audioAsVoice?: boolean;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      audioAsVoice: payload.audioAsVoice,
+    }));
+
+    coalescer.enqueue({ text: "Listen to this" });
+    coalescer.enqueue({ mediaUrls: ["https://example.com/a.ogg"], audioAsVoice: true });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Listen to this", mediaUrls: undefined, audioAsVoice: undefined },
+      {
+        text: undefined,
+        mediaUrls: ["https://example.com/a.ogg"],
+        audioAsVoice: true,
+      },
+    ]);
     coalescer.stop();
   });
 });
@@ -1080,6 +1236,16 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
+  it("does not emit padding before a buffered trailing reply tag", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const first = accumulator.consume("Hello [[");
+    expect(first?.text).toBe("Hello");
+
+    const second = accumulator.consume("", { final: true });
+    expect(second?.text).toBe("[[");
+  });
+
   it("propagates explicit reply ids across current and subsequent chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
@@ -1125,49 +1291,16 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.text).toBe("NO_REPLY: explanation");
   });
 
-  it("reassembles MEDIA: directives split between the token and the colon", () => {
+  it("buffers split final media directive text until final parsing", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
     const first = accumulator.consume("这次直接发图。\n\nMEDIA");
-    expect(first?.text).toBe("这次直接发图。");
+    expect(first?.text).toBe("这次直接发图。\n\n");
     expect(first?.mediaUrls).toBeUndefined();
 
     const second = accumulator.consume(":/tmp/spy-family.png");
-    expect(second).toBeNull();
-
-    const finalResult = accumulator.consume("", { final: true });
-    expect(finalResult?.mediaUrls).toEqual(["/tmp/spy-family.png"]);
-    expect((finalResult?.text ?? "").includes("MEDIA")).toBe(false);
-  });
-
-  it("reassembles MEDIA: directives split inside the URL path", () => {
-    const accumulator = createStreamingDirectiveAccumulator();
-
-    const first = accumulator.consume("Preview below.\n\nMEDIA:/var/folders/tool-image");
-    expect(first?.text).toBe("Preview below.");
-    expect(first?.mediaUrls).toBeUndefined();
-
-    const second = accumulator.consume("-generation/cover.png");
-    expect(second).toBeNull();
-
-    const finalResult = accumulator.consume("", { final: true });
-    expect(finalResult?.mediaUrls).toEqual(["/var/folders/tool-image-generation/cover.png"]);
-  });
-
-  it("buffers partial MEDIA prefixes (M/ME/MED/MEDI) across chunk boundaries", () => {
-    for (const prefix of ["M", "ME", "MED", "MEDI"]) {
-      const accumulator = createStreamingDirectiveAccumulator();
-      const head = `Here is the file.\n\n${prefix}`;
-      const headResult = accumulator.consume(head);
-      expect(headResult?.text, `prefix=${prefix} head emits text`).toBe("Here is the file.");
-
-      const rest = `MEDIA:/tmp/file.png`.slice(prefix.length);
-      const restResult = accumulator.consume(rest);
-      expect(restResult, `prefix=${prefix} mid returns null`).toBeNull();
-
-      const finalResult = accumulator.consume("", { final: true });
-      expect(finalResult?.mediaUrls, `prefix=${prefix} final mediaUrls`).toEqual(["/tmp/file.png"]);
-    }
+    expect(second?.text ?? "").toBe("");
+    expect(second?.mediaUrls).toBeUndefined();
   });
 
   it("does not buffer a trailing letter that appears mid-line", () => {
@@ -1185,32 +1318,29 @@ describe("createStreamingDirectiveAccumulator", () => {
   it("does not buffer prose that merely contains the token MEDIA:", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
-    // Matches what upstream `splitMediaFromOutput` considers a directive:
-    // only lines whose trimmed start is `MEDIA:`. A line that merely
-    // contains "MEDIA:" mid-sentence is ordinary prose and must flush
-    // immediately — otherwise on a stream-item boundary (which may call
-    // `reset()` without a preceding `consume("", { final: true })`) the
-    // buffered prose would be silently dropped.
     const result = accumulator.consume("See the MEDIA: section for details");
     expect(result?.text).toBe("See the MEDIA: section for details");
     expect(result?.mediaUrls).toBeUndefined();
   });
 
-  it("still buffers an indented MEDIA directive line that is mid-stream", () => {
+  it("strips audio voice tags from streamed chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
-    // Upstream parser treats `line.trimStart().startsWith("MEDIA:")` as a
-    // directive, so the guard must also buffer the indented form across
-    // a chunk boundary.
+    const result = accumulator.consume("Hello\n[[audio_as_voice]]");
+    expect(result?.text).toBe("Hello");
+    expect(result?.audioAsVoice).toBe(true);
+  });
+
+  it("buffers an indented media-looking line for final parsing", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
     const first = accumulator.consume("Preview:\n  MEDIA:/tmp/cover");
-    expect(first?.text).toBe("Preview:");
+    expect(first?.text).toBe("Preview:\n");
     expect(first?.mediaUrls).toBeUndefined();
 
     const second = accumulator.consume(".png");
-    expect(second).toBeNull();
-
-    const finalResult = accumulator.consume("", { final: true });
-    expect(finalResult?.mediaUrls).toEqual(["/tmp/cover.png"]);
+    expect(second?.text ?? "").toBe("");
+    expect(second?.mediaUrls).toBeUndefined();
   });
 
   it("does not rewrite mid-prose MEDIA into a directive across chunks", () => {
@@ -1239,12 +1369,12 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.mediaUrls).toBeUndefined();
   });
 
-  it("keeps MEDIA directives that arrive in a single complete chunk working", () => {
+  it("keeps media-looking lines as text in streaming chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 
     const result = accumulator.consume("Here it is.\n\nMEDIA:/tmp/complete.png\n");
-    expect(result?.text.includes("MEDIA")).toBe(false);
-    expect(result?.mediaUrls).toEqual(["/tmp/complete.png"]);
+    expect(result?.text).toBe("Here it is.\n\nMEDIA:/tmp/complete.png\n");
+    expect(result?.mediaUrls).toBeUndefined();
   });
 
   it("does not strip a complete final MEDIA line when parsing final text", () => {
@@ -1258,7 +1388,7 @@ describe("createStreamingDirectiveAccumulator", () => {
 describe("extractShortModelName", () => {
   it("normalizes provider/date/latest suffixes while preserving other IDs", () => {
     const cases = [
-      ["openai-codex/gpt-5.4", "gpt-5.4"],
+      ["openai/gpt-5.4", "gpt-5.4"],
       ["claude-opus-4-6-20251101", "claude-opus-4-6"],
       ["gpt-5.4-latest", "gpt-5.4"],
       // Date suffix must be exactly 8 digits at the end.

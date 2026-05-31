@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -41,23 +42,19 @@ export function resolveModelAuthLabel(params: {
           }),
         });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
-  const acceptedProviderKeys = [
-    ...new Set(
-      [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  const acceptedProviderKeys = uniqueStrings(
+    [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  );
+  const order = uniqueStrings(
+    acceptedProviderKeys.flatMap((acceptedProvider) =>
+      resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store,
+        provider: acceptedProvider,
+        preferredProfile: profileOverride,
+      }),
     ),
-  ];
-  const order = [
-    ...new Set(
-      acceptedProviderKeys.flatMap((acceptedProvider) =>
-        resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store,
-          provider: acceptedProvider,
-          preferredProfile: profileOverride,
-        }),
-      ),
-    ),
-  ];
+  );
   const candidates = [profileOverride, ...order].filter(Boolean) as string[];
 
   for (const profileId of candidates) {

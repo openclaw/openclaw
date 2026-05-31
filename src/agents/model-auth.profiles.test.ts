@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -13,8 +13,10 @@ import {
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
+  createRuntimeProviderAuthLookup,
   getApiKeyForModel,
   hasAvailableAuthForProvider,
+  hasRuntimeAvailableProviderAuth,
   resolveApiKeyForProvider,
   resolveEnvApiKey,
   resolveModelAuthMode,
@@ -44,7 +46,7 @@ async function expectVertexAdcEnvApiKey(params: {
   }
 }
 
-function testModelDefinition(id: string): Model<Api> {
+function testModelDefinition(id: string): Model {
   return {
     id,
     name: id,
@@ -136,42 +138,57 @@ vi.mock("./model-auth-env-vars.js", () => {
     voyage: ["VOYAGE_API_KEY"],
     zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
   } as const;
+  const aliasMap = {
+    modelstudio: "qwen",
+    qwencloud: "qwen",
+    "z.ai": "zai",
+    "z-ai": "zai",
+    "opencode-go-auth": "opencode-go",
+    bedrock: "amazon-bedrock",
+    "aws-bedrock": "amazon-bedrock",
+  };
+  const resolveProviderEnvAuthEvidence = (params?: { config?: OpenClawConfig }) => {
+    const evidence = {
+      "google-vertex": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+          fallbackPaths: [
+            "${HOME}/.config/gcloud/application_default_credentials.json",
+            "${APPDATA}/gcloud/application_default_credentials.json",
+          ],
+          requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+          requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+          credentialMarker: "gcp-vertex-credentials",
+          source: "gcloud adc",
+        },
+      ],
+    } satisfies Record<string, readonly unknown[]>;
+    if (!hasAllowedPlugin(params?.config, "workspace-cloud")) {
+      return evidence;
+    }
+    return {
+      ...evidence,
+      "workspace-cloud": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+          credentialMarker: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+        },
+      ],
+    };
+  };
   return {
-    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvApiKeyCandidates: () => candidates,
-    resolveProviderEnvAuthEvidence: (params?: { config?: OpenClawConfig }) => {
-      const evidence = {
-        "google-vertex": [
-          {
-            type: "local-file-with-env",
-            fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
-            fallbackPaths: [
-              "${HOME}/.config/gcloud/application_default_credentials.json",
-              "${APPDATA}/gcloud/application_default_credentials.json",
-            ],
-            requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
-            requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
-            credentialMarker: "gcp-vertex-credentials",
-            source: "gcloud adc",
-          },
-        ],
-      } satisfies Record<string, readonly unknown[]>;
-      if (!hasAllowedPlugin(params?.config, "workspace-cloud")) {
-        return evidence;
-      }
-      return {
-        ...evidence,
-        "workspace-cloud": [
-          {
-            type: "local-file-with-env",
-            fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
-            credentialMarker: "workspace-cloud-local-credentials",
-            source: "workspace cloud credentials",
-          },
-        ],
-      };
-    },
+    resolveProviderEnvAuthEvidence,
+    resolveProviderEnvAuthLookupMaps: (params?: { config?: OpenClawConfig }) => ({
+      aliasMap,
+      envCandidateMap: candidates,
+      authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+      setupProviderFallbackRefs: ["anthropic-vertex"],
+    }),
   };
 });
 
@@ -180,7 +197,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     provider: string;
     context: { listProfileIds: (providerId: string) => string[] };
   }) => {
-    if (params.provider === "openai" && params.context.listProfileIds("openai-codex").length > 0) {
+    if (params.provider === "openai" && params.context.listProfileIds("openai").length > 0) {
       return 'No API key found for provider "openai". Use openai/gpt-5.5.';
     }
     return undefined;
@@ -220,6 +237,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProvider: ({ provider }: { provider: string }) =>
+    provider === "openai" ? ["openai"] : [],
+  resolveOwningPluginIdsForProviderRef: ({ provider }: { provider: string }) =>
     provider === "openai" ? ["openai"] : [],
 }));
 
@@ -389,9 +408,9 @@ describe("getApiKeyForModel", () => {
         await state.writeAuthProfiles({
           version: 1,
           profiles: {
-            "openai-codex:default": {
+            "openai:default": {
               type: "oauth",
-              provider: "openai-codex",
+              provider: "openai",
               ...oauthFixture,
             },
           },
@@ -399,16 +418,16 @@ describe("getApiKeyForModel", () => {
 
         const model = {
           id: "codex-mini-latest",
-          provider: "openai-codex",
-          api: "openai-codex-responses",
-        } as Model<Api>;
+          provider: "openai",
+          api: "openai-chatgpt-responses",
+        } as Model;
 
         const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
           allowKeychainPrompt: false,
         });
         const apiKey = await getApiKeyForModel({
           model,
-          profileId: "openai-codex:default",
+          profileId: "openai:default",
           store,
           agentDir: process.env.OPENCLAW_AGENT_DIR,
         });
@@ -417,7 +436,167 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("suggests openai-codex when only Codex OAuth is configured", async () => {
+  it("keeps OpenAI OAuth profiles on the Codex transport and API keys on direct OpenAI", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+        "openai:api-key": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "direct-openai-key",
+        },
+      },
+    };
+
+    const directAuth = await getApiKeyForModel({
+      model: {
+        id: "chat-latest",
+        provider: "openai",
+        api: "openai-responses",
+      } as Model,
+      store,
+    });
+    const codexAuth = await getApiKeyForModel({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+      } as Model,
+      store,
+    });
+
+    expect(directAuth).toMatchObject({
+      apiKey: "direct-openai-key",
+      mode: "api-key",
+      profileId: "openai:api-key",
+    });
+    expect(codexAuth).toMatchObject({
+      apiKey: oauthFixture.access,
+      mode: "oauth",
+      profileId: "openai:chatgpt",
+    });
+  });
+
+  it("rejects an explicit OpenAI OAuth profile for direct OpenAI Platform models", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+      },
+    };
+
+    await expect(
+      getApiKeyForModel({
+        model: {
+          id: "chat-latest",
+          provider: "openai",
+          api: "openai-responses",
+        } as Model,
+        profileId: "openai:chatgpt",
+        lockedProfile: true,
+        store,
+      }),
+    ).rejects.toThrow(/requires an OpenAI API key profile/);
+  });
+
+  it("uses the config default agent dir when resolving provider profiles", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-agent-dir-",
+        agentEnv: "clear",
+        env: {
+          XAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "xai:default": {
+                type: "api_key",
+                provider: "xai",
+                key: "process-default-key",
+              },
+            },
+          },
+          "main",
+        );
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "xai:default": {
+                type: "api_key",
+                provider: "xai",
+                key: "configured-agent-key",
+              },
+            },
+          },
+          "configured",
+        );
+
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: state.agentDir("configured"),
+              },
+            ],
+          },
+        };
+
+        const resolved = await resolveApiKeyForProvider({ provider: "xai", cfg });
+        expect(resolved.apiKey).toBe("configured-agent-key");
+        expect(resolved.source).toBe("profile:xai:default");
+      },
+    );
+  });
+
+  it("reports the config default agent dir when provider auth is missing", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-missing-agent-dir-",
+        agentEnv: "clear",
+        env: {
+          XAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        const configuredAgentDir = state.agentDir("configured");
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: configuredAgentDir,
+              },
+            ],
+          },
+        };
+
+        await expect(resolveApiKeyForProvider({ provider: "xai", cfg })).rejects.toThrow(
+          `agentDir: ${configuredAgentDir}`,
+        );
+      },
+    );
+  });
+
+  it("uses OpenAI OAuth when it is configured for the provider", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -431,21 +610,21 @@ describe("getApiKeyForModel", () => {
         await state.writeAuthProfiles({
           version: 1,
           profiles: {
-            "openai-codex:default": {
+            "openai:default": {
               type: "oauth",
-              provider: "openai-codex",
+              provider: "openai",
               ...oauthFixture,
             },
           },
         });
 
-        let error: unknown = null;
-        try {
-          await resolveApiKeyForProvider({ provider: "openai" });
-        } catch (err) {
-          error = err;
-        }
-        expect(String(error)).toContain("openai/gpt-5.5");
+        const resolved = await resolveApiKeyForProvider({ provider: "openai" });
+
+        expect(resolved).toMatchObject({
+          apiKey: oauthFixture.access,
+          mode: "oauth",
+          profileId: "openai:default",
+        });
       },
     );
   });
@@ -476,7 +655,7 @@ describe("getApiKeyForModel", () => {
     );
 
     expect(cliCredentialMocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
-    expect(cliCredentialMocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalled();
     expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
@@ -661,27 +840,27 @@ describe("getApiKeyForModel", () => {
 
     try {
       await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
-        expect(
+        await expect(
           hasAuthForModelProvider({
             provider: "workspace-cloud",
             cfg: { plugins: { allow: ["workspace-cloud"] } },
             store,
           }),
-        ).toBe(true);
-        expect(
+        ).resolves.toBe(true);
+        await expect(
           hasAuthForModelProvider({
             provider: "workspace-cloud",
             cfg: { plugins: {} },
             store,
           }),
-        ).toBe(false);
+        ).resolves.toBe(false);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("reuses runtime auth availability for provider auth checks", () => {
+  it("reuses runtime auth availability for provider auth checks", async () => {
     const store = { version: 1 as const, profiles: {} };
     const localNoKeyConfig = {
       models: {
@@ -700,30 +879,30 @@ describe("getApiKeyForModel", () => {
       },
     } as OpenClawConfig;
 
-    expect(
+    await expect(
       hasAuthForModelProvider({
         provider: "amazon-bedrock",
         cfg: {} as OpenClawConfig,
         env: {},
         store,
       }),
-    ).toBe(true);
-    expect(
+    ).resolves.toBe(false);
+    await expect(
       hasAuthForModelProvider({
         provider: "vllm",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
-    ).toBe(true);
-    expect(
+    ).resolves.toBe(true);
+    await expect(
       hasAuthForModelProvider({
         provider: "remote",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {
@@ -1340,5 +1519,34 @@ describe("getApiKeyForModel", () => {
     );
 
     expect(resolved).toBeNull();
+  });
+
+  it("prepared runtime auth lookup still allows setup fallback for manifest setup providers", () => {
+    const runtimeLookup = createRuntimeProviderAuthLookup({ env: {} });
+
+    expect(runtimeLookup.setupProviderFallbackRefs).toContain("anthropic-vertex");
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "anthropic-vertex",
+        env: {
+          ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+        } as NodeJS.ProcessEnv,
+        runtimeLookup,
+      }),
+    ).toBe(true);
+  });
+
+  it("prepared runtime auth lookup skips setup fallback for providers outside manifest setup refs", () => {
+    const runtimeLookup = createRuntimeProviderAuthLookup({ env: {} });
+
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "other-vertex",
+        env: {
+          ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+        } as NodeJS.ProcessEnv,
+        runtimeLookup,
+      }),
+    ).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential as hasUsableStoredOAuthCredential } from "./credential-state.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -32,11 +33,13 @@ function hasNewerStoredOAuthCredential(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
+  const existingExpires = asDateTimestampMs(existing?.expires);
+  const incomingExpires = asDateTimestampMs(incoming.expires);
   return Boolean(
     existing &&
     existing.provider === incoming.provider &&
-    Number.isFinite(existing.expires) &&
-    (!Number.isFinite(incoming.expires) || existing.expires > incoming.expires),
+    existingExpires !== undefined &&
+    (incomingExpires === undefined || existingExpires > incomingExpires),
   );
 }
 
@@ -97,12 +100,18 @@ export function hasMatchingOAuthIdentity(
   return false;
 }
 
-export function isSafeToOverwriteStoredOAuthIdentity(
+type OAuthIdentitySafetyPolicy = {
+  whenExistingCredentialMissing: boolean;
+  whenExistingIdentityMissing: boolean;
+};
+
+function isSafeOAuthIdentityTransition(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
+  policy: OAuthIdentitySafetyPolicy,
 ): boolean {
   if (!existing || existing.type !== "oauth") {
-    return true;
+    return policy.whenExistingCredentialMissing;
   }
   if (existing.provider !== incoming.provider) {
     return false;
@@ -111,47 +120,39 @@ export function isSafeToOverwriteStoredOAuthIdentity(
     return true;
   }
   if (!hasOAuthIdentity(existing)) {
-    return false;
+    return policy.whenExistingIdentityMissing;
   }
   return hasMatchingOAuthIdentity(existing, incoming);
+}
+
+export function isSafeToOverwriteStoredOAuthIdentity(
+  existing: OAuthCredential | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  return isSafeOAuthIdentityTransition(existing, incoming, {
+    whenExistingCredentialMissing: true,
+    whenExistingIdentityMissing: false,
+  });
 }
 
 export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  if (!existing || existing.type !== "oauth") {
-    return true;
-  }
-  if (existing.provider !== incoming.provider) {
-    return false;
-  }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
-    return true;
-  }
-  if (!hasOAuthIdentity(existing)) {
-    return true;
-  }
-  return hasMatchingOAuthIdentity(existing, incoming);
+  return isSafeOAuthIdentityTransition(existing, incoming, {
+    whenExistingCredentialMissing: true,
+    whenExistingIdentityMissing: true,
+  });
 }
 
 export function isSafeToAdoptMainStoreOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  if (!existing || existing.type !== "oauth") {
-    return false;
-  }
-  if (existing.provider !== incoming.provider) {
-    return false;
-  }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
-    return true;
-  }
-  if (!hasOAuthIdentity(existing)) {
-    return true;
-  }
-  return hasMatchingOAuthIdentity(existing, incoming);
+  return isSafeOAuthIdentityTransition(existing, incoming, {
+    whenExistingCredentialMissing: false,
+    whenExistingIdentityMissing: true,
+  });
 }
 
 export function shouldBootstrapFromExternalCliCredential(params: {
@@ -169,15 +170,29 @@ export function shouldBootstrapFromExternalCliCredential(params: {
 export function overlayRuntimeExternalOAuthProfiles(
   store: AuthProfileStore,
   profiles: Iterable<RuntimeExternalOAuthProfile>,
+  options?: { runtimeExternalProfileIdsAuthoritative?: boolean },
 ): AuthProfileStore {
   const externalProfiles = Array.from(profiles);
-  if (externalProfiles.length === 0) {
-    return store;
-  }
   const next = cloneAuthProfileStore(store);
   for (const profile of externalProfiles) {
     next.profiles[profile.profileId] = profile.credential;
   }
+  const runtimeOnlyProfileIds = new Set(
+    externalProfiles
+      .filter((profile) => profile.persistence !== "persisted")
+      .map((profile) => profile.profileId),
+  );
+  for (const profileId of store.runtimeExternalProfileIds ?? []) {
+    if (next.profiles[profileId]) {
+      runtimeOnlyProfileIds.add(profileId);
+    }
+  }
+  next.runtimeExternalProfileIds =
+    runtimeOnlyProfileIds.size > 0 || options?.runtimeExternalProfileIdsAuthoritative === true
+      ? [...runtimeOnlyProfileIds].toSorted()
+      : undefined;
+  next.runtimeExternalProfileIdsAuthoritative =
+    options?.runtimeExternalProfileIdsAuthoritative === true ? true : undefined;
   return next;
 }
 

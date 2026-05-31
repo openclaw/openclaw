@@ -1,8 +1,14 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  sortUniqueStrings,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
-import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/pi-bundle-mcp-names.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -14,7 +20,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -41,10 +46,6 @@ type ToolPolicyConfig = {
   profile?: string;
   byProvider?: unknown;
 };
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function normalizePluginIdMaybe(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? normalizePluginId(value) : undefined;
@@ -99,7 +100,7 @@ function collectToolAllowlistSources(cfg: OpenClawConfig): ToolAllowlistSource[]
 }
 
 function collectSortedSourceLabels(labels: Iterable<string>): string[] {
-  return [...new Set(labels)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(labels);
 }
 
 function formatSortedSourceLabels(sorted: readonly string[]): string {
@@ -301,7 +302,9 @@ function buildEffectiveSandboxToolPolicy(params: {
     Boolean(label),
   );
   const labels = allowLabels.length > 0 ? allowLabels : ["tools.sandbox.tools.alsoAllow (unset)"];
-  const dedupeLabels = Array.from(new Set([...labels, deny.label].filter(Boolean)));
+  const dedupeLabels = uniqueStrings(
+    [...labels, deny.label].filter((label): label is string => Boolean(label)),
+  );
 
   return {
     labels,
@@ -654,22 +657,4 @@ export function collectPluginToolAllowlistWarnings(params: {
   }
 
   return warnings;
-}
-
-export function collectBundledProviderAllowlistPolicyWarnings(params: {
-  cfg: OpenClawConfig;
-}): string[] {
-  if (params.cfg.plugins?.enabled === false) {
-    return [];
-  }
-  const allow = params.cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return [];
-  }
-  if (params.cfg.plugins?.bundledDiscovery !== "compat") {
-    return [];
-  }
-  return [
-    '- plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode. Bundled provider plugins can still appear in runtime provider inventories; set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked.',
-  ];
 }

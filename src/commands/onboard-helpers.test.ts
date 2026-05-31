@@ -1,11 +1,14 @@
 import * as fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
+  formatControlUiSshHint,
   handleReset,
+  moveToTrash,
   normalizeGatewayTokenInput,
   openUrl,
   probeGatewayReachable,
@@ -13,9 +16,11 @@ import {
   resolveControlUiLinks,
   summarizeExistingConfig,
   validateGatewayPasswordInput,
+  waitForGatewayReachable,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
+  movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
   runCommandWithTimeout: vi.fn<
     (
       argv: string[],
@@ -30,6 +35,10 @@ const mocks = vi.hoisted(() => ({
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   probeGateway: vi.fn(),
+}));
+
+vi.mock("../infra/fs-safe.js", () => ({
+  movePathToTrash: mocks.movePathToTrash,
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -63,6 +72,10 @@ function requireFirstRunCommandCall(): RunCommandCall {
   return call as RunCommandCall;
 }
 
+function expectedTrashSourcePath(targetPath: string): string {
+  return path.join(fs.realpathSync(path.dirname(targetPath)), path.basename(targetPath));
+}
+
 describe("handleReset", () => {
   it("uses active profile paths for destructive reset targets", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
@@ -87,17 +100,96 @@ describe("handleReset", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", profileConfigPath);
 
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-
-    await handleReset("full", workspaceDir, runtime);
-
-    const trashedPaths = mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv[1]);
-    expect(trashedPaths).toEqual([
+    const expectedTrashedPaths = [
       profileConfigPath,
       profileCredentialsDir,
       profileSessionsDir,
       workspaceDir,
-    ]);
-    expect(trashedPaths).not.toContain(defaultCredentialsDir);
+    ].map(expectedTrashSourcePath);
+    const expectedDefaultCredentialsDir = expectedTrashSourcePath(defaultCredentialsDir);
+
+    try {
+      await handleReset("full", workspaceDir, runtime);
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+
+    const trashedPaths = mocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+    expect(trashedPaths).toEqual(expectedTrashedPaths);
+    expect(trashedPaths).not.toContain(expectedDefaultCredentialsDir);
+  });
+});
+
+describe("moveToTrash", () => {
+  it("uses fs-safe trash instead of resolving a PATH trash command", async () => {
+    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-helper-"));
+    const targetPath = path.join(testRoot, "target");
+    fs.mkdirSync(targetPath, { recursive: true });
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+    const sourcePath = expectedTrashSourcePath(targetPath);
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
+      allowedRoots: [path.dirname(sourcePath)],
+    });
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(`Moved to Trash: ${targetPath}`);
+  });
+
+  it("allows fs-safe trash to move a symlink whose target resolves outside the parent", async () => {
+    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-symlink-"));
+    const targetPath = path.join(testRoot, "target-link");
+    const outsideTarget = path.join(os.tmpdir(), "openclaw-trash-symlink-target");
+    fs.writeFileSync(targetPath, "link placeholder");
+    vi.spyOn(fsPromises, "lstat").mockResolvedValue({
+      isSymbolicLink: () => true,
+    } as fs.Stats);
+    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) =>
+      String(candidate) === path.dirname(targetPath) ? path.dirname(targetPath) : outsideTarget,
+    );
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(targetPath, {
+      allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
+    });
+  });
+
+  it("canonicalizes a symlinked parent before calling fs-safe trash", async () => {
+    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-parent-link-"));
+    const lexicalParent = path.join(testRoot, "state-link");
+    const realParent = path.join(testRoot, "state-real");
+    const targetPath = path.join(lexicalParent, "openclaw.json");
+    const sourcePath = path.join(realParent, "openclaw.json");
+    fs.mkdirSync(lexicalParent, { recursive: true });
+    fs.writeFileSync(targetPath, "{}\n");
+    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) =>
+      String(candidate) === lexicalParent ? realParent : String(candidate),
+    );
+    vi.spyOn(fsPromises, "lstat").mockResolvedValue({
+      isSymbolicLink: () => false,
+    } as fs.Stats);
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
+      allowedRoots: [realParent],
+    });
   });
 });
 
@@ -147,6 +239,16 @@ describe("resolveBrowserOpenCommand", () => {
       expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
       expect(resolved.command).toBe(rundll32);
     });
+  });
+});
+
+describe("formatControlUiSshHint", () => {
+  it("includes the IPv4-only BYOH note and workaround", () => {
+    const hint = formatControlUiSshHint({ port: 18789 });
+    expect(hint).toContain("BYOH note: lan, tailnet, and custom bind are currently IPv4-only.");
+    expect(hint).toContain(
+      "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
+    );
   });
 });
 
@@ -203,6 +305,31 @@ describe("probeGatewayReachable", () => {
       ok: false,
       detail: "connect failed: timeout",
     });
+  });
+});
+
+describe("waitForGatewayReachable", () => {
+  it("keeps oversized poll intervals within the overall deadline", async () => {
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "connect failed: timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await waitForGatewayReachable({
+      url: "ws://127.0.0.1:18789",
+      deadlineMs: 5,
+      pollMs: Number.MAX_SAFE_INTEGER,
+      probeTimeoutMs: 1,
+    });
+
+    expect(result).toEqual({ ok: false, detail: "connect failed: timeout" });
   });
 });
 

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type { PluginInstallRecord } from "./types.plugins.js";
 import { PluginInstallRecordShape } from "./zod-schema.installs.js";
@@ -6,10 +7,6 @@ const PluginInstallRecordsSchema = z.record(
   z.string(),
   z.object(PluginInstallRecordShape).passthrough(),
 );
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function pruneEmptyPluginsObject(plugins: Record<string, unknown>): unknown {
   const { installs: _installs, ...rest } = plugins;

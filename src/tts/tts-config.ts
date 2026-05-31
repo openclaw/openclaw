@@ -1,12 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.js";
-import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
-import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
+import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.js";
+import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
+import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
@@ -18,10 +19,6 @@ export type TtsConfigResolutionContext = {
   channelId?: string;
   accountId?: string;
 };
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function deepMergeDefined(base: unknown, override: unknown): unknown {
   if (!isPlainObject(base) || !isPlainObject(override)) {

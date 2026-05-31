@@ -163,6 +163,61 @@ describe("tool-card extraction", () => {
     expect(cards[0]?.outputText).toBe("# Heading\nfile body");
   });
 
+  it("preserves explicit tool error flags from tool result items and messages", () => {
+    const pairedCards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolcall",
+            id: "call-error",
+            name: "lookup",
+          },
+          {
+            type: "tool_result",
+            id: "call-error",
+            name: "lookup",
+            text: "lookup failed",
+            isError: true,
+          },
+        ],
+      },
+      "msg:error-item",
+    );
+
+    expect(pairedCards[0]?.isError).toBe(true);
+
+    const messageFlagCards = extractToolCards(
+      {
+        role: "toolResult",
+        isError: true,
+        content: [
+          {
+            type: "tool_result",
+            id: "call-message-error",
+            name: "lookup",
+            text: "lookup failed",
+          },
+        ],
+      },
+      "msg:error-message-flag",
+    );
+
+    expect(messageFlagCards[0]?.isError).toBe(true);
+
+    const standaloneCards = extractToolCards(
+      {
+        role: "tool",
+        toolName: "lookup",
+        content: "lookup failed",
+        isError: true,
+      },
+      "msg:error-message",
+    );
+
+    expect(standaloneCards[0]?.isError).toBe(true);
+  });
+
   it("builds sidebar content with input and empty output status", () => {
     const [card] = extractToolCards(
       {
@@ -191,6 +246,21 @@ with Example Deck
 
 ### Tool output
 *No output — tool completed successfully.*`);
+  });
+
+  it("builds sidebar content with a failed empty-output status for explicit errors", () => {
+    const sidebar = buildToolCardSidebarContent({
+      id: "msg:error-empty",
+      name: "lookup",
+      isError: true,
+    });
+
+    expect(sidebar).toBe(`## Lookup
+
+**Tool:** \`lookup\`
+
+### Tool error
+*No output — tool failed.*`);
   });
 
   it("extracts canvas handle payloads into canvas previews", () => {
@@ -222,6 +292,21 @@ with Example Deck
     expect(card?.preview?.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
     expect(card?.preview?.title).toBe("Inline demo");
     expect(card?.preview?.preferredHeight).toBe(420);
+  });
+
+  it("uses transcript metadata ids for history-backed tool messages", () => {
+    const [card] = extractToolCards(
+      {
+        role: "tool",
+        toolName: "browser.open",
+        content: [{ type: "text", text: "Opened page" }],
+        __openclaw: { id: "msg-tool-history-1", seq: 7 },
+      },
+      "msg:history",
+    );
+
+    expect(card?.messageId).toBe("msg-tool-history-1");
+    expect(card?.outputText).toBe("Opened page");
   });
 
   it("does not create previews for non-assistant canvas or generic outputs", () => {

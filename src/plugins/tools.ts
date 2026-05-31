@@ -1,3 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeUniqueStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -38,6 +43,7 @@ export {
 export type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
+  trustedLocalMedia?: boolean;
 };
 
 type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";
@@ -84,7 +90,7 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
 }
 
 function normalizeAllowlist(list?: string[]) {
-  return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
+  return new Set(normalizeUniqueStringEntries((list ?? []).map(normalizeToolName)));
 }
 
 function normalizeDenylist(list?: string[]) {
@@ -139,6 +145,16 @@ function isPluginToolOptional(params: {
   );
 }
 
+function isTrustedManifestLocalMediaTool(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return (
+    params.manifestPlugin?.origin === "bundled" &&
+    params.manifestPlugin.contracts?.tools?.includes(params.toolName) === true
+  );
+}
+
 function isOptionalToolAllowed(params: {
   toolName: string;
   pluginId: string;
@@ -180,10 +196,6 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
     return true;
   }
   return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function readPluginToolName(tool: unknown): string {
@@ -373,7 +385,7 @@ function listManifestToolNamesForAllowlist(params: {
   const defaultToolNames = params.toolNames.filter(
     (name) => !isManifestToolOptional(params.plugin, name),
   );
-  return [...new Set([...defaultToolNames, ...matchedToolNames])];
+  return uniqueStrings([...defaultToolNames, ...matchedToolNames]);
 }
 
 function listManifestToolNamesForAvailability(params: {
@@ -530,6 +542,7 @@ function cachedDescriptorsCoverToolNames(params: {
 
 function createCachedDescriptorPluginTool(params: {
   descriptor: CachedPluginToolDescriptor;
+  plugin: PluginManifestRecord;
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
@@ -601,6 +614,10 @@ function createCachedDescriptorPluginTool(params: {
   setPluginToolMeta(tool, {
     pluginId,
     optional: params.descriptor.optional,
+    trustedLocalMedia: isTrustedManifestLocalMediaTool({
+      manifestPlugin: params.plugin,
+      toolName,
+    }),
   });
   return tool;
 }
@@ -728,6 +745,7 @@ function resolveCachedPluginTools(params: {
       pluginTools.push(
         createCachedDescriptorPluginTool({
           descriptor: cachedDescriptor,
+          plugin,
           ctx: params.ctx,
           loadContext: params.loadContext,
           runtimeOptions: params.runtimeOptions,
@@ -1195,6 +1213,10 @@ export function resolvePluginTools(params: {
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
         optional,
+        trustedLocalMedia: isTrustedManifestLocalMediaTool({
+          manifestPlugin,
+          toolName: tool.name,
+        }),
       });
       if (manifestPlugin) {
         const capturedDescriptors = capturedDescriptorsByPluginId.get(entry.pluginId) ?? [];

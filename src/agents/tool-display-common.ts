@@ -1,7 +1,8 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
@@ -447,7 +448,7 @@ function parseToolSearchCallArgs(raw: string | undefined): Record<string, unknow
   }
   const args: Record<string, unknown> = {};
   const propertyPattern =
-    /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|-?\d+(?:\.\d+)?)/g;
+    /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?)/gi;
   for (const match of source.matchAll(propertyPattern)) {
     const key = match[1];
     const value = match[2];
@@ -515,8 +516,9 @@ function parseSimpleToolSearchArgValue(raw: string): unknown {
   if (raw === "null") {
     return null;
   }
-  if (/^-?\d+(?:\.\d+)?$/.test(raw)) {
-    return Number(raw);
+  const numeric = parseStrictFiniteNumber(raw);
+  if (numeric !== undefined) {
+    return numeric;
   }
   const quote = raw[0];
   const inner = raw.slice(1, -1);

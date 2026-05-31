@@ -233,6 +233,20 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(resolveDiscordGatewayRuntimeReadyTimeoutMs({ env: {} })).toBe(30_000);
   });
 
+  it("ignores non-integer gateway READY timeout values", () => {
+    expect(
+      resolveDiscordGatewayReadyTimeoutMs({
+        configuredTimeoutMs: 1.5,
+        env: { OPENCLAW_DISCORD_READY_TIMEOUT_MS: "0x1000" },
+      }),
+    ).toBe(15_000);
+    expect(
+      resolveDiscordGatewayRuntimeReadyTimeoutMs({
+        env: { OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS: "1e3" },
+      }),
+    ).toBe(30_000);
+  });
+
   it("cleans up thread bindings when gateway wait fails before READY", async () => {
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("startup failed"));
     const { lifecycleParams, threadStop, gatewaySupervisor } = createLifecycleHarness();
@@ -323,6 +337,14 @@ describe("runDiscordGatewayLifecycle", () => {
     emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: 100_000 });
     emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: 101_000 });
     emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: 131_000 });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(200_000);
+    try {
+      emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, {
+        at: Number.MAX_SAFE_INTEGER,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     const transportPatches = statusSink.mock.calls
       .slice(baselinePatchCount)
@@ -331,6 +353,7 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(transportPatches).toEqual([
       { lastTransportActivityAt: 100_000 },
       { lastTransportActivityAt: 131_000 },
+      { lastTransportActivityAt: 200_000 },
     ]);
     expect(
       transportPatches.every(

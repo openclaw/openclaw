@@ -1,9 +1,11 @@
 import {
   getAcpRuntimeBackend,
+  registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
   type AcpRuntime,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
+import { createLazyAcpRuntimeProxy } from "./src/runtime-proxy.js";
 
 const ACPX_BACKEND_ID = "acpx";
 
@@ -46,7 +48,18 @@ async function startRealService(state: DeferredServiceState): Promise<AcpRuntime
     state.realRuntime = backend.runtime;
     return state.realRuntime;
   })();
-  return await state.startPromise;
+  try {
+    return await state.startPromise;
+  } catch (error) {
+    state.startPromise = null;
+    state.realService = null;
+    throw error;
+  }
+}
+
+function createDeferredRuntime(state: DeferredServiceState): AcpRuntime {
+  const resolveRuntime = () => startRealService(state);
+  return createLazyAcpRuntimeProxy(resolveRuntime);
 }
 
 export function createAcpxRuntimeService(
@@ -69,7 +82,11 @@ export function createAcpxRuntimeService(
       }
 
       state.ctx = ctx;
-      await startRealService(state);
+      registerAcpRuntimeBackend({
+        id: ACPX_BACKEND_ID,
+        runtime: createDeferredRuntime(state),
+      });
+      ctx.logger.info("embedded acpx runtime backend registered lazily");
     },
     async stop(ctx) {
       if (state.realService) {

@@ -8,9 +8,10 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
-import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
-import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -220,6 +221,7 @@ export const testing = {
   getResponseSessionIds() {
     return [...responseSessionMap.keys()];
   },
+  resolveResponsesLimits,
 };
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
@@ -242,10 +244,7 @@ function resolveResponsesLimits(
   const fileLimits = resolveInputFileLimits(files);
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
-    maxUrlParts:
-      typeof config?.maxUrlParts === "number"
-        ? Math.max(0, Math.floor(config.maxUrlParts))
-        : DEFAULT_MAX_URL_PARTS,
+    maxUrlParts: resolveIntegerOption(config?.maxUrlParts, DEFAULT_MAX_URL_PARTS, { min: 0 }),
     files: {
       ...fileLimits,
       urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),

@@ -69,6 +69,17 @@ export async function runWithOwnedSessionTranscriptWritePublication<T>(
   });
 }
 
+export function resolveOwnedSessionTranscriptWriteLockRunner(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+}): OwnedSessionTranscriptWriteContext["withSessionWriteLock"] | undefined {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (!context || !contextMatches({ context, ...params })) {
+    return undefined;
+  }
+  return context.withSessionWriteLock;
+}
+
 async function runWithOwnedSessionTranscriptWriteContext<T>(
   params: {
     sessionFile?: string;

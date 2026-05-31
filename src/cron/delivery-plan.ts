@@ -1,11 +1,11 @@
-import type { CronFailureDestinationConfig } from "../config/types.cron.js";
-import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
@@ -18,6 +18,12 @@ export type CronDeliveryPlan = {
   source: "delivery";
   requested: boolean;
 };
+
+export function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
+  return Boolean(
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
+  );
+}
 
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);

@@ -5,10 +5,10 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -16,6 +16,10 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { imessageMessageActions } from "./actions.js";
+import {
+  imessageApprovalCapability,
+  shouldSuppressLocalIMessageExecApprovalPrompt,
+} from "./approval-native.js";
 import {
   chunkTextForOutbound,
   collectStatusIssuesFromLastError,
@@ -30,6 +34,7 @@ import {
   normalizeIMessageAcpConversationId,
   resolveIMessageConversationIdFromTarget,
 } from "./conversation-id.js";
+import { imessageDoctor } from "./doctor.js";
 import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
@@ -137,6 +142,14 @@ function resolveIMessageOutboundSessionRoute(params: {
     if (!handle) {
       return null;
     }
+    const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
+    const service =
+      parsed.serviceExplicit || parsed.service !== "auto"
+        ? parsed.service
+        : account.config.service === "sms"
+          ? "sms"
+          : "imessage";
+    const directTarget = `${service}:${handle}`;
     const peer: RoutePeer = { kind: "direct", id: handle };
     const baseSessionKey = buildIMessageBaseSessionKey({
       cfg: params.cfg,
@@ -149,8 +162,8 @@ function resolveIMessageOutboundSessionRoute(params: {
       baseSessionKey,
       peer,
       chatType: "direct" as const,
-      from: `imessage:${handle}`,
-      to: `imessage:${handle}`,
+      from: directTarget,
+      to: directTarget,
     };
   }
 
@@ -206,9 +219,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveRequireMention: resolveIMessageGroupRequireMention,
         resolveToolPolicy: resolveIMessageGroupToolPolicy,
       },
-      doctor: {
-        groupAllowFromFallbackToAllowFrom: false,
-      },
+      doctor: imessageDoctor,
       conversationBindings: {
         supportsCurrentConversationBinding: true,
         createManager: ({ cfg, accountId }) =>
@@ -302,6 +313,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
       message: imessageMessageAdapter,
       actions: imessageMessageActions,
+      approvalCapability: imessageApprovalCapability,
     },
     pairing: {
       text: {
@@ -319,6 +331,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         chunkerMode: "text",
         textChunkLimit: 4000,
         sanitizeText: ({ text }) => sanitizeForPlainText(sanitizeOutboundText(text)),
+        shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+          shouldSuppressLocalIMessageExecApprovalPrompt({ cfg, accountId, payload, hint }),
         deliveryCapabilities: {
           durableFinal: {
             text: true,

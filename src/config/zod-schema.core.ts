@@ -1,13 +1,13 @@
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
 import type { MediaToolsConfig } from "./types.tools.js";
@@ -107,7 +107,7 @@ const SecretsFileProviderSchema = z
   })
   .strict();
 
-const SecretsExecProviderSchema = z
+const SecretsManualExecProviderSchema = z
   .object({
     source: z.literal("exec"),
     command: z
@@ -144,7 +144,24 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
-export const SecretProviderSchema = z.discriminatedUnion("source", [
+const SecretsPluginIntegrationExecProviderSchema = z
+  .object({
+    source: z.literal("exec"),
+    pluginIntegration: z
+      .object({
+        pluginId: z.string().min(1).max(128),
+        integrationId: z.string().min(1).max(128),
+      })
+      .strict(),
+  })
+  .strict();
+
+const SecretsExecProviderSchema = z.union([
+  SecretsManualExecProviderSchema,
+  SecretsPluginIntegrationExecProviderSchema,
+]);
+
+export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
@@ -307,6 +324,22 @@ const ModelAgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+const ModelImageInputSchema = z
+  .object({
+    maxBytes: z.number().int().positive().optional(),
+    maxPixels: z.number().int().positive().optional(),
+    maxSidePx: z.number().int().positive().optional(),
+    preferredSidePx: z.number().int().positive().optional(),
+    tokenMode: z.union([z.literal("tile"), z.literal("detail"), z.literal("provider")]).optional(),
+  })
+  .strict();
+
+const ModelMediaInputSchema = z
+  .object({
+    image: ModelImageInputSchema.optional(),
+  })
+  .strict();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -348,6 +381,7 @@ const ModelDefinitionSchema = z
     agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    mediaInput: ModelMediaInputSchema.optional(),
     metadataSource: z.literal("models-add").optional(),
   })
   .strict();
@@ -405,7 +439,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "nvidia",
   "ollama",
   "openai",
-  "openai-codex",
+  "openai",
   "opencode",
   "opencode-go",
   "openrouter",
@@ -426,6 +460,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "vydra",
   "xai",
   "xiaomi",
+  "xiaomi-token-plan",
   "zai",
 ]);
 
@@ -445,6 +480,7 @@ const ModelProviderSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    region: z.string().min(1).optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,

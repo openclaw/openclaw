@@ -31,6 +31,19 @@ describe("tool display details", () => {
     });
   });
 
+  it("preserves JS numeric literals in tool-search call args", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("web_search", { query: "OpenClaw", count: 1e3, limit: +3, threshold: .5 });',
+      })?.displayArgs,
+    ).toEqual({
+      query: "OpenClaw",
+      count: 1000,
+      limit: 3,
+      threshold: 0.5,
+    });
+  });
+
   it("skips zero/false values for optional detail fields", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
@@ -427,5 +440,61 @@ describe("tool display details", () => {
     expect(pyDetail).toContain("run python3 inline script (heredoc)");
     expect(nodeCheckDetail).toContain("check js syntax for /tmp/test.js");
     expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
+  });
+
+  it("appends node name to exec detail when node is set", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: "docker pull pihole/pihole:latest",
+          host: "node",
+          node: "raspberrypi",
+        },
+      }),
+    );
+
+    expect(detail).toContain("node: raspberrypi");
+  });
+
+  it("includes both cwd and node name in exec detail for known commands", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: "npm install",
+          workdir: "/app",
+          host: "node",
+          node: "raspberrypi",
+        },
+      }),
+    );
+
+    expect(detail).toContain("(in /app)");
+    expect(detail).toContain("node: raspberrypi");
+  });
+
+  it("omits node label when node param is absent or empty", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "npm install", host: "gateway" },
+      }),
+    );
+
+    expect(detail).not.toContain("node:");
+  });
+
+  it("omits node label when host is not 'node' even if node is set", () => {
+    for (const host of ["gateway", "sandbox", "auto"]) {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "exec",
+          args: { command: "npm install", host, node: "raspberrypi" },
+        }),
+      );
+
+      expect(detail).not.toContain("node:");
+    }
   });
 });

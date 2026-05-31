@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   ChannelIngressPolicyInput,
   ChannelIngressState,
@@ -35,10 +36,6 @@ export function redactedAllowlistDiagnostics(
     disabledEntryCount: allowlist.disabledEntries.length,
     accessGroups: allowlist.accessGroups,
   };
-}
-
-function uniqueStrings(values: readonly string[]): string[] {
-  return Array.from(new Set(values));
 }
 
 function mergeResolvedAllowlists(

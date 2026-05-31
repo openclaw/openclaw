@@ -20,7 +20,11 @@ const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
+vi.mock("./app-server/shared-client.js", () => ({
+  ...sharedClientMocks,
+  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
+}));
 
 describe("codex conversation controls", () => {
   beforeEach(async () => {
@@ -67,7 +71,7 @@ describe("codex conversation controls", () => {
       profileId: "work",
       credential: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,

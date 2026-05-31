@@ -9,6 +9,7 @@ import {
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 
 type EmbeddingBatchExecutionParams = {
@@ -221,11 +222,9 @@ function parseGeminiBatchOutput(text: string): GeminiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
   }
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as GeminiBatchOutputLine);
+  return normalizeStringEntries(text.split("\n")).map(
+    (line) => JSON.parse(line) as GeminiBatchOutputLine,
+  );
 }
 
 async function waitForGeminiBatch(params: {
@@ -285,7 +284,7 @@ export async function runGeminiEmbeddingBatches(
       maxRequests: GEMINI_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: gemini batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
       const batchInfo = await submitGeminiBatch({
         gemini: params.gemini,
         requests: group,
@@ -327,8 +326,8 @@ export async function runGeminiEmbeddingBatches(
               gemini: params.gemini,
               batchName,
               wait: params.wait,
-              pollIntervalMs: params.pollIntervalMs,
-              timeoutMs: params.timeoutMs,
+              pollIntervalMs,
+              timeoutMs,
               debug: params.debug,
               initial: batchInfo,
             });

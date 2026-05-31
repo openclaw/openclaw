@@ -1,12 +1,15 @@
 import {
   buildMentionRegexes,
+  buildChannelInboundEventContext,
   type EnvelopeFormatOptions,
+  filterChannelInboundQuoteContext,
   formatInboundEnvelope,
   formatInboundFromLabel,
   logInboundDrop,
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelIngressResolver,
@@ -21,11 +24,12 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveIMessageAccount } from "../accounts.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import {
   isKnownFromMeIMessageMessageId,
@@ -37,9 +41,16 @@ import {
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
 } from "../targets.js";
+import type { IMessageDmHistoryContext } from "./dm-history.js";
+import {
+  type IMessageReactionContext,
+  resolveIMessageReactionContext,
+} from "./reaction-context.js";
 import { detectReflectedContent } from "./reflection-guard.js";
 import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
+
+export { resolveIMessageReactionContext };
 
 type IMessageReactionNotificationMode = "off" | "own" | "all";
 
@@ -48,110 +59,6 @@ type IMessageReplyContext = {
   body: string;
   sender?: string;
 };
-
-type IMessageReactionContext = {
-  action: "added" | "removed";
-  emoji: string;
-  targetGuid?: string;
-  targetGuids?: string[];
-  targetText?: string;
-};
-
-const TAPBACK_TEXT_PATTERNS: Array<{
-  prefix: string;
-  action: "added" | "removed";
-  emoji: string;
-}> = [
-  { prefix: "loved", action: "added", emoji: "❤️" },
-  { prefix: "liked", action: "added", emoji: "👍" },
-  { prefix: "disliked", action: "added", emoji: "👎" },
-  { prefix: "laughed at", action: "added", emoji: "😂" },
-  { prefix: "emphasized", action: "added", emoji: "‼️" },
-  { prefix: "questioned", action: "added", emoji: "❓" },
-  { prefix: "removed a heart from", action: "removed", emoji: "❤️" },
-  { prefix: "removed a like from", action: "removed", emoji: "👍" },
-  { prefix: "removed a dislike from", action: "removed", emoji: "👎" },
-  { prefix: "removed a laugh from", action: "removed", emoji: "😂" },
-  { prefix: "removed an emphasis from", action: "removed", emoji: "‼️" },
-  { prefix: "removed a question from", action: "removed", emoji: "❓" },
-];
-
-function normalizeReactionValue(value: unknown): string | undefined {
-  return typeof value === "string"
-    ? value.trim().replace(/^p:\d+\//iu, "") || undefined
-    : undefined;
-}
-
-function resolveReactionTargetGuidCandidates(...values: unknown[]): string[] {
-  const candidates: string[] = [];
-  for (const value of values) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const raw = value.trim();
-    if (!raw) {
-      continue;
-    }
-    const normalized = raw.replace(/^p:\d+\//iu, "");
-    for (const candidate of [normalized, raw]) {
-      if (candidate && !candidates.includes(candidate)) {
-        candidates.push(candidate);
-      }
-    }
-  }
-  return candidates;
-}
-
-function resolveTapbackTextContext(bodyText: string): IMessageReactionContext | null {
-  const lower = bodyText.toLowerCase();
-  for (const pattern of TAPBACK_TEXT_PATTERNS) {
-    if (!lower.startsWith(pattern.prefix)) {
-      continue;
-    }
-    const afterPrefix = bodyText.slice(pattern.prefix.length).trim();
-    if (!/^["\u201c]/u.test(afterPrefix)) {
-      continue;
-    }
-    return {
-      action: pattern.action,
-      emoji: pattern.emoji,
-      targetText: afterPrefix
-        .replace(/^["\u201c]/u, "")
-        .replace(/["\u201d]$/u, "")
-        .trim(),
-    };
-  }
-  return null;
-}
-
-export function resolveIMessageReactionContext(
-  message: IMessagePayload,
-  bodyText: string,
-): IMessageReactionContext | null {
-  const explicit =
-    message.is_reaction === true ||
-    message.is_tapback === true ||
-    (typeof message.associated_message_type === "number" &&
-      Number.isFinite(message.associated_message_type) &&
-      message.associated_message_type >= 2000 &&
-      message.associated_message_type < 4000);
-  if (explicit) {
-    const targetGuids = resolveReactionTargetGuidCandidates(
-      message.reacted_to_guid,
-      message.associated_message_guid,
-    );
-    return {
-      action: message.is_reaction_add === false ? "removed" : "added",
-      emoji:
-        normalizeReactionValue(message.reaction_emoji) ??
-        normalizeReactionValue(message.reaction_type) ??
-        "reaction",
-      targetGuid: targetGuids[0],
-      targetGuids,
-    };
-  }
-  return resolveTapbackTextContext(bodyText);
-}
 
 const normalizeNonEmpty = (value: string) => value.trim() || null;
 
@@ -192,7 +99,7 @@ function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   if (legacyChatTargets.length === 0) {
     return params.groupAllowFrom;
   }
-  return Array.from(new Set([...params.groupAllowFrom, ...legacyChatTargets]));
+  return uniqueStrings([...params.groupAllowFrom, ...legacyChatTargets]);
 }
 
 const imessageIngressIdentity = defineStableChannelIngressIdentity({
@@ -395,6 +302,7 @@ type IMessageInboundDispatchDecision = {
   replyContext: IMessageReplyContext | null;
   effectiveWasMentioned: boolean;
   commandAuthorized: boolean;
+  hasControlCommand: boolean;
   // Forwarded as ctxPayload.GroupSystemPrompt for group messages. Resolved
   // from `channels.imessage.groups.<chat_id>.systemPrompt` (or the `"*"`
   // wildcard) at gate time. Always undefined for DMs.
@@ -781,15 +689,24 @@ export async function resolveIMessageInboundDecision(params: {
             chatIdentifier,
           })
         : false;
-  const filteredReplyContext =
-    !replyContext ||
-    evaluateSupplementalContextVisibility({
-      mode: contextVisibilityMode,
-      kind: "quote",
-      senderAllowed: replySenderAllowed,
-    }).include
-      ? replyContext
-      : null;
+  const visibleReply = filterChannelInboundQuoteContext(
+    contextVisibilityMode,
+    replyContext
+      ? {
+          id: replyContext.id,
+          body: replyContext.body,
+          sender: replyContext.sender,
+          senderAllowed: replySenderAllowed,
+        }
+      : undefined,
+  );
+  const filteredReplyContext = visibleReply
+    ? {
+        id: visibleReply.id,
+        body: visibleReply.body ?? "",
+        sender: visibleReply.sender,
+      }
+    : null;
   if (replyContext && !filteredReplyContext && isGroup) {
     params.logVerbose?.(
       `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
@@ -884,11 +801,12 @@ export async function resolveIMessageInboundDecision(params: {
     replyContext: filteredReplyContext,
     effectiveWasMentioned,
     commandAuthorized,
+    hasControlCommand: hasControlCommandInMessage,
     groupSystemPrompt,
   };
 }
 
-export function buildIMessageInboundContext(params: {
+export async function buildIMessageInboundContext(params: {
   cfg: OpenClawConfig;
   decision: IMessageInboundDispatchDecision;
   message: IMessagePayload;
@@ -903,13 +821,14 @@ export function buildIMessageInboundContext(params: {
   };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-}): {
-  ctxPayload: ReturnType<typeof finalizeInboundContext>;
+  dmHistory?: IMessageDmHistoryContext;
+}): Promise<{
+  ctxPayload: FinalizedMsgContext;
   fromLabel: string;
   chatTarget?: string;
   imessageTo: string;
   inboundHistory?: Array<{ sender: string; body: string; timestamp?: number }>;
-} {
+}> {
   const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
   const chatId = decision.chatId;
@@ -962,6 +881,9 @@ export function buildIMessageInboundContext(params: {
   });
 
   let combinedBody = body;
+  if (!decision.isGroup && params.dmHistory?.body) {
+    combinedBody = `${params.dmHistory.body}\n\n${combinedBody}`;
+  }
   if (decision.isGroup && decision.historyKey) {
     const channelHistory = createChannelHistoryWindow({ historyMap: params.groupHistories });
     combinedBody = channelHistory.buildPendingContext({
@@ -981,58 +903,97 @@ export function buildIMessageInboundContext(params: {
     });
   }
 
-  const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
+  const imessageTo = decision.isGroup
+    ? chatTarget || `imessage:${decision.sender}`
+    : buildDirectIMessageReplyTarget({
+        cfg: params.cfg,
+        accountId: decision.route.accountId,
+        sender: decision.sender,
+      });
+  // Async follow-ups can resume from the stored origin instead of the immediate
+  // reply target. Keep direct SMS origins service-qualified the same way as To,
+  // or the final resumed message can fall back to imessage:<phone>.
+  const imessageFrom = decision.isGroup ? `imessage:group:${chatId ?? "unknown"}` : imessageTo;
   const inboundHistory =
-    decision.isGroup && decision.historyKey && params.historyLimit > 0
-      ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
-          historyKey: decision.historyKey,
-          limit: params.historyLimit,
-        })
-      : undefined;
+    !decision.isGroup && params.dmHistory?.inboundHistory
+      ? params.dmHistory.inboundHistory
+      : decision.isGroup && decision.historyKey && params.historyLimit > 0
+        ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
+            historyKey: decision.historyKey,
+            limit: params.historyLimit,
+          })
+        : undefined;
 
-  const ctxPayload = finalizeInboundContext({
-    Body: combinedBody,
-    BodyForAgent: decision.bodyText,
-    InboundHistory: inboundHistory,
-    RawBody: decision.bodyText,
-    CommandBody: decision.bodyText,
-    From: decision.isGroup
-      ? `imessage:group:${chatId ?? "unknown"}`
-      : `imessage:${decision.sender}`,
-    To: imessageTo,
-    SessionKey: decision.route.sessionKey,
-    AccountId: decision.route.accountId,
-    ChatType: decision.isGroup ? "group" : "direct",
-    ConversationLabel: fromLabel,
-    GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
-    GroupSystemPrompt: decision.isGroup ? decision.groupSystemPrompt : undefined,
-    GroupMembers: decision.isGroup
-      ? (params.message.participants ?? []).filter(Boolean).join(", ")
-      : undefined,
-    SenderName: decision.senderNormalized,
-    SenderId: decision.sender,
-    Provider: "imessage",
-    Surface: "imessage",
-    MessageSid: messageSid,
-    MessageSidFull: messageGuid,
-    ReplyToId: decision.replyContext?.id,
-    ReplyToBody: decision.replyContext?.body,
-    ReplyToSender: decision.replyContext?.sender,
-    Timestamp: decision.createdAt,
-    MediaPath: params.media?.path,
-    MediaType: params.media?.type,
-    MediaUrl: params.media?.path,
-    MediaPaths:
-      params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
-    MediaTypes:
-      params.media?.types && params.media.types.length > 0 ? params.media.types : undefined,
-    MediaUrls:
-      params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
-    MediaRemoteHost: params.remoteHost,
-    WasMentioned: decision.effectiveWasMentioned,
-    CommandAuthorized: decision.commandAuthorized,
-    OriginatingChannel: "imessage" as const,
-    OriginatingTo: imessageTo,
+  const mediaInput =
+    params.media?.paths && params.media.paths.length > 0
+      ? params.media.paths.map((path, index) => ({
+          path,
+          url: path,
+          contentType: params.media?.types?.[index],
+        }))
+      : params.media?.path
+        ? [{ path: params.media.path, url: params.media.path, contentType: params.media.type }]
+        : undefined;
+  const media = toInboundMediaFacts(mediaInput);
+  const ctxPayload = buildChannelInboundEventContext({
+    channel: "imessage",
+    supplemental: {
+      quote: decision.replyContext
+        ? {
+            id: decision.replyContext.id,
+            body: decision.replyContext.body,
+            sender: decision.replyContext.sender,
+          }
+        : undefined,
+      groupSystemPrompt: decision.isGroup ? decision.groupSystemPrompt : undefined,
+    },
+    media,
+    messageId: messageSid,
+    messageIdFull: messageGuid,
+    timestamp: decision.createdAt,
+    from: imessageFrom,
+    sender: {
+      id: decision.sender,
+      name: decision.senderNormalized,
+    },
+    conversation: {
+      kind: decision.isGroup ? "group" : "direct",
+      id: chatId != null ? String(chatId) : decision.sender,
+      label: fromLabel,
+    },
+    route: {
+      agentId: decision.route.agentId,
+      accountId: decision.route.accountId,
+      routeSessionKey: decision.route.sessionKey,
+    },
+    reply: {
+      to: imessageTo,
+    },
+    message: {
+      body: combinedBody,
+      bodyForAgent: decision.bodyText,
+      inboundHistory,
+      rawBody: decision.bodyText,
+      commandBody: decision.bodyText,
+    },
+    access: {
+      mentions: {
+        canDetectMention: decision.isGroup,
+        wasMentioned: decision.effectiveWasMentioned,
+      },
+      commands: {
+        authorized: decision.commandAuthorized,
+      },
+    },
+    extra: {
+      GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
+      GroupMembers: decision.isGroup
+        ? (params.message.participants ?? []).filter(Boolean).join(", ")
+        : undefined,
+      MediaRemoteHost: params.remoteHost,
+      CommandSource:
+        decision.commandAuthorized && decision.hasControlCommand ? ("text" as const) : undefined,
+    },
   });
 
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };
@@ -1069,6 +1030,19 @@ function buildIMessageEchoScope(params: {
     scopes.push(`${params.accountId}:chat_identifier:${params.chatIdentifier}`);
   }
   return scopes;
+}
+
+function buildDirectIMessageReplyTarget(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  sender: string;
+}): string {
+  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
+  const configuredService = account.config.service;
+  if (configuredService === "sms") {
+    return `sms:${params.sender}`;
+  }
+  return `imessage:${params.sender}`;
 }
 
 export function describeIMessageEchoDropLog(params: {

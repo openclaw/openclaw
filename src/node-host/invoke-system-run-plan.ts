@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+} from "@openclaw/normalization-core/string-coerce";
 import type {
   SystemRunApprovalFileOperand,
   SystemRunApprovalPlan,
@@ -15,16 +19,13 @@ import {
   unwrapKnownShellMultiplexerInvocation,
 } from "../infra/exec-wrapper-resolution.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 import {
   advancePosixInlineOptionScan,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeNullableString,
-} from "../shared/string-coerce.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type ApprovedCwdSnapshot = {
@@ -146,7 +147,7 @@ const RUBY_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-r", "--require"]);
 const PERL_UNSAFE_APPROVAL_FLAGS = new Set(["-I", "-M", "-m"]);
 
 function normalizeOptionFlag(token: string): string {
-  return normalizeLowercaseStringOrEmpty(token.split("=", 1)[0]);
+  return normalizeLowercaseStringOrEmpty(parseInlineOptionToken(token).name);
 }
 
 function readTrimmedArgToken(argv: readonly string[], index: number): string {
@@ -725,7 +726,9 @@ function collectExistingFileOperandIndexes(params: {
       return { hits: [], sawOptionValueFile: false };
     }
     if (token.startsWith("-")) {
-      const [flag, inlineValue] = token.split("=", 2);
+      const option = parseInlineOptionToken(token);
+      const flag = option.name;
+      const inlineValue = option.hasInlineValue ? option.inlineValue : undefined;
       if (params.optionsWithFileValue?.has(normalizeLowercaseStringOrEmpty(flag))) {
         if (inlineValue && resolvesToExistingFileSync(inlineValue, params.cwd)) {
           hits.push(i);

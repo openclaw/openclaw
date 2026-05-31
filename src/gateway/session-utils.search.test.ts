@@ -189,6 +189,54 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("filters sessions by the displayed provider and model identity", () => {
+    const now = Date.now();
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-sonnet-4-6",
+    });
+    const store: Record<string, SessionEntry> = {
+      "agent:main:inherited-default": {
+        sessionId: "sess-inherited-default",
+        updatedAt: now,
+        label: "Inherited default",
+      } as SessionEntry,
+      "agent:main:override": {
+        sessionId: "sess-override",
+        updatedAt: now - 1_000,
+        label: "Override",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      } as SessionEntry,
+      "agent:main:runtime": {
+        sessionId: "sess-runtime",
+        updatedAt: now - 2_000,
+        label: "Runtime",
+        modelProvider: "google",
+        model: "gemini-3.1-pro-preview",
+      } as SessionEntry,
+    };
+    const cases = [
+      { search: "anthropic", expectedKey: "agent:main:inherited-default" },
+      { search: "claude-sonnet", expectedKey: "agent:main:inherited-default" },
+      { search: "anthropic/claude-sonnet", expectedKey: "agent:main:inherited-default" },
+      { search: "openai/gpt-5.5", expectedKey: "agent:main:override" },
+      { search: "gemini-3.1", expectedKey: "agent:main:runtime" },
+      { search: "google/gemini", expectedKey: "agent:main:runtime" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: { search: testCase.search },
+      });
+
+      expect(result.sessions.map((session) => session.key)).toEqual([testCase.expectedKey]);
+      expect(result.totalCount).toBe(1);
+    }
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -366,7 +414,7 @@ describe("listSessionsFromStore search", () => {
       agents: { list: [{ id: "main", default: true }] },
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             models: [
               {
                 id: "gpt-5.3-codex-spark",
@@ -386,7 +434,7 @@ describe("listSessionsFromStore search", () => {
         "agent:main:main": {
           sessionId: "sess-main",
           updatedAt: Date.now(),
-          modelProvider: "openai-codex",
+          modelProvider: "openai",
           model: "gpt-5.3-codex-spark",
           inputTokens: 5_107,
           outputTokens: 1_827,
@@ -404,7 +452,7 @@ describe("listSessionsFromStore search", () => {
     withTranscriptStoreFixture({
       prefix: "openclaw-session-utils-zero-cost-",
       transcriptId: "sess-main",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.3-codex-spark",
       input: 5_107,
       output: 1_827,
@@ -418,7 +466,7 @@ describe("listSessionsFromStore search", () => {
           entry: {
             sessionId: "sess-main",
             updatedAt: now,
-            modelProvider: "openai-codex",
+            modelProvider: "openai",
             model: "gpt-5.3-codex-spark",
             totalTokens: 0,
             totalTokensFresh: false,

@@ -1,8 +1,9 @@
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import {
   listProviderEnvAuthLookupKeys,
-  resolveProviderEnvAuthEvidence,
-  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveAwsSdkEnvVarName } from "../../agents/model-auth-runtime-shared.js";
@@ -12,10 +13,9 @@ import {
 } from "../../agents/model-auth.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
-} from "../../agents/openai-codex-routing.js";
-import { resolveProviderAuthAliasMap } from "../../agents/provider-auth-aliases.js";
-import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
+} from "../../agents/openai-routing.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -40,6 +40,17 @@ function normalizeAuthProvider(
   aliasMap: Readonly<Record<string, string>>,
 ): string {
   const normalized = normalizeProviderIdForAuth(provider);
+  return aliasMap[normalized] ?? normalized;
+}
+
+function normalizeStoredAuthProvider(
+  provider: string,
+  aliasMap: Readonly<Record<string, string>>,
+): string {
+  const normalized = normalizeProviderIdForAuth(provider);
+  if (normalized === OPENAI_CODEX_PROVIDER_ID) {
+    return normalized;
+  }
   return aliasMap[normalized] ?? normalized;
 }
 
@@ -76,18 +87,33 @@ export function createModelListAuthIndex(
     env,
     metadataSnapshot: params.metadataSnapshot,
   };
-  const aliasMap = resolveProviderAuthAliasMap(lookupParams);
-  const envCandidateMap = resolveProviderEnvApiKeyCandidates(lookupParams);
-  const authEvidenceMap = resolveProviderEnvAuthEvidence(lookupParams);
+  const { aliasMap, envCandidateMap, authEvidenceMap } =
+    resolveProviderEnvAuthLookupMaps(lookupParams);
   const skipSetupProviderFallback = params.metadataSnapshot !== undefined;
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();
   const envProviderAuthCache = new Map<string, boolean>();
+  const credentialAuthsProvider = (credential: AuthProfileCredential): boolean => {
+    const normalizedProvider = normalizeStoredAuthProvider(credential.provider, aliasMap);
+    if (normalizedProvider !== OPENAI_PROVIDER_ID) {
+      return true;
+    }
+    if (credential.type === "api_key") {
+      return true;
+    }
+    if (credential.type !== "oauth" && credential.type !== "token") {
+      return false;
+    }
+    return openAIProviderUsesCodexRuntimeByDefault({
+      provider: normalizedProvider,
+      config: params.cfg,
+    });
+  };
   const addProvider = (provider: string | undefined) => {
     if (!provider?.trim()) {
       return;
     }
-    authenticatedProviders.add(normalizeAuthProvider(provider, aliasMap));
+    authenticatedProviders.add(normalizeStoredAuthProvider(provider, aliasMap));
   };
   const addSyntheticProvider = (provider: string | undefined) => {
     const normalized = provider?.trim() ? normalizeProviderIdForAuth(provider) : "";
@@ -98,7 +124,9 @@ export function createModelListAuthIndex(
   };
 
   for (const credential of Object.values(params.authStore.profiles ?? {})) {
-    addProvider(credential.provider);
+    if (credentialAuthsProvider(credential)) {
+      addProvider(credential.provider);
+    }
   }
 
   for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
@@ -131,7 +159,7 @@ export function createModelListAuthIndex(
   const primaryModelProvider = resolveAgentModelPrimaryValue(
     params.cfg.agents?.defaults?.model,
   )?.split("/", 1)[0];
-  if (primaryModelProvider === "openai-codex" || primaryModelProvider === "codex") {
+  if (primaryModelProvider === "codex") {
     addSyntheticProvider("codex");
   }
 
@@ -178,7 +206,9 @@ export function createModelListAuthIndex(
       openAIProviderUsesCodexRuntimeByDefault({
         provider: normalizedProvider,
         config: params.cfg,
-      }) && authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID)
+      }) &&
+      (authenticatedProviders.has(OPENAI_PROVIDER_ID) ||
+        authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID))
     );
   };
 

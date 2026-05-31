@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -42,6 +42,24 @@ export type ContextEngineProjection = {
   epoch?: string;
   /** Optional diagnostic fingerprint for the projected context payload. */
   fingerprint?: string;
+};
+
+export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
+
+export type ContextEngineHostCapability =
+  | "bootstrap"
+  | "assemble-before-prompt"
+  | "after-turn"
+  | "maintain"
+  | "compact"
+  | "runtime-llm-complete"
+  | "thread-bootstrap-projection";
+
+export type ContextEngineHostRequirements = {
+  /** Host capabilities required before the engine can safely serve this operation. */
+  requiredCapabilities: ContextEngineHostCapability[];
+  /** Optional engine-authored guidance appended to the host compatibility error. */
+  unsupportedMessage?: string;
 };
 
 export type CompactResult = {
@@ -93,6 +111,11 @@ export type ContextEngineInfo = {
    * background turn maintenance.
    */
   turnMaintenanceMode?: "foreground" | "background";
+  /**
+   * Host capability requirements for operations where using an unsupported
+   * runtime would silently degrade or corrupt the engine's behavior.
+   */
+  hostRequirements?: Partial<Record<ContextEngineOperation, ContextEngineHostRequirements>>;
 };
 
 export type SubagentSpawnPreparation = {
@@ -112,6 +135,8 @@ export type TranscriptRewriteReplacement = {
 export type TranscriptRewriteRequest = {
   /** Message entry replacements to apply in one branch-and-reappend pass. */
   replacements: TranscriptRewriteReplacement[];
+  /** Optional entry-id set that must cover every active-branch entry from the first replacement onward. */
+  allowedRewriteSuffixEntryIds?: string[];
 };
 
 export type TranscriptRewriteResult = {
@@ -171,6 +196,8 @@ export type ContextEnginePromptCacheInfo = {
 };
 
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
+  cwd?: string;
   /**
    * True when the host has explicitly opted this maintenance run into
    * consuming deferred compaction debt.
@@ -178,6 +205,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   allowDeferredCompactionExecution?: boolean;
   /** Runtime-resolved context window budget for the active model call. */
   tokenBudget?: number;
+  /** Selected agent harness id when compaction delegates back to the runtime. */
+  agentHarnessId?: string;
   /** Best-effort current prompt/context token estimate for this turn. */
   currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
@@ -222,7 +251,7 @@ export interface ContextEngine {
    * Run transcript maintenance after bootstrap, successful turns, or compaction.
    *
    * Engines can use runtimeContext.rewriteTranscriptEntries() to request safe
-   * branch-and-reappend transcript rewrites without depending on Pi internals.
+   * branch-and-reappend transcript rewrites without depending on runner internals.
    */
   maintain?(params: {
     sessionId: string;

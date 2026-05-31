@@ -1,10 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -66,22 +65,13 @@ export function resolveReadOnlyChannelCommandDefaults(
     return undefined;
   }
   const env = options.env ?? process.env;
-  const snapshot =
-    options.stateDir === undefined
-      ? getCurrentPluginMetadataSnapshot({
-          config: options.config,
-          env,
-          workspaceDir: options.workspaceDir,
-        })
-      : undefined;
-  const resolvedSnapshot =
-    snapshot ??
-    loadPluginMetadataSnapshot({
-      config: options.config,
-      stateDir: options.stateDir,
-      workspaceDir: options.workspaceDir,
-      env,
-    });
+  const resolvedSnapshot = resolvePluginMetadataSnapshot({
+    config: options.config,
+    stateDir: options.stateDir,
+    workspaceDir: options.workspaceDir,
+    env,
+    allowWorkspaceScopedCurrent: true,
+  });
   for (const record of resolvedSnapshot.plugins) {
     if (!record.channels.includes(normalizedChannelId)) {
       continue;

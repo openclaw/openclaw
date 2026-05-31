@@ -1,9 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+type ExecFileCallback = (
+  error: ExecFileException | null,
+  stdout: string,
+  stderr: string,
+) => void;
+type ExecFileMock = (
+  command: string,
+  args: string[],
+  options: ExecFileOptionsWithStringEncoding,
+  callback: ExecFileCallback,
+) => unknown;
+
+const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
 const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -11,13 +24,35 @@ vi.mock("node:fs", async (importOriginal) => ({
   existsSync: existsSyncMock,
 }));
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessExecFile(
-    Object.assign(execFileMock, {
-      __promisify__: vi.fn(),
-    }) as typeof import("node:child_process").execFile,
-  );
+vi.mock("./exec-file.js", () => {
+  return {
+    execFileUtf8: async (
+      command: string,
+      args: string[],
+      options: Omit<ExecFileOptionsWithStringEncoding, "encoding"> = {},
+    ) => {
+      let settled:
+        | {
+            stdout: string;
+            stderr: string;
+            code: number;
+          }
+        | undefined;
+
+      execFileMock(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+        settled = {
+          stdout: stdout ?? "",
+          stderr: stderr || error?.message || "",
+          code: error && typeof error.code === "number" ? error.code : error ? 1 : 0,
+        };
+      });
+
+      if (!settled) {
+        throw new Error(`execFile mock did not settle for ${command} ${args.join(" ")}`);
+      }
+      return settled;
+    },
+  };
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
@@ -29,6 +64,7 @@ import {
   isSystemdUnitActive,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceRuntime,
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
@@ -166,6 +202,9 @@ describe("systemd availability", () => {
     existsSyncMock.mockReturnValue(true);
     execFileMock.mockImplementation((_cmd, args, opts, cb) => {
       assertUserSystemctlArgs(args, "status");
+      if (!opts.env) {
+        throw new Error("expected systemctl env");
+      }
       expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
       expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1000/bus");
       cb(null, "", "");
@@ -417,7 +456,7 @@ describe("isSystemdServiceEnabled", () => {
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args[0]).toBe("--machine");
-        expect(String(args[1])).toMatch(/^[^@]+@$/);
+        expect(args[1]).toMatch(/^[^@]+@$/);
         expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
         const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;
@@ -528,6 +567,77 @@ describe("systemd runtime parsing", () => {
       activeState: "inactive",
       subState: "dead",
       execMainCode: "exited",
+    });
+  });
+
+  it("rejects invalid cgroup counters as junk", () => {
+    const output = [
+      "ActiveState=active",
+      "SubState=running",
+      "MainPID=1",
+      "ExecMainStatus=0",
+      "ExecMainCode=running",
+      "KillMode=process",
+      "TasksCurrent=42abc",
+      "MemoryCurrent=11GB",
+    ].join("\n");
+    expect(parseSystemdShow(output)).toEqual({
+      activeState: "active",
+      subState: "running",
+      mainPid: 1,
+      execMainStatus: 0,
+      execMainCode: "running",
+      killMode: "process",
+    });
+  });
+});
+
+describe("readSystemdServiceRuntime", () => {
+  it("surfaces systemd cgroup metrics and KillMode", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(
+          args,
+          "show",
+          GATEWAY_SERVICE,
+          "--no-page",
+          "--property",
+          "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+        );
+        cb(
+          null,
+          [
+            "Id=openclaw-gateway.service",
+            "ActiveState=active",
+            "SubState=running",
+            "MainPID=1234",
+            "ExecMainStatus=0",
+            "ExecMainCode=running",
+            "KillMode=process",
+            "TasksCurrent=807",
+            "MemoryCurrent=11918534246",
+          ].join("\n"),
+          "",
+        );
+      });
+    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    expect(runtime).toEqual({
+      status: "running",
+      state: "active",
+      subState: "running",
+      pid: 1234,
+      lastExitStatus: 0,
+      lastExitReason: "running",
+      systemd: {
+        unit: "openclaw-gateway.service",
+        killMode: "process",
+        tasksCurrent: 807,
+        memoryCurrent: 11_918_534_246,
+      },
     });
   });
 });

@@ -1,9 +1,10 @@
-import { normalizeChatChannelId } from "../channels/ids.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeChatChannelId } from "../channels/ids.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
@@ -149,9 +150,9 @@ function normalizePluginEntries(
               (subagentRaw as { allowedModels?: unknown }).allowedModels,
             ),
             allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
-              ? ((subagentRaw as { allowedModels?: unknown }).allowedModels as unknown[])
-                  .map((model) => normalizeOptionalString(model))
-                  .filter((model): model is string => Boolean(model))
+              ? normalizeArrayBackedTrimmedStringList(
+                  (subagentRaw as { allowedModels?: unknown }).allowedModels,
+                )
               : undefined,
           }
         : undefined;
@@ -179,9 +180,9 @@ function normalizePluginEntries(
               (llmRaw as { allowedModels?: unknown }).allowedModels,
             ),
             allowedModels: Array.isArray((llmRaw as { allowedModels?: unknown }).allowedModels)
-              ? ((llmRaw as { allowedModels?: unknown }).allowedModels as unknown[])
-                  .map((model) => normalizeOptionalString(model))
-                  .filter((model): model is string => Boolean(model))
+              ? normalizeArrayBackedTrimmedStringList(
+                  (llmRaw as { allowedModels?: unknown }).allowedModels,
+                )
               : undefined,
             allowAgentIdOverride: (llmRaw as { allowAgentIdOverride?: unknown })
               .allowAgentIdOverride,

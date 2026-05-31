@@ -1,8 +1,10 @@
 import type { NativeHookRelayRegistrationHandle } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
+  resolveCodexNativeHookRelayUnregisterGraceMs,
 } from "./native-hook-relay.js";
 
 describe("Codex native hook relay config", () => {
@@ -20,7 +22,7 @@ describe("Codex native hook relay config", () => {
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --event pre_tool_use",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use",
               timeout: 7,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -34,7 +36,7 @@ describe("Codex native hook relay config", () => {
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --event post_tool_use",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event post_tool_use",
               timeout: 7,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -48,7 +50,7 @@ describe("Codex native hook relay config", () => {
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --event permission_request",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request",
               timeout: 7,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -62,7 +64,7 @@ describe("Codex native hook relay config", () => {
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --event before_agent_finalize",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event before_agent_finalize",
               timeout: 7,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -125,7 +127,7 @@ describe("Codex native hook relay config", () => {
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --event permission_request",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request",
               timeout: 5,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -160,7 +162,7 @@ describe("Codex native hook relay config", () => {
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --event pre_tool_use",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use",
               timeout: 5,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -200,7 +202,7 @@ describe("Codex native hook relay config", () => {
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --event permission_request",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request",
               timeout: 5,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -251,6 +253,12 @@ describe("Codex native hook relay config", () => {
       "hooks.Stop": [],
     });
   });
+
+  it("caps oversized native hook cleanup grace before scheduling", () => {
+    expect(resolveCodexNativeHookRelayUnregisterGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+  });
 });
 
 function createRelay(options?: {
@@ -260,6 +268,7 @@ function createRelay(options?: {
   return {
     relayId: "relay-1",
     provider: "codex",
+    generation: "generation-1",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     runId: "run-1",
@@ -267,7 +276,7 @@ function createRelay(options?: {
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
     commandForEvent: (event) =>
-      `openclaw hooks relay --provider codex --relay-id relay-1 --event ${event}`,
+      `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}`,
     renew: () => undefined,
     unregister: () => undefined,
   };

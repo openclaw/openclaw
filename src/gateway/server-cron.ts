@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { abortAndDrainEmbeddedPiRun } from "../agents/pi-embedded.js";
+import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -12,17 +12,14 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import {
-  appendCronRunLog,
-  resolveCronRunLogPath,
-  resolveCronRunLogPruneOptions,
-} from "../cron/run-log.js";
+import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -204,7 +201,13 @@ export function buildGatewayCronService(params: {
         });
       }
     }
-    return canonical;
+    return (
+      resolveMainScopedEventSessionKey({
+        cfg: params.runtimeConfig,
+        sessionKey: canonical,
+        agentId: params.agentId,
+      }) ?? canonical
+    );
   };
 
   const resolveCronTarget = (opts?: {
@@ -380,7 +383,7 @@ export function buildGatewayCronService(params: {
       if (!execution?.sessionId) {
         return;
       }
-      const result = await abortAndDrainEmbeddedPiRun({
+      const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         settleMs: 15_000,
@@ -464,13 +467,9 @@ export function buildGatewayCronService(params: {
           warnedLegacyWebhookJobs,
         });
 
-        const logPath = resolveCronRunLogPath({
+        void appendCronRunLog({
           storePath,
-          jobId: evt.jobId,
-        });
-        void appendCronRunLog(
-          logPath,
-          {
+          entry: {
             ts: Date.now(),
             jobId: evt.jobId,
             action: "finished",
@@ -493,9 +492,12 @@ export function buildGatewayCronService(params: {
             provider: evt.provider,
             usage: evt.usage,
           },
-          runLogPrune,
-        ).catch((err) => {
-          cronLogger.warn({ err: String(err), logPath }, "cron: run log append failed");
+          opts: { keepLines: runLogPrune.keepLines },
+        }).catch((err) => {
+          cronLogger.warn(
+            { err: String(err), storePath, jobId: evt.jobId },
+            "cron: run log append failed",
+          );
         });
       }
     },

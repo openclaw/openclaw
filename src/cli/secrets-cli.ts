@@ -1,13 +1,18 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatGatewayCommandFailure } from "./error-format.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
+
+type FsModule = typeof import("node:fs");
+type ClackPromptsModule = typeof import("@clack/prompts");
+type SecretsApplyModule = typeof import("../secrets/apply.js");
 
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
 type SecretsAuditOptions = {
@@ -32,9 +37,17 @@ type SecretsApplyOptions = {
   json?: boolean;
 };
 
+const fsModuleLoader = createLazyImportLoader<FsModule>(() => import("node:fs"));
+const clackPromptsLoader = createLazyImportLoader<ClackPromptsModule>(
+  () => import("@clack/prompts"),
+);
+const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
+  () => import("../secrets/apply.js"),
+);
+
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
-    import("node:fs"),
+    fsModuleLoader.load(),
     import("../secrets/plan.js"),
   ]);
   const raw = readFileSync(pathname, "utf8");
@@ -178,14 +191,18 @@ export function registerSecretsCli(program: Command): void {
           allowExecInPreflight: Boolean(opts.allowExec),
         });
         if (opts.planOut) {
-          const { writeFileSync } = await import("node:fs");
+          const { writeFileSync } = await fsModuleLoader.load();
           writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
         }
+
+        let shouldApply = Boolean(opts.apply || opts.yes);
         if (opts.json) {
-          defaultRuntime.writeJson({
-            plan: configured.plan,
-            preflight: configured.preflight,
-          });
+          if (!shouldApply) {
+            defaultRuntime.writeJson({
+              plan: configured.plan,
+              preflight: configured.preflight,
+            });
+          }
         } else {
           defaultRuntime.log(
             `Preflight: changed=${configured.preflight.changed}, files=${configured.preflight.changedFiles.length}, warnings=${configured.preflight.warningCount}.`,
@@ -213,9 +230,8 @@ export function registerSecretsCli(program: Command): void {
           }
         }
 
-        let shouldApply = Boolean(opts.apply);
         if (!shouldApply && !opts.json) {
-          const { confirm } = await import("@clack/prompts");
+          const { confirm } = await clackPromptsLoader.load();
           const approved = await confirm({
             message: "Apply this plan now?",
             initialValue: true,
@@ -225,9 +241,14 @@ export function registerSecretsCli(program: Command): void {
           }
         }
         if (shouldApply) {
-          const needsIrreversiblePrompt = Boolean(opts.apply);
+          // Show the irreversibility warning whenever we are about to apply,
+          // including when the user opted in through the interactive "Apply
+          // this plan now?" confirm. Previously this checked opts.apply, so the
+          // one-way-migration warning was silently skipped on the interactive
+          // path (only --apply surfaced it). See #83883.
+          const needsIrreversiblePrompt = shouldApply;
           if (needsIrreversiblePrompt && !opts.yes && !opts.json) {
-            const { confirm } = await import("@clack/prompts");
+            const { confirm } = await clackPromptsLoader.load();
             const confirmed = await confirm({
               message:
                 "This migration is one-way for migrated plaintext values. Continue with apply?",
@@ -238,7 +259,7 @@ export function registerSecretsCli(program: Command): void {
               return;
             }
           }
-          const { runSecretsApply } = await import("../secrets/apply.js");
+          const { runSecretsApply } = await secretsApplyLoader.load();
           const result = await runSecretsApply({
             plan: configured.plan,
             write: true,
@@ -274,7 +295,7 @@ export function registerSecretsCli(program: Command): void {
     .action(async (opts: SecretsApplyOptions) => {
       try {
         const [{ runSecretsApply }, plan] = await Promise.all([
-          import("../secrets/apply.js"),
+          secretsApplyLoader.load(),
           readPlanFile(opts.from),
         ]);
         const result = await runSecretsApply({

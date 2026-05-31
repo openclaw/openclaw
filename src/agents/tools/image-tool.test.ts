@@ -5,19 +5,51 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
+import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { createOpenClawCodingTools } from "../agent-tools.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { createOpenClawCodingTools } from "../pi-tools.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+
+const publicSurfaceLoaderMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(
+    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+      if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
+        return {
+          resolveInboundAttachmentRoots: ({
+            accountId,
+            cfg,
+          }: {
+            accountId?: string | null;
+            cfg: OpenClawConfig;
+          }) => [
+            ...((accountId
+              ? cfg.channels?.imessage?.accounts?.[accountId]?.attachmentRoots
+              : undefined) ?? []),
+            ...(cfg.channels?.imessage?.attachmentRoots ?? []),
+            "/Users/*/Library/Messages/Attachments",
+          ],
+        };
+      }
+      throw new Error(
+        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+      );
+    },
+  ),
+}));
+
+vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
 
 type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
@@ -27,10 +59,13 @@ type MockOpenClawToolsOptions = {
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   fsPolicy?: NonNullable<Parameters<typeof createImageTool>[0]>["fsPolicy"];
+  agentChannel?: string | null;
+  agentAccountId?: string | null;
+  currentChannelId?: string | null;
   modelHasVision?: boolean;
 };
 
-const piToolsHarness = vi.hoisted(() => ({
+const agentToolsHarness = vi.hoisted(() => ({
   createStubTool(name: string) {
     return {
       name,
@@ -70,8 +105,8 @@ vi.mock("../bash-tools.js", async () => {
   const actual = await vi.importActual<typeof import("../bash-tools.js")>("../bash-tools.js");
   return {
     ...actual,
-    createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
-    createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
+    createExecTool: vi.fn(() => agentToolsHarness.createStubTool("exec")),
+    createProcessTool: vi.fn(() => agentToolsHarness.createStubTool("process")),
   };
 });
 
@@ -81,15 +116,39 @@ vi.mock("../channel-tools.js", () => ({
 }));
 
 vi.mock("../apply-patch.js", () => ({
-  createApplyPatchTool: vi.fn(() => piToolsHarness.createStubTool("apply_patch")),
+  createApplyPatchTool: vi.fn(() => agentToolsHarness.createStubTool("apply_patch")),
 }));
 
-vi.mock("../pi-tools.before-tool-call.js", () => ({
+vi.mock("../agent-tools.before-tool-call.js", () => ({
   wrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
 }));
 
-vi.mock("../pi-tools.abort.js", () => ({
+vi.mock("../agent-tools.abort.js", () => ({
   wrapToolWithAbortSignal: vi.fn((tool) => tool),
+}));
+
+// Keep image-tool tests focused on root propagation; media-tool-shared
+// and channel-inbound tests cover the real bundled contract loader.
+vi.mock("../../media/channel-inbound-roots.js", () => ({
+  resolveChannelInboundAttachmentRootsForChannel: (params: {
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  }) => {
+    const channelId = params.channelId?.trim();
+    if (!channelId) {
+      return undefined;
+    }
+    const channelConfig = params.cfg?.channels?.[channelId];
+    const accountConfig = params.accountId
+      ? channelConfig?.accounts?.[params.accountId]
+      : undefined;
+    const roots = [
+      ...(accountConfig?.attachmentRoots ?? []),
+      ...(channelConfig?.attachmentRoots ?? []),
+    ];
+    return channelId === "imessage" ? [...roots, "/Users/*/Library/Messages/Attachments"] : roots;
+  },
 }));
 
 vi.mock("../auth-profiles.js", () => ({
@@ -121,6 +180,11 @@ vi.mock("../auth-profiles.js", () => ({
 }));
 
 vi.mock("../model-auth.js", () => ({
+  hasUsableCustomProviderApiKey: (cfg?: OpenClawConfig, provider?: string) => {
+    const providerConfig = cfg?.models?.providers?.[provider ?? ""];
+    const apiKey = providerConfig?.apiKey;
+    return typeof apiKey === "string" && apiKey.trim().length > 0;
+  },
   resolveEnvApiKey: (provider: string) => {
     const envVarByProvider: Record<string, string[]> = {
       anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
@@ -161,6 +225,9 @@ vi.mock("../openclaw-tools.js", async () => {
               }
             : undefined,
         fsPolicy: options?.fsPolicy,
+        agentChannel: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
+        currentChannelId: options?.currentChannelId,
         modelHasVision: options?.modelHasVision,
       });
       return imageTool ? [imageTool] : [];
@@ -218,7 +285,53 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
-const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
+
+function createLargeColorBlockPng(size: number): Buffer {
+  const buf = Buffer.alloc(size * size * 4, 255);
+  const centerStart = Math.floor(size * 0.25);
+  const centerEnd = Math.floor(size * 0.75);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const inCenter = x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd;
+      fillPixel(buf, x, y, size, inCenter ? 230 : 30, inCenter ? 40 : 110, inCenter ? 35 : 220);
+    }
+  }
+  return encodePngRgba(buf, size, size);
+}
+
+function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    offset += 2;
+    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+    const segmentLength = buffer.readUInt16BE(offset);
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return {
+        height: buffer.readUInt16BE(offset + 3),
+        width: buffer.readUInt16BE(offset + 5),
+      };
+    }
+    offset += segmentLength;
+  }
+  throw new Error("JPEG dimensions not found");
+}
+
+function readPngDimensions(buffer: Buffer): { width: number; height: number } {
+  if (buffer.length < 24 || buffer.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error("PNG dimensions not found");
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
@@ -479,7 +592,26 @@ const moonshotProvider = {
   describeImages: describeMoonshotImages,
 } satisfies MediaUnderstandingProvider;
 
-function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+function installImageUnderstandingProviderDeps(
+  providers: MediaUnderstandingProvider[],
+  options?: {
+    describeImageWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImageWithModel"];
+    describeImagesWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImagesWithModel"];
+    loadImageWebMediaRuntime?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["loadImageWebMediaRuntime"];
+    resolveImageCompressionPolicy?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveImageCompressionPolicy"];
+    resolveModelAsync?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveModelAsync"];
+  },
+) {
   imageProviderHarness.setProviders(providers);
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
@@ -499,12 +631,74 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-    describeImageWithModel: describeGenericImageWithModel,
-    describeImagesWithModel: describeGenericImagesWithModel,
+    describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
+    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders: ({ capability }) =>
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    ...(options?.resolveImageCompressionPolicy
+      ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
+      : {}),
+    ...(options?.resolveModelAsync ? { resolveModelAsync: options.resolveModelAsync } : {}),
+    ...(options?.loadImageWebMediaRuntime
+      ? { loadImageWebMediaRuntime: options.loadImageWebMediaRuntime }
+      : {}),
+  });
+}
+
+function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+  installImageUnderstandingProviderDeps(providers);
+}
+
+function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProvider[]) {
+  installImageUnderstandingProviderDeps(providers, {
+    describeImageWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
+    describeImagesWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
+    resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
+    resolveModelAsync: async (provider, model) => ({
+      model: {
+        id: model,
+        provider,
+        input: ["text", "image"],
+      } as never,
+      authStorage: {} as never,
+      modelRegistry: {} as never,
+    }),
+    loadImageWebMediaRuntime: async () => ({
+      loadWebMedia: async (mediaUrl, options) => {
+        const inboundRoots =
+          options && typeof options === "object" && "inboundRoots" in options
+            ? options.inboundRoots
+            : [];
+        if (
+          !isInboundPathAllowed({
+            filePath: mediaUrl,
+            roots: inboundRoots ?? [],
+          })
+        ) {
+          throw new Error(`Local media path is not under an allowed directory: ${mediaUrl}`);
+        }
+        return {
+          buffer: await fs.readFile(mediaUrl),
+          contentType: "image/png",
+          kind: "image",
+          fileName: path.basename(mediaUrl),
+        };
+      },
+      optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => {
+        return {
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        };
+      },
+    }),
   });
 }
 
@@ -1060,6 +1254,30 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("pairs a custom provider when config declares its api key", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "hatchery-qwen3.6-plus/text-1" } } },
+        models: {
+          providers: {
+            "hatchery-qwen3.6-plus": {
+              baseUrl: "https://example.com",
+              apiKey: "sk-configured", // pragma: allowlist secret
+              models: [
+                makeModelDefinition("text-1", ["text"]),
+                makeModelDefinition("qwen3.6-plus", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "hatchery-qwen3.6-plus/qwen3.6-plus",
+      });
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+    });
+  });
+
   it("does not double-prefix custom provider model IDs that already include the provider", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
@@ -1089,7 +1307,7 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("pairs a provider when config uses an alias key", async () => {
+  it("does not pair provider aliases through core normalization", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
         version: 1,
@@ -1115,10 +1333,7 @@ describe("image tool implicit imageModel config", () => {
           },
         },
       };
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "amazon-bedrock/vision-1",
-      });
-      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
     });
   });
 
@@ -1341,7 +1556,7 @@ describe("image tool implicit imageModel config", () => {
       ).toBe(true);
       expect(userContent.some((block) => block.type === "image_url")).toBe(true);
       expect(userContent.find((block) => block.type === "image_url")?.image_url?.url).toContain(
-        "data:image/png;base64,",
+        "data:image/",
       );
       expect(bodyRaw).not.toContain('"role":"developer"');
       expectToolText(result, "ok moonshot");
@@ -1481,8 +1696,8 @@ describe("image tool implicit imageModel config", () => {
             items: { type: "string" },
           },
           model: { type: "string" },
-          maxBytesMb: { type: "number" },
-          maxImages: { type: "number" },
+          maxBytesMb: { type: "number", exclusiveMinimum: 0 },
+          maxImages: { type: "integer", minimum: 1 },
         },
       });
     });
@@ -1560,6 +1775,134 @@ describe("image tool implicit imageModel config", () => {
         expect(fetch).not.toHaveBeenCalled();
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows image paths from the current iMessage account attachment roots", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installFastLocalImageProviderStubs({
+        id: "ollama",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const attachmentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-root-"));
+      const imagePath = path.join(attachmentRoot, "photo.png");
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/moondream" },
+            },
+          },
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://localhost:11434",
+                models: [makeModelDefinition("moondream", ["text", "image"])],
+              },
+            },
+          },
+          channels: {
+            imessage: {
+              accounts: {
+                work: {
+                  attachmentRoots: [attachmentRoot],
+                },
+              },
+            },
+          },
+        };
+
+        expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+        const roots = resolveMediaToolInboundRoots({
+          cfg,
+          channelId: "imessage",
+          accountId: "work",
+        });
+        expect(roots).toContain(attachmentRoot);
+        expect(isInboundPathAllowed({ filePath: imagePath, roots })).toBe(true);
+
+        const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
+        await expect(
+          withoutChannel.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+
+        const withImessage = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+
+        await expectImageToolExecOk(withImessage, imagePath);
+        expect(describeImage).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows image paths from current iMessage wildcard attachment roots", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installFastLocalImageProviderStubs({
+        id: "ollama",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const attachmentRootParent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-imessage-wildcard-root-"),
+      );
+      const attachmentRoot = path.join(attachmentRootParent, "work", "Attachments");
+      const imagePath = path.join(attachmentRoot, "photo.png");
+      await fs.mkdir(attachmentRoot, { recursive: true });
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/moondream" },
+            },
+          },
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://localhost:11434",
+                models: [makeModelDefinition("moondream", ["text", "image"])],
+              },
+            },
+          },
+          channels: {
+            imessage: {
+              accounts: {
+                work: {
+                  attachmentRoots: [path.join(attachmentRootParent, "*", "Attachments")],
+                },
+              },
+            },
+          },
+        };
+
+        const withImessage = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+
+        await expectImageToolExecOk(withImessage, imagePath);
+        expect(describeImage).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRootParent, { recursive: true, force: true });
       }
     });
   });
@@ -1754,11 +2097,154 @@ describe("image tool data URL support", () => {
       bufferFromSpy.mockRestore();
     }
   });
+
+  it("applies model image maxBytes to data URLs", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const model = {
+        ...makeModelDefinition("tiny-vision", ["text", "image"]),
+        mediaInput: { image: { maxBytes: 1 } },
+      } satisfies ModelDefinitionConfig;
+      installImageUnderstandingProviderDeps([], {
+        resolveImageCompressionPolicy: async () => ({
+          imageCount: 1,
+          models: [model.mediaInput.image],
+        }),
+      });
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/tiny-vision" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              models: [model],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "Describe this image.",
+          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        }),
+      ).rejects.toThrow(/could not be reduced below/i);
+    });
+  });
+
+  it("downscales data URL images to the resolved model side limit", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      let observedDimensions: { width: number; height: number } | undefined;
+      const model = {
+        ...makeModelDefinition("tiny-vision", ["text", "image"]),
+        mediaInput: { image: { maxSidePx: 512, preferredSidePx: 512 } },
+      } satisfies ModelDefinitionConfig;
+      installImageUnderstandingProviderDeps(
+        [
+          {
+            id: "openai",
+            capabilities: ["image"],
+            describeImage: async (params) => {
+              observedDimensions =
+                params.mime === "image/png"
+                  ? readPngDimensions(params.buffer)
+                  : readJpegDimensions(params.buffer);
+              return { text: "ok", model: params.model };
+            },
+          },
+        ],
+        {
+          resolveImageCompressionPolicy: async () => ({
+            imageCount: 1,
+            models: [model.mediaInput.image],
+          }),
+        },
+      );
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/tiny-vision" },
+            imageQuality: "high",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              apiKey: "test-key",
+              baseUrl: "https://api.openai.com/v1",
+              models: [model],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+      const source = createLargeColorBlockPng(1600);
+      await expectImageToolExecOk(tool, `data:image/png;base64,${source.toString("base64")}`);
+
+      expect(observedDimensions).toBeDefined();
+      if (!observedDimensions) {
+        throw new Error("expected observed data URL dimensions");
+      }
+      expect(Math.max(observedDimensions.width, observedDimensions.height)).toBeLessThanOrEqual(
+        512,
+      );
+    });
+  });
+
+  it("applies configured image quality to data URLs without model media metadata", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      let observedDimensions: { width: number; height: number } | undefined;
+      installImageUnderstandingProviderStubs({
+        id: "openai",
+        capabilities: ["image"],
+        describeImage: async (params) => {
+          observedDimensions =
+            params.mime === "image/png"
+              ? readPngDimensions(params.buffer)
+              : readJpegDimensions(params.buffer);
+          return { text: "ok", model: params.model };
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/plain-vision" },
+            imageQuality: "efficient",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              apiKey: "test-key",
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeModelDefinition("plain-vision", ["text", "image"])],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+      const source = createLargeColorBlockPng(1600);
+      await expectImageToolExecOk(tool, `data:image/png;base64,${source.toString("base64")}`);
+
+      expect(observedDimensions).toBeDefined();
+      if (!observedDimensions) {
+        throw new Error("expected observed data URL dimensions");
+      }
+      expect(Math.max(observedDimensions.width, observedDimensions.height)).toBeLessThanOrEqual(
+        1280,
+      );
+    });
+  });
 });
 
 describe("image tool MiniMax VLM routing", () => {
-  const pngB64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
   const priorFetch = global.fetch;
   registerImageToolEnvReset(priorFetch, [
     "MINIMAX_API_KEY",
@@ -1791,7 +2277,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const res = await tool.execute("t1", {
       prompt: "Describe the image.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -1803,7 +2289,7 @@ describe("image tool MiniMax VLM routing", () => {
     expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");
     expect(String(init?.body)).toContain('"prompt":"Describe the image."');
-    expect(String(init?.body)).toContain('"image_url":"data:image/png;base64,');
+    expect(String(init?.body)).toContain('"image_url":"data:image/');
 
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
     expect(text).toBe("ok");
@@ -1811,10 +2297,14 @@ describe("image tool MiniMax VLM routing", () => {
 
   it("accepts images[] for multi-image requests", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+    const secondPngB64 = createLargeColorBlockPng(2).toString("base64");
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [`data:image/png;base64,${pngB64}`, `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`],
+      images: [
+        `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        `data:image/png;base64,${secondPngB64}`,
+      ],
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -1828,14 +2318,15 @@ describe("image tool MiniMax VLM routing", () => {
 
   it("combines image + images with dedupe and enforces maxImages", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+    const secondPngB64 = createLargeColorBlockPng(2).toString("base64");
 
     const deduped = await tool.execute("t1", {
       prompt: "Compare these images.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       images: [
-        `data:image/png;base64,${pngB64}`,
-        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
-        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
+        `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        `data:image/png;base64,${secondPngB64}`,
+        `data:image/png;base64,${secondPngB64}`,
       ],
     });
 
@@ -1849,7 +2340,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const tooMany = await tool.execute("t2", {
       prompt: "Compare these images.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       images: [`data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
       maxImages: 1,
     });
@@ -1867,13 +2358,47 @@ describe("image tool MiniMax VLM routing", () => {
     expect(tooManyDetails?.max).toBe(1);
   });
 
+  it("rejects invalid image cap values before loading images", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await expect(
+      tool.execute("t1", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxImages: 1.5,
+      }),
+    ).rejects.toThrow("maxImages must be a positive integer");
+
+    await expect(
+      tool.execute("t2", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxBytesMb: 0,
+      }),
+    ).rejects.toThrow("maxBytesMb must be greater than 0");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts string image caps through shared numeric readers", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await tool.execute("t1", {
+      prompt: "Describe this image.",
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      maxImages: "1",
+      maxBytesMb: "1",
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
     const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
 
     await expect(
       tool.execute("t1", {
         prompt: "Describe the image.",
-        image: `data:image/png;base64,${pngB64}`,
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       }),
     ).rejects.toThrow(/MiniMax VLM API error/i);
   });
@@ -1907,13 +2432,16 @@ describe("image tool managed inbound media", () => {
   }
 
   it("resolves media://inbound refs", async () => {
-    await withManagedInboundPng(async ({ mediaId }) => {
+    await withManagedInboundPng(async ({ stateDir, mediaId }) => {
       installImageUnderstandingProviderStubs();
       const fetch = stubMinimaxOkFetch();
+      const workspaceDir = path.join(stateDir, "workspace-agent");
+      await fs.mkdir(workspaceDir, { recursive: true });
       await withTempAgentDir(async (agentDir) => {
         const tool = createRequiredImageTool({
           config: createMinimaxImageConfig(),
           agentDir,
+          workspaceDir,
           fsPolicy: { workspaceOnly: true },
         });
 
@@ -2135,5 +2663,247 @@ describe("image tool response validation", () => {
     });
 
     expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
+  });
+});
+
+describe("image compression policy", () => {
+  const cfgWithImageModelMetadata = {
+    agents: {
+      defaults: {
+        imageQuality: "high",
+      },
+    },
+    models: {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "claude-opus-4-7",
+              name: "Claude Opus 4.7",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+              },
+            },
+            {
+              id: "claude-opus-4-6",
+              name: "Claude Opus 4.6",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+              },
+            },
+          ],
+        },
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+
+  it("derives model metadata, quality preference, and image count from config", async () => {
+    const cfg = {
+      ...cfgWithImageModelMetadata,
+    } satisfies OpenClawConfig;
+
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg,
+        imageModelConfig: { primary: "anthropic/claude-opus-4-7" },
+        imageCount: 2,
+      }),
+    ).resolves.toEqual({
+      quality: "high",
+      imageCount: 2,
+      models: [{ maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" }],
+    });
+  });
+
+  it("keeps unset image quality as adaptive auto behavior and includes fallback models", async () => {
+    const { agents: _agents, ...cfg } = cfgWithImageModelMetadata;
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg,
+        imageModelConfig: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-opus-4-6", "unknown/custom-image"],
+        },
+        imageCount: 1,
+      }),
+    ).resolves.toEqual({
+      imageCount: 1,
+      models: [
+        { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+        {},
+      ],
+    });
+  });
+
+  it("uses bundled Anthropic media limits without runtime provider hooks", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: {},
+        imageModelConfig: {
+          primary: "anthropic/claude-opus-4-7",
+          fallbacks: ["anthropic/claude-sonnet-4-6"],
+        },
+        imageCount: 1,
+      }),
+    ).resolves.toEqual({
+      imageCount: 1,
+      models: [
+        { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+      ],
+    });
+  });
+
+  it("keeps runtime Anthropic media limits for dated model variants", async () => {
+    testing.setProviderDepsForTest({
+      resolveModelAsync: async (_provider, model) => ({
+        model: {
+          mediaInput: {
+            image: model.includes("opus")
+              ? { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" }
+              : { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+          },
+        } as never,
+        authStorage: {} as never,
+        modelRegistry: {} as never,
+      }),
+    });
+    try {
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg: {},
+          imageModelConfig: {
+            primary: "anthropic/claude-opus-4.7-20260219",
+            fallbacks: ["anthropic/claude-sonnet-4.6-20260219"],
+          },
+          imageCount: 1,
+        }),
+      ).resolves.toEqual({
+        imageCount: 1,
+        models: [
+          { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+          { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+        ],
+      });
+    } finally {
+      testing.setProviderDepsForTest();
+    }
+  });
+
+  it("merges partial configured Anthropic media policy with runtime side limits", async () => {
+    testing.setProviderDepsForTest({
+      resolveModelAsync: async (_provider, _model, _agentDir, _cfg, options) => ({
+        model: {
+          mediaInput: {
+            image: options?.skipProviderRuntimeHooks
+              ? { maxBytes: 1_000_000 }
+              : { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+          },
+        } as never,
+        authStorage: {} as never,
+        modelRegistry: {} as never,
+      }),
+    });
+    try {
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg: {
+            models: {
+              providers: {
+                anthropic: {
+                  baseUrl: "https://api.anthropic.com",
+                  api: "anthropic-messages",
+                  models: [
+                    {
+                      id: "claude-opus-4.7-20260219",
+                      name: "Claude Opus 4.7 dated",
+                      reasoning: true,
+                      input: ["text", "image"],
+                      contextWindow: 200_000,
+                      maxTokens: 64_000,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      mediaInput: { image: { maxBytes: 1_000_000 } },
+                    },
+                  ],
+                },
+              },
+            },
+          } satisfies OpenClawConfig,
+          imageModelConfig: {
+            primary: "anthropic/claude-opus-4.7-20260219",
+          },
+          imageCount: 1,
+        }),
+      ).resolves.toEqual({
+        imageCount: 1,
+        models: [
+          { maxBytes: 1_000_000, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        ],
+      });
+    } finally {
+      testing.setProviderDepsForTest();
+    }
+  });
+
+  it("uses a model override as the compression candidate", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: cfgWithImageModelMetadata,
+        imageModelConfig: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-opus-4-6"],
+        },
+        modelOverride: "anthropic/claude-opus-4-6",
+        imageCount: 1,
+      }),
+    ).resolves.toMatchObject({
+      models: [{ maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" }],
+    });
+  });
+
+  it("resolves providerless overrides before reading compression metadata", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: cfgWithImageModelMetadata,
+        imageModelConfig: {
+          primary: "anthropic/claude-opus-4-6",
+        },
+        modelOverride: "gpt-5.5",
+        imageCount: 1,
+      }),
+    ).resolves.toMatchObject({
+      models: [{ maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" }],
+    });
   });
 });

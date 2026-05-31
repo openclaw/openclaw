@@ -1,9 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "../plugin-state/plugin-state-store.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import {
@@ -24,6 +29,7 @@ type PluginDoctorContractModule = {
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
   sessionRouteStateOwners?: unknown;
+  stateMigrations?: unknown;
 };
 
 type PluginDoctorCompatibilityMutation = {
@@ -40,6 +46,44 @@ type PluginDoctorContractEntry = {
   rules: LegacyConfigRule[];
   normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
   sessionRouteStateOwners: DoctorSessionRouteStateOwner[];
+  stateMigrations: PluginDoctorStateMigration[];
+};
+
+export type PluginDoctorStateMigrationDetection = {
+  preview: string[];
+};
+
+export type PluginDoctorStateMigrationContext = {
+  openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+};
+
+export type PluginDoctorStateMigration = {
+  id: string;
+  label: string;
+  detectLegacyState: (params: {
+    config: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    stateDir: string;
+    oauthDir: string;
+    context: PluginDoctorStateMigrationContext;
+  }) =>
+    | Promise<PluginDoctorStateMigrationDetection | null>
+    | PluginDoctorStateMigrationDetection
+    | null;
+  migrateLegacyState: (params: {
+    config: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    stateDir: string;
+    oauthDir: string;
+    context: PluginDoctorStateMigrationContext;
+  }) =>
+    | Promise<{ changes: string[]; warnings: string[] }>
+    | { changes: string[]; warnings: string[] };
+};
+
+export type PluginDoctorStateMigrationEntry = {
+  pluginId: string;
+  migration: PluginDoctorStateMigration;
 };
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
@@ -94,15 +138,6 @@ function coerceNormalizeCompatibilityConfig(
   return typeof value === "function" ? (value as PluginDoctorCompatibilityNormalizer) : undefined;
 }
 
-function normalizeTrimmedStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => entry.trim());
-}
-
 function isDoctorSessionRouteStateOwner(value: unknown): value is DoctorSessionRouteStateOwner {
   if (!value || typeof value !== "object") {
     return false;
@@ -142,6 +177,38 @@ function coerceDoctorSessionRouteStateOwners(value: unknown): DoctorSessionRoute
     runtimeIds: normalizeTrimmedStringList(owner.runtimeIds),
     cliSessionKeys: normalizeTrimmedStringList(owner.cliSessionKeys),
     authProfilePrefixes: normalizeTrimmedStringList(owner.authProfilePrefixes),
+  }));
+}
+
+function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as {
+    id?: unknown;
+    label?: unknown;
+    detectLegacyState?: unknown;
+    migrateLegacyState?: unknown;
+  };
+  return (
+    typeof candidate.id === "string" &&
+    candidate.id.trim().length > 0 &&
+    typeof candidate.label === "string" &&
+    candidate.label.trim().length > 0 &&
+    typeof candidate.detectLegacyState === "function" &&
+    typeof candidate.migrateLegacyState === "function"
+  );
+}
+
+function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMigration[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(isPluginDoctorStateMigration).map((migration) => ({
+    id: migration.id.trim(),
+    label: migration.label.trim(),
+    detectLegacyState: migration.detectLegacyState,
+    migrateLegacyState: migration.migrateLegacyState,
   }));
 }
 
@@ -246,7 +313,16 @@ function loadPluginDoctorContractEntry(
     mod.sessionRouteStateOwners ??
       (mod as { default?: PluginDoctorContractModule }).default?.sessionRouteStateOwners,
   );
-  if (rules.length === 0 && !normalizeCompatibilityConfig && sessionRouteStateOwners.length === 0) {
+  const stateMigrations = coercePluginDoctorStateMigrations(
+    mod.stateMigrations ??
+      (mod as { default?: PluginDoctorContractModule }).default?.stateMigrations,
+  );
+  if (
+    rules.length === 0 &&
+    !normalizeCompatibilityConfig &&
+    sessionRouteStateOwners.length === 0 &&
+    stateMigrations.length === 0
+  ) {
     return null;
   }
   return {
@@ -254,6 +330,7 @@ function loadPluginDoctorContractEntry(
     rules,
     normalizeCompatibilityConfig,
     sessionRouteStateOwners,
+    stateMigrations,
   };
 }
 
@@ -330,6 +407,29 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
     }
   }
   return [...owners.values()].toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+export function listPluginDoctorStateMigrations(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
+}): PluginDoctorStateMigration[] {
+  return listPluginDoctorStateMigrationEntries(params).map((entry) => entry.migration);
+}
+
+export function listPluginDoctorStateMigrationEntries(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
+}): PluginDoctorStateMigrationEntry[] {
+  return resolvePluginDoctorContracts(params).flatMap((entry) =>
+    entry.stateMigrations.map((migration) => ({
+      pluginId: entry.pluginId,
+      migration,
+    })),
+  );
 }
 
 export function applyPluginDoctorCompatibilityMigrations(

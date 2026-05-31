@@ -174,8 +174,22 @@ function collectStableRootRuntimeAliasCandidates(params) {
 
 function resolveStableRootRuntimeAliasCandidate(params) {
   const { aliasFileName, candidates, distDir, fsImpl } = params;
-  if (candidates.length === 1) {
-    return candidates[0];
+  const candidatesWithSources = candidates.map((candidate) => {
+    const filePath = path.join(distDir, candidate);
+    let source = "";
+    try {
+      source = fsImpl.readFileSync(filePath, "utf8");
+    } catch {
+      // Keep unreadable candidates visible to the ambiguous-candidate logic.
+    }
+    return { candidate, source };
+  });
+  const implementationCandidates = candidatesWithSources.filter(
+    ({ source }) => source.trim() !== `export * from "./${aliasFileName}";`,
+  );
+  const candidateNames = implementationCandidates.map(({ candidate }) => candidate);
+  if (candidateNames.length === 1) {
+    return candidateNames[0];
   }
   if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
     return resolveRootRuntimeCandidateByMarkers({
@@ -185,24 +199,19 @@ function resolveStableRootRuntimeAliasCandidate(params) {
       sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
     });
   }
-  const candidateSet = new Set(candidates);
-  const wrappers = candidates.filter((candidate) => {
-    const filePath = path.join(distDir, candidate);
-    let source;
-    try {
-      source = fsImpl.readFileSync(filePath, "utf8");
-    } catch {
-      return false;
-    }
-    return candidates.some(
-      (target) =>
-        target !== candidate &&
-        candidateSet.has(target) &&
-        source.includes(`"./${target}"`) &&
-        !source.includes("\n//#region "),
-    );
-  });
-  return wrappers.length === 1 ? wrappers[0] : null;
+  const candidateSet = new Set(candidateNames);
+  const wrappers = implementationCandidates
+    .map(({ candidate, source }) => ({ candidate, source }))
+    .filter(({ candidate, source }) => {
+      return candidates.some(
+        (target) =>
+          target !== candidate &&
+          candidateSet.has(target) &&
+          source.includes(`"./${target}"`) &&
+          !source.includes("\n//#region "),
+      );
+    });
+  return wrappers.length === 1 ? wrappers[0].candidate : null;
 }
 
 export function listStableRootRuntimeAliasOutputs(params = {}) {
@@ -311,20 +320,14 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
   }
   const runtimeAliasFiles = new Map();
   for (const [aliasFileName, candidates] of candidatesByAlias) {
-    if (candidates.length === 1) {
-      runtimeAliasFiles.set(candidates[0], aliasFileName);
-      continue;
-    }
-    if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
-      const candidate = resolveRootRuntimeCandidateByMarkers({
-        distDir,
-        fsImpl,
-        aliasFileName,
-        sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
-      });
-      if (candidate) {
-        runtimeAliasFiles.set(candidate, aliasFileName);
-      }
+    const candidate = resolveStableRootRuntimeAliasCandidate({
+      distDir,
+      fsImpl,
+      aliasFileName,
+      candidates,
+    });
+    if (candidate) {
+      runtimeAliasFiles.set(candidate, aliasFileName);
     }
   }
   if (runtimeAliasFiles.size === 0) {
@@ -450,6 +453,11 @@ export function writeLegacyCliExitCompatChunks(params = {}) {
   }
 }
 
+function shouldCopyStaticExtensionAssets(params) {
+  const env = params.env ?? process.env;
+  return env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS !== "0";
+}
+
 export function runRuntimePostBuild(params = {}) {
   const timingsEnabled = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS !== "0";
   const runPhase = (label, action) => {
@@ -468,6 +476,9 @@ export function runRuntimePostBuild(params = {}) {
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
   runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
   runPhase("static extension assets", () => {
+    if (!shouldCopyStaticExtensionAssets(params)) {
+      return;
+    }
     const staticAssetParams = {
       rootDir: ROOT,
       ...params,

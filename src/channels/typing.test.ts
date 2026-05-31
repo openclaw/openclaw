@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTypingCallbacks } from "./typing.js";
 
 type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
@@ -45,6 +46,9 @@ function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
     onStopError,
     ...(overrides.maxConsecutiveFailures !== undefined
       ? { maxConsecutiveFailures: overrides.maxConsecutiveFailures }
+      : {}),
+    ...(overrides.keepaliveIntervalMs !== undefined
+      ? { keepaliveIntervalMs: overrides.keepaliveIntervalMs }
       : {}),
     ...(overrides.maxDurationMs !== undefined ? { maxDurationMs: overrides.maxDurationMs } : {}),
   });
@@ -144,6 +148,57 @@ describe("createTypingCallbacks", () => {
 
       await vi.advanceTimersByTimeAsync(9_000);
       expect(start).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("uses default keepalive and breaker options for non-finite overrides", async () => {
+    await withFakeTimers(async () => {
+      const { start, onStartError, callbacks } = createTypingHarness({
+        start: vi.fn().mockRejectedValue(new Error("gone")),
+        keepaliveIntervalMs: Number.NaN,
+        maxConsecutiveFailures: Number.NaN,
+      });
+
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(start).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(onStartError).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(start).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps zero keepalive interval disabled", async () => {
+    await withFakeTimers(async () => {
+      const { start, callbacks } = createTypingHarness({ keepaliveIntervalMs: 0 });
+
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(start).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("clamps oversized keepalive intervals before arming timers", async () => {
+    await withFakeTimers(async () => {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const { callbacks } = createTypingHarness({
+        keepaliveIntervalMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      callbacks.onCleanup?.();
     });
   });
 
@@ -282,6 +337,20 @@ describe("createTypingCallbacks", () => {
       });
     });
 
+    it("uses default 60s TTL for non-finite maxDurationMs", async () => {
+      await withFakeTimers(async () => {
+        const { stop, callbacks } = createTypingHarness({ maxDurationMs: Number.NaN });
+
+        await callbacks.onReplyStart();
+
+        await vi.advanceTimersByTimeAsync(59_000);
+        expect(stop).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(stop).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("disables TTL when maxDurationMs is 0", async () => {
       await withFakeTimers(async () => {
         const { stop, callbacks } = createTypingHarness({ maxDurationMs: 0 });
@@ -291,6 +360,21 @@ describe("createTypingCallbacks", () => {
         // Should not auto-stop even after long time
         await vi.advanceTimersByTimeAsync(300_000);
         expect(stop).not.toHaveBeenCalled();
+      });
+    });
+
+    it("clamps oversized TTLs before arming timers", async () => {
+      await withFakeTimers(async () => {
+        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+        const { callbacks } = createTypingHarness({
+          maxDurationMs: Number.MAX_SAFE_INTEGER,
+        });
+
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+        callbacks.onCleanup?.();
       });
     });
 

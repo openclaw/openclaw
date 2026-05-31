@@ -1,4 +1,5 @@
-import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -38,7 +39,6 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
@@ -239,6 +239,37 @@ async function logCronDeliveryWarn(message: string): Promise<void> {
 async function logCronDeliveryError(message: string): Promise<void> {
   const { logError } = await loadDeliveryLoggerRuntime();
   logError(message);
+}
+
+export async function cleanupDirectCronSession(params: {
+  job: CronJob;
+  agentSessionKey: string;
+  sessionId: string;
+  retireReason: string;
+}): Promise<void> {
+  if (!params.job.deleteAfterRun) {
+    return;
+  }
+  if (!isCronSessionKey(params.agentSessionKey)) {
+    return;
+  }
+  try {
+    const { callGateway } = await loadGatewayCallRuntime();
+    await callGateway({
+      method: "sessions.delete",
+      params: {
+        key: params.agentSessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  } catch {
+    await retireSessionMcpRuntime({
+      sessionId: params.sessionId,
+      reason: params.retireReason,
+    });
+  }
 }
 
 function logCronDeliveryErrorDeferred(message: string): void {
@@ -745,32 +776,16 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-    if (!params.job.deleteAfterRun || directCronSessionDeleted) {
+    if (directCronSessionDeleted) {
       return;
     }
-    if (!isCronSessionKey(params.agentSessionKey)) {
-      directCronSessionDeleted = true;
-      return;
-    }
-    try {
-      const { callGateway } = await loadGatewayCallRuntime();
-      await callGateway({
-        method: "sessions.delete",
-        params: {
-          key: params.agentSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-        },
-        timeoutMs: 10_000,
-      });
-      directCronSessionDeleted = true;
-    } catch {
-      await retireSessionMcpRuntime({
-        sessionId: params.sessionId,
-        reason: "cron-delete-after-run-fallback",
-      });
-      // Best-effort; direct delivery result should still be returned.
-    }
+    directCronSessionDeleted = true;
+    await cleanupDirectCronSession({
+      job: params.job,
+      agentSessionKey: params.agentSessionKey,
+      sessionId: params.sessionId,
+      retireReason: "cron-delete-after-run-fallback",
+    });
   };
   const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
     deliveryAttempted = true;

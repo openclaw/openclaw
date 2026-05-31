@@ -1,4 +1,6 @@
-import { readStringValue } from "../shared/string-coerce.js";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { asBoolean } from "../utils/boolean.js";
 import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 
 type OpenAIResponsesPayloadModel = {
@@ -29,7 +31,7 @@ type OpenAIResponsesEndpointClass =
   | "moonshot-native"
   | "modelstudio-native"
   | "openai-public"
-  | "openai-codex"
+  | "openai"
   | "opencode-native"
   | "azure-openai"
   | "openrouter"
@@ -62,7 +64,8 @@ type OpenAIResponsesPayloadCapabilities = {
 const OPENAI_RESPONSES_APIS = new Set([
   "openai-responses",
   "azure-openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
+  "openclaw-openai-responses-transport",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -163,7 +166,7 @@ function resolveBundledOpenAIResponsesEndpointClass(
     case "api.openai.com":
       return "openai-public";
     case "chatgpt.com":
-      return "openai-codex";
+      return "openai";
     case "generativelanguage.googleapis.com":
       return "google-generative-ai";
     case "aiplatform.googleapis.com":
@@ -212,8 +215,7 @@ function readCompatPayloadBoolean(
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
-  const value = (compat as Record<string, unknown>)[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean((compat as Record<string, unknown>)[key]);
 }
 
 function resolveOpenAIResponsesPayloadCapabilities(
@@ -221,12 +223,13 @@ function resolveOpenAIResponsesPayloadCapabilities(
 ): OpenAIResponsesPayloadCapabilities {
   const provider = normalizeLowercaseString(model.provider);
   const api = normalizeLowercaseString(model.api);
+  const isOpenAIProvider = provider === "openai";
   const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
-    endpointClass === "openai-codex" ||
+    endpointClass === "openai" ||
     endpointClass === "azure-openai";
   const usesKnownNativeOpenAIRoute =
     endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint;
@@ -243,12 +246,17 @@ function resolveOpenAIResponsesPayloadCapabilities(
 
   return {
     allowsOpenAIServiceTier:
-      (provider === "openai" && api === "openai-responses" && endpointClass === "openai-public") ||
-      (provider === "openai-codex" &&
-        (api === "openai-codex-responses" || api === "openai-responses") &&
-        endpointClass === "openai-codex"),
+      (provider === "openai" &&
+        (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
+        endpointClass === "openai-public") ||
+      (isOpenAIProvider &&
+        (api === "openai-chatgpt-responses" ||
+          api === "openai-responses" ||
+          api === "openclaw-openai-responses-transport") &&
+        endpointClass === "openai"),
     allowsResponsesStore:
       supportsResponsesStoreField &&
+      api !== "openai-chatgpt-responses" &&
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
@@ -263,10 +271,7 @@ function parsePositiveInteger(value: unknown): number | undefined {
     return Math.floor(value);
   }
   if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
+    return parseStrictPositiveInteger(value);
   }
   return undefined;
 }

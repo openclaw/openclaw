@@ -170,8 +170,7 @@ function createTaskRegistryMaintenanceHarness(params: {
     isCronRuntimeAuthoritative: () => params.cronRuntimeAuthoritative ?? true,
     resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
     loadCronStoreSync: () => params.cronStore ?? { version: 1, jobs: [] },
-    resolveCronRunLogPath: ({ jobId }) => jobId,
-    readCronRunLogEntriesSync: (jobId) => cronRunLogEntries[jobId] ?? [],
+    readCronRunLogEntriesSync: ({ jobId }) => (jobId ? (cronRunLogEntries[jobId] ?? []) : []),
   };
 
   setTaskRegistryMaintenanceRuntimeForTests(runtime);
@@ -418,6 +417,35 @@ describe("task-registry maintenance issue #60299", () => {
     expect(storedTask.status).toBe("succeeded");
     expect(storedTask.endedAt).toBe(startedAt + 1250);
     expect(storedTask.terminalSummary).toBe("done");
+  });
+
+  it("does not recover cron tasks from malformed run id timestamps", async () => {
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-run-log-ok",
+      runId: "cron:cron-job-run-log-ok:1e3",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-run-log-ok": [
+          {
+            ts: 1250,
+            jobId: "cron-job-run-log-ok",
+            action: "finished",
+            status: "ok",
+            summary: "done",
+            runAtMs: 1000,
+            durationMs: 250,
+          },
+        ],
+      },
+    });
+
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
   it("recovers interrupted cron tasks from durable cron job state when run logs are absent", async () => {

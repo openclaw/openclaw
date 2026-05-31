@@ -1,4 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   calculateCost,
   getEnvApiKey,
@@ -6,7 +6,8 @@ import {
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
@@ -21,7 +22,10 @@ import {
   transformTransportMessages,
   type WritableTransportStream,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
@@ -140,10 +144,6 @@ type GoogleSseChunk = {
 let toolCallCounter = 0;
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
@@ -193,18 +193,18 @@ function isJsonLikeThoughtSignature(value: string): boolean {
 }
 
 const GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
-const GEMINI_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
+const GEMINI_THOUGHT_SIGNATURE_BASE64_RE =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function hasGeminiThoughtSignatureTruncationFootprint(value: string): boolean {
-  return (
-    GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value) ||
-    (GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length % 4 !== 0)
-  );
+  return GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value);
 }
 
-function sanitizeGeminiThoughtSignature(
-  thoughtSignature: string | undefined,
-): string | undefined {
+function isGeminiThoughtSignaturePayload(value: string): boolean {
+  return GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length > 0;
+}
+
+function sanitizeGeminiThoughtSignature(thoughtSignature: string | undefined): string | undefined {
   if (typeof thoughtSignature !== "string") {
     return undefined;
   }
@@ -223,6 +223,9 @@ function sanitizeGeminiThoughtSignature(
     return undefined;
   }
   if (hasGeminiThoughtSignatureTruncationFootprint(trimmed)) {
+    return undefined;
+  }
+  if (!isGeminiThoughtSignaturePayload(trimmed)) {
     return undefined;
   }
   return trimmed;
@@ -415,7 +418,7 @@ function getGoogleThinkingBudget(
   effort: ThinkingLevel,
   customBudgets?: GoogleTransportOptions["thinkingBudgets"],
 ): number | undefined {
-  const normalizedEffort = effort === "xhigh" ? "high" : effort;
+  const normalizedEffort = effort === "xhigh" || effort === "max" ? "high" : effort;
   if (customBudgets?.[normalizedEffort] !== undefined) {
     return customBudgets[normalizedEffort];
   }
@@ -552,9 +555,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             : undefined;
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
-            ...(sanitizedTextSignature
-              ? { thoughtSignature: sanitizedTextSignature }
-              : {}),
+            ...(sanitizedTextSignature ? { thoughtSignature: sanitizedTextSignature } : {}),
           });
           continue;
         }
@@ -710,13 +711,15 @@ export function buildGoogleGenerativeAiParams(
   const params: GoogleGenerateContentRequest = {
     contents: convertGoogleMessages(model, context),
   };
-  if (typeof options?.cachedContent === "string" && options.cachedContent.trim()) {
-    params.cachedContent = options.cachedContent.trim();
+  const cachedContent =
+    typeof options?.cachedContent === "string" ? options.cachedContent.trim() : "";
+  if (cachedContent) {
+    params.cachedContent = cachedContent;
   }
   if (Object.keys(generationConfig).length > 0) {
     params.generationConfig = generationConfig;
   }
-  if (context.systemPrompt) {
+  if (!cachedContent && context.systemPrompt) {
     params.systemInstruction = {
       parts: [
         {
@@ -725,7 +728,7 @@ export function buildGoogleGenerativeAiParams(
       ],
     };
   }
-  if (context.tools?.length) {
+  if (!cachedContent && context.tools?.length) {
     params.tools = convertGoogleTools(context.tools);
     const toolChoice = mapToolChoice(options?.toolChoice);
     if (toolChoice) {
@@ -805,16 +808,12 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
   }
 }
 
-function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
+export function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   if (raw === undefined || raw.trim() === "") {
     return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
-  }
-  return Math.floor(parsed);
+  return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
 function shouldRetryGoogleGemini3FirstResponse(params: {

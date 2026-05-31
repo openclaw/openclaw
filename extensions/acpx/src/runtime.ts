@@ -18,8 +18,11 @@ import {
   type AcpRuntimeTurn,
   type AcpRuntimeTurnResult,
 } from "acpx/runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import { splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
@@ -32,7 +35,6 @@ import {
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
-import { splitCommandParts } from "./command-line.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
@@ -160,7 +162,7 @@ function readRecordAgentPid(record: unknown): number | undefined {
     typeof rawPid === "number"
       ? rawPid
       : typeof rawPid === "string"
-        ? Number.parseInt(rawPid, 10)
+        ? parseStrictPositiveInteger(rawPid)
         : undefined;
   return numericPid && Number.isInteger(numericPid) && numericPid > 0 ? numericPid : undefined;
 }
@@ -189,7 +191,7 @@ function selectCurrentSessionLease(params: {
   sessionKeys: string[];
   rootPid?: number;
 }): AcpxProcessLease | undefined {
-  const sessionKeys = new Set(params.sessionKeys.map((entry) => entry.trim()).filter(Boolean));
+  const sessionKeys = new Set(normalizeStringEntries(params.sessionKeys));
   const candidates = params.leases.filter((lease) => sessionKeys.has(lease.sessionKey));
   if (params.rootPid) {
     return candidates.find((lease) => lease.rootPid === params.rootPid);
@@ -290,7 +292,7 @@ function createResetAwareSessionStore(
 const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
-const CODEX_ACP_OPENCLAW_PREFIX = "openai-codex/";
+const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
 const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
@@ -435,7 +437,7 @@ function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never 
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
     detail ??
-      `Codex ACP model "${rawModel}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+      `Codex ACP model "${rawModel}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
   );
 }
 
@@ -496,7 +498,7 @@ function normalizeCodexAcpModelOverride(
   if (parts.length > 2) {
     failUnsupportedCodexAcpModel(
       raw,
-      `Codex ACP model "${raw}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+      `Codex ACP model "${raw}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
     );
   }
   const model = (parts[0] ?? "").trim();
@@ -504,7 +506,7 @@ function normalizeCodexAcpModelOverride(
   if (!model) {
     failUnsupportedCodexAcpModel(
       raw,
-      `Codex ACP model "${raw}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+      `Codex ACP model "${raw}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
     );
   }
   const reasoningEffort = thinkingReasoningEffort ?? modelReasoningEffort;

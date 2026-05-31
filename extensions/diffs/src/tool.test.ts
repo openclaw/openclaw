@@ -206,7 +206,7 @@ describe("diffs tool", () => {
         before: "one\n",
         after: "two\n",
         mode: "file",
-        ttlSeconds: 1,
+        ttlSeconds: "1",
       });
       const filePath = requireString(readDetails(result).filePath, "filePath");
       await fs.access(filePath);
@@ -214,6 +214,29 @@ describe("diffs tool", () => {
       vi.setSystemTime(new Date(now.getTime() + 2_000));
       await store.cleanupExpired();
       await expectFsEnoent(fs.stat(filePath));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps artifact-only ttlSeconds that bypass schema validation", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+    try {
+      const screenshotter = createPngScreenshotter();
+      const tool = createToolWithScreenshotter(store, screenshotter);
+
+      const result = await tool.execute?.("tool-2c-ttl-cap", {
+        before: "one\n",
+        after: "two\n",
+        mode: "file",
+        ttlSeconds: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(Date.parse(requireString(readDetails(result).expiresAt, "expiresAt"))).toBe(
+        now.getTime() + 21_600_000,
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -263,8 +286,8 @@ describe("diffs tool", () => {
       after: "two\n",
       mode: "file",
       imageQuality: "hq",
-      imageScale: 2.4,
-      imageMaxWidth: 1100,
+      imageScale: "2.4",
+      imageMaxWidth: "1100",
     });
 
     expect((result?.details as Record<string, unknown>).fileQuality).toBe("hq");

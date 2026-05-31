@@ -1,3 +1,4 @@
+import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   ACCESS_GROUP_ALLOW_FROM_PREFIX,
   parseAccessGroupAllowFromEntry,
@@ -177,5 +178,5 @@ export async function expandAllowFromWithAccessGroups(params: {
     return allowFrom;
   }
   const senderEntry = params.senderAllowEntry ?? params.senderId;
-  return Array.from(new Set([...allowFrom, senderEntry]));
+  return uniqueStrings([...allowFrom, senderEntry]);
 }

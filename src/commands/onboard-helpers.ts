@@ -2,6 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import {
+  decorativeEmoji,
+  supportsDecorativeEmoji,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
@@ -17,12 +26,8 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { visibleWidth } from "../terminal/ansi.js";
-import { decorativeEmoji, supportsDecorativeEmoji } from "../terminal/decorative-emoji.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
@@ -199,6 +204,8 @@ export function formatControlUiSshHint(params: {
     "Then open:",
     localUrl,
     authedUrl,
+    "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
+    "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
@@ -255,11 +262,34 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
     return;
   }
   try {
-    await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
+    const targetPath = path.resolve(pathname);
+    const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
+    await movePathToTrash(sourcePath, {
+      allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
+    });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
   }
+}
+
+async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
+  return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
+}
+
+async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<string[]> {
+  const allowedRoots = [path.dirname(targetPath)];
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink()) {
+    try {
+      // fs-safe resolves valid symlinks before allow-root checks; include the
+      // resolved parent so deleting a configured symlink moves the link itself.
+      allowedRoots.push(path.dirname(await fs.realpath(targetPath)));
+    } catch {
+      // Broken symlinks are handled lexically by fs-safe.
+    }
+  }
+  return uniqueStrings(allowedRoots);
 }
 
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
@@ -310,7 +340,7 @@ export async function waitForGatewayReachable(params: {
   pollMs?: number;
 }): Promise<{ ok: boolean; detail?: string }> {
   const deadlineMs = params.deadlineMs ?? 15_000;
-  const pollMs = params.pollMs ?? 400;
+  const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 400, 400, 0);
   const probeTimeoutMs = params.probeTimeoutMs ?? 1500;
   const startedAt = Date.now();
   let lastDetail: string | undefined;
@@ -326,7 +356,11 @@ export async function waitForGatewayReachable(params: {
       return probe;
     }
     lastDetail = probe.detail;
-    await sleep(pollMs);
+    const remainingMs = deadlineMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(pollMs, remainingMs));
   }
 
   return { ok: false, detail: lastDetail };

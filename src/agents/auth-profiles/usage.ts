@@ -1,6 +1,13 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationMs,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
@@ -105,13 +112,28 @@ function shouldProbeWhamForFailure(
   provider: string | undefined,
   reason: AuthProfileFailureReason,
 ): boolean {
+  const normalizedProvider = normalizeProviderId(provider ?? "");
   return (
-    normalizeProviderId(provider ?? "") === "openai-codex" &&
+    normalizedProvider === "openai" &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
       reason === "no_error_details" ||
       reason === "unclassified" ||
       reason === "unknown")
+  );
+}
+
+function resolveActiveWindowUntil(value: unknown, now: number): number {
+  const timestampMs = asDateTimestampMs(value);
+  return timestampMs !== undefined && timestampMs > now ? timestampMs : 0;
+}
+
+function resolveUsageWindowUntil(now: number, durationMs: number): number {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return now;
+  }
+  return (
+    resolveExpiresAtMsFromDurationMs(Math.max(1, Math.floor(durationMs)), { nowMs: now }) ?? now
   );
 }
 
@@ -124,14 +146,15 @@ function resolveWhamResetMs(window: WhamUsageWindow | undefined, now: number): n
     Number.isFinite(window.reset_after_seconds) &&
     window.reset_after_seconds > 0
   ) {
-    return window.reset_after_seconds * 1000;
+    return positiveSecondsToSafeMilliseconds(window.reset_after_seconds) ?? null;
   }
   if (
     typeof window.reset_at === "number" &&
     Number.isFinite(window.reset_at) &&
     window.reset_at > 0
   ) {
-    return Math.max(0, window.reset_at * 1000 - now);
+    const resetAtMs = resolveExpiresAtMsFromEpochSeconds(window.reset_at);
+    return resetAtMs === undefined ? null : Math.max(0, resetAtMs - now);
   }
   return null;
 }
@@ -179,7 +202,10 @@ function applyWhamCooldownResult(params: {
   }
   return {
     ...params.computed,
-    cooldownUntil: Math.max(existingActiveCooldownUntil, params.now + params.whamResult.cooldownMs),
+    cooldownUntil: Math.max(
+      existingActiveCooldownUntil,
+      resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
+    ),
   };
 }
 
@@ -195,16 +221,20 @@ async function probeWhamForCooldown(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WHAM_TIMEOUT_MS);
   try {
+    const version = process.env.OPENCLAW_VERSION?.trim();
     const defaultHeaders: Record<string, string> = {
       Authorization: `Bearer ${profile.access}`,
       Accept: "application/json",
+      originator: "openclaw",
+      ...(version ? { version } : {}),
+      "User-Agent": `openclaw/${version || "dev"}`,
     };
     if (profile.accountId) {
       defaultHeaders["ChatGPT-Account-Id"] = profile.accountId;
     }
     const headers =
       resolveProviderRequestHeaders({
-        provider: "openai-codex",
+        provider: "openai",
         baseUrl: WHAM_USAGE_URL,
         capability: "other",
         transport: "http",
@@ -246,7 +276,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + primaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, primaryResetMs),
         blockedSource: "wham",
         reason: "wham_personal_rolling",
       };
@@ -258,7 +288,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + secondaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, secondaryResetMs),
         blockedSource: "wham",
         reason: "wham_team_weekly",
       };
@@ -270,7 +300,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + primaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, primaryResetMs),
         blockedSource: "wham",
         reason: "wham_team_rolling",
       };
@@ -598,7 +628,7 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = keepActiveWindowOrRecompute({
       existingUntil: params.existing.disabledUntil,
       now: params.now,
-      recomputedUntil: params.now + backoffMs,
+      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
     });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
@@ -608,7 +638,7 @@ function computeNextProfileUsageStats(params: {
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
       existingUntil: params.existing.cooldownUntil,
       now: params.now,
-      recomputedUntil: params.now + backoffMs,
+      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
     });
     // Update cooldown metadata based on whether the window is still active
     // and whether the same or a different model is failing.
@@ -806,8 +836,7 @@ export async function markAuthProfileBlockedUntil(params: {
   if (
     !profile ||
     isAuthCooldownBypassedForProvider(profile.provider) ||
-    !Number.isFinite(blockedUntil) ||
-    blockedUntil <= Date.now()
+    !isFutureDateTimestampMs(blockedUntil)
   ) {
     return;
   }
@@ -822,16 +851,13 @@ export async function markAuthProfileBlockedUntil(params: {
       if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
         return false;
       }
-      const now = Date.now();
+      const now = asDateTimestampMs(Date.now());
+      if (now === undefined) {
+        return false;
+      }
       previousStats = freshStore.usageStats?.[profileId];
       updateTime = now;
-      const existingBlockedUntil = previousStats?.blockedUntil;
-      const activeBlockedUntil =
-        typeof existingBlockedUntil === "number" &&
-        Number.isFinite(existingBlockedUntil) &&
-        existingBlockedUntil > now
-          ? existingBlockedUntil
-          : 0;
+      const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
       nextStats = {
         ...previousStats,
         blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
@@ -870,15 +896,12 @@ export async function markAuthProfileBlockedUntil(params: {
     return;
   }
 
-  const now = Date.now();
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined) {
+    return;
+  }
   previousStats = store.usageStats?.[profileId];
-  const existingBlockedUntil = previousStats?.blockedUntil;
-  const activeBlockedUntil =
-    typeof existingBlockedUntil === "number" &&
-    Number.isFinite(existingBlockedUntil) &&
-    existingBlockedUntil > now
-      ? existingBlockedUntil
-      : 0;
+  const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
   nextStats = {
     ...previousStats,
     blockedUntil: Math.max(activeBlockedUntil, blockedUntil),

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
@@ -171,6 +172,27 @@ describe("hook correlation fields", () => {
       expect(logger.error).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized hook timeouts before scheduling", async () => {
+    const handler = vi.fn(async () => {});
+    addTestHook({
+      registry,
+      pluginId: "plugin-a",
+      hookName: "agent_end",
+      handler: handler as PluginHookRegistration["handler"],
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const runner = createHookRunner(registry);
+
+      await runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
     }
   });
 });

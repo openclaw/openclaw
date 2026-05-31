@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
@@ -29,6 +30,15 @@ function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; resp
   } catch (cause) {
     throw new Error("Tlon Urbit SSE event was malformed JSON", { cause });
   }
+}
+
+function parseUrbitSseEventId(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 export class UrbitSSEClient {
@@ -78,8 +88,8 @@ export class UrbitSSEClient {
     this.onReconnect = options.onReconnect ?? null;
     this.autoReconnect = options.autoReconnect !== false;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 10;
-    this.reconnectDelay = options.reconnectDelay ?? 1000;
-    this.maxReconnectDelay = options.maxReconnectDelay ?? 30000;
+    this.reconnectDelay = resolveTimerTimeoutMs(options.reconnectDelay, 1000);
+    this.maxReconnectDelay = resolveTimerTimeoutMs(options.maxReconnectDelay, 30000);
     this.logger = options.logger ?? {};
     this.ssrfPolicy = options.ssrfPolicy;
     this.lookupFn = options.lookupFn;
@@ -257,7 +267,7 @@ export class UrbitSSEClient {
 
     for (const line of lines) {
       if (line.startsWith("id: ")) {
-        eventId = Number.parseInt(line.slice(4), 10);
+        eventId = parseUrbitSseEventId(line.slice(4));
       }
       if (line.startsWith("data: ")) {
         data = line.slice(6);

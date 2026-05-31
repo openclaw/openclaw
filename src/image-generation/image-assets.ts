@@ -1,8 +1,9 @@
-import { canonicalizeBase64 } from "../media/base64.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { canonicalizeBase64 } from "../media/base64.js";
 import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./types.js";
 
 const DEFAULT_IMAGE_MIME_TYPE = "image/png";
@@ -22,10 +23,6 @@ export type OpenAiCompatibleImageResponseEntry = {
 export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function throwMalformedImageResponse(message: string | undefined): never | undefined {
   if (message) {

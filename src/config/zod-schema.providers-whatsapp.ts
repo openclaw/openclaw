@@ -1,6 +1,6 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -44,6 +44,13 @@ const WhatsAppAckReactionSchema = z
     emoji: z.string().optional(),
     direct: z.boolean().optional().default(true),
     group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
+  })
+  .strict()
+  .optional();
+
+const WhatsAppPluginHooksSchema = z
+  .object({
+    messageReceived: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -97,6 +104,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     replyToMode: ReplyToModeSchema.optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
+    pluginHooks: WhatsAppPluginHooksSchema,
   };
 }
 

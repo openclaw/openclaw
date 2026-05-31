@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
@@ -14,7 +15,6 @@ import {
   resolveGatewayRestartLogPath,
   shellEscapeRestartLogValue,
 } from "../../daemon/restart-logs.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -406,10 +406,15 @@ export async function runRestartScript(scriptPath: string): Promise<void> {
   const file = isWindows ? "cmd.exe" : "/bin/sh";
   const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
 
-  const child = spawn(file, args, {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.unref();
+  try {
+    const child = spawn(file, args, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // Restart handoff is best-effort; update completion must not crash here.
+  }
 }

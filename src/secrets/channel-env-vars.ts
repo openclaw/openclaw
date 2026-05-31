@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 export { isSafeChannelEnvVarTriggerName } from "./channel-env-var-names.js";
@@ -58,5 +59,5 @@ export function getChannelEnvVars(channelId: string, params?: ChannelEnvVarLooku
 }
 
 export function listKnownChannelEnvVarNames(params?: ChannelEnvVarLookupParams): string[] {
-  return [...new Set(Object.values(resolveChannelEnvVars(params)).flatMap((keys) => keys))];
+  return uniqueStrings(Object.values(resolveChannelEnvVars(params)).flatMap((keys) => keys));
 }

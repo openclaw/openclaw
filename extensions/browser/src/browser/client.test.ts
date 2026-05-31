@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   browserAct,
@@ -110,6 +111,46 @@ describe("browser client", () => {
 
     const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("refs")).toBe("aria");
+  });
+
+  it("forwards an explicit snapshot timeoutMs into the query string", async () => {
+    const calls: string[] = [];
+    stubSnapshotFetch(calls);
+
+    await browserSnapshot("http://127.0.0.1:18791", {
+      format: "ai",
+      timeoutMs: 4321,
+    });
+
+    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
+    expect(snapshotCall).toBeTruthy();
+    const parsed = new URL(snapshotCall as string);
+    expect(parsed.searchParams.get("timeoutMs")).toBe("4321");
+  });
+
+  it("clamps oversized snapshot timeoutMs before forwarding", async () => {
+    const calls: string[] = [];
+    stubSnapshotFetch(calls);
+
+    await browserSnapshot("http://127.0.0.1:18791", {
+      format: "ai",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    const parsed = new URL(requireSnapshotCall(calls));
+    expect(parsed.searchParams.get("timeoutMs")).toBe(String(MAX_TIMER_TIMEOUT_MS));
+  });
+
+  it("falls back to the default snapshot timeout when none is supplied", async () => {
+    const calls: string[] = [];
+    stubSnapshotFetch(calls);
+
+    await browserSnapshot("http://127.0.0.1:18791", { format: "ai" });
+
+    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
+    expect(snapshotCall).toBeTruthy();
+    const parsed = new URL(snapshotCall as string);
+    expect(parsed.searchParams.get("timeoutMs")).toBe("20000");
   });
 
   it("omits format when the caller wants server-side snapshot capability defaults", async () => {
@@ -388,5 +429,36 @@ describe("browser client", () => {
     });
 
     expect(calls.map((call) => call.init?.timeoutMs)).toEqual([60_000, 75_000, 50_000]);
+  });
+
+  it("clamps oversized browser action timeouts before forwarding", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          json: async () => ({ ok: true, targetId: "t1", path: "/tmp/a.png" }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "wait",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    await browserScreenshotAction("http://127.0.0.1:18791", {
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    const act = calls.find((call) => call.url.endsWith("/act"));
+    expect(act?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    const screenshot = calls.find((call) => call.url.endsWith("/screenshot"));
+    expect(screenshot?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    const screenshotBody = JSON.parse(
+      typeof screenshot?.init?.body === "string" ? screenshot.init.body : "{}",
+    ) as { timeoutMs?: unknown };
+    expect(screenshotBody.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 });

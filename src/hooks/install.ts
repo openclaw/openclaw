@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
@@ -106,7 +107,7 @@ async function ensureOpenClawHooks(manifest: HookPackageManifest) {
   if (!Array.isArray(hooks)) {
     throw new Error("package.json missing openclaw.hooks");
   }
-  const list = hooks.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
+  const list = normalizeTrimmedStringList(hooks);
   if (list.length === 0) {
     throw new Error("package.json openclaw.hooks is empty");
   }

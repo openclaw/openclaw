@@ -1,25 +1,15 @@
+import { isOpenClawMainPromptSurface } from "../plugins/agent-prompt-surface-kind.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-
-export type AgentPromptRenderContext = {
-  surface: AgentPromptSurfaceKind;
-  agentRuntimeId?: string;
-  backendKind?: string;
-  availableTools?: ReadonlySet<string>;
-  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-  acpEnabled?: boolean;
-  runtimeChannel?: string;
-  runtimeCapabilities?: readonly string[];
-};
 
 export function buildOpenClawToolFallbackText(params: {
   surface: AgentPromptSurfaceKind;
   execToolName: string;
   processToolName: string;
 }): string {
-  if (params.surface === "pi_main") {
+  if (isOpenClawMainPromptSurface(params.surface)) {
     return [
-      "Pi lists the standard tools above. This runtime enables:",
+      "OpenClaw lists the standard tools above. This runtime enables:",
       "- grep: search file contents for patterns",
       "- find: find files by glob pattern",
       "- ls: list directory contents",
@@ -35,7 +25,7 @@ export function buildOpenClawToolFallbackText(params: {
       "- sessions_send: send to another session",
       "- sessions_spawn: spawn an isolated sub-agent session",
       "- sessions_yield: end this turn and wait for sub-agent completion events",
-      "- subagents: list/steer/kill sub-agent runs",
+      "- subagents: list active/recent sub-agent runs",
       '- session_status: show usage/time/model state and answer "what model are we using?"',
     ].join("\n");
   }
@@ -47,7 +37,7 @@ export function shouldRenderOpenClawToolWorkflowHints(params: {
   surface: AgentPromptSurfaceKind;
   hasToolList: boolean;
 }): boolean {
-  return params.surface === "pi_main";
+  return isOpenClawMainPromptSurface(params.surface);
 }
 
 export function resolveAgentPromptSurfaceForSessionKey(
@@ -56,5 +46,5 @@ export function resolveAgentPromptSurfaceForSessionKey(
   if (sessionKey && isAcpSessionKey(sessionKey)) {
     return "acp_backend";
   }
-  return sessionKey && isSubagentSessionKey(sessionKey) ? "subagent" : "pi_main";
+  return sessionKey && isSubagentSessionKey(sessionKey) ? "subagent" : "openclaw_main";
 }

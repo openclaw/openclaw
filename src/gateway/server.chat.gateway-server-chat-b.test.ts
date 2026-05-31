@@ -80,6 +80,9 @@ async function withGatewayChatHarness(
     await run({ ws, createSessionDir });
   } finally {
     setMaxChatHistoryMessagesBytesForTest();
+    if (process.env.OPENCLAW_CONFIG_PATH) {
+      await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
+    }
     clearConfigCache();
     testState.sessionStorePath = undefined;
     ws.close();
@@ -129,22 +132,48 @@ async function fetchHistoryMessages(
   return historyRes.payload?.messages ?? [];
 }
 
+async function fetchChatMessage(
+  ws: GatewaySocket,
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    messageId: string;
+    maxChars?: number;
+  },
+): Promise<{
+  ok?: boolean;
+  message?: unknown;
+  unavailableReason?: "not_found" | "oversized" | "not_visible";
+}> {
+  const res = await rpcReq<{
+    ok?: boolean;
+    message?: unknown;
+    unavailableReason?: "not_found" | "oversized" | "not_visible";
+  }>(ws, "chat.message.get", {
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    messageId: params.messageId,
+    ...(typeof params.maxChars === "number" ? { maxChars: params.maxChars } : {}),
+  });
+  if (!res.ok) {
+    throw new Error(`chat.message.get rpc failed: ${JSON.stringify(res.error ?? null)}`);
+  }
+  return res.payload ?? {};
+}
+
 type ConfiguredImageModelCase = {
   id: string;
   imageModel: AgentModelConfig;
-  expectedFallbacks: string[];
 };
 
 const configuredImageModelCases: ConfiguredImageModelCase[] = [
   {
     id: "with-image-fallback",
     imageModel: { primary: "openai/gpt-4o", fallbacks: ["openai/gpt-4o-mini"] },
-    expectedFallbacks: ["openai/gpt-4o-mini"],
   },
   {
     id: "without-image-fallback",
     imageModel: { primary: "openai/gpt-4o" },
-    expectedFallbacks: [],
   },
 ];
 
@@ -273,6 +302,9 @@ describe("gateway server chat", () => {
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
         chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -365,8 +397,8 @@ describe("gateway server chat", () => {
   });
 
   test.each(configuredImageModelCases)(
-    "chat.send inlines image attachments through configured imageModel with allowlist present: $id",
-    async ({ id, imageModel, expectedFallbacks }) => {
+    "chat.send preserves text-only image uploads as MediaPaths even with configured imageModel: $id",
+    async ({ id, imageModel }) => {
       const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       try {
         testState.sessionStorePath = path.join(sessionDir, "sessions.json");
@@ -500,12 +532,13 @@ describe("gateway server chat", () => {
 
         expect(responses[0]?.ok).toBe(true);
         await vi.waitFor(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
-        expect(captured?.replyOptions?.images).toEqual([
-          expect.objectContaining({ type: "image", mimeType: "image/png" }),
-        ]);
-        expect(captured?.replyOptions?.modelOverride).toBe("openai/gpt-4o");
-        expect(captured?.replyOptions?.modelOverrideFallbacks).toEqual(expectedFallbacks);
-        expect(captured?.ctx?.MediaPaths).toBeUndefined();
+        expect(captured?.replyOptions?.images).toBeUndefined();
+        expect(captured?.ctx?.MediaPath).toEqual(expect.any(String));
+        expect(captured?.ctx?.MediaPaths).toEqual([expect.any(String)]);
+        expect(captured?.ctx?.MediaType).toBe("image/png");
+        expect(captured?.ctx?.MediaTypes).toEqual(["image/png"]);
+        expect(captured?.ctx?.MediaStaged).toBe(true);
+        await vi.waitFor(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
@@ -546,6 +579,9 @@ describe("gateway server chat", () => {
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
         chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -663,6 +699,9 @@ describe("gateway server chat", () => {
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
         chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -818,6 +857,130 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history overreads one local message to drop stale announce pairs at the limit boundary", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content: [
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+              "stale announce payload",
+            ].join("\n"),
+            provenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:main:subagent:child",
+              sourceTool: "subagent_announce",
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-23T04:03:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "fresh turn" }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 2 });
+      expect(messages).toHaveLength(1);
+      expect(JSON.stringify(messages)).not.toContain("stale announce reply");
+      expect(JSON.stringify(messages)).toContain("fresh turn");
+    });
+  });
+
+  test("chat.history does not surface an older stale assistant when overreading for pair context", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      const announce = {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "subagent_announce",
+      };
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:29.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:30.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "older stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "newer stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-23T04:03:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "fresh turn" }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 3 });
+      const serialized = JSON.stringify(messages);
+      expect(serialized).not.toContain("older stale announce reply");
+      expect(serialized).not.toContain("newer stale announce reply");
+      expect(serialized).toContain("fresh turn");
+    });
+  });
+
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
@@ -921,6 +1084,7 @@ describe("gateway server chat", () => {
 
       const hugeNestedText = "n".repeat(120_000);
       const oversizedLine = JSON.stringify({
+        id: "msg-huge",
         message: {
           role: "assistant",
           timestamp: Date.now(),
@@ -945,6 +1109,9 @@ describe("gateway server chat", () => {
       const bytes = Buffer.byteLength(serialized, "utf8");
       expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
       expect(serialized).toContain("[chat.history omitted: message too large]");
+      expect(messages[0]).toMatchObject({
+        __openclaw: { id: "msg-huge", truncated: true, reason: "oversized" },
+      });
       expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
     });
   });
@@ -1234,6 +1401,198 @@ describe("gateway server chat", () => {
       expect((tooLargeRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
         /invalid chat\.history params/i,
       );
+    });
+  });
+
+  test("chat.message.get returns the full projected message for a truncated history row", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-full-assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "abcdefghij" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const historyMessages = await fetchHistoryMessages(ws, { maxChars: 5 });
+      expect(JSON.stringify(historyMessages)).toContain("abcde\\n...(truncated)...");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-full-assistant",
+      });
+      expect(full.ok).toBe(true);
+      expect(full.unavailableReason).toBeUndefined();
+      expect(JSON.stringify(full.message)).toContain("abcdefghij");
+      expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+    });
+  });
+
+  test("chat.message.get accepts the selected agent for global sessions", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await writeGatewayConfig({
+        session: { scope: "global" },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      });
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      await writeSessionStore({
+        entries: {
+          global: { sessionId: "sess-global", updatedAt: Date.now() },
+        },
+      });
+      await fs.writeFile(
+        path.join(sessionDir, "sess-global.jsonl"),
+        `${JSON.stringify({
+          id: "msg-global-agent",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "global agent content" }],
+            timestamp: Date.now(),
+          },
+        })}\n`,
+        "utf-8",
+      );
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "msg-global-agent",
+      });
+      expect(full.ok).toBe(true);
+      expect(JSON.stringify(full.message)).toContain("global agent content");
+    });
+  });
+
+  test("chat.message.get reports oversized transcript entries as unavailable", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const oversizedLine = JSON.stringify({
+        id: "msg-oversized",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "x".repeat(300 * 1024) }],
+          timestamp: Date.now(),
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-oversized",
+      });
+      expect(full.ok).toBe(false);
+      expect(full.unavailableReason).toBe("oversized");
+      expect(full.message).toBeUndefined();
+    });
+  });
+
+  test("chat.message.get does not return inactive branch entries", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-root",
+          parentId: null,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "question" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          id: "msg-stale",
+          parentId: "msg-root",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stale branch" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          id: "msg-active",
+          parentId: "msg-root",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "active branch" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const stale = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-stale",
+      });
+      expect(stale.ok).toBe(false);
+      expect(stale.unavailableReason).toBe("not_found");
+
+      const active = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-active",
+      });
+      expect(active.ok).toBe(true);
+      expect(JSON.stringify(active.message)).toContain("active branch");
+    });
+  });
+
+  test("chat.message.get does not return pre-session announce pairs hidden by history", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.now();
+      await writeSessionStore({
+        entries: {
+          main: { sessionId: "sess-main", updatedAt: Date.now(), sessionStartedAt },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-announce",
+          message: {
+            role: "user",
+            provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+            content: [{ type: "text", text: "announce" }],
+            timestamp: sessionStartedAt - 2_000,
+          },
+        }),
+        JSON.stringify({
+          id: "msg-hidden-assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "hidden pre-session reply" }],
+            timestamp: sessionStartedAt - 1_000,
+          },
+        }),
+        JSON.stringify({
+          id: "msg-visible-assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "visible reply" }],
+            timestamp: sessionStartedAt + 1_000,
+          },
+        }),
+      ]);
+
+      const hidden = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-hidden-assistant",
+      });
+      expect(hidden.ok).toBe(false);
+      expect(hidden.unavailableReason).toBe("not_found");
+
+      const visible = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-visible-assistant",
+      });
+      expect(visible.ok).toBe(true);
+      expect(JSON.stringify(visible.message)).toContain("visible reply");
     });
   });
 

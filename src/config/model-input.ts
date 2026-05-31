@@ -1,20 +1,20 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeGooglePreviewModelId,
+  normalizeTogetherModelId,
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
 };
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function modelKeyForConfig(provider: string, model: string): string {
   const providerId = provider.trim();
@@ -81,7 +81,9 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   const normalizedModel =
     GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
       ? normalizeGooglePreviewModelId(modelSuffix)
-      : modelSuffix;
+      : provider === "together"
+        ? normalizeTogetherModelId(modelSuffix)
+        : modelSuffix;
   return modelKeyForConfig(provider, normalizedModel);
 }
 
