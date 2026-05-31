@@ -127,6 +127,13 @@ import {
   toggleSessionCompactionCheckpoints,
 } from "./controllers/sessions.ts";
 import {
+  countSkillWorkshopProposals,
+  loadSkillWorkshopProposalDetail,
+  requestSkillWorkshopRevision,
+  runSkillWorkshopLifecycleAction,
+  selectSkillWorkshopProposal,
+} from "./controllers/skill-workshop.ts";
+import {
   closeClawHubDetail,
   installFromClawHub,
   loadSkillCard,
@@ -493,8 +500,6 @@ const MAX_SKILL_WORKSHOP_REVIEWED_KEYS = 500;
 const DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH = 360;
 const MIN_SKILL_WORKSHOP_QUEUE_WIDTH = 280;
 const MAX_SKILL_WORKSHOP_QUEUE_WIDTH = 560;
-const SKILL_WORKSHOP_ACTION_DELAY_MS = 450;
-const SKILL_WORKSHOP_NOTICE_MS = 2800;
 const CRON_THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 const CRON_TIMEZONE_SUGGESTIONS = [
   "UTC",
@@ -686,16 +691,6 @@ function applySkillWorkshopReviewState<T extends SkillWorkshopReviewableProposal
   }));
 }
 
-function applySkillWorkshopStatusOverrides<T extends SkillWorkshopReviewableProposal>(
-  proposals: T[],
-  overrides: AppViewState["skillWorkshopStatusOverrides"],
-): T[] {
-  return proposals.map((proposal) => {
-    const status = overrides[proposal.key];
-    return status ? { ...proposal, status } : proposal;
-  });
-}
-
 function rememberSkillWorkshopProposalReviewed<T extends SkillWorkshopReviewableProposal>(
   reviewedKeys: string[],
   proposal: T,
@@ -707,59 +702,6 @@ function rememberSkillWorkshopProposalReviewed<T extends SkillWorkshopReviewable
   const next = [...reviewedKeys, key].slice(-MAX_SKILL_WORKSHOP_REVIEWED_KEYS);
   saveSkillWorkshopReviewedKeys(next);
   return next;
-}
-
-function runSkillWorkshopDemoAction(
-  state: AppViewState,
-  action: "apply" | "revise" | "reject",
-  key: string,
-  proposals: SkillWorkshopReviewableProposal[],
-  options?: { onComplete?: () => void },
-): void {
-  if (state.skillWorkshopActionBusy) {
-    return;
-  }
-  const proposal = proposals.find((item) => item.key === key);
-  if (!proposal) {
-    return;
-  }
-  if (state.skillWorkshopActionNoticeTimer) {
-    globalThis.clearTimeout(state.skillWorkshopActionNoticeTimer);
-    state.skillWorkshopActionNoticeTimer = null;
-  }
-  state.skillWorkshopActionBusy = { key, action };
-  state.skillWorkshopActionNotice = null;
-
-  globalThis.setTimeout(() => {
-    if (
-      state.skillWorkshopActionBusy?.key !== key ||
-      state.skillWorkshopActionBusy.action !== action
-    ) {
-      return;
-    }
-
-    state.skillWorkshopActionBusy = null;
-    const nextStatus = action === "apply" ? "applied" : action === "reject" ? "rejected" : null;
-    if (nextStatus) {
-      state.skillWorkshopStatusOverrides = {
-        ...state.skillWorkshopStatusOverrides,
-        [key]: nextStatus,
-      };
-    }
-    state.skillWorkshopActionNotice = {
-      key,
-      label:
-        action === "apply" ? "Applied" : action === "reject" ? "Rejected" : "Revision requested",
-      slug: "slug" in proposal && typeof proposal.slug === "string" ? proposal.slug : proposal.key,
-    };
-    options?.onComplete?.();
-    state.skillWorkshopActionNoticeTimer = globalThis.setTimeout(() => {
-      if (state.skillWorkshopActionNotice?.key === key) {
-        state.skillWorkshopActionNotice = null;
-      }
-      state.skillWorkshopActionNoticeTimer = null;
-    }, SKILL_WORKSHOP_NOTICE_MS);
-  }, SKILL_WORKSHOP_ACTION_DELAY_MS);
 }
 
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
@@ -3096,13 +3038,10 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "skillWorkshop"
           ? renderLazyView(lazySkillWorkshop, (m) => {
               const proposals = applySkillWorkshopReviewState(
-                applySkillWorkshopStatusOverrides(
-                  m.getDemoSkillWorkshopProposals(),
-                  state.skillWorkshopStatusOverrides,
-                ),
+                state.skillWorkshopProposals,
                 state.skillWorkshopReviewedKeys,
               );
-              const counts = m.countProposals(proposals);
+              const counts = countSkillWorkshopProposals(proposals);
               const selectedKey = state.skillWorkshopSelectedKey ?? proposals[0]?.key ?? null;
               const currentIndex = proposals.findIndex((p) => p.key === selectedKey);
               const goto = (offset: number) => {
@@ -3117,7 +3056,9 @@ export function renderApp(state: AppViewState) {
                 );
               };
               return m.renderSkillWorkshop({
-                loading: false,
+                loading: state.skillWorkshopLoading,
+                error: state.skillWorkshopError,
+                inspectingKey: state.skillWorkshopInspectingKey,
                 proposals,
                 selectedKey,
                 statusFilter: state.skillWorkshopStatusFilter,
@@ -3140,7 +3081,7 @@ export function renderApp(state: AppViewState) {
                 onModeChange: (mode) => setSkillWorkshopMode(state, mode),
                 onSelect: (key) => {
                   const proposal = proposals.find((p) => p.key === key);
-                  state.skillWorkshopSelectedKey = key;
+                  selectSkillWorkshopProposal(state, key);
                   if (proposal) {
                     state.skillWorkshopReviewedKeys = rememberSkillWorkshopProposalReviewed(
                       state.skillWorkshopReviewedKeys,
@@ -3152,13 +3093,17 @@ export function renderApp(state: AppViewState) {
                 },
                 onPrev: () => goto(-1),
                 onNext: () => goto(1),
-                onApply: (key) => runSkillWorkshopDemoAction(state, "apply", key, proposals),
+                onApply: (key) => {
+                  void runSkillWorkshopLifecycleAction(state, "apply", key);
+                },
                 onRevise: (key) => {
                   state.skillWorkshopRevisionKey = key;
                   state.skillWorkshopRevisionDraft = "";
                   state.skillWorkshopActionNotice = null;
                 },
-                onReject: (key) => runSkillWorkshopDemoAction(state, "reject", key, proposals),
+                onReject: (key) => {
+                  void runSkillWorkshopLifecycleAction(state, "reject", key);
+                },
                 onRevisionDraftChange: (draft) => {
                   state.skillWorkshopRevisionDraft = draft;
                 },
@@ -3173,15 +3118,11 @@ export function renderApp(state: AppViewState) {
                   if (!state.skillWorkshopRevisionDraft.trim()) {
                     return;
                   }
-                  runSkillWorkshopDemoAction(state, "revise", key, proposals, {
-                    onComplete: () => {
-                      state.skillWorkshopRevisionKey = null;
-                      state.skillWorkshopRevisionDraft = "";
-                    },
-                  });
+                  void requestSkillWorkshopRevision(state, key);
                 },
                 onPreviewFile: (_key, path) => {
                   state.skillWorkshopFilePreviewKey = path;
+                  void loadSkillWorkshopProposalDetail(state, _key);
                 },
                 onClosePreview: () => {
                   state.skillWorkshopFilePreviewKey = null;

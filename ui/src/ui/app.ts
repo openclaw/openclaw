@@ -149,6 +149,7 @@ import type {
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import type { SkillWorkshopProposal } from "./views/skill-workshop.ts";
 
 declare global {
   interface Window {
@@ -638,13 +639,17 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopQuery = "";
   @state() skillWorkshopFilePreviewKey: string | null = null;
   @state() skillWorkshopFilePreviewQuery = "";
+  @state() skillWorkshopLoading = false;
+  @state() skillWorkshopLoaded = false;
+  @state() skillWorkshopError: string | null = null;
+  @state() skillWorkshopInspectingKey: string | null = null;
+  @state() skillWorkshopProposals: SkillWorkshopProposal[] = [];
   @state() skillWorkshopReviewedKeys = loadSkillWorkshopReviewedKeys();
   @state() skillWorkshopQueueWidth = loadSkillWorkshopQueueWidth();
   @state() skillWorkshopMode: "board" | "today" = loadSkillWorkshopMode();
   @state() skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null =
     null;
   @state() skillWorkshopActionNotice: { key: string; label: string; slug: string } | null = null;
-  @state() skillWorkshopStatusOverrides: Record<string, "applied" | "rejected"> = {};
   @state() skillWorkshopRevisionKey: string | null = null;
   @state() skillWorkshopRevisionDraft = "";
   skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;

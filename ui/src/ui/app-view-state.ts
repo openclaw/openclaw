@@ -51,6 +51,7 @@ import type {
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import type { SkillWorkshopProposal } from "./views/skill-workshop.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {
@@ -431,11 +432,15 @@ export type AppViewState = {
     skillWorkshopQuery: string;
     skillWorkshopFilePreviewKey: string | null;
     skillWorkshopFilePreviewQuery: string;
+    skillWorkshopLoading: boolean;
+    skillWorkshopLoaded: boolean;
+    skillWorkshopError: string | null;
+    skillWorkshopInspectingKey: string | null;
+    skillWorkshopProposals: SkillWorkshopProposal[];
     skillWorkshopReviewedKeys: string[];
     skillWorkshopQueueWidth: number;
     skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null;
     skillWorkshopActionNotice: { key: string; label: string; slug: string } | null;
-    skillWorkshopStatusOverrides: Record<string, "applied" | "rejected">;
     skillWorkshopRevisionKey: string | null;
     skillWorkshopRevisionDraft: string;
     skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;

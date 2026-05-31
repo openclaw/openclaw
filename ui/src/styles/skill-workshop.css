@@ -40,6 +40,19 @@
   min-height: auto;
 }
 
+.sw-error {
+  margin: 0 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.sw-muted {
+  color: var(--muted);
+}
+
 /* ── Lifecycle tabs (underline style) ───────────────────────────────── */
 .sw-lifecycle-tabs {
   display: flex;
