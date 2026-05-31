@@ -115,4 +115,26 @@ describe("getSoonestCooldownExpiry", () => {
       getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
     ).toBe(now + 20_000);
   });
+
+  it("still counts profile-wide blocked windows for other models", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:p1": {
+        blockedUntil: now + 20_000,
+        blockedReason: "subscription_limit",
+        cooldownUntil: now + 10_000,
+        cooldownReason: "timeout",
+        cooldownModel: "gpt-5.4",
+      },
+      "openai:p2": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "timeout",
+        cooldownModel: "gpt-5.4",
+      },
+    });
+
+    expect(
+      getSoonestCooldownExpiry(store, ["openai:p1", "openai:p2"], { now, forModel: "gpt-5.4" }),
+    ).toBe(now + 20_000);
+  });
 });

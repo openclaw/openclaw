@@ -263,6 +263,20 @@ describe("isProfileInCooldown", () => {
     // should keep the profile blocked for all models.
     expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(true);
   });
+
+  it("does not bypass model-scoped cooldown when blockedUntil is active", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "google:default": {
+        blockedUntil: now + 120_000,
+        blockedReason: "subscription_limit",
+        cooldownUntil: now + 60_000,
+        cooldownReason: "timeout",
+        cooldownModel: "gemini-3-flash-preview",
+      },
+    });
+    expect(isProfileInCooldown(store, "google:default", now, "gemini-3.1-flash-lite")).toBe(true);
+  });
 });
 
 describe("resolveProfilesUnavailableReason", () => {
