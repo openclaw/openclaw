@@ -503,6 +503,7 @@ const SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY =
 const SKILL_WORKSHOP_REVISION_SESSIONS_KEY =
   "openclaw:control-ui:skill-workshop-revision-sessions:v1";
 const SKILL_WORKSHOP_CHAT_HANDOFF_MS = 900;
+const SKILL_WORKSHOP_REVISION_PREPARE_MIN_MS = 700;
 const MAX_SKILL_WORKSHOP_REVIEWED_KEYS = 500;
 const MAX_SKILL_WORKSHOP_REVISION_SESSIONS = 200;
 const DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH = 360;
@@ -914,10 +915,12 @@ async function sendSkillWorkshopRevisionRequest(
   if (!state.client || !state.connected) {
     throw new Error("Gateway is not connected.");
   }
+  const startedAt = Date.now();
   const sessionKey = await resolveSkillWorkshopRevisionSessionKey(state, proposal);
   if (!sessionKey) {
     throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
   }
+  await waitForSkillWorkshopRevisionPrepare(startedAt);
   startSkillWorkshopChatHandoff(state);
   if (state.tab !== "chat") {
     state.setTab("chat" as Tab);
@@ -928,6 +931,13 @@ async function sendSkillWorkshopRevisionRequest(
     await switchChatSession(state, sessionKey, { awaitInitialLoad: true });
   }
   await state.handleSendChat(message);
+}
+
+function waitForSkillWorkshopRevisionPrepare(startedAt: number): Promise<void> {
+  const remainingMs = SKILL_WORKSHOP_REVISION_PREPARE_MIN_MS - (Date.now() - startedAt);
+  return remainingMs > 0
+    ? new Promise((resolve) => globalThis.setTimeout(resolve, remainingMs))
+    : Promise.resolve();
 }
 
 function startSkillWorkshopChatHandoff(state: AppViewState): void {
@@ -3360,7 +3370,6 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   void (async () => {
-                    await loadSkillWorkshopProposalDetail(state, key);
                     await requestSkillWorkshopRevision(state, key, (message, proposal) =>
                       sendSkillWorkshopRevisionRequest(state, message, proposal),
                     );

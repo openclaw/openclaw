@@ -166,7 +166,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
   return html`
     <div class="sw-revision-backdrop" role="presentation" @click=${props.onRevisionCancel}>
       <section
-        class="sw-revision-dialog"
+        class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}"
         role="dialog"
         aria-modal="true"
         aria-labelledby="sw-revision-title"
@@ -200,6 +200,14 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           @input=${(event: Event) =>
             props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
         ></textarea>
+        ${busy
+          ? html`
+              <div class="sw-revision-dialog__status" role="status">
+                <span class="sw-revision-dialog__status-dot" aria-hidden="true"></span>
+                <span>Preparing revision handoff</span>
+              </div>
+            `
+          : nothing}
         <div class="sw-revision-dialog__actions">
           <button
             class="sw-btn sw-btn--ghost"

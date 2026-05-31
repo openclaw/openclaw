@@ -410,7 +410,10 @@ export async function requestSkillWorkshopRevision(
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    await sendRevisionRequest(buildRevisionRequest(proposal, instructions), proposal);
+    await loadSkillWorkshopProposalDetail(state, proposalId);
+    const currentProposal =
+      state.skillWorkshopProposals.find((item) => item.key === proposalId) ?? proposal;
+    await sendRevisionRequest(buildRevisionRequest(currentProposal, instructions), currentProposal);
     state.skillWorkshopRevisionKey = null;
     state.skillWorkshopRevisionDraft = "";
     showActionNotice(state, proposal, "Revision requested");
