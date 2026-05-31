@@ -25,6 +25,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -990,6 +991,35 @@ describe("gateway session utils", () => {
         const borrowedStore = loadSessionStore(loaded.storePath, { clone: false });
 
         expect(loaded.entry).toBe(borrowedStore["agent:main:main"]);
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("resolveGatewaySessionStoreTargetWithStore returns the caller-provided store", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-target-store-", async ({ stateDir }) => {
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        const store: Record<string, SessionEntry> = {
+          "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
+        };
+
+        const target = resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key: "agent:main:main",
+          store,
+        });
+
+        expect(target.store).toBe(store);
+        expect(target.storeKeys).toContain("agent:main:main");
       });
     } finally {
       resetConfigRuntimeState();

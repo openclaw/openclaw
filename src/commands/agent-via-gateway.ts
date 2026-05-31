@@ -109,6 +109,11 @@ let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
 const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
   import("./agent/session.js");
 let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
+let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
+
+function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
+  return gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
+}
 
 function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCommand"]> {
   embeddedAgentCommandPromise ??= import("./agent.js").then((module) => module.agentCommand);
@@ -131,6 +136,9 @@ export const agentViaGatewayTesting = {
     agentSessionModuleLoader = loader;
   },
   resolveGatewayAgentTimeoutMs,
+  setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
+    gatewayAbortRetryDelaysMsForTests = delays;
+  },
 };
 
 function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
@@ -433,8 +441,9 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
       config: params.config,
       ...params.gatewayIdentity,
     });
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
+    const isFinalAttempt = attempt === retryDelaysMs.length;
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
@@ -457,8 +466,9 @@ async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
   runtime: RuntimeEnv;
   request: GatewayRequestFunction;
 }): Promise<boolean> {
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
+    const isFinalAttempt = attempt === retryDelaysMs.length;
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,

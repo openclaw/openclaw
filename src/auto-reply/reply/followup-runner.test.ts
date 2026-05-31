@@ -1637,6 +1637,33 @@ describe("createFollowupRunner runtime config", () => {
 });
 
 describe("createFollowupRunner progress forwarding", () => {
+  it("records queued thread id on follow-up reply operations", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "slack",
+      originatingTo: "user:U1",
+      originatingThreadId: "501.000",
+      run: {
+        messageProvider: "slack",
+      },
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: { replyOperation?: { routeThreadId?: string | number } }) => {
+        expect(args.replyOperation?.routeThreadId).toBe("501.000");
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards queued follow-up tool progress and verbose tool result payloads", async () => {
     const onToolStart = vi.fn(async () => {});
     const queued = createQueuedRun({

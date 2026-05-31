@@ -5,6 +5,7 @@ import {
   closePlaywrightBrowserConnection,
   getPageForTargetId,
   listPagesViaPlaywright,
+  setCdpConnectRetryDelayMsForTests,
 } from "./pw-session.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
@@ -83,6 +84,7 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketUrlSpy.mockReset();
+  setCdpConnectRetryDelayMsForTests();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
@@ -258,6 +260,7 @@ describe("pw-session getPageForTargetId", () => {
   });
 
   it("does not add an extra top-level retry for non-recoverable connect failures", async () => {
+    setCdpConnectRetryDelayMsForTests(0);
     connectOverCdpSpy.mockRejectedValue(new Error("connectOverCDP exploded"));
     getChromeWebSocketUrlSpy.mockResolvedValue(null);
 

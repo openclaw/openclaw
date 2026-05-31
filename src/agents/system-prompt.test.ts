@@ -991,7 +991,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
-    expect(prompt).toContain("Attach media with message-tool attachment fields");
+    expect(prompt).toContain(
+      "Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
+    );
     expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
     expect(prompt).toContain("The target defaults to the current source channel");
     expect(prompt).toContain("do not repeat that visible content in your final answer");
@@ -1001,6 +1003,23 @@ describe("buildAgentSystemPrompt", () => {
       `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
     );
     expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
+  });
+
+  it("tells automatic source delivery to expose generated media as MEDIA directives", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+      },
+    });
+
+    expect(prompt).toContain(
+      "Attach media in the final visible reply with `MEDIA:<path-or-url>` on its own line.",
+    );
+    expect(prompt).toContain(
+      "Tool/generated media paths are attachments, not prose; emit each as its own `MEDIA:<path-or-url>` line.",
+    );
   });
 
   it("suppresses plain chat approval commands when inline approval UI is available", () => {

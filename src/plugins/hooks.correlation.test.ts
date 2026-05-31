@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
@@ -8,6 +8,11 @@ import type { PluginHookRegistration } from "./types.js";
 
 describe("hook correlation fields", () => {
   let registry: PluginRegistry;
+  let oneShotAgentEndProbe: {
+    status: number | null;
+    stderr: string;
+    stdout: string;
+  };
 
   beforeEach(() => {
     registry = createEmptyPluginRegistry();
@@ -87,7 +92,7 @@ describe("hook correlation fields", () => {
     }
   });
 
-  it("keeps one-shot agent_end runs alive until a ref'd timeout fires", () => {
+  beforeAll(() => {
     const script = `
       import { createHookRunner } from "./src/plugins/hooks.ts";
       const registry = {
@@ -131,12 +136,19 @@ describe("hook correlation fields", () => {
         timeout: 3_000,
       },
     );
+    oneShotAgentEndProbe = {
+      status: child.status,
+      stderr: child.stderr,
+      stdout: child.stdout,
+    };
+  });
 
-    expect(child.status).toBe(0);
-    expect(child.stderr).toContain(
+  it("keeps one-shot agent_end runs alive until a ref'd timeout fires", () => {
+    expect(oneShotAgentEndProbe.status).toBe(0);
+    expect(oneShotAgentEndProbe.stderr).toContain(
       "[hooks] agent_end handler from plugin-a failed: timed out after 20ms",
     );
-    expect(child.stdout).toContain("settled-after-timeout");
+    expect(oneShotAgentEndProbe.stdout).toContain("settled-after-timeout");
   });
 
   it("honors per-hook registration timeouts over the default void hook timeout", async () => {

@@ -643,10 +643,11 @@ describe("session MCP runtime", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
+    testing.setBundleMcpCatalogListTimeoutMsForTest(700);
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
-      delayMs: 750,
+      delayMs: 250,
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -659,7 +660,7 @@ describe("session MCP runtime", () => {
             slowListTools: {
               command: process.execPath,
               args: [serverPath],
-              connectionTimeoutMs: 500,
+              connectionTimeoutMs: 150,
             },
           },
         },
@@ -674,7 +675,7 @@ describe("session MCP runtime", () => {
         serverName: "slowListTools",
         toolCount: 1,
       });
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 750");
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 250");
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -685,6 +686,7 @@ describe("session MCP runtime", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
     const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
+    testing.setBundleMcpCatalogListTimeoutMsForTest(100);
     await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -1137,11 +1139,7 @@ process.on("SIGINT", shutdown);`,
         toolCount: 0,
         resources: { listChanged: true },
       });
-      await waitForFileText(
-        logPath,
-        "recv initialize",
-        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
-      );
+      await waitForFileText(logPath, "recv initialize", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

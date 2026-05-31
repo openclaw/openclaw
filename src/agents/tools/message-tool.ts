@@ -190,16 +190,6 @@ function buildSendSchema(options: {
         description: "Media URL/path. data: use buffer.",
       }),
     ),
-    mediaUrl: Type.Optional(
-      Type.String({
-        description: "Alias for media.",
-      }),
-    ),
-    mediaUrls: Type.Optional(
-      Type.Array(Type.String(), {
-        description: "Multiple media URLs/paths.",
-      }),
-    ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
@@ -209,24 +199,16 @@ function buildSendSchema(options: {
     contentType: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     caption: Type.Optional(Type.String()),
-    path: Type.Optional(Type.String()),
-    filePath: Type.Optional(Type.String()),
     attachments: Type.Optional(
       Type.Array(
         Type.Object({
           type: Type.Optional(stringEnum(["image", "audio", "video", "file"])),
           media: Type.Optional(Type.String()),
-          mediaUrl: Type.Optional(Type.String()),
-          path: Type.Optional(Type.String()),
-          filePath: Type.Optional(Type.String()),
-          fileUrl: Type.Optional(Type.String()),
-          url: Type.Optional(Type.String()),
           name: Type.Optional(Type.String()),
           mimeType: Type.Optional(Type.String()),
         }),
         {
-          description:
-            "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          description: "Structured attachments; each entry uses media.",
         },
       ),
     ),
