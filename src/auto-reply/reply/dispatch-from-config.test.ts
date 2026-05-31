@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   clearApprovalNativeRouteStateForTest,
@@ -38,6 +39,9 @@ import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+type ResolveInboundConversationParams = Parameters<
+  NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
+>[0];
 
 const mocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
@@ -5220,7 +5224,12 @@ describe("dispatchReplyFromConfig", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "discord" }),
             messaging: {
-              resolveInboundConversation: ({ to, conversationId, threadId, threadParentId }) =>
+              resolveInboundConversation: ({
+                to,
+                conversationId,
+                threadId,
+                threadParentId,
+              }: ResolveInboundConversationParams) =>
                 threadId
                   ? {
                       conversationId: String(threadId),

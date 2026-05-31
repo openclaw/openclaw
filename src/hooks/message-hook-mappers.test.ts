@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -17,6 +18,10 @@ import {
   toPluginMessageReceivedEvent,
   toPluginMessageSentEvent,
 } from "./message-hook-mappers.js";
+
+type ResolveInboundConversationParams = Parameters<
+  NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
+>[0];
 
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -88,7 +93,11 @@ describe("message hook mappers", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "thread-claim-chat", label: "Thread claim chat" }),
             messaging: {
-              resolveInboundConversation: ({ to, threadId, threadParentId }) => {
+              resolveInboundConversation: ({
+                to,
+                threadId,
+                threadParentId,
+              }: ResolveInboundConversationParams) => {
                 if (threadId) {
                   return {
                     conversationId: String(threadId),
