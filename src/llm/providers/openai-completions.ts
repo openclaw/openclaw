@@ -411,7 +411,21 @@ export const streamOpenAICompletions: StreamFunction<
               let delta = "";
               if (toolCall.function?.arguments) {
                 delta = toolCall.function.arguments;
-                block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
+                const prev = block.partialArgs ?? "";
+                // Some OpenAI-compatible servers (e.g. llama.cpp) send the full
+                // accumulated arguments in each delta instead of incremental
+                // fragments. Detect this pattern so we don't produce malformed
+                // JSON by appending overlapping content (issue #88439).
+                if (prev && delta.startsWith(prev)) {
+                  // Server re-sends accumulated content — replace with the
+                  // longer version so the result is a single valid document.
+                  block.partialArgs = delta;
+                } else if (prev && prev.endsWith(delta)) {
+                  // Duplicate tail fragment — skip.
+                } else {
+                  // Normal incremental delta — append.
+                  block.partialArgs = prev + delta;
+                }
                 block.arguments = parseStreamingJson(block.partialArgs);
               }
               stream.push({

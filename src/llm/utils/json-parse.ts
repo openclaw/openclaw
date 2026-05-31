@@ -1,4 +1,5 @@
 import { parse as partialParse } from "partial-json";
+import JSON5 from "json5";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 
@@ -115,6 +116,28 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
   try {
     return parseJsonWithRepair(partialJson) as Record<string, unknown>;
   } catch {
+    // JSON5 handles non-strict JSON (trailing commas, unquoted keys, comments,
+    // single-quoted strings) that local models may produce. Prefer JSON5 over
+    // partial-json to avoid key-concatenation bugs in partial-json (issue #88439).
+    try {
+      const result = JSON5.parse(partialJson);
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        return result as Record<string, unknown>;
+      }
+    } catch {
+      // JSON5 also failed — continue to next fallback.
+    }
+    try {
+      const repairedJson = repairJson(partialJson);
+      if (repairedJson !== partialJson) {
+        const result = JSON5.parse(repairedJson);
+        if (result && typeof result === "object" && !Array.isArray(result)) {
+          return result as Record<string, unknown>;
+        }
+      }
+    } catch {
+      // repair + JSON5 also failed.
+    }
     try {
       const result = partialParse(partialJson);
       return (result ?? {}) as Record<string, unknown>;
