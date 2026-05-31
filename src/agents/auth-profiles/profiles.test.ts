@@ -540,6 +540,62 @@ describe("promoteAuthProfileInOrder", () => {
     }
   });
 
+  it("preserves config-only fallback ids when creating a relogin order", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-order-config-only-"));
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const newProfileId = "openai:new-login";
+      const existingProfileId = "openai:old-login";
+      const configOnlyProfileId = "openai:aws-sdk";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [existingProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "old-access",
+              refresh: "old-refresh",
+              expires: Date.now() + 30 * 60 * 1000,
+            },
+            [newProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "new-access",
+              refresh: "new-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+            },
+          },
+        },
+        agentDir,
+      );
+
+      await promoteAuthProfileInOrder({
+        agentDir,
+        provider: "openai",
+        profileId: newProfileId,
+        createIfMissing: true,
+        createFromOrder: [existingProfileId, configOnlyProfileId],
+      });
+
+      expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
+        newProfileId,
+        existingProfileId,
+        configOnlyProfileId,
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps implicit round-robin when relogin has no existing order by default", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-order-implicit-"));
     const agentDir = path.join(stateDir, "agents", "main", "agent");

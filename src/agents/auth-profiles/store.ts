@@ -60,6 +60,7 @@ type LoadAuthProfileStoreOptions = {
 
 type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
+  preserveOrderProfileIds?: Iterable<string>;
   syncExternalCli?: boolean;
 };
 
@@ -474,13 +475,14 @@ function shouldKeepProfileInLocalStore(params: {
 function pruneAuthProfileStoreReferences(
   store: AuthProfileStore,
   keptProfileIds: Set<string>,
+  keptOrderProfileIds = keptProfileIds,
 ): void {
   store.order = store.order
     ? Object.fromEntries(
         Object.entries(store.order)
           .map(([provider, profileIds]) => [
             provider,
-            profileIds.filter((profileId) => keptProfileIds.has(profileId)),
+            profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
           ])
           .filter(([, profileIds]) => profileIds.length > 0),
       )
@@ -534,7 +536,14 @@ function buildLocalAuthProfileStoreForSave(params: {
     ),
   );
   const keptProfileIds = new Set(Object.keys(localStore.profiles));
-  pruneAuthProfileStoreReferences(localStore, keptProfileIds);
+  const keptOrderProfileIds = new Set(keptProfileIds);
+  for (const profileId of params.options?.preserveOrderProfileIds ?? []) {
+    const normalizedProfileId = profileId.trim();
+    if (normalizedProfileId) {
+      keptOrderProfileIds.add(normalizedProfileId);
+    }
+  }
+  pruneAuthProfileStoreReferences(localStore, keptProfileIds, keptOrderProfileIds);
   if (params.options?.filterExternalAuthProfiles !== false) {
     localStore.runtimeExternalProfileIds = undefined;
     localStore.runtimeExternalProfileIdsAuthoritative = undefined;
