@@ -50,7 +50,7 @@ export function resolveCronSourceDeliveryPlan(params: {
     messageToolEnabled: true,
     messageToolForced: false,
     directFallback: true,
-    skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok,
+    skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok ?? true,
   });
 }
 

@@ -159,6 +159,23 @@ describe("resolveFallbackCronSourceDeliveryPlan", () => {
     expect(plan.fallback.directDelivery).toBe(true);
     expect(plan.fallback.skipWhenMessageToolSentToTarget).toBe(false);
   });
+
+  it("preserves duplicate suppression when stale caller omits ok", () => {
+    const plan = resolveFallbackCronSourceDeliveryPlan(
+      makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "room-1" } }),
+      {
+        channel: "messagechat",
+        to: "room-1",
+        // ok intentionally omitted — stale caller shape
+      },
+    );
+
+    expect(plan.owner).toBe("direct_fallback");
+    expect(plan.reason).toBe("cron_announce");
+    expect(plan.fallback.directDelivery).toBe(true);
+    // When ok is absent, default to true to prevent double-posting
+    expect(plan.fallback.skipWhenMessageToolSentToTarget).toBe(true);
+  });
 });
 
 describe("resolveCronSourceDeliveryPlan", () => {
