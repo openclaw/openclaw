@@ -333,7 +333,7 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).not.toBe(first);
   });
 
-  it("keeps token auth-profile epochs stable across credential.token rotation", async () => {
+  it("keeps token auth-profile epochs stable across credential.token rotation when identity is present", async () => {
     let store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -373,9 +373,53 @@ describe("resolveCliAuthEpoch", () => {
     });
 
     expectCliAuthEpoch(first);
-    // Static-token auth-profile rotation must not flip the epoch; identity
-    // (provider, email, displayName, tokenRef) is the discriminator. Refs #74312.
+    // Static-token auth-profile rotation must not flip the epoch when stable
+    // identity fields exist; the token material is only a refreshable secret.
     expect(second).toBe(first);
+  });
+
+  it("changes token auth-profile epochs when token-only credentials change", async () => {
+    let store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:token-only": {
+          type: "token",
+          provider: "anthropic",
+          token: "token-a",
+          displayName: "Manual token",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:token-only",
+    });
+    store = {
+      version: 1,
+      profiles: {
+        "anthropic:token-only": {
+          type: "token",
+          provider: "anthropic",
+          token: "token-b",
+          displayName: "Manual token",
+        },
+      },
+    };
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:token-only",
+    });
+
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
+    // Token-only profiles have no stable account/ref identity, so the token
+    // remains the session owner and manual replacement still invalidates.
+    expect(second).not.toBe(first);
   });
 
   it("changes token auth-profile epochs when the email identity changes", async () => {

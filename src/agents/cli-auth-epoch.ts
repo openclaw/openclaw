@@ -112,16 +112,27 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         encodeUnknown(credential.metadata),
       ]);
     case "token":
-      // Drop `credential.token` from the hash so static-token rotation does
-      // not invalidate live sessions; identity fields (provider, tokenRef,
-      // email, displayName) are sufficient to detect real account changes.
-      // Mirrors the OAuth identity-only fix and keeps Claude-CLI auth-profile
-      // entries stable across keychain partial-read races. Refs #74312.
+      if (
+        normalizeOptionalString(credential.email) !== undefined ||
+        credential.tokenRef !== undefined
+      ) {
+        // When a token profile has a stable account/ref identity, token
+        // material is a refreshable secret rather than the session owner.
+        // Plain token-only profiles still hash the token below so manual token
+        // replacement keeps invalidating reusable sessions.
+        return JSON.stringify([
+          "token-identity",
+          credential.provider,
+          encodeUnknown(credential.tokenRef),
+          credential.email ?? null,
+          credential.displayName ?? null,
+        ]);
+      }
       return JSON.stringify([
         "token",
         credential.provider,
+        credential.token ?? null,
         encodeUnknown(credential.tokenRef),
-        credential.email ?? null,
         credential.displayName ?? null,
       ]);
     case "oauth":
