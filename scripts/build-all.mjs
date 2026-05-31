@@ -51,6 +51,7 @@ export const BUILD_ALL_STEPS = [
         "packages/media-understanding-common/package.json",
         "packages/terminal-core/package.json",
         "packages/model-catalog-core/package.json",
+        "packages/normalization-core/package.json",
         "packages/web-content-core/package.json",
         "packages/memory-host-sdk/package.json",
         "tsconfig.json",
@@ -61,6 +62,7 @@ export const BUILD_ALL_STEPS = [
         "packages/model-catalog-core/src",
         "packages/memory-host-sdk/src",
         "packages/media-generation-core/src",
+        "packages/normalization-core/src",
         "packages/media-understanding-common/src",
         "packages/terminal-core/src",
         "packages/web-content-core/src",
@@ -158,6 +160,14 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
   ],
+  qaRuntime: [
+    "plugins:assets:build",
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+  ],
   cliStartup: [
     "tsdown",
     "check-cli-bootstrap-imports",
@@ -170,17 +180,35 @@ export const BUILD_ALL_PROFILES = {
 };
 
 export const BUILD_ALL_PROFILE_STEP_ENV = {
+  full: {
+    tsdown: {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+  },
   ciArtifacts: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   gatewayWatch: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
     "runtime-postbuild": {
       OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
     },
   },
+  qaRuntime: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
   cliStartup: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
     "runtime-postbuild": {
       OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
     },

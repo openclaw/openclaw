@@ -31,6 +31,7 @@ const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
+const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 10_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
@@ -321,6 +322,60 @@ function scheduleProviderAuthStatePrewarm(params: {
       if (rewarmTimer) {
         clearTimeout(rewarmTimer);
         rewarmTimer = undefined;
+      }
+    },
+  };
+}
+
+function scheduleAgentRuntimePluginPrewarm(params: {
+  getConfig: () => OpenClawConfig;
+  workspaceDir: string;
+  startupTrace?: GatewayStartupTrace;
+  log: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+  };
+  delayMs?: number;
+}): GatewayPostReadySidecarHandle {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const isStopped = () => stopped;
+  timer = setTimeout(
+    () => {
+      timer = undefined;
+      void measureStartup(params.startupTrace, "post-ready.agent-runtime-plugins", async () => {
+        if (isStopped()) {
+          return;
+        }
+        const started = performance.now();
+        const { ensureRuntimePluginsLoaded } = await import("../agents/runtime-plugins.js");
+        const cfg = params.getConfig();
+        if (isStopped()) {
+          return;
+        }
+        ensureRuntimePluginsLoaded({
+          config: cfg,
+          workspaceDir: params.workspaceDir,
+          allowGatewaySubagentBinding: true,
+        });
+        if (!isStopped()) {
+          params.log.info(
+            `agent runtime plugins pre-warmed in ${(performance.now() - started).toFixed(0)}ms`,
+          );
+        }
+      }).catch((err) => {
+        params.log.warn(`agent runtime plugin pre-warm failed: ${String(err)}`);
+      });
+    },
+    Math.max(0, params.delayMs ?? AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS),
+  );
+  timer.unref?.();
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
       }
     },
   };
@@ -1115,6 +1170,11 @@ export async function startGatewayPostAttachRuntime(
       delayMs?: number;
       getConfig?: () => OpenClawConfig;
     };
+    agentRuntimePluginPrewarm?: {
+      enabled?: boolean;
+      delayMs?: number;
+      getConfig?: () => OpenClawConfig;
+    };
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -1255,6 +1315,20 @@ export async function startGatewayPostAttachRuntime(
         }
         const postReadySidecars = [...result.postReadySidecars];
         const gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
+        if (params.agentRuntimePluginPrewarm?.enabled !== false) {
+          gatewayLifetimeSidecars.push(
+            scheduleAgentRuntimePluginPrewarm({
+              getConfig:
+                params.agentRuntimePluginPrewarm?.getConfig ??
+                params.providerAuthPrewarm?.getConfig ??
+                (() => params.gatewayPluginConfigAtStart),
+              workspaceDir: params.defaultWorkspaceDir,
+              startupTrace: params.startupTrace,
+              log: params.log,
+              delayMs: params.agentRuntimePluginPrewarm?.delayMs,
+            }),
+          );
+        }
         if (params.providerAuthPrewarm?.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({

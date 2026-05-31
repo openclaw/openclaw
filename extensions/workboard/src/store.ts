@@ -4,6 +4,14 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  PersistedWorkboardNotificationSubscription,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
@@ -53,6 +61,13 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "./types.js";
+export type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  PersistedWorkboardNotificationSubscription,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 
 const POSITION_STEP = 1000;
 const MAX_CARDS = 2000;
@@ -66,7 +81,6 @@ const MAX_CARD_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_ENTRIES = MAX_CARDS * (MAX_CARD_ATTACHMENTS + 1);
 const MAX_CARD_WORKER_LOGS = 40;
 const MAX_ATTACHMENT_BYTES = 256 * 1024;
-const MAX_ATTACHMENT_STATE_VALUE_BYTES = 65_536;
 const MAX_CARD_DIAGNOSTICS = 12;
 const MAX_CARD_NOTIFICATIONS = 20;
 const MAX_CARD_METADATA_BYTES = 24 * 1024;
@@ -75,7 +89,6 @@ const READY_STRANDED_MS = 60 * 60 * 1000;
 const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
 const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;
 const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
-const textEncoder = new TextEncoder();
 
 function secondsToDurationMs(seconds: number): number {
   const ms = Math.trunc(seconds) * 1000;
@@ -87,34 +100,6 @@ function secondsToDurationMs(seconds: number): number {
 function addWorkboardDurationMs(now: number, durationMs: number): number {
   return resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: now }) ?? MAX_DATE_TIMESTAMP_MS;
 }
-
-export type PersistedWorkboardCard = {
-  version: 1;
-  card: WorkboardCard;
-};
-
-export type PersistedWorkboardBoard = {
-  version: 1;
-  board: WorkboardBoardMetadata;
-};
-
-export type PersistedWorkboardNotificationSubscription = {
-  version: 1;
-  subscription: WorkboardNotificationSubscription;
-};
-
-export type PersistedWorkboardAttachment = {
-  version: 1;
-  attachment: WorkboardAttachment;
-  contentBase64: string;
-};
-
-export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
-  register(key: string, value: T): Promise<void>;
-  lookup(key: string): Promise<T | undefined>;
-  delete(key: string): Promise<boolean>;
-  entries(): Promise<Array<{ key: string; value: T }>>;
-};
 
 export type WorkboardCardInput = {
   title?: unknown;
@@ -1086,12 +1071,6 @@ function normalizeAttachmentInput(
     ...(mimeType ? { mimeType } : {}),
     ...(note ? { note } : {}),
   };
-  const valueJson = JSON.stringify({ version: 1, attachment, contentBase64 });
-  if (textEncoder.encode(valueJson).byteLength > MAX_ATTACHMENT_STATE_VALUE_BYTES) {
-    throw new Error(
-      `attachment content plus metadata must fit one plugin state value (${MAX_ATTACHMENT_STATE_VALUE_BYTES} bytes).`,
-    );
-  }
   return { attachment, contentBase64 };
 }
 
@@ -4248,5 +4227,14 @@ export class WorkboardStore {
         }) as WorkboardKeyedStore<PersistedWorkboardAttachment>,
       },
     );
+  }
+
+  static openSqlite() {
+    const stores = createWorkboardSqliteStores();
+    return new WorkboardStore(stores.cards, {
+      boards: stores.boards,
+      subscriptions: stores.subscriptions,
+      attachments: stores.attachments,
+    });
   }
 }

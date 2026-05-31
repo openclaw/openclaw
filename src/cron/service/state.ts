@@ -159,12 +159,6 @@ export type CronServiceState = {
   op: Promise<unknown>;
   warnedDisabled: boolean;
   /**
-   * Job ids whose missing `sessionTarget` was defaulted at load and warned
-   * about. Used to suppress duplicate warns across forceReload ticks so a
-   * single broken job does not spam the log on every scheduler cycle.
-   */
-  warnedMissingSessionTargetJobIds: Set<string>;
-  /**
    * Persisted job rows with non-canonical storage shape are skipped in memory
    * until the runtime can quarantine and sanitize the active store.
    */
@@ -182,7 +176,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
-    warnedMissingSessionTargetJobIds: new Set<string>(),
     warnedInvalidPersistedJobKeys: new Set<string>(),
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,

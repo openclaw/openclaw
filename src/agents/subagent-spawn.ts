@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import {
   resolveChannelDefaultBindingPlacement,
@@ -25,11 +30,6 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { finiteSecondsToTimerSafeMilliseconds } from "../shared/number-coercion.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -54,6 +54,7 @@ import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
@@ -95,10 +96,10 @@ import {
   updateSessionStore,
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
-import {
-  type SpawnSubagentContextMode,
-  type SpawnSubagentMode,
-  type SpawnSubagentSandboxMode,
+import type {
+  SpawnSubagentContextMode,
+  SpawnSubagentMode,
+  SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
 
 export {
@@ -261,10 +262,7 @@ function buildResolvedSubagentModelMetadata(
 }
 
 function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
-  const runTimeoutMs =
-    Number.isFinite(runTimeoutSeconds) && runTimeoutSeconds > 0
-      ? Math.floor(runTimeoutSeconds * 1000)
-      : 0;
+  const runTimeoutMs = resolveSubagentRunTimerDelayMs(runTimeoutSeconds) ?? 0;
   if (runTimeoutMs <= 0) {
     return DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS;
   }

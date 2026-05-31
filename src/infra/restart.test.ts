@@ -6,15 +6,22 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 const execFileMock = vi.hoisted(() =>
   Object.assign(vi.fn(), {
     [Symbol.for("nodejs.util.promisify.custom")]: vi.fn(),
+    __promisify__: vi.fn(),
   }),
 );
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  execFile: execFileMock,
-  spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      execFile: execFileMock,
+      spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+    } as Partial<typeof import("node:child_process")>,
+  );
+});
 
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,7 +7,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -28,6 +28,7 @@ import {
 // Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
 export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 50_000;
+let maxPluginStateEntriesPerPluginForTests: number | undefined;
 
 type PluginStateEntriesTable = OpenClawStateKyselyDatabase["plugin_state_entries"];
 type PluginStateStoreDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
@@ -402,7 +403,8 @@ function enforcePostRegisterLimits(params: {
     pluginId: params.pluginId,
     now: params.now,
   });
-  if (pluginCount <= MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN) {
+  const maxPluginEntries = resolveMaxPluginStateEntriesPerPlugin();
+  if (pluginCount <= maxPluginEntries) {
     return;
   }
 
@@ -412,20 +414,24 @@ function enforcePostRegisterLimits(params: {
     namespace: params.namespace,
     protectedKey: params.protectedKey,
     now: params.now,
-    limit: pluginCount - MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+    limit: pluginCount - maxPluginEntries,
   });
   const remainingPluginCount = countLivePluginStateEntries(params.store.db, {
     pluginId: params.pluginId,
     now: params.now,
   });
-  if (remainingPluginCount > MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN) {
+  if (remainingPluginCount > maxPluginEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       operation: "register",
-      message: `Plugin state for ${params.pluginId} exceeds the ${MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN} live row limit.`,
+      message: `Plugin state for ${params.pluginId} exceeds the ${maxPluginEntries} live row limit.`,
       path: params.store.path,
     });
   }
+}
+
+function resolveMaxPluginStateEntriesPerPlugin(): number {
+  return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
 
 export function pluginStateRegister(params: {
@@ -706,6 +712,10 @@ export function clearPluginStateDatabaseForTests(): void {
     store.db,
     getPluginStateKysely(store.db).deleteFrom("plugin_state_entries"),
   );
+}
+
+export function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
+  maxPluginStateEntriesPerPluginForTests = value;
 }
 
 export function countPluginStateLiveEntries(pluginId: string): number {

@@ -4,6 +4,12 @@ import {
   parseCanonicalIpAddress,
 } from "@openclaw/net-policy/ip";
 import {
+  asFiniteNumberInRange,
+  clampTimerTimeoutMs,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "@openclaw/normalization-core/number-coercion";
+import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
@@ -17,12 +23,6 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
-import {
-  asFiniteNumberInRange,
-  clampTimerTimeoutMs,
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-} from "../shared/number-coercion.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {

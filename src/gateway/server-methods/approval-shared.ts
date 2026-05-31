@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -6,7 +7,6 @@ import {
 import type { ValidationError } from "../../../packages/gateway-protocol/src/index.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type {
   ExecApprovalIdLookupResult,
   ExecApprovalManager,

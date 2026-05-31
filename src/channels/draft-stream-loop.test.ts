@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
 const flushMicrotasks = async () => {
@@ -28,6 +29,14 @@ async function captureUnhandledRejections(
 }
 
 describe("createDraftStreamLoop", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("contains immediate background flush rejections and preserves pending text", async () => {
     await captureUnhandledRejections(async (rejections) => {
       const error = new Error("send failed");
@@ -89,6 +98,26 @@ describe("createDraftStreamLoop", () => {
           await vi.advanceTimersByTimeAsync(0);
         },
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized throttle timers", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const loop = createDraftStreamLoop({
+        throttleMs: Number.MAX_SAFE_INTEGER,
+        isStopped: () => false,
+        sendOrEditStreamMessage: vi.fn(async () => true),
+      });
+
+      loop.update("hello");
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      loop.stop();
     } finally {
       vi.useRealTimers();
     }

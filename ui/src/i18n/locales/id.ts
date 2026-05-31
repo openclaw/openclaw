@@ -759,6 +759,10 @@ export const id: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "Agen",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -1283,6 +1287,9 @@ export const id: TranslationMap = {
       loadMoreSessions: "Muat sesi lainnya",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

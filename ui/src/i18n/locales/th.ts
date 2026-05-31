@@ -751,6 +751,10 @@ export const th: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "เอเจนต์",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "ฉาก",
       diary: "ไดอารี",
@@ -1253,6 +1257,9 @@ export const th: TranslationMap = {
       loadMoreSessions: "โหลดเซสชันเพิ่มเติม",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

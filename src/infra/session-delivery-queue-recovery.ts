@@ -2,7 +2,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
   resolveNonNegativeIntegerOption,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "./errors.js";
 import {
   ackSessionDelivery,

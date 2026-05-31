@@ -764,6 +764,10 @@ export const tr: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "Aracı",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "Sahne",
       diary: "Günlük",
@@ -1289,6 +1293,9 @@ export const tr: TranslationMap = {
       loadMoreSessions: "Daha fazla oturum yükle",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -9,11 +10,9 @@ import {
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
-  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
-  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
   resolvePluginApprovalRequestAllowedDecisions,
+  resolvePluginApprovalTimeoutMs,
 } from "../../infra/plugin-approvals.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalRequesterMetadata,
@@ -67,10 +66,7 @@ export function createPluginApprovalHandlers(
         twoPhase?: boolean;
       };
       const twoPhase = p.twoPhase === true;
-      const timeoutMs = Math.min(
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
-        MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
-      );
+      const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;

@@ -4,9 +4,13 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import {
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
-import { resolveTimestampMsToIsoString } from "../shared/number-coercion.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
@@ -256,9 +260,12 @@ export async function acquireGatewayLock(
     return null;
   }
 
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS, 0);
+  const pollIntervalMs = resolvePositiveTimerTimeoutMs(
+    opts.pollIntervalMs,
+    DEFAULT_POLL_INTERVAL_MS,
+  );
+  const staleMs = resolveTimerTimeoutMs(opts.staleMs, DEFAULT_STALE_MS, 0);
   const platform = opts.platform ?? process.platform;
   const port = opts.port;
   const now = opts.now ?? Date.now;
@@ -336,7 +343,11 @@ export async function acquireGatewayLock(
         }
       }
 
-      await sleep(pollIntervalMs);
+      const remainingMs = timeoutMs - (now() - startedAt);
+      if (remainingMs <= 0) {
+        break;
+      }
+      await sleep(Math.min(pollIntervalMs, remainingMs));
     }
   }
 

@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeModelRef } from "../agents/model-selection.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type CachedPricingTier = {
   input: number;

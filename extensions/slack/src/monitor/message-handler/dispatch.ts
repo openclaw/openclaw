@@ -1245,10 +1245,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
       },
     });
-
-    if (result.kind === "preview-finalized") {
-      return;
-    }
   };
   const onSlackDeliveryError = (err: unknown, info: { kind: string }) => {
     runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));

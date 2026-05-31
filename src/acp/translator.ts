@@ -33,6 +33,8 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
@@ -42,8 +44,6 @@ import {
   resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
-import { timestampMsToIsoString } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import {
   createInMemoryAcpEventLedger,

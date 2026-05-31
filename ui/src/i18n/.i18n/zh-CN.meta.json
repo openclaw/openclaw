@@ -1,11 +1,13 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-05-30T15:38:03.159Z",
+  "fallbackKeys": [
+    "chat.toolCards.toolError"
+  ],
+  "generatedAt": "2026-05-31T05:03:13.926Z",
   "locale": "zh-CN",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "d2195849e06087f13cb1c7ff6afd46aa15649304779e3cbfe6ab704c603693a7",
-  "totalKeys": 1287,
-  "translatedKeys": 1287,
+  "sourceHash": "8a217d36d3f11e701c8d4a27a7040af327297ed4fdd01d89d15b62a79e8acefd",
+  "totalKeys": 1290,
+  "translatedKeys": 1289,
   "workflow": 1
 }

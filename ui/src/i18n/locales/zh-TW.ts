@@ -750,6 +750,10 @@ export const zh_TW: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "代理",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "場景",
       diary: "日誌",
@@ -1250,6 +1254,9 @@ export const zh_TW: TranslationMap = {
       loadMoreSessions: "載入更多工作階段",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

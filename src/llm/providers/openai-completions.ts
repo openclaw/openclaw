@@ -429,6 +429,14 @@ export const streamOpenAICompletions: StreamFunction<
         throw new Error("Stream ended without finish_reason");
       }
 
+      const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+      if (output.stopReason === "toolUse" && !hasToolCalls) {
+        output.stopReason = "stop";
+      }
+      if (hasToolCalls && output.stopReason !== "toolUse") {
+        output.content = output.content.filter((block) => block.type !== "toolCall");
+      }
+
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
@@ -614,12 +622,12 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = !!options?.reasoningEffort;
+    params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-    params.enable_thinking = !!options?.reasoningEffort;
+    params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
     params.chat_template_kwargs = {
-      enable_thinking: !!options?.reasoningEffort,
+      enable_thinking: Boolean(options?.reasoningEffort),
       preserve_thinking: true,
     };
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
@@ -643,7 +651,7 @@ function buildParams(
       reasoning?: { enabled: boolean };
       reasoning_effort?: string;
     };
-    togetherParams.reasoning = { enabled: !!options?.reasoningEffort };
+    togetherParams.reasoning = { enabled: Boolean(options?.reasoningEffort) };
     if (options?.reasoningEffort && compat.supportsReasoningEffort) {
       togetherParams.reasoning_effort =
         model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
@@ -820,7 +828,7 @@ export function convertMessages(
   const normalizeToolCallId = (id: string): string => {
     // Handle pipe-separated IDs from OpenAI Responses API
     // Format: {call_id}|{id} where {id} can be 400+ chars with special chars (+, /, =)
-    // These come from providers like github-copilot, openai-codex, opencode
+    // These come from providers like github-copilot, openai, opencode
     // Extract just the call_id part and normalize it
     if (id.includes("|")) {
       const [callId] = id.split("|");

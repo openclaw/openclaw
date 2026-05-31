@@ -582,7 +582,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
     }
   }
 
-  async createTempDir(prefix: string = "tmp-"): Promise<Result<string, FileError>> {
+  async createTempDir(prefix = "tmp-"): Promise<Result<string, FileError>> {
     try {
       return ok(await mkdtemp(join(tmpdir(), prefix)));
     } catch (error) {

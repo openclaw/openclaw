@@ -762,6 +762,10 @@ export const nl: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "Agent",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "Scène",
       diary: "Dagboek",
@@ -1288,6 +1292,9 @@ export const nl: TranslationMap = {
       loadMoreSessions: "Meer sessies laden",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

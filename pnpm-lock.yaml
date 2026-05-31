@@ -1828,6 +1828,8 @@ importers:
         specifier: 2.4.0
         version: 2.4.0
 
+  packages/normalization-core: {}
+
   packages/plugin-package-contract: {}
 
   packages/plugin-sdk: {}
@@ -1853,6 +1855,8 @@ importers:
         specifier: 5.6.2
         version: 5.6.2
 
+  packages/tool-call-repair: {}
+
   packages/web-content-core: {}
 
   ui:
@@ -1863,6 +1867,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../packages/normalization-core
       dompurify:
         specifier: 3.4.6
         version: 3.4.6

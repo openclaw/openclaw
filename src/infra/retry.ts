@@ -1,4 +1,4 @@
-import { asFiniteNumber } from "../shared/number-coercion.js";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { sleep } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { generateSecureFraction } from "./secure-random.js";

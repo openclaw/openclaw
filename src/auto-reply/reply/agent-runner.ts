@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -40,7 +41,6 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -106,6 +106,7 @@ import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -1335,6 +1336,10 @@ export async function runReplyAgent(params: {
       : null;
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
+  const replyRouteThreadId = resolveRoutedDeliveryThreadId({
+    ctx: sessionCtx,
+    sessionKey: replySessionKey,
+  });
   let replyOperation: ReplyOperation;
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
@@ -1345,6 +1350,7 @@ export async function runReplyAgent(params: {
       sessionKey: replySessionKey ?? "",
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
+      routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
     });
     if (admission.status === "skipped") {

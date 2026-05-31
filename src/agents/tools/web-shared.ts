@@ -2,8 +2,9 @@ import {
   asDateTimestampMs,
   MAX_TIMER_TIMEOUT_SECONDS,
   resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type CacheEntry<T> = {
   value: T;
@@ -84,7 +85,7 @@ export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number):
     return signal ?? new AbortController().signal;
   }
   const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
+  const timer = setTimeout(controller.abort.bind(controller), resolveTimerTimeoutMs(timeoutMs, 1));
   if (signal) {
     signal.addEventListener(
       "abort",

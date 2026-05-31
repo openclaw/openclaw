@@ -1,12 +1,12 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   asDateTimestampMs,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 

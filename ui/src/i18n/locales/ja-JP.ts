@@ -763,6 +763,10 @@ export const ja_JP: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "エージェント",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "Scene",
       diary: "Diary",
@@ -1287,6 +1291,9 @@ export const ja_JP: TranslationMap = {
       loadMoreSessions: "さらにセッションを読み込む",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

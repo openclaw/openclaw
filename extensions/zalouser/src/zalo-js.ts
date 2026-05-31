@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
+  asDateTimestampMs,
   asFiniteNumberInRange,
   isFutureDateTimestampMs,
   parseStrictFiniteNumber,
@@ -270,6 +271,7 @@ function normalizeMessageContent(content: unknown): string {
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
+  const fallbackTimestamp = () => asDateTimestampMs(Date.now()) ?? 0;
   const parsed =
     typeof rawTs === "number"
       ? rawTs
@@ -282,15 +284,15 @@ function resolveInboundTimestamp(rawTs: unknown): number {
     max: Number.MAX_SAFE_INTEGER,
   });
   if (timestamp === undefined) {
-    return Date.now();
+    return fallbackTimestamp();
   }
   if (timestamp > ZALO_TIMESTAMP_MS_THRESHOLD) {
-    return Math.trunc(timestamp);
+    return asDateTimestampMs(Math.trunc(timestamp)) ?? fallbackTimestamp();
   }
   if (timestamp > MAX_SAFE_ZALO_TIMESTAMP_SECONDS) {
-    return Date.now();
+    return fallbackTimestamp();
   }
-  return Math.trunc(timestamp * 1000);
+  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? fallbackTimestamp();
 }
 
 function extractMentionIds(rawMentions: unknown): string[] {

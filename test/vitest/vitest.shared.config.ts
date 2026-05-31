@@ -331,6 +331,50 @@ export const sharedVitestConfig = {
         find: "@openclaw/net-policy",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
+      {
+        find: "@openclaw/normalization-core/number-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "number-coercion.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/record-coerce",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "record-coerce.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/string-coerce",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "string-coerce.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/string-normalization",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "string-normalization.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
+      },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),

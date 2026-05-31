@@ -300,7 +300,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
 
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg: {},
       includeExternalCliAuth: true,
     });
@@ -495,6 +495,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       clientSecret: "client-secret-123",
       offerUrl: "https://api.openai.com/v1/realtime/calls",
       model: "gpt-realtime-2",
+      expiresAt: 1_765_000_000_000,
     });
     // originator, version, and User-Agent are server-side attribution headers; they
     // must not be forwarded to the browser so that the browser's direct SDP POST to
@@ -588,7 +589,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     expect(provider.isConfigured({ cfg, providerConfig: {} })).toBe(true);
     expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
       includeExternalCliAuth: true,
     });
@@ -632,7 +633,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
       includeExternalCliAuth: true,
     });
@@ -664,7 +665,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
       includeExternalCliAuth: true,
     });

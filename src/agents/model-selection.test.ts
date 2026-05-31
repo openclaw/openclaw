@@ -294,7 +294,7 @@ describe("model-selection", () => {
   describe("normalizeProviderIdForAuth", () => {
     it("only applies lowercase provider-id normalization before auth alias lookup", () => {
       expect(normalizeProviderIdForAuth("qwencloud")).toBe("qwencloud");
-      expect(normalizeProviderIdForAuth("openai-codex")).toBe("openai-codex");
+      expect(normalizeProviderIdForAuth("openai")).toBe("openai");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
     });
   });
@@ -588,7 +588,7 @@ describe("model-selection", () => {
       expect(
         resolvePersistedSelectedModelRef({
           defaultProvider: "anthropic",
-          runtimeProvider: "openai-codex",
+          runtimeProvider: "openai",
           runtimeModel: "gpt-5.4",
           overrideProvider: "anthropic",
           overrideModel: "claude-opus-4-6",
@@ -1122,7 +1122,7 @@ describe("model-selection", () => {
         agents: {
           defaults: {
             models: {
-              "openai-codex/*": {},
+              "openai/*": {},
               "vllm/*": {},
             },
           },
@@ -1133,8 +1133,8 @@ describe("model-selection", () => {
         cfg,
         catalog: [
           { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-          { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
-          { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+          { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+          { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
           { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
           { provider: "vllm", id: "local-added-after-startup", name: "Local Added After Startup" },
         ],
@@ -1144,13 +1144,13 @@ describe("model-selection", () => {
 
       expect(result.allowAny).toBe(false);
       expect(result.allowedCatalog).toEqual([
-        { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
-        { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+        { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+        { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
         { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
         { provider: "vllm", id: "local-added-after-startup", name: "Local Added After Startup" },
       ]);
-      expect(result.allowedKeys.has("openai-codex/gpt-5.4-codex")).toBe(true);
-      expect(result.allowedKeys.has("openai-codex/gpt-5.5-codex")).toBe(true);
+      expect(result.allowedKeys.has("openai/gpt-5.4-codex")).toBe(true);
+      expect(result.allowedKeys.has("openai/gpt-5.5-codex")).toBe(true);
       expect(result.allowedKeys.has("vllm/local-added-after-startup")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
     });
@@ -1160,7 +1160,7 @@ describe("model-selection", () => {
         agents: {
           defaults: {
             models: {
-              "openai-codex/*": {},
+              "openai/*": {},
             },
           },
         },
@@ -1175,8 +1175,8 @@ describe("model-selection", () => {
 
       expect(result.allowAny).toBe(false);
       expect(result.allowedCatalog).toEqual([]);
-      expect(result.allowedKeys.has(providerWildcardModelKey("openai-codex"))).toBe(true);
-      expect(isModelKeyAllowedBySet(result.allowedKeys, "openai-codex/gpt-added-later")).toBe(true);
+      expect(result.allowedKeys.has(providerWildcardModelKey("openai"))).toBe(true);
+      expect(isModelKeyAllowedBySet(result.allowedKeys, "openai/gpt-added-later")).toBe(true);
       expect(isModelKeyAllowedBySet(result.allowedKeys, "anthropic/claude-sonnet-4-6")).toBe(false);
     });
 
@@ -1185,7 +1185,7 @@ describe("model-selection", () => {
         agents: {
           defaults: {
             models: {
-              "openai-codex/*": {},
+              "openai/*": {},
               "anthropic/claude-sonnet-4-6": {},
             },
           },
@@ -1196,7 +1196,7 @@ describe("model-selection", () => {
         cfg,
         catalog: [
           { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-          { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+          { provider: "openai", id: "gpt-added-later", name: "GPT Added Later" },
           { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
         ],
         defaultProvider: "anthropic",
@@ -1204,18 +1204,18 @@ describe("model-selection", () => {
       });
 
       expect(policy.hasProviderWildcards).toBe(true);
-      expect(policy.allows({ provider: "openai-codex", model: "future-model" })).toBe(true);
+      expect(policy.allows({ provider: "openai", model: "future-model" })).toBe(true);
       expect(policy.allows({ provider: "vllm", model: "qwen-local" })).toBe(false);
       expect(
         policy.visibleCatalog({
           catalog: [],
           defaultVisibleCatalog: [
-            { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+            { provider: "openai", id: "gpt-added-later", name: "GPT Added Later" },
             { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
           ],
         }),
       ).toEqual([
-        { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+        { provider: "openai", id: "gpt-added-later", name: "GPT Added Later" },
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
       ]);
     });
@@ -1255,7 +1255,7 @@ describe("model-selection", () => {
         agents: {
           defaults: {
             models: {
-              "openai-codex/*": {},
+              "openai/*": {},
               "google/gemini-test": {},
             },
           },
@@ -1266,7 +1266,7 @@ describe("model-selection", () => {
         cfg,
         catalog: [
           { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-          { provider: "openai-codex", id: "gpt-codex", name: "GPT Codex" },
+          { provider: "openai", id: "gpt-codex", name: "GPT Codex" },
           { provider: "google", id: "gemini-test", name: "Gemini Test" },
         ],
         defaultProvider: "anthropic",
@@ -1274,11 +1274,11 @@ describe("model-selection", () => {
       });
 
       expect(result.allowedCatalog).toEqual([
-        { provider: "openai-codex", id: "gpt-codex", name: "GPT Codex" },
+        { provider: "openai", id: "gpt-codex", name: "GPT Codex" },
         { provider: "google", id: "gemini-test", name: "Gemini Test" },
       ]);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
-      expect(result.allowedKeys.has(providerWildcardModelKey("openai-codex"))).toBe(true);
+      expect(result.allowedKeys.has(providerWildcardModelKey("openai"))).toBe(true);
     });
 
     it("unions exact model entries with provider wildcard entries", () => {
@@ -1287,7 +1287,7 @@ describe("model-selection", () => {
           defaults: {
             models: {
               "anthropic/claude-sonnet-4-6": {},
-              "openai-codex/*": {},
+              "openai/*": {},
             },
           },
         },
@@ -1297,8 +1297,8 @@ describe("model-selection", () => {
         cfg,
         catalog: [
           { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-          { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
-          { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+          { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+          { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
           { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
         ],
         defaultProvider: "anthropic",
@@ -1307,10 +1307,10 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedCatalog).toEqual([
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
-        { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
-        { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+        { provider: "openai", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+        { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
       ]);
-      expect(result.allowedKeys.has("openai-codex/gpt-5.5-codex")).toBe(true);
+      expect(result.allowedKeys.has("openai/gpt-5.5-codex")).toBe(true);
       expect(result.allowedKeys.has("vllm/qwen-local")).toBe(false);
     });
 
@@ -1519,7 +1519,7 @@ describe("model-selection", () => {
         agents: {
           defaults: {
             models: {
-              "openai-codex/gpt-5.4": {},
+              "openai/gpt-5.4": {},
               "opencode-go/kimi-k2.6": {},
               "opencode-go/glm-5": {},
             },
@@ -1527,13 +1527,13 @@ describe("model-selection", () => {
         },
       } as OpenClawConfig;
 
-      // When session default is openai-codex, switching to a bare "kimi-k2.6"
-      // should resolve to opencode-go/kimi-k2.6, not openai-codex/kimi-k2.6
+      // When session default is openai, switching to a bare "kimi-k2.6"
+      // should resolve to opencode-go/kimi-k2.6, not openai/kimi-k2.6
       const result = resolveAllowedModelRef({
         cfg,
         catalog: [],
         raw: "kimi-k2.6",
-        defaultProvider: "openai-codex", // session's current provider
+        defaultProvider: "openai", // session's current provider
       });
 
       expect(result).toEqual({
@@ -2665,7 +2665,7 @@ describe("resolveDefaultModelForAgent", () => {
           {
             id: "main",
             model: {
-              primary: "openai-codex/gpt-5.5",
+              primary: "openai/gpt-5.5",
             },
           },
         ],
@@ -2673,7 +2673,7 @@ describe("resolveDefaultModelForAgent", () => {
     } as OpenClawConfig;
 
     expect(resolveDefaultModelForAgent({ cfg, agentId: "main" })).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5",
     });
   });

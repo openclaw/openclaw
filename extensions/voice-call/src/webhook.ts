@@ -90,7 +90,7 @@ function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void
   const recent = Array.isArray(metadata.recentTalkEvents)
     ? metadata.recentTalkEvents.filter(
         (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
-          !!entry && typeof entry === "object" && !Array.isArray(entry),
+          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
       )
     : [];
   recent.push({

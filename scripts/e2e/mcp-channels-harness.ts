@@ -12,7 +12,7 @@ import { z } from "zod";
 import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
 import { formatErrorMessage } from "../../dist/infra/errors.js";
 import { rawDataToString } from "../../dist/infra/ws.js";
-import { readStringValue } from "../../dist/shared/string-coerce.js";
+import { readStringValue } from "../../dist/normalization-core/string-coerce.js";
 import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
 import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
 import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
@@ -300,6 +300,7 @@ function isRetryableGatewayConnectError(error: Error): boolean {
   return (
     message.includes("gateway ws open timeout") ||
     message.includes("gateway connect timeout") ||
+    message.includes("closed before open") ||
     message.includes("gateway closed") ||
     message.includes("econnrefused") ||
     message.includes("socket hang up")

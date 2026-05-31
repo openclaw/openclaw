@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   GATEWAY_CLIENT_MODES,
@@ -27,7 +29,6 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 type AgentGatewayResult = {
@@ -108,6 +109,11 @@ let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
 const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
   import("./agent/session.js");
 let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
+let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
+
+function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
+  return gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
+}
 
 function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCommand"]> {
   embeddedAgentCommandPromise ??= import("./agent.js").then((module) => module.agentCommand);
@@ -129,6 +135,10 @@ export const agentViaGatewayTesting = {
     agentSessionModulePromise = undefined;
     agentSessionModuleLoader = loader;
   },
+  resolveGatewayAgentTimeoutMs,
+  setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
+    gatewayAbortRetryDelaysMsForTests = delays;
+  },
 };
 
 function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
@@ -148,6 +158,13 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
     );
   }
   return raw;
+}
+
+function resolveGatewayAgentTimeoutMs(timeoutSeconds: number): number {
+  if (timeoutSeconds === 0) {
+    return NO_GATEWAY_TIMEOUT_MS;
+  }
+  return resolveTimerTimeoutMs((timeoutSeconds + 30) * 1000, 10_000, 10_000);
 }
 
 function getGatewayDispatchConfig(): OpenClawConfig {
@@ -171,7 +188,7 @@ function formatPayloadForLog(payload: {
     lines.push(parts.text.trimEnd());
   }
   for (const url of parts.mediaUrls) {
-    lines.push(`MEDIA:${url}`);
+    lines.push(`Attachment: ${url}`);
   }
   return lines.join("\n").trimEnd();
 }
@@ -317,7 +334,7 @@ function isAgentCliProcessLike(value: unknown): value is AgentCliProcessLike {
 }
 
 function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliProcessLike {
-  if (!deps || !Object.prototype.hasOwnProperty.call(deps, "process")) {
+  if (!deps || !Object.hasOwn(deps, "process")) {
     return process;
   }
   const processLike = (deps as { process?: unknown }).process;
@@ -424,8 +441,9 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
       config: params.config,
       ...params.gatewayIdentity,
     });
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
+    const isFinalAttempt = attempt === retryDelaysMs.length;
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
@@ -448,8 +466,9 @@ async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
   runtime: RuntimeEnv;
   request: GatewayRequestFunction;
 }): Promise<boolean> {
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
+    const isFinalAttempt = attempt === retryDelaysMs.length;
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
@@ -580,10 +599,7 @@ async function agentViaGatewayCommand(
     }
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
-  const gatewayTimeoutMs =
-    timeoutSeconds === 0
-      ? NO_GATEWAY_TIMEOUT_MS // no timeout (timer-safe max)
-      : Math.max(10_000, (timeoutSeconds + 30) * 1000);
+  const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
 
   const sessionKey =
     classifySessionKeyShape(explicitSessionKey) === "agent"

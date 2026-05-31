@@ -31,7 +31,7 @@ import {
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { SessionManager } from "./sessions/index.js";
+import { SessionManager } from "./sessions/session-manager.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./store.js";
+import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -41,7 +41,7 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api });
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
 
     expect([...methods.keys()]).toEqual([
       "workboard.cards.list",
@@ -157,7 +157,7 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api });
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
 
     const createRespond = vi.fn();
     await methods.get("workboard.cards.create")?.handler({
@@ -202,7 +202,7 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api });
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
 
     const createHandler = methods.get("workboard.cards.create")?.handler;
     const respond = vi.fn();
@@ -236,7 +236,7 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api });
+    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
 
     const createRespond = vi.fn();
     await methods.get("workboard.cards.create")?.handler({

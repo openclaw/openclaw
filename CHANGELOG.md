@@ -23,11 +23,16 @@ Docs: https://docs.openclaw.ai
 - Plugins: externalize the GitHub Copilot agent runtime as the official `@openclaw/copilot` plugin with npm and ClawHub publish metadata.
 - iOS: add hosted push relay defaults, realtime Talk playback, and a guarded WebSocket ping path for more reliable mobile sessions. (#88096, #88105, #88231)
 - Workboard: add orchestration primitives and agent coordination tools for multi-agent planning and run tracking. (#87469)
+- Code mode: add internal namespaces for scoped agent/global sessions and exact namespace tool dispatch. (#88043)
+- Control UI: add a Dreaming-tab agent selector and propagate the selected agent through Dreaming status, diary, and diary actions. (#78748) Thanks @stevenepalmer.
 - Plugins: add a SecretRef provider integration manifest contract and extract shared LLM core packages for provider/plugin reuse. (#82326, #88117)
 - Skills: add the core skills index and centralize skills runtime loading, status, filtering, and prompt formatting.
 
 ### Fixes
 
+- Agents/Codex: keep public OpenAI API-key profiles from being treated as native Codex app-server auth while preserving persisted Codex OAuth sessions.
+- Control UI: keep collapsed tool cards labeled with the tool name and action instead of generic output text. Thanks @shakkernerd.
+- Agents/Codex: surface Skill Workshop guidance in Codex app-server prompts when `skill_workshop` is available. Thanks @shakkernerd.
 - CLI: keep `plugins list --json` on the snapshot-only path so plugin sweeps avoid loading the full runtime status graph.
 - Plugins: make PixVerse external-plugin ClawHub metadata explicit and keep it out of bundled dist builds.
 - Cron: keep SQLite cron migrations compatible with legacy run-log tables, archived job stores, diagnostic cron names, and legacy one-shot delete-after-run behavior. (#88285)
@@ -35,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - Providers: cap GitHub Copilot OAuth request timeouts before creating abort signals.
 - Cron: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot.
 - Agents/Codex: keep live session locks during cleanup, recover interrupted CLI tool transcripts, preserve Codex auth and compaction session identity, clear orphan tool state, cap app-server idle timers, and keep media completion delivery retryable. (#88129, #88136, #88141, #88162, #88182)
+- Chat/UI: show Gateway chat failures as visible assistant messages in the Control UI instead of only setting an invisible error state.
 - Channels: cap Telegram, Discord, WhatsApp, Signal, Feishu, Google Chat, Microsoft Teams, QQBot, Nostr, Zalo, Zalouser, and Nextcloud-style request/retry timers; preserve SMS approval reply routes; and retry WhatsApp QR login 408 timeouts. (#88183)
 - Security/config parsing: reject unsafe OAuth/token lifetimes, retry-after delays, inbound timestamps, response body sizes, command timeout config, sandbox observer token TTLs, and gateway WebSocket calls after close.
 - Providers/media: cap local service, model, usage, queue, generated media, TTS, music, workflow polling, and provider OAuth request timers across hosted and local providers.
@@ -53,8 +59,13 @@ Docs: https://docs.openclaw.ai
 - CI/tooling: skip expensive import-graph scans once a changed diff already requires broad fallback, keeping local changed-test planning fast while still collecting explicit owner tests.
 - CI/tooling: route script edits through conventional owner tests when matching `test/scripts` or `src/scripts` coverage already exists.
 - CI/tooling: honor option terminators in the memory FD repro script so follow-on arguments are not reparsed.
+- Release/CI/E2E: assert plugin lifecycle runtime inspect output instead of only capturing it.
+- Release/CI/E2E: make gateway-network prove the advertised health RPC and retry early WebSocket closes without burning full open timeouts.
 - Release/CI/E2E: honor option terminators across release, Parallels smoke, plugin gauntlet, and extension-memory scripts.
-- Performance: reuse prepared provider handles, strict tool schemas, gateway runtime metadata, session maintenance config, plugin metadata, bundled skill allowlists, package-local plugin artifacts, and single-entry store writes.
+- Release/CI/E2E: fail plugin gateway gauntlet QA chunks when the requested suite summary is missing or invalid.
+- Performance: prebuild QA runtime probes with generated plugin assets but without CLI startup metadata.
+- Performance: skip declaration bundling for runtime-only CLI startup and gateway watch build profiles.
+- Performance: reuse prepared provider handles, strict tool schemas, gateway runtime metadata, session maintenance config, plugin metadata, bundled skill allowlists, package-local plugin artifacts, single-entry store writes, and validated/serialized session prompt blobs.
 
 ## 2026.5.28
 

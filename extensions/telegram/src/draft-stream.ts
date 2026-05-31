@@ -350,7 +350,6 @@ export function createTelegramDraftStream(params: {
       } catch (err) {
         params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
       }
-      return;
     }
   };
 

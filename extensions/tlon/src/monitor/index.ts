@@ -889,9 +889,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           });
         },
       });
-      if (processed.kind === "duplicate") {
-        return;
-      }
+      void processed;
     } catch (error: unknown) {
       runtime.error?.(`[tlon] Error handling channel firehose event: ${formatErrorMessage(error)}`);
     }
@@ -1081,9 +1079,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           });
         },
       });
-      if (processed.kind === "duplicate") {
-        return;
-      }
+      void processed;
     } catch (error: unknown) {
       runtime.error?.(`[tlon] Error handling chat firehose event: ${formatErrorMessage(error)}`);
     }

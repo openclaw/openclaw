@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
@@ -17,10 +21,6 @@ import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import { formatCliCommand } from "./command-format.js";
 
 /** Parse channel, allowing extension channels not in core registry. */

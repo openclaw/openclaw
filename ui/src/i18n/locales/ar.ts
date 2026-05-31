@@ -753,6 +753,10 @@ export const ar: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "الوكيل",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "المشهد",
       diary: "اليوميات",
@@ -1268,6 +1272,9 @@ export const ar: TranslationMap = {
       loadMoreSessions: "تحميل المزيد من الجلسات",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

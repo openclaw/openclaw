@@ -260,6 +260,7 @@ describe("resolveProviderAuths key normalization", () => {
     MINIMAX_API_KEY: undefined,
     MINIMAX_CODE_PLAN_KEY: undefined,
     MINIMAX_CODING_API_KEY: undefined,
+    OPENAI_API_KEY: undefined,
     XIAOMI_API_KEY: undefined,
   } satisfies Record<string, string | undefined>;
 
@@ -597,6 +598,50 @@ describe("resolveProviderAuths key normalization", () => {
         });
       },
       expected: [{ provider: "zai", token: "profile-zai-key" }],
+    });
+  });
+
+  it("does not use OpenAI api keys for ChatGPT usage auth", async () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-openai-key", // pragma: allowlist secret
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      env: {
+        OPENAI_API_KEY: "env-openai-key",
+      },
+      setup: async (home) => {
+        await writeConfig(home, config);
+        await writeAuthProfiles(home, {
+          "openai:default": { type: "api_key", provider: "openai", key: "profile-openai-key" },
+        });
+      },
+      config,
+      expected: [],
+    });
+  });
+
+  it("uses OpenAI oauth-compatible profiles for ChatGPT usage auth", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["openai"],
+      setup: async (home) => {
+        await writeAuthProfiles(home, {
+          "openai:default": {
+            type: "token",
+            provider: "openai",
+            token: "chatgpt-token",
+          },
+        });
+      },
+      expected: [{ provider: "openai", token: "chatgpt-token" }],
     });
   });
 

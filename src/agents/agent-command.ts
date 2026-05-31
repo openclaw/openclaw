@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
@@ -46,7 +47,6 @@ import {
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
@@ -113,7 +113,7 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -468,6 +468,7 @@ function resolveExplicitAgentCommandSessionKey(params: {
 }): string | undefined {
   if (
     isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
+    !params.agentIdOverride &&
     !params.shouldScopeDefaultAgentKey
   ) {
     return params.rawExplicitSessionKey;

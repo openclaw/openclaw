@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTypingCallbacks } from "./typing.js";
 
 type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
@@ -186,6 +187,21 @@ describe("createTypingCallbacks", () => {
     });
   });
 
+  it("clamps oversized keepalive intervals before arming timers", async () => {
+    await withFakeTimers(async () => {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const { callbacks } = createTypingHarness({
+        keepaliveIntervalMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      callbacks.onCleanup?.();
+    });
+  });
+
   it("does not restart keepalive when breaker trips on initial start", async () => {
     await withFakeTimers(async () => {
       const { start, onStartError, callbacks } = createTypingHarness({
@@ -344,6 +360,21 @@ describe("createTypingCallbacks", () => {
         // Should not auto-stop even after long time
         await vi.advanceTimersByTimeAsync(300_000);
         expect(stop).not.toHaveBeenCalled();
+      });
+    });
+
+    it("clamps oversized TTLs before arming timers", async () => {
+      await withFakeTimers(async () => {
+        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+        const { callbacks } = createTypingHarness({
+          maxDurationMs: Number.MAX_SAFE_INTEGER,
+        });
+
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+        callbacks.onCleanup?.();
       });
     });
 

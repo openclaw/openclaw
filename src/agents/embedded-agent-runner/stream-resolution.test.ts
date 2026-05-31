@@ -81,7 +81,7 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: undefined,
         model: {
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           provider: "openai",
           id: "codex-mini-latest",
         } as never,
@@ -154,7 +154,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         id: "codex-mini-latest",
       } as never,
@@ -406,7 +406,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         id: "gpt-5.5",
       } as never,
@@ -431,7 +431,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         id: "gpt-5.5",
       } as never,
@@ -455,7 +455,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       sessionId: "session-1",
       signal: runSignal,
       model: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         id: "gpt-5.5",
       } as never,
@@ -480,7 +480,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       sessionId: "session-1",
       signal: runSignal,
       model: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         id: "gpt-5.5",
       } as never,
@@ -505,7 +505,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       sessionId: "session-1",
       signal: runSignal,
       model: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         id: "gpt-5.5",
       } as never,
@@ -525,7 +525,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         id: "gpt-5.5",
       } as never,

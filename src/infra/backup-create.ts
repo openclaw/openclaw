@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -11,7 +12,6 @@ import {
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
-import { resolveDateTimestampMs } from "../shared/number-coercion.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";

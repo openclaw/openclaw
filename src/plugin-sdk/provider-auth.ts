@@ -1,6 +1,12 @@
 // Public auth/onboarding helpers for provider plugins.
 
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromEpochSeconds,
+  parseStrictNonNegativeInteger,
+} from "../../packages/normalization-core/src/number-coercion.js";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
@@ -21,12 +27,6 @@ import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromEpochSeconds,
-  parseStrictNonNegativeInteger,
-} from "../shared/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveProviderEndpoint } from "./provider-model-shared.js";
 
 export type { OpenClawConfig } from "../config/config.js";
@@ -108,7 +108,7 @@ export {
   resolveOpenAICodexAuthIdentity,
   resolveOpenAICodexImportProfileName,
   type OpenAICodexAuthIdentity,
-} from "./provider-openai-codex-auth.js";
+} from "./provider-openai-chatgpt-auth.js";
 export {
   generateHexPkceVerifierChallenge,
   generatePkceVerifierChallenge,
@@ -405,7 +405,6 @@ function resolveUsableProviderAuthProfiles(params: {
 
   const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt ?? false,
-    resolveLegacyOAuthSidecars: true,
   });
   return {
     agentDir,

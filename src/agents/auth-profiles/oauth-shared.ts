@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential as hasUsableStoredOAuthCredential } from "./credential-state.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -32,11 +33,13 @@ function hasNewerStoredOAuthCredential(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
+  const existingExpires = asDateTimestampMs(existing?.expires);
+  const incomingExpires = asDateTimestampMs(incoming.expires);
   return Boolean(
     existing &&
     existing.provider === incoming.provider &&
-    Number.isFinite(existing.expires) &&
-    (!Number.isFinite(incoming.expires) || existing.expires > incoming.expires),
+    existingExpires !== undefined &&
+    (incomingExpires === undefined || existingExpires > incomingExpires),
   );
 }
 

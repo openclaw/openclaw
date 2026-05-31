@@ -411,7 +411,7 @@ describe("secret provider integration presets", () => {
     const config = {
       plugins: {
         entries: {
-          "openai-codex": {
+          openai: {
             enabled: false,
           },
         },

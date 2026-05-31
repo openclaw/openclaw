@@ -758,6 +758,10 @@ export const ko: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "에이전트",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "장면",
       diary: "일지",
@@ -1276,6 +1280,9 @@ export const ko: TranslationMap = {
       loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

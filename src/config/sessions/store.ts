@@ -28,9 +28,11 @@ import {
   dropSessionStoreObjectCache,
   dropSessionStoreSnapshotCache,
   getSerializedSessionStore,
+  getSerializedSessionStorePromptRefs,
   getSessionStoreCacheVersion,
   invalidateSessionStoreCache,
   isSessionStoreCacheEnabled,
+  setSerializedSessionStorePromptRefs,
   setSerializedSessionStore,
   takeMutableSessionStoreCache,
   writeSessionStoreCache,
@@ -234,11 +236,17 @@ function updateSessionStoreWriteCaches(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   serialized: string;
+  serializedPromptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
   cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
   const fileStat = getFileStatSnapshot(params.storePath);
-  setSerializedSessionStore(params.storePath, params.serialized, fileStat?.sizeBytes);
+  setSerializedSessionStore(
+    params.storePath,
+    params.serialized,
+    fileStat?.sizeBytes,
+    params.serializedPromptRefs,
+  );
   if (!isSessionStoreCacheEnabled()) {
     dropSessionStoreObjectCache(params.storePath);
     dropSessionStoreSnapshotCache(params.storePath);
@@ -250,6 +258,7 @@ function updateSessionStoreWriteCaches(params: {
     mtimeMs: fileStat?.mtimeMs,
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
+    serializedPromptRefs: params.serializedPromptRefs,
     cloneSerialized: params.cloneSerialized,
     takeOwnership: params.takeOwnership,
   });
@@ -273,18 +282,26 @@ function restoreUnchangedSessionStoreCache(
     return;
   }
   const serialized = getSerializedSessionStore(storePath);
+  const serializedPromptRefs =
+    serialized !== undefined ? getSerializedSessionStorePromptRefs(storePath) : undefined;
   writeSessionStoreCache({
     storePath,
     store,
     mtimeMs: loadedFileStat?.mtimeMs,
     sizeBytes: loadedFileStat?.sizeBytes,
     serialized,
+    serializedPromptRefs,
     takeOwnership: true,
   });
   if (serialized !== undefined) {
     // Keep hydrated blob prompts in the object cache, but preserve the disk JSON
     // comparison string so repeated no-op saves do not rewrite sessions.json.
-    setSerializedSessionStore(storePath, serialized, loadedFileStat?.sizeBytes);
+    setSerializedSessionStore(
+      storePath,
+      serialized,
+      loadedFileStat?.sizeBytes,
+      serializedPromptRefs,
+    );
   }
 }
 
@@ -333,11 +350,16 @@ function indentTopLevelEntryJson(json: string): string {
 function buildSingleEntrySerializedStore(params: {
   storePath: string;
   patch: SingleEntryPersistencePatch;
-}): { serialized: string; promptBlobs: SessionSkillPromptBlobProjection[] } | null {
+}): {
+  serialized: string;
+  promptBlobs: SessionSkillPromptBlobProjection[];
+  promptRefs: ReadonlyMap<string, SessionSkillPromptRef>;
+} | null {
   const currentSerialized = getSerializedSessionStore(params.storePath);
   if (currentSerialized === undefined) {
     return null;
   }
+  const currentPromptRefs = getSerializedPromptRefs(params.storePath, currentSerialized);
   const marker = `\n  ${JSON.stringify(params.patch.sessionKey)}: `;
   const markerIndex = currentSerialized.indexOf(marker);
   if (markerIndex < 0) {
@@ -360,10 +382,18 @@ function buildSingleEntrySerializedStore(params: {
     return null;
   }
   const entryJson = indentTopLevelEntryJson(JSON.stringify(projectedEntry, null, 2));
+  const promptRefs = new Map(currentPromptRefs);
+  const promptRef = projectedEntry.skillsSnapshot?.promptRef;
+  if (promptRef) {
+    promptRefs.set(params.patch.sessionKey, promptRef);
+  } else {
+    promptRefs.delete(params.patch.sessionKey);
+  }
   return {
     serialized:
       currentSerialized.slice(0, valueStart) + entryJson + currentSerialized.slice(valueEnd),
     promptBlobs: [...projected.promptBlobs.values()],
+    promptRefs,
   };
 }
 
@@ -383,15 +413,42 @@ function collectSerializedPromptRefs(serialized: string): Map<string, SessionSki
   return refs;
 }
 
+function collectStorePromptRefs(
+  store: Record<string, SessionEntry>,
+): Map<string, SessionSkillPromptRef> {
+  const refs = new Map<string, SessionSkillPromptRef>();
+  for (const [key, entry] of Object.entries(store)) {
+    const ref = entry?.skillsSnapshot?.promptRef;
+    if (ref) {
+      refs.set(key, ref);
+    }
+  }
+  return refs;
+}
+
+function getSerializedPromptRefs(
+  storePath: string,
+  serialized: string,
+): ReadonlyMap<string, SessionSkillPromptRef> {
+  const cached = getSerializedSessionStorePromptRefs(storePath);
+  if (cached) {
+    return cached;
+  }
+  const refs = collectSerializedPromptRefs(serialized);
+  setSerializedSessionStorePromptRefs(storePath, refs);
+  return refs;
+}
+
 function storeHasUnsafeUntouchedHydratedSkillPrompts(
   storePath: string,
   store: Record<string, SessionEntry>,
   changedSessionKey: string,
 ): boolean {
   const currentSerialized = getSerializedSessionStore(storePath);
-  const serializedPromptRefs = currentSerialized
-    ? collectSerializedPromptRefs(currentSerialized)
-    : undefined;
+  const serializedPromptRefs =
+    currentSerialized !== undefined
+      ? getSerializedPromptRefs(storePath, currentSerialized)
+      : undefined;
   for (const [key, entry] of Object.entries(store)) {
     if (key === changedSessionKey || typeof entry.skillsSnapshot?.prompt !== "string") {
       continue;
@@ -453,11 +510,11 @@ function resolveMutableSessionStoreKey(
   if (!trimmed) {
     return undefined;
   }
-  if (Object.prototype.hasOwnProperty.call(store, trimmed)) {
+  if (Object.hasOwn(store, trimmed)) {
     return trimmed;
   }
   const normalized = normalizeStoreSessionKey(trimmed);
-  if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+  if (Object.hasOwn(store, normalized)) {
     return normalized;
   }
   return Object.keys(store).find((key) => normalizeStoreSessionKey(key) === normalized);
@@ -684,6 +741,7 @@ async function saveSessionStoreUnlocked(
         storePath,
         store,
         serialized: singleEntrySerialized.serialized,
+        serializedPromptRefs: singleEntrySerialized.promptRefs,
         promptBlobs: singleEntrySerialized.promptBlobs,
         takeOwnership: opts?.takeCacheOwnership,
       });
@@ -692,6 +750,7 @@ async function saveSessionStoreUnlocked(
   }
   const persisted = projectSessionStoreForPersistence({ storePath, store });
   const promptBlobs = [...persisted.promptBlobs.values()];
+  const promptRefs = collectStorePromptRefs(persisted.store);
   const json = JSON.stringify(persisted.store, null, 2);
   const cloneSerialized = persisted.changed ? undefined : json;
   if (getSerializedSessionStore(storePath) === json) {
@@ -703,6 +762,7 @@ async function saveSessionStoreUnlocked(
       storePath,
       store,
       serialized: json,
+      serializedPromptRefs: promptRefs,
       cloneSerialized,
       takeOwnership: opts?.takeCacheOwnership,
     });
@@ -717,6 +777,7 @@ async function saveSessionStoreUnlocked(
           storePath,
           store,
           serialized: json,
+          serializedPromptRefs: promptRefs,
           cloneSerialized,
           promptBlobs,
           takeOwnership: opts?.takeCacheOwnership,
@@ -744,6 +805,7 @@ async function saveSessionStoreUnlocked(
       storePath,
       store,
       serialized: json,
+      serializedPromptRefs: promptRefs,
       cloneSerialized,
       promptBlobs,
       takeOwnership: opts?.takeCacheOwnership,
@@ -759,6 +821,7 @@ async function saveSessionStoreUnlocked(
           storePath,
           store,
           serialized: json,
+          serializedPromptRefs: promptRefs,
           cloneSerialized,
           promptBlobs,
           takeOwnership: opts?.takeCacheOwnership,
@@ -882,6 +945,7 @@ async function writeSessionStoreAtomic(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   serialized: string;
+  serializedPromptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
   cloneSerialized?: string;
   promptBlobs: Iterable<SessionSkillPromptBlobProjection>;
   takeOwnership?: boolean;
@@ -904,6 +968,7 @@ async function writeSessionStoreAtomic(params: {
     storePath: params.storePath,
     store: params.store,
     serialized: params.serialized,
+    serializedPromptRefs: params.serializedPromptRefs,
     cloneSerialized: params.cloneSerialized,
     takeOwnership: params.takeOwnership,
   });
@@ -1170,8 +1235,7 @@ export async function updateLastRoute(params: {
     );
     const explicitDeliveryContext = params.deliveryContext;
     const explicitThreadFromDeliveryContext =
-      explicitDeliveryContext != null &&
-      Object.prototype.hasOwnProperty.call(explicitDeliveryContext, "threadId")
+      explicitDeliveryContext != null && Object.hasOwn(explicitDeliveryContext, "threadId")
         ? explicitDeliveryContext.threadId
         : undefined;
     const explicitThreadValue =

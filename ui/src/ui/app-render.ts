@@ -6,6 +6,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
@@ -26,6 +27,11 @@ import {
 import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
+import {
+  resolveChatAgentFilterId,
+  resolveChatAgentFilterOptions,
+  resolvePreferredSessionForAgent,
+} from "./chat/session-controls.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -155,7 +161,9 @@ import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.t
 import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
+  isSessionKeyTiedToAgent,
   isSubagentSessionKey,
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
@@ -252,7 +260,40 @@ function isSidebarSessionBusy(state: AppViewState) {
   );
 }
 
+function resolveSidebarDefaultAgentId(state: AppViewState): string {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  return normalizeAgentId(
+    state.agentsList?.defaultId ?? snapshot?.sessionDefaults?.defaultAgentId ?? "main",
+  );
+}
+
+function resolveSidebarSelectedAgentId(state: AppViewState): string {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const sessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
+  const fallbackAgentId =
+    sessionKey === "global" || sessionKey === "unknown"
+      ? (state.assistantAgentId ?? resolveSidebarDefaultAgentId(state))
+      : resolveSidebarDefaultAgentId(state);
+  return normalizeAgentId(fallbackAgentId);
+}
+
+function isSidebarSessionForSelectedAgent(
+  state: AppViewState,
+  row: GatewaySessionRow,
+  selectedAgentId: string,
+): boolean {
+  return isSessionKeyTiedToAgent(row.key, selectedAgentId, resolveSidebarDefaultAgentId(state));
+}
+
 function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+  const selectedAgentId = resolveSidebarSelectedAgentId(state);
+  const shouldFilterByAgent =
+    normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
   return (state.sessionsResult?.sessions ?? [])
     .filter(
       (row) =>
@@ -262,7 +303,8 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         row.kind !== "cron" &&
         !isCronSessionKey(row.key) &&
         !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy,
+        !row.spawnedBy &&
+        (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 5);
@@ -991,10 +1033,16 @@ export function renderApp(state: AppViewState) {
   const configuredDreaming = resolveConfiguredDreaming(configValue);
   const dreamingOn = state.dreamingStatus?.enabled ?? configuredDreaming.enabled;
   const dreamingNextCycle = resolveDreamingNextCycle(state.dreamingStatus);
+  const dreamingAgentOptions = resolveChatAgentFilterOptions(state);
+  const dreamingSelectedAgentId = resolveChatAgentFilterId(state, state.sessionKey);
+  const syncDreamingSelectedAgent = () => {
+    state.selectedAgentId = dreamingSelectedAgentId;
+  };
   const dreamingLoading = state.dreamingStatusLoading || state.dreamingModeSaving;
   const dreamingRefreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
   const refreshDreaming = () => {
     void (async () => {
+      syncDreamingSelectedAgent();
       await loadConfig(state);
       await Promise.all([
         loadDreamingStatus(state),
@@ -1230,8 +1278,8 @@ export function renderApp(state: AppViewState) {
     configPath: state.configSnapshot?.path ?? null,
     rawAvailable:
       typeof state.configSnapshot?.raw === "string" ||
-      !!state.configSnapshot?.config ||
-      !!state.configForm,
+      Boolean(state.configSnapshot?.config) ||
+      Boolean(state.configForm),
   } satisfies Omit<
     ConfigProps,
     | "formMode"
@@ -1637,11 +1685,9 @@ export function renderApp(state: AppViewState) {
       case "tools":
         void loadToolsCatalog(state, agentId);
         void refreshVisibleToolsEffectiveForCurrentSession(state);
-        return;
       case "overview":
       case "channels":
       case "cron":
-        return;
     }
   };
   const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
@@ -2624,17 +2670,15 @@ export function renderApp(state: AppViewState) {
                   const { basePath, existing } = modelEntry;
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
+                  } else if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                    const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                    const next = {
+                      primary: modelId,
+                      ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                    };
+                    updateConfigFormValue(state, basePath, next);
                   } else {
-                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                      const next = {
-                        primary: modelId,
-                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                      };
-                      updateConfigFormValue(state, basePath, next);
-                    } else {
-                      updateConfigFormValue(state, basePath, modelId);
-                    }
+                    updateConfigFormValue(state, basePath, modelId);
                   }
                   void refreshVisibleToolsEffectiveForCurrentSession(state);
                 },
@@ -2910,6 +2954,7 @@ export function renderApp(state: AppViewState) {
                     state.setTab("sessions" as import("./navigation.ts").Tab);
                     void loadSessions(state, {
                       ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, state.sessionKey),
                     });
                   },
                   onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
@@ -2959,6 +3004,7 @@ export function renderApp(state: AppViewState) {
                   },
                   agentsList: state.agentsList,
                   currentAgentId: resolvedAgentId ?? "main",
+                  fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
                   onAgentChange: (agentId: string) => {
                     switchChatSession(state, buildAgentMainSessionKey({ agentId }));
                   },
@@ -3047,6 +3093,8 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "dreams"
           ? renderDreaming({
               active: dreamingOn,
+              selectedAgentId: dreamingSelectedAgentId,
+              agentOptions: dreamingAgentOptions,
               shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
               groundedSignalCount: state.dreamingStatus?.groundedSignalCount ?? 0,
               totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
@@ -3079,7 +3127,16 @@ export function renderApp(state: AppViewState) {
               wikiMemoryPalaceError: state.wikiMemoryPalaceError,
               wikiMemoryPalace: state.wikiMemoryPalace,
               onRefresh: refreshDreaming,
-              onRefreshDiary: () => loadDreamDiary(state),
+              onSelectAgent: (agentId: string) => {
+                state.selectedAgentId = agentId;
+                switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
+                void loadDreamingStatus(state);
+                void loadDreamDiary(state);
+              },
+              onRefreshDiary: () => {
+                syncDreamingSelectedAgent();
+                void loadDreamDiary(state);
+              },
               onRefreshImports: () => {
                 void (async () => {
                   await loadConfig(state);
@@ -3094,14 +3151,29 @@ export function renderApp(state: AppViewState) {
               },
               onOpenConfig: () => openConfigFile(state),
               onOpenWikiPage: (lookup: string) => openWikiPage(lookup),
-              onBackfillDiary: () => backfillDreamDiary(state),
+              onBackfillDiary: () => {
+                syncDreamingSelectedAgent();
+                void backfillDreamDiary(state);
+              },
               onCopyDreamingArchivePath: () => {
                 void copyDreamingArchivePath(state);
               },
-              onDedupeDreamDiary: () => dedupeDreamDiary(state),
-              onResetDiary: () => resetDreamDiary(state),
-              onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
-              onRepairDreamingArtifacts: () => repairDreamingArtifacts(state),
+              onDedupeDreamDiary: () => {
+                syncDreamingSelectedAgent();
+                void dedupeDreamDiary(state);
+              },
+              onResetDiary: () => {
+                syncDreamingSelectedAgent();
+                void resetDreamDiary(state);
+              },
+              onResetGroundedShortTerm: () => {
+                syncDreamingSelectedAgent();
+                void resetGroundedShortTerm(state);
+              },
+              onRepairDreamingArtifacts: () => {
+                syncDreamingSelectedAgent();
+                void repairDreamingArtifacts(state);
+              },
               onRequestUpdate: requestHostUpdate,
             })
           : nothing}

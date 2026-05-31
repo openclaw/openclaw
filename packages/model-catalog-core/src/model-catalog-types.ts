@@ -1,7 +1,7 @@
 export const MODEL_CATALOG_APIS = [
   "openai-completions",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "anthropic-messages",
   "google-generative-ai",
   "google-vertex",
@@ -39,6 +39,14 @@ export type ModelCatalogCompatConfig = {
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
   requiresThinkingAsText?: boolean;
+  openRouterRouting?: ModelCatalogOpenRouterRouting;
+  vercelGatewayRouting?: ModelCatalogVercelGatewayRouting;
+  zaiToolStream?: boolean;
+  cacheControlFormat?: "anthropic";
+  sendSessionAffinityHeaders?: boolean;
+  sendSessionIdHeader?: boolean;
+  supportsEagerToolInputStreaming?: boolean;
+  supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;
   supportsTools?: boolean;
   requiresStringContent?: boolean;
@@ -53,6 +61,52 @@ export type ModelCatalogCompatConfig = {
   supportedReasoningEfforts?: string[];
   reasoningEffortMap?: Record<string, string>;
   visibleReasoningDetailTypes?: string[];
+};
+
+export type ModelCatalogOpenRouterRouting = {
+  allow_fallbacks?: boolean;
+  require_parameters?: boolean;
+  data_collection?: "deny" | "allow";
+  zdr?: boolean;
+  enforce_distillable_text?: boolean;
+  order?: string[];
+  only?: string[];
+  ignore?: string[];
+  quantizations?: string[];
+  sort?:
+    | string
+    | {
+        by?: string;
+        partition?: string | null;
+      };
+  max_price?: {
+    prompt?: number | string;
+    completion?: number | string;
+    image?: number | string;
+    audio?: number | string;
+    request?: number | string;
+  };
+  preferred_min_throughput?:
+    | number
+    | {
+        p50?: number;
+        p75?: number;
+        p90?: number;
+        p99?: number;
+      };
+  preferred_max_latency?:
+    | number
+    | {
+        p50?: number;
+        p75?: number;
+        p90?: number;
+        p99?: number;
+      };
+};
+
+export type ModelCatalogVercelGatewayRouting = {
+  only?: string[];
+  order?: string[];
 };
 
 export type ModelCatalogImageInputConfig = {

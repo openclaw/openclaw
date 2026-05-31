@@ -1637,6 +1637,33 @@ describe("createFollowupRunner runtime config", () => {
 });
 
 describe("createFollowupRunner progress forwarding", () => {
+  it("records queued thread id on follow-up reply operations", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "slack",
+      originatingTo: "user:U1",
+      originatingThreadId: "501.000",
+      run: {
+        messageProvider: "slack",
+      },
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: { replyOperation?: { routeThreadId?: string | number } }) => {
+        expect(args.replyOperation?.routeThreadId).toBe("501.000");
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards queued follow-up tool progress and verbose tool result payloads", async () => {
     const onToolStart = vi.fn(async () => {});
     const queued = createQueuedRun({
@@ -2825,7 +2852,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
       contextTokens: 200_000,
       inputTokens: 1_234,
@@ -2854,7 +2881,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       opts: { onBlockReply: createAsyncReplySpy() },
       typing: createMockTypingController(),
       typingMode: "instant",
-      defaultModel: "openai-codex/gpt-5.5",
+      defaultModel: "openai/gpt-5.5",
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -2878,7 +2905,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     const persistCall = requireMockCallArg(persistSpy, 0);
     expect(persistCall.preserveUserFacingSessionModelState).toBe(true);
-    expect(sessionStore[sessionKey]?.modelProvider).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
     expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
     expect(sessionStore[sessionKey]?.contextTokens).toBe(200_000);
     expect(sessionStore[sessionKey]?.inputTokens).toBe(1_234);

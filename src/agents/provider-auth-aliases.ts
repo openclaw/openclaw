@@ -25,6 +25,10 @@ type ProviderAuthAliasCandidate = {
   target: string;
 };
 
+const RETIRED_PROVIDER_AUTH_ALIASES: Readonly<Record<string, string>> = {
+  [["openai", "codex"].join("-")]: "openai",
+};
+
 const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
   bundled: 1,
@@ -203,5 +207,9 @@ export function resolveProviderIdForAuth(
   if (!normalized) {
     return normalized;
   }
-  return resolveProviderAuthAliasMap(params)[normalized] ?? normalized;
+  return (
+    resolveProviderAuthAliasMap(params)[normalized] ??
+    RETIRED_PROVIDER_AUTH_ALIASES[normalized] ??
+    normalized
+  );
 }

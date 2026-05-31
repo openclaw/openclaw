@@ -13,8 +13,8 @@ function buildOpenAICodexOAuthConfig(): OpenClawConfig {
   return {
     auth: {
       profiles: {
-        "openai-codex:user@example.com": {
-          provider: "openai-codex",
+        "openai:user@example.com": {
+          provider: "openai",
           mode: "oauth",
           email: "user@example.com",
         },

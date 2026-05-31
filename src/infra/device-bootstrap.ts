@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeDeviceBootstrapHandoffProfile,
@@ -8,7 +12,6 @@ import {
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
-import { asDateTimestampMs, resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { resolvePairingPaths } from "./pairing-files.js";

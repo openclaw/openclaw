@@ -157,14 +157,36 @@ function withTinyGitRepo(files: Record<string, string>, test: (cwd: string) => v
   }
 }
 
+function withTinyFileTree(files: Record<string, string>, test: (cwd: string) => void): void {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-"));
+  try {
+    for (const [file, source] of Object.entries(files)) {
+      const absolute = path.join(cwd, file);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, source);
+    }
+    test(cwd);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
 describe("scripts/test-projects changed-target routing", () => {
+  beforeAll(() => {
+    buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"]);
+    findUnmatchedExplicitTestTargets(["test/vitest/vitest.shared.config.ts"], process.cwd());
+  });
+
   it("maps changed source files into scoped lane targets", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "src/shared/string-normalization.ts",
+        "packages/normalization-core/src/string-normalization.ts",
         "src/utils/provider-utils.ts",
       ]),
-    ).toEqual(["src/shared/string-normalization.test.ts", "src/utils/provider-utils.test.ts"]);
+    ).toEqual([
+      "packages/normalization-core/src/string-normalization.test.ts",
+      "src/utils/provider-utils.test.ts",
+    ]);
   });
 
   it("keeps changed mode focused by default for Vitest wiring edits", () => {
@@ -673,7 +695,7 @@ describe("scripts/test-projects changed-target routing", () => {
     }
     files["src/runtime.consumer.test.ts"] = `${imports.join("\n")}\nvoid [${refs.join(", ")}];\n`;
 
-    withTinyGitRepo(files, (cwd) => {
+    withTinyFileTree(files, (cwd) => {
       plans = buildVitestRunPlans(
         Array.from({ length: 13 }, (_, index) => `src/runtime-${index}.ts`),
         cwd,
@@ -1412,15 +1434,15 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes changed utils and shared files to their light scoped lanes", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/shared/string-normalization.ts",
+      "packages/normalization-core/src/string-normalization.ts",
       "src/utils/provider-utils.ts",
     ]);
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.unit-fast.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/shared/string-normalization.test.ts"],
+        config: "test/vitest/vitest.unit.config.ts",
+        forwardedArgs: ["packages/normalization-core/src/string-normalization.test.ts"],
+        includePatterns: null,
         watchMode: false,
       },
       {
@@ -2092,6 +2114,71 @@ describe("scripts/test-projects full-suite sharding", () => {
           includePatterns: null,
           watchMode: false,
         })),
+    );
+  });
+
+  it("runs explicit leaf project config targets as whole configs", () => {
+    const args = [
+      "test/vitest/vitest.agents-core.config.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+      "test/vitest/vitest.agents-support.config.ts",
+      "test/vitest/vitest.agents-tools.config.ts",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([]);
+    expect(buildVitestRunPlans(args, process.cwd())).toEqual(
+      args.map((config) => ({
+        config,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      })),
+    );
+  });
+
+  it("keeps shared Vitest config helpers out of whole-config targets", () => {
+    const args = ["test/vitest/vitest.shared.config.ts"];
+
+    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([
+      {
+        target: "test/vitest/vitest.shared.config.ts",
+        reason: "target-matched-no-test-files",
+        includePattern: "test/vitest/**/*.test.ts",
+      },
+    ]);
+    expect(buildVitestRunPlans(args, process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/vitest/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("rejects typoed explicit leaf project config targets", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(["test/vitest/vitest.agents-croe.config.ts"], process.cwd()),
+    ).toEqual([
+      {
+        target: "test/vitest/vitest.agents-croe.config.ts",
+        reason: "path-does-not-exist",
+      },
+    ]);
+  });
+
+  it("rejects watch mode with multiple explicit leaf project config targets", () => {
+    expect(() =>
+      buildVitestRunPlans(
+        [
+          "--watch",
+          "test/vitest/vitest.agents-core.config.ts",
+          "test/vitest/vitest.agents-tools.config.ts",
+        ],
+        process.cwd(),
+      ),
+    ).toThrow(
+      "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
     );
   });
 

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -50,7 +51,6 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 import {
@@ -86,8 +86,9 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "requires compiled runtime output",
 ] as const;
 const VERSION_BOUND_RUNTIME_PLUGIN_IDS = new Set(["codex"]);
-const OPENCLAW_UNCORRECTED_STABLE_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)$/;
 const OPENCLAW_BETA_COMPANION_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)-beta\.[1-9]\d*$/;
+const OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE =
+  /^(\d{4}\.[1-9]\d?\.[1-9]\d?)(?:-beta\.[1-9]\d*)?$/;
 
 function shouldFallbackClawHubToNpm(params: {
   result: { ok: false; code?: string };
@@ -563,7 +564,7 @@ function betaCompanionMatchesCurrentStableVersion(params: {
   currentVersion: string;
 }): boolean {
   const installedBase = OPENCLAW_BETA_COMPANION_VERSION_RE.exec(params.installedVersion)?.[1];
-  const currentBase = OPENCLAW_UNCORRECTED_STABLE_VERSION_RE.exec(params.currentVersion)?.[1];
+  const currentBase = OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE.exec(params.currentVersion)?.[1];
   return Boolean(installedBase && currentBase && installedBase === currentBase);
 }
 

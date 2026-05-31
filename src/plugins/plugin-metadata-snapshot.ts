@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
-import { isRecord } from "../shared/record-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -140,6 +140,10 @@ function pickMemoRelevantEnv(env: NodeJS.ProcessEnv): Record<string, string> {
       return value === undefined ? [] : [[key, value]];
     }),
   );
+}
+
+export function resolvePluginMetadataSnapshotMemoEnvFingerprint(env: NodeJS.ProcessEnv): string {
+  return hashJson(pickMemoRelevantEnv(env));
 }
 
 function throwReadonlyPluginMetadataMutation(): never {
@@ -451,6 +455,9 @@ export function isPluginMetadataSnapshotCompatible(params: {
 function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: string): void {
   const existing = owners.get(ownedId);
   if (existing) {
+    if (existing.includes(pluginId)) {
+      return;
+    }
     existing.push(pluginId);
     return;
   }

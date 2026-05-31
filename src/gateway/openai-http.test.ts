@@ -1881,14 +1881,20 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           messages: [{ role: "user", content: "hi" }],
         });
         expect(lateToolCallRes.status).toBe(200);
-        const lateToolCallTextPromise = lateToolCallRes.text();
-        const earlyCompletion = await Promise.race([
-          lateToolCallTextPromise.then(() => "completed" as const),
-          new Promise<"pending">((resolve) => {
-            setTimeout(() => resolve("pending"), 1200);
-          }),
-        ]);
-        expect(earlyCompletion).toBe("pending");
+        if (!lateToolCallRes.body) {
+          throw new Error("expected streaming response body");
+        }
+        const reader = lateToolCallRes.body.getReader();
+        const decoder = new TextDecoder();
+        let lateToolCallText = "";
+        while (!lateToolCallText.includes("Let me check that.")) {
+          const { done, value } = await reader.read();
+          if (done) {
+            throw new Error("stream ended before early assistant delta");
+          }
+          lateToolCallText += decoder.decode(value, { stream: true });
+        }
+        expect(lateToolCallText).not.toContain("[DONE]");
 
         resolveLateToolCall?.({
           payloads: [{ text: "Let me check that." }],
@@ -1903,7 +1909,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             ],
           },
         });
-        const lateToolCallText = await lateToolCallTextPromise;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) {
+            lateToolCallText += decoder.decode();
+            break;
+          }
+          lateToolCallText += decoder.decode(value, { stream: true });
+        }
         const lateToolCallData = parseSseDataLines(lateToolCallText);
         const lateToolCallChunks = lateToolCallData
           .filter((d) => d !== "[DONE]")

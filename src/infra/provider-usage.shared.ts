@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
@@ -8,7 +9,7 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini",
   minimax: "MiniMax",
-  "openai-codex": "Codex",
+  openai: "OpenAI",
   xiaomi: "Xiaomi",
   "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",
@@ -19,11 +20,15 @@ export const usageProviders: UsageProviderId[] = [
   "github-copilot",
   "google-gemini-cli",
   "minimax",
-  "openai-codex",
+  "openai",
   "xiaomi",
   "xiaomi-token-plan",
   "zai",
 ];
+
+export function isOAuthOnlyUsageProvider(provider: UsageProviderId): boolean {
+  return provider === "openai";
+}
 
 export function resolveUsageProviderId(
   provider?: string | null,
@@ -37,7 +42,10 @@ export function resolveUsageProviderId(
     normalized === "openai" &&
     (options?.credentialType === "oauth" || options?.credentialType === "token")
   ) {
-    return "openai-codex";
+    return "openai";
+  }
+  if (normalized === "openai") {
+    return undefined;
   }
   if (
     normalized === "minimax-portal" ||
@@ -64,11 +72,12 @@ export const clampPercent = (value: number) =>
 
 export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
+  const timeoutMs = resolveTimerTimeoutMs(ms, 1);
   try {
     return await Promise.race([
       work,
       new Promise<T>((resolve) => {
-        timeout = setTimeout(() => resolve(fallback), ms);
+        timeout = setTimeout(() => resolve(fallback), timeoutMs);
       }),
     ]);
   } finally {

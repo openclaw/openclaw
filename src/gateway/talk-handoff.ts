@@ -4,8 +4,8 @@ import {
   isFutureDateTimestampMs,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-} from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   createTalkSessionController,

@@ -760,6 +760,10 @@ export const fa: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "عامل",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "صحنه",
       diary: "دفترچه",
@@ -1285,6 +1289,9 @@ export const fa: TranslationMap = {
       loadMoreSessions: "بارگذاری نشست‌های بیشتر",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool error",
     },
   },
   languages: {

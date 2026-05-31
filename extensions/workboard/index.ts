@@ -8,7 +8,7 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
-    const store = WorkboardStore.open((options) => api.runtime.state.openKeyedStore(options));
+    const store = WorkboardStore.openSqlite();
     registerWorkboardGatewayMethods({ api, store });
     api.registerTool((context) => createWorkboardTools({ api, context, store }), {
       names: [

@@ -1,10 +1,10 @@
 import path from "node:path";
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
-import type { NormalizedModelCatalogRow } from "../model-catalog/types.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
+import { sortUniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearNativeRequireJavaScriptModuleCache } from "./native-module-require.js";
