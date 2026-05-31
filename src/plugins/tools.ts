@@ -116,18 +116,25 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
   }
 
   const prepareArguments = tool.prepareArguments;
-  const wrapped: AnyAgentTool = {
-    ...tool,
-    ...(prepareArguments
-      ? {
-          prepareArguments(args) {
-            return runWithPluginToolScope(entry, () =>
-              Reflect.apply(prepareArguments, tool, [args]),
-            );
-          },
-        }
-      : {}),
-    execute(toolCallId, params, signal, onUpdate) {
+  const descriptors = Object.getOwnPropertyDescriptors(tool);
+  delete descriptors.execute;
+  delete descriptors.prepareArguments;
+  const wrapped = Object.create(Object.getPrototypeOf(tool)) as AnyAgentTool;
+  Object.defineProperties(wrapped, descriptors);
+  if (prepareArguments) {
+    Object.defineProperty(wrapped, "prepareArguments", {
+      configurable: true,
+      enumerable: Object.prototype.propertyIsEnumerable.call(tool, "prepareArguments"),
+      value(args: unknown) {
+        return runWithPluginToolScope(entry, () => Reflect.apply(prepareArguments, tool, [args]));
+      },
+      writable: true,
+    });
+  }
+  Object.defineProperty(wrapped, "execute", {
+    configurable: true,
+    enumerable: Object.prototype.propertyIsEnumerable.call(tool, "execute"),
+    value(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) {
       return runWithPluginToolScope(
         entry,
         () =>
@@ -136,7 +143,8 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
           >,
       );
     },
-  };
+    writable: true,
+  });
 
   copyPluginToolMeta(tool, wrapped);
   const nextScopedByKey = scopedByKey ?? new Map<string, AnyAgentTool>();

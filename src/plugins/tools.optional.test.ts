@@ -663,6 +663,61 @@ describe("resolvePluginTools optional tools", () => {
     ]);
   });
 
+  it("preserves class-backed plugin tool shape while scoping callbacks", async () => {
+    const context = createContext();
+    const observed: Array<{ phase: string; pluginId?: string }> = [];
+
+    class AccessorTool {
+      get name() {
+        return "class_tool";
+      }
+
+      get description() {
+        return "class backed tool";
+      }
+
+      get parameters() {
+        return { type: "object", properties: {} };
+      }
+
+      prepareArguments(args: unknown) {
+        observed.push({
+          phase: "prepare",
+          pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+        });
+        return args;
+      }
+
+      async execute() {
+        observed.push({
+          phase: "execute",
+          pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+        });
+        return { content: [{ type: "text", text: "ok" }] };
+      }
+    }
+
+    setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["class_tool"],
+        factory: () => new AccessorTool(),
+      },
+    ]);
+
+    const [tool] = resolvePluginTools(createResolveToolsParams({ context }));
+    expect(tool?.name).toBe("class_tool");
+    expect(Object.getPrototypeOf(tool)).toBe(AccessorTool.prototype);
+    await tool?.execute("call-class", tool.prepareArguments?.({}) ?? {}, undefined);
+
+    expect(observed).toEqual([
+      { phase: "prepare", pluginId: "multi" },
+      { phase: "execute", pluginId: "multi" },
+    ]);
+  });
+
   it("does not load plugin-owned tools whose manifest metadata has no available signal", () => {
     const config = createContext().config;
     installToolManifestSnapshot({
