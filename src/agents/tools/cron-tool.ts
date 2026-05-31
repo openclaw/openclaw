@@ -603,19 +603,19 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           const includeDisabled = Boolean(params.includeDisabled);
           let offset = 0;
           let result: unknown;
-          let shouldContinueListing = true;
-          while (shouldContinueListing) {
+          let shouldContinue = true;
+          while (shouldContinue) {
             result = await callGateway("cron.list", gatewayOpts, {
               includeDisabled,
               agentId: listAgentId,
               ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
             });
             if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
-              shouldContinueListing = false;
+              shouldContinue = false;
             } else {
               const nextOffset = readCronListNextOffset(result, offset);
               if (nextOffset === undefined) {
-                shouldContinueListing = false;
+                shouldContinue = false;
               } else {
                 offset = nextOffset;
               }

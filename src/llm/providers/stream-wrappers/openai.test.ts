@@ -36,18 +36,6 @@ const openaiModel = {
   id: "gpt-5.2",
 } as Model<"openai-responses">;
 
-const openAICompletionsModelDefaults = {
-  name: "OpenAI-compatible test model",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128000,
-  maxTokens: 8192,
-} satisfies Pick<
-  Model<"openai-completions">,
-  "name" | "reasoning" | "input" | "cost" | "contextWindow" | "maxTokens"
->;
-
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
     const payloads: Array<Record<string, unknown>> = [];
@@ -66,7 +54,6 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
     const wrapped = createOpenAICompletionsToolsCompatWrapper(baseStreamFn);
     void wrapped(
       {
-        ...openAICompletionsModelDefaults,
         api: "openai-completions",
         provider: "venice",
         id: "chat-only-model",
@@ -97,7 +84,6 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
     const wrapped = createOpenAICompletionsToolsCompatWrapper(baseStreamFn);
     void wrapped(
       {
-        ...openAICompletionsModelDefaults,
         api: "openai-completions",
         provider: "venice",
         id: "tool-capable-model",
@@ -432,7 +418,6 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
     void wrapped(
       {
-        ...openAICompletionsModelDefaults,
         api: "openai-completions",
         provider: "openai",
         id: "gpt-4o",
