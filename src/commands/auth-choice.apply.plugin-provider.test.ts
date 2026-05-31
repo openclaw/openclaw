@@ -587,6 +587,46 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
   });
 
+  it("does not carry legacy Codex model metadata when default preservation is not requested", async () => {
+    const provider = buildOpenAIProviderWithDefaultModelPatch();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: LEGACY_OPENAI_CODEX_DEFAULT_MODEL },
+              models: {
+                [LEGACY_OPENAI_CODEX_DEFAULT_MODEL]: {
+                  params: { maxTokens: 12_000 },
+                  agentRuntime: { id: "codex-cli" },
+                  streaming: false,
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: OPENAI_DEFAULT_MODEL,
+    });
+    expect(result?.config.agents?.defaults?.models).toEqual({
+      [LEGACY_OPENAI_CODEX_DEFAULT_MODEL]: {
+        params: { maxTokens: 12_000 },
+        agentRuntime: { id: "codex-cli" },
+        streaming: false,
+      },
+      [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
+    });
+  });
+
   it("keeps a Codex default during direct OpenAI API-key setup", async () => {
     const provider = buildOpenAIProviderWithDefaultModelPatch({
       id: "api-key",

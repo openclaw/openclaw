@@ -311,11 +311,14 @@ async function applyDefaultModelFromAuthChoice(params: {
 }): Promise<OpenClawConfig> {
   const defaultModelBaseConfig = params.configBeforeProviderAuth ?? params.config;
   const previousPrimary = resolveConfiguredDefaultModelPrimary(defaultModelBaseConfig);
-  const migrationMatch = resolveDefaultModelMigrationMatch({
-    previousPrimary,
-    selectedModel: params.selectedModel,
-    defaultModelMigration: params.defaultModelMigration,
-  });
+  const migrationMatch =
+    params.preserveExistingDefaultModel === true
+      ? resolveDefaultModelMigrationMatch({
+          previousPrimary,
+          selectedModel: params.selectedModel,
+          defaultModelMigration: params.defaultModelMigration,
+        })
+      : undefined;
   const preserveExistingPrimary = shouldPreserveExistingDefaultPrimary({
     previousPrimary,
     selectedModel: params.selectedModel,
