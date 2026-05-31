@@ -457,13 +457,6 @@ async function persistProviderAuthResult(params: {
           replaceDefaultModels: params.result.replaceDefaultModels,
         });
       }
-      for (const profile of profiles) {
-        next = applyAuthProfileConfig(next, {
-          profileId: profile.profileId,
-          provider: profile.credential.provider,
-          mode: credentialMode(profile.credential),
-        });
-      }
       next = restorePriorAgentsDefaultsModelUnlessOptIn({
         cfg: next,
         priorAgentsDefaultsModel,

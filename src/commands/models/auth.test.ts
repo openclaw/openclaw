@@ -1107,6 +1107,7 @@ describe("modelsAuthLoginCommand", () => {
       "anthropic/claude-sonnet-4-6": {},
       "openai/gpt-5.5": { alias: "GPT" },
     });
+    expect(lastUpdatedConfig?.auth).toBeUndefined();
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai/gpt-5.5 (use --set-default to apply)",
     );
