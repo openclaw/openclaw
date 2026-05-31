@@ -349,6 +349,27 @@ describe("mcp cli", () => {
     });
   });
 
+  it("clears stored OAuth credentials after auth is removed", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","transport":"streamable-http"}',
+      ]);
+      clearMcpOAuthCredentials.mockClear();
+      await runMcpCommand(["mcp", "logout", "docs"]);
+
+      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
+        serverName: "docs",
+        serverUrl: "https://mcp.example.com",
+      });
+    });
+  });
+
   it("reports MCP doctor setup errors and sensitive literals", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();

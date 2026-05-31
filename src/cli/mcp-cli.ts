@@ -1282,9 +1282,6 @@ export function registerMcpCli(program: Command) {
           `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
         );
       }
-      if (server.auth !== "oauth") {
-        fail(`MCP server "${name}" is not configured with auth: "oauth".`);
-      }
       const resolved = resolveMcpTransportConfig(name, server);
       if (!resolved || resolved.kind !== "http") {
         fail(`MCP server "${name}" needs a valid HTTP transport for OAuth logout.`);
