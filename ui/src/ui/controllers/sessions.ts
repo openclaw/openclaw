@@ -341,6 +341,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "systemSent",
   "thinkingDefault",
   "thinkingLevel",
+  "thinkingLevels",
   "thinkingOptions",
   "totalTokens",
   "totalTokensFresh",
@@ -827,6 +828,12 @@ export function applyChatHistorySessionInfo(
       }
     }
     return true;
+  }
+  if (defaults) {
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      defaults,
+    };
   }
   const visibleKey =
     state.sessionsResult.sessions.find((existing) =>
