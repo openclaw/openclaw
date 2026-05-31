@@ -41,7 +41,7 @@ describe("buildTelegramPresentationButtons", () => {
       [
         {
           text: "Approve",
-          callback_data: "tgcmd:/approve req-1 allow-once",
+          callback_data: "/approve req-1 allow-once",
           style: "success",
         },
       ],
@@ -66,6 +66,28 @@ describe("buildTelegramPresentationButtons", () => {
         {
           text: "Keep",
           callback_data: "tgcmd:/codex plugins menu",
+          style: undefined,
+        },
+      ],
+    ]);
+  });
+
+  it("keeps shortened plugin approval callbacks on the approval bypass path", () => {
+    const approvalId = `plugin:${"a".repeat(36)}`;
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Allow", value: `/approve ${approvalId} allow-always` }],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Allow",
+          callback_data: `/approve ${approvalId} always`,
           style: undefined,
         },
       ],

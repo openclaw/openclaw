@@ -1,3 +1,4 @@
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isMessagePresentationInteractiveBlock,
@@ -41,9 +42,7 @@ function toTelegramInlineButton(
       style,
     };
   }
-  const callbackData = button.value
-    ? sanitizeTelegramCallbackData(toTelegramCallbackData(button.value))
-    : undefined;
+  const callbackData = button.value ? toTelegramCallbackData(button.value) : undefined;
   if (callbackData) {
     return {
       text: button.label,
@@ -61,9 +60,19 @@ function toTelegramInlineButton(
   return undefined;
 }
 
-function toTelegramCallbackData(value: string): string {
-  const commandText = value.trim();
-  return commandText.startsWith("/") ? buildTelegramNativeCommandCallbackData(commandText) : value;
+function toTelegramCallbackData(value: string): string | undefined {
+  const sanitizedValue = sanitizeTelegramCallbackData(value);
+  if (!sanitizedValue) {
+    return undefined;
+  }
+  if (parseExecApprovalCommandText(sanitizedValue)) {
+    return sanitizedValue;
+  }
+  const commandText = sanitizedValue.trim();
+  const callbackData = commandText.startsWith("/")
+    ? buildTelegramNativeCommandCallbackData(commandText)
+    : sanitizedValue;
+  return sanitizeTelegramCallbackData(callbackData);
 }
 
 function chunkInteractiveButtons(
