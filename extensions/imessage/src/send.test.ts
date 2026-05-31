@@ -283,6 +283,88 @@ describe("sendMessageIMessage receipts", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("preserves explicit SMS service for bare-handle media sends", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/sms-media-guid" });
+
+    await sendMessageIMessage("+15550004567", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      service: "sms",
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(runCliJson.mock.calls[0]?.[0]).toEqual([
+      "send-attachment",
+      "--chat",
+      "SMS;-;+15550004567",
+      "--file",
+      "/tmp/image.png",
+      "--transport",
+      "auto",
+    ]);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("preserves configured iMessage service for bare-handle media sends", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/imessage-media-guid" });
+
+    await sendMessageIMessage("+15550004567", "", {
+      config: {
+        channels: {
+          imessage: {
+            accounts: {
+              default: {
+                service: "imessage",
+              },
+            },
+          },
+        },
+      },
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(runCliJson.mock.calls[0]?.[0]).toEqual([
+      "send-attachment",
+      "--chat",
+      "iMessage;-;+15550004567",
+      "--file",
+      "/tmp/image.png",
+      "--transport",
+      "auto",
+    ]);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps chat_identifier media sends on the rpc send path", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn();
+
+    await sendMessageIMessage("chat_identifier:team-thread", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_identifier: "team-thread",
+        file: "/tmp/image.png",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("sends DM handle media captions as attachment plus follow-up text", async () => {
     const client = createClient({ guid: "p:0/caption-guid" });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });

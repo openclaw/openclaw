@@ -682,26 +682,29 @@ function isAttachmentCommandFallbackError(error: unknown): boolean {
 
 async function resolveAttachmentChatTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
+  service?: IMessageService;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
 }): Promise<string | null> {
   if (params.target.kind === "chat_guid") {
     return params.target.chatGuid;
-  }
-  if (params.target.kind === "chat_identifier") {
-    return params.target.chatIdentifier;
   }
   if (params.target.kind === "handle") {
     const normalizedHandle = normalizeIMessageHandle(params.target.to);
     if (!normalizedHandle) {
       return null;
     }
-    if (params.target.service === "sms") {
+    const service =
+      params.target.service !== "auto" ? params.target.service : params.service;
+    if (service === "sms") {
       return `SMS;-;${normalizedHandle}`;
     }
-    if (params.target.service === "imessage") {
+    if (service === "imessage") {
       return `iMessage;-;${normalizedHandle}`;
     }
     return `any;-;${normalizedHandle}`;
+  }
+  if (params.target.kind !== "chat_id") {
+    return null;
   }
   const result = await params.runCliJson(["group", "--chat-id", String(params.target.chatId)]);
   return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
@@ -711,6 +714,7 @@ async function trySendAttachmentForTarget(params: {
   accountId: string;
   dbPath?: string;
   target: ReturnType<typeof parseIMessageTarget>;
+  service?: IMessageService;
   filePath: string;
   echoText?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
@@ -720,6 +724,7 @@ async function trySendAttachmentForTarget(params: {
   try {
     attachmentChatTarget = await resolveAttachmentChatTarget({
       target: params.target,
+      service: params.service,
       runCliJson: params.runCliJson,
     });
   } catch (error) {
@@ -887,6 +892,7 @@ export async function sendMessageIMessage(
       accountId: account.accountId,
       dbPath: chatDbLookupPath,
       target,
+      service,
       filePath,
       echoText,
       runCliJson,
