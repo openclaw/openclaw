@@ -12,6 +12,7 @@ import {
   ensureAuthProfileStore,
 } from "./auth-profiles/store.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
+import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
   createRuntimeProviderAuthLookup,
@@ -568,6 +569,51 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("uses the config default agent dir for inline provider cooldown checks", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-inline-cooldown-agent-dir-",
+        agentEnv: "clear",
+      },
+      async (state) => {
+        const usageId = resolveInlineProviderApiKeyUsageId("demo-local");
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {},
+            usageStats: {
+              [usageId]: {
+                disabledUntil: Date.now() + 60_000,
+                disabledReason: "billing",
+              },
+            },
+          },
+          "configured",
+        );
+
+        const cfg: OpenClawConfig = {
+          ...buildDemoLocalProviderCfg("DEMO_LOCAL_API_KEY"),
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: state.agentDir("configured"),
+              },
+            ],
+          },
+        };
+
+        await withEnvAsync({ DEMO_LOCAL_API_KEY: "env-demo-key" }, async () => {
+          await expect(resolveApiKeyForProvider({ provider: "demo-local", cfg })).rejects.toThrow(
+            /Inline API key for provider "demo-local" is temporarily disabled/,
+          );
+        });
+      },
+    );
+  });
+
   it("reports the config default agent dir when provider auth is missing", async () => {
     await withOpenClawTestState(
       {
@@ -1070,6 +1116,156 @@ describe("getApiKeyForModel", () => {
     expect(resolved.apiKey).toBe("config-demo-key");
     expect(resolved.source).toBe("models.json");
     expect(resolved.profileId).toBeUndefined();
+  });
+
+  it("blocks explicit configured apiKey while its inline provider cooldown is active", async () => {
+    const usageId = resolveInlineProviderApiKeyUsageId("demo-local");
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "demo-local",
+        store: {
+          version: 1,
+          profiles: {},
+          usageStats: {
+            [usageId]: {
+              disabledUntil: Date.now() + 60_000,
+              disabledReason: "billing",
+            },
+          },
+        },
+        cfg: {
+          models: {
+            providers: {
+              "demo-local": {
+                baseUrl: "http://localhost:11434",
+                api: "openai-completions",
+                apiKey: "config-demo-key",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/Inline API key for provider "demo-local" is temporarily disabled/);
+  });
+
+  it("blocks configured env-marker apiKey while its inline provider cooldown is active", async () => {
+    const usageId = resolveInlineProviderApiKeyUsageId("inline-cloud");
+    await withEnvAsync({ INLINE_CLOUD_API_KEY: "env-cloud-key" }, async () => {
+      const store = {
+        version: 1 as const,
+        profiles: {},
+        usageStats: {
+          [usageId]: {
+            disabledUntil: Date.now() + 60_000,
+            disabledReason: "billing" as const,
+          },
+        },
+      };
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "inline-cloud": {
+              baseUrl: "https://inline-cloud.example",
+              api: "openai-completions",
+              apiKey: "INLINE_CLOUD_API_KEY",
+              models: [],
+            },
+          },
+        },
+      };
+
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "inline-cloud",
+          store,
+          cfg,
+        }),
+      ).rejects.toThrow(/Inline API key for provider "inline-cloud" is temporarily disabled/);
+      await expect(
+        hasAvailableAuthForProvider({ provider: "inline-cloud", store, cfg }),
+      ).resolves.toBe(false);
+    });
+  });
+
+  it("keeps healthy stored profiles available when configured env auth is cooling down", async () => {
+    const usageId = resolveInlineProviderApiKeyUsageId("inline-cloud");
+    await withEnvAsync({ INLINE_CLOUD_API_KEY: "env-cloud-key" }, async () => {
+      const store = {
+        version: 1 as const,
+        profiles: {
+          "inline-cloud:default": {
+            type: "api_key" as const,
+            provider: "inline-cloud" as const,
+            key: "stored-cloud-key",
+          },
+        },
+        usageStats: {
+          [usageId]: {
+            disabledUntil: Date.now() + 60_000,
+            disabledReason: "billing" as const,
+          },
+        },
+      };
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "inline-cloud": {
+              baseUrl: "https://inline-cloud.example",
+              api: "openai-completions",
+              apiKey: "INLINE_CLOUD_API_KEY",
+              models: [],
+            },
+          },
+        },
+      };
+
+      await expect(
+        hasAvailableAuthForProvider({ provider: "inline-cloud", store, cfg }),
+      ).resolves.toBe(true);
+      const resolved = await resolveApiKeyForProvider({ provider: "inline-cloud", store, cfg });
+      expect(resolved.apiKey).toBe("stored-cloud-key");
+      expect(resolved.source).toBe("profile:inline-cloud:default");
+    });
+  });
+
+  it("blocks configured env SecretRef apiKey while its inline provider cooldown is active", async () => {
+    const usageId = resolveInlineProviderApiKeyUsageId("inline-cloud");
+    await withEnvAsync({ INLINE_CLOUD_API_KEY: "env-cloud-key" }, async () => {
+      const store = {
+        version: 1 as const,
+        profiles: {},
+        usageStats: {
+          [usageId]: {
+            disabledUntil: Date.now() + 60_000,
+            disabledReason: "billing" as const,
+          },
+        },
+      };
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "inline-cloud": {
+              baseUrl: "https://inline-cloud.example",
+              api: "openai-completions",
+              apiKey: { source: "env", provider: "default", id: "INLINE_CLOUD_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      };
+
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "inline-cloud",
+          store,
+          cfg,
+        }),
+      ).rejects.toThrow(/Inline API key for provider "inline-cloud" is temporarily disabled/);
+      await expect(
+        hasAvailableAuthForProvider({ provider: "inline-cloud", store, cfg }),
+      ).resolves.toBe(false);
+    });
   });
 
   it("falls back to the stored synthetic local profile when no real auth exists", async () => {

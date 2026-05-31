@@ -60,6 +60,12 @@ export const testing = {
   },
 };
 
+const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
+
+export function resolveInlineProviderApiKeyUsageId(provider: string): string {
+  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
+}
+
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
   "auth",
@@ -547,6 +553,20 @@ export function resolveProfileUnusableUntilForDisplay(
   return resolveProfileUnusableUntil(stats);
 }
 
+export function resolveInlineProviderApiKeyUnusableUntil(
+  store: AuthProfileStore,
+  provider: string,
+): number | null {
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
+  if (!stats) {
+    return null;
+  }
+  return resolveProfileUnusableUntil(stats);
+}
+
 function resetUsageStats(
   existing: ProfileUsageStats | undefined,
   overrides?: Partial<ProfileUsageStats>,
@@ -951,6 +971,105 @@ export async function markAuthProfileBlockedUntil(params: {
     next: nextStats,
     now,
   });
+}
+
+export async function markInlineProviderApiKeyFailure(params: {
+  store: AuthProfileStore;
+  provider: string;
+  reason: AuthProfileFailureReason;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  runId?: string;
+  modelId?: string;
+}): Promise<void> {
+  const { store, provider, reason, agentDir, cfg, runId, modelId } = params;
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return;
+  }
+
+  const usageId = resolveInlineProviderApiKeyUsageId(provider);
+  const providerKey = normalizeProviderId(provider);
+  const cfgResolved = resolveAuthCooldownConfig({
+    cfg,
+    providerId: providerKey,
+  });
+
+  let nextStats: ProfileUsageStats | undefined;
+  let previousStats: ProfileUsageStats | undefined;
+  let updateTime = 0;
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+    agentDir,
+    updater: (freshStore) => {
+      const now = Date.now();
+      previousStats = freshStore.usageStats?.[usageId];
+      updateTime = now;
+      nextStats = computeNextProfileUsageStats({
+        existing: previousStats ?? {},
+        now,
+        reason,
+        cfgResolved,
+        modelId,
+      });
+      updateUsageStatsEntry(freshStore, usageId, () => nextStats as ProfileUsageStats);
+      return true;
+    },
+  });
+  if (updated) {
+    store.usageStats = updated.usageStats;
+    if (nextStats) {
+      logAuthProfileFailureStateChange({
+        runId,
+        profileId: usageId,
+        provider,
+        reason,
+        previous: previousStats,
+        next: nextStats,
+        now: updateTime,
+      });
+    }
+    try {
+      onAuthProfileFailureHook?.();
+    } catch (err) {
+      // Hook errors must not break failure recording; log and continue.
+      authProfileUsageLog.warn("auth profile failure hook threw", {
+        event: "auth_profile_failure_hook_error",
+        tags: ["error_handling", "auth_profiles"],
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  const now = Date.now();
+  previousStats = store.usageStats?.[usageId];
+  nextStats = computeNextProfileUsageStats({
+    existing: previousStats ?? {},
+    now,
+    reason,
+    cfgResolved,
+    modelId,
+  });
+  updateUsageStatsEntry(store, usageId, () => nextStats as ProfileUsageStats);
+  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
+  logAuthProfileFailureStateChange({
+    runId,
+    profileId: usageId,
+    provider,
+    reason,
+    previous: previousStats,
+    next: nextStats,
+    now,
+  });
+  try {
+    onAuthProfileFailureHook?.();
+  } catch (err) {
+    // Hook errors must not break failure recording; log and continue.
+    authProfileUsageLog.warn("auth profile failure hook threw", {
+      event: "auth_profile_failure_hook_error",
+      tags: ["error_handling", "auth_profiles"],
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
