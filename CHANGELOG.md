@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugin SDK: expose the exec approvals runtime subpath used by newer Codex plugins, so an already-installed \`@openclaw/codex\` package does not fail to load with \`MODULE_NOT_FOUND\` for \`openclaw/plugin-sdk/exec-approvals-runtime\`.
 - Zorg docs: document that install/package repairs must be grounded in product docs, package metadata, source patterns, and clean-install verification instead of local-only assumptions.
 - Zorg: pin the auto-installed Codex plugin to the packaged OpenClaw version so direct GitHub installs of \`openclaw@2026.5.22\` do not pull a newer \`@openclaw/codex\` that expects missing plugin SDK runtime exports.
 - Zorg: make first-run installs fail closed when a host OpenClaw binary already exists, and require explicit existing-install/Docker config flags before touching upgrade or Docker/TUI compatibility paths.

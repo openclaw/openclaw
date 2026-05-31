@@ -30,6 +30,7 @@
   "approval-native-runtime",
   "approval-reply-runtime",
   "approval-runtime",
+  "exec-approvals-runtime",
   "config-runtime",
   "config-contracts",
   "config-types",

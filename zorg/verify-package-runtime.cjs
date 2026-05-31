@@ -13,6 +13,22 @@ function fail(message) {
   process.exitCode = 1;
 }
 
+function listDistChunksByPrefix(prefix) {
+  const distRoot = path.join(root, "dist");
+  try {
+    return fs
+      .readdirSync(distRoot, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith(".js"),
+      )
+      .map((entry) => path.join("dist", entry.name))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 for (const [subpath, target] of Object.entries(pkg.exports || {})) {
   if (!subpath.startsWith("./plugin-sdk/")) {
     continue;
@@ -86,38 +102,50 @@ const codexSpecChecks = [
     "scripts/lib/official-external-provider-catalog.json",
     /"id":\s*"codex"[\s\S]*?"npmSpec":\s*"([^"]+)"/,
   ],
+  [{ distPrefix: "codex-runtime-plugin-install" }, /CODEX_RUNTIME_PLUGIN_NPM_SPEC\s*=\s*"([^"]+)"/],
   [
-    "dist/codex-runtime-plugin-install-B70xNAdC.js",
-    /CODEX_RUNTIME_PLUGIN_NPM_SPEC\s*=\s*"([^"]+)"/,
-  ],
-  [
-    "dist/configured-runtime-plugin-installs-D_FZggJS.js",
+    { distPrefix: "configured-runtime-plugin-installs" },
     /pluginId:\s*"codex"[\s\S]*?npmSpec:\s*"([^"]+)"/,
   ],
   [
-    "dist/official-external-plugin-catalog-f6g4JsA2.js",
+    { distPrefix: "official-external-plugin-catalog" },
     /"id":\s*"codex"[\s\S]*?"npmSpec":\s*"([^"]+)"/,
   ],
 ];
 
-for (const [relativePath, pattern] of codexSpecChecks) {
-  const filePath = path.join(root, relativePath);
-  if (!fs.existsSync(filePath)) {
-    if (relativePath.startsWith("src/")) {
-      continue;
-    }
-    fail(`missing packaged Codex plugin install spec file: ${relativePath}`);
+for (const [pathSpec, pattern] of codexSpecChecks) {
+  const relativePaths =
+    typeof pathSpec === "string" ? [pathSpec] : listDistChunksByPrefix(pathSpec.distPrefix);
+  if (relativePaths.length === 0) {
+    fail(`missing packaged Codex plugin install spec dist chunk: ${pathSpec.distPrefix}-*.js`);
     continue;
   }
-  const content = fs.readFileSync(filePath, "utf8");
-  const match = pattern.exec(content);
+  let matchedPath = null;
+  let match = null;
+  for (const relativePath of relativePaths) {
+    const filePath = path.join(root, relativePath);
+    if (!fs.existsSync(filePath)) {
+      if (relativePath.startsWith("src/")) {
+        continue;
+      }
+      fail(`missing packaged Codex plugin install spec file: ${relativePath}`);
+      continue;
+    }
+    const content = fs.readFileSync(filePath, "utf8");
+    match = pattern.exec(content);
+    if (match) {
+      matchedPath = relativePath;
+      break;
+    }
+  }
   if (!match) {
-    fail(`missing Codex plugin npmSpec in ${relativePath}`);
+    const label = typeof pathSpec === "string" ? pathSpec : `${pathSpec.distPrefix}-*.js`;
+    fail(`missing Codex plugin npmSpec in ${label}`);
     continue;
   }
   if (match[1] !== EXPECTED_CODEX_PLUGIN_SPEC) {
     fail(
-      `${relativePath} installs ${match[1]} instead of ${EXPECTED_CODEX_PLUGIN_SPEC}; unpinned Codex installs can pull an incompatible plugin SDK`,
+      `${matchedPath} installs ${match[1]} instead of ${EXPECTED_CODEX_PLUGIN_SPEC}; unpinned Codex installs can pull an incompatible plugin SDK`,
     );
   }
 }

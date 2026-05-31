@@ -38,6 +38,9 @@ export const pluginSdkDocMetadata = {
   "approval-reply-runtime": {
     category: "runtime",
   },
+  "exec-approvals-runtime": {
+    category: "runtime",
+  },
   "plugin-entry": {
     category: "core",
   },
