@@ -54,12 +54,28 @@ type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
 
+type OpenClawLeaseSessionMetadata = {
+  openclawLeaseId: string;
+  openclawGatewayInstanceId: string;
+};
+
 function withOpenClawManagedTurnTimeout<T extends object>(input: T): T & { timeoutMs: 0 } {
   // OpenClaw owns ACP turn deadlines. acpx treats timeout after partial agent
   // output as a completed turn, which can mark background work done early.
   return {
     ...input,
     timeoutMs: 0,
+  };
+}
+
+function withOpenClawLeaseSessionMetadata<T extends object>(
+  record: T,
+  metadata: OpenClawLeaseSessionMetadata,
+): T & OpenClawLeaseSessionMetadata {
+  return {
+    ...record,
+    openclawLeaseId: metadata.openclawLeaseId,
+    openclawGatewayInstanceId: metadata.openclawGatewayInstanceId,
   };
 }
 
@@ -234,11 +250,10 @@ function createResetAwareSessionStore(
       if (!lease) {
         return record;
       }
-      return {
-        ...record,
+      return withOpenClawLeaseSessionMetadata(record, {
         openclawLeaseId: lease.leaseId,
         openclawGatewayInstanceId: lease.gatewayInstanceId,
-      } as unknown as AcpLoadedSessionRecord;
+      });
     },
     async save(record: AcpSessionRecord): Promise<void> {
       let recordToSave = record;
@@ -266,14 +281,18 @@ function createResetAwareSessionStore(
           state: "open",
         };
         await params.leaseStore.save(lease);
-        recordToSave = {
-          ...record,
-          // ACPX uses agentCommand as reuse identity. Lease metadata belongs to
-          // our sidecar record, so keep the persisted command stable.
-          agentCommand: stableAgentCommand,
-          openclawLeaseId: launch.leaseId,
-          openclawGatewayInstanceId: launch.gatewayInstanceId,
-        } as unknown as AcpSessionRecord;
+        recordToSave = withOpenClawLeaseSessionMetadata(
+          {
+            ...record,
+            // ACPX uses agentCommand as reuse identity. Lease metadata belongs to
+            // our sidecar record, so keep the persisted command stable.
+            agentCommand: stableAgentCommand,
+          },
+          {
+            openclawLeaseId: launch.leaseId,
+            openclawGatewayInstanceId: launch.gatewayInstanceId,
+          },
+        );
       }
       await baseStore.save(recordToSave);
       if (sessionName) {

@@ -351,13 +351,15 @@ function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 function asProviderConfig(value: unknown): SpeechProviderConfig {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as SpeechProviderConfig)
+    ? // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Speech provider configs are open JSON records normalized at the plugin boundary.
+      (value as SpeechProviderConfig)
     : {};
 }
 
 function asProviderConfigMap(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+    ? // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- TTS provider config maps are open JSON records keyed by provider id.
+      (value as Record<string, unknown>)
     : {};
 }
 
@@ -728,6 +730,7 @@ function readPrefs(prefsPath: string): TtsUserPrefs {
     if (!existsSync(prefsPath)) {
       return {};
     }
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- User prefs are trusted local JSON and unknown keys are ignored by readers.
     return JSON.parse(readFileSync(prefsPath, "utf8")) as TtsUserPrefs;
   } catch {
     return {};
@@ -900,12 +903,14 @@ export function resolveExplicitTtsOverrides(params: {
       `TTS provider "${selectedProvider}" ignored the requested model or voice overrides.`,
     );
   }
+  if (!providerOverrides) {
+    throw new Error(`TTS provider "${selectedProvider}" did not return talk overrides.`);
+  }
 
-  const overridesRecord = providerOverrides as SpeechProviderOverrides;
   return {
     provider: selectedProvider,
     providerOverrides: {
-      [provider.id]: overridesRecord,
+      [provider.id]: providerOverrides,
     },
   };
 }
@@ -1815,9 +1820,10 @@ export async function textToSpeechTelephony(params: {
         config,
         provider: resolvedProvider.provider,
       });
-      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
-        typeof resolvedProvider.provider.synthesizeTelephony
-      >;
+      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony;
+      if (!synthesizeTelephony) {
+        throw new Error(`TTS provider "${resolvedProvider.provider.id}" lost telephony support`);
+      }
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: params.text,
@@ -2044,6 +2050,7 @@ export async function maybeApplyTtsToPayload(params: {
           textForAudio = `${textForAudio.slice(0, config.maxTextLength - 3)}...`;
         }
       } catch (err) {
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Only the message is used for verbose diagnostics after a caught summarizer failure.
         const error = err as Error;
         logVerbose(`TTS: summarization failed, truncating instead: ${error.message}`);
         textForAudio = `${textForAudio.slice(0, maxLength - 3)}...`;
