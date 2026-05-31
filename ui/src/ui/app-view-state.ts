@@ -430,6 +430,7 @@ export type AppViewState = {
     skillWorkshopQuery: string;
     skillWorkshopFilePreviewKey: string | null;
     skillWorkshopFilePreviewQuery: string;
+    skillWorkshopReviewedKeys: string[];
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

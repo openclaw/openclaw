@@ -486,6 +486,8 @@ function resolveDreamingNextCycle(
 let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
+const SKILL_WORKSHOP_REVIEWED_KEY = "openclaw:control-ui:skill-workshop-reviewed:v1";
+const MAX_SKILL_WORKSHOP_REVIEWED_KEYS = 500;
 const CRON_THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 const CRON_TIMEZONE_SUGGESTIONS = [
   "UTC",
@@ -529,6 +531,72 @@ type DismissedUpdateBanner = {
   channel: string | null;
   dismissedAtMs: number;
 };
+
+type SkillWorkshopReviewableProposal = {
+  key: string;
+  status: string;
+  version: number;
+  createdAt: number;
+  updatedAt?: number;
+  isNew: boolean;
+};
+
+export function loadSkillWorkshopReviewedKeys(): string[] {
+  const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_REVIEWED_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((value): value is string => typeof value === "string")
+      .slice(-MAX_SKILL_WORKSHOP_REVIEWED_KEYS);
+  } catch {
+    return [];
+  }
+}
+
+function saveSkillWorkshopReviewedKeys(keys: string[]): void {
+  try {
+    getSafeLocalStorage()?.setItem(
+      SKILL_WORKSHOP_REVIEWED_KEY,
+      JSON.stringify(keys.slice(-MAX_SKILL_WORKSHOP_REVIEWED_KEYS)),
+    );
+  } catch {
+    // Ignore browser storage failures; the dots still work for the current render state.
+  }
+}
+
+function skillWorkshopReviewKey(proposal: SkillWorkshopReviewableProposal): string {
+  return `${proposal.key}:${proposal.version}:${proposal.updatedAt ?? proposal.createdAt}`;
+}
+
+function applySkillWorkshopReviewState<T extends SkillWorkshopReviewableProposal>(
+  proposals: T[],
+  reviewedKeys: string[],
+): T[] {
+  const reviewed = new Set(reviewedKeys);
+  return proposals.map((proposal) => ({
+    ...proposal,
+    isNew: proposal.status === "pending" && !reviewed.has(skillWorkshopReviewKey(proposal)),
+  }));
+}
+
+function rememberSkillWorkshopProposalReviewed<T extends SkillWorkshopReviewableProposal>(
+  reviewedKeys: string[],
+  proposal: T,
+): string[] {
+  const key = skillWorkshopReviewKey(proposal);
+  if (reviewedKeys.includes(key)) {
+    return reviewedKeys;
+  }
+  const next = [...reviewedKeys, key].slice(-MAX_SKILL_WORKSHOP_REVIEWED_KEYS);
+  saveSkillWorkshopReviewedKeys(next);
+  return next;
+}
 
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
   try {
@@ -2862,7 +2930,10 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "skillWorkshop"
           ? renderLazyView(lazySkillWorkshop, (m) => {
-              const proposals = m.getDemoSkillWorkshopProposals();
+              const proposals = applySkillWorkshopReviewState(
+                m.getDemoSkillWorkshopProposals(),
+                state.skillWorkshopReviewedKeys,
+              );
               const counts = m.countProposals(proposals);
               const selectedKey = state.skillWorkshopSelectedKey ?? proposals[0]?.key ?? null;
               const currentIndex = proposals.findIndex((p) => p.key === selectedKey);
@@ -2870,7 +2941,12 @@ export function renderApp(state: AppViewState) {
                 if (proposals.length === 0) return;
                 const idx = currentIndex < 0 ? 0 : currentIndex;
                 const next = (idx + offset + proposals.length) % proposals.length;
-                state.skillWorkshopSelectedKey = proposals[next].key;
+                const proposal = proposals[next];
+                state.skillWorkshopSelectedKey = proposal.key;
+                state.skillWorkshopReviewedKeys = rememberSkillWorkshopProposalReviewed(
+                  state.skillWorkshopReviewedKeys,
+                  proposal,
+                );
               };
               return m.renderSkillWorkshop({
                 loading: false,
@@ -2885,7 +2961,14 @@ export function renderApp(state: AppViewState) {
                 onQueryChange: (next) => (state.skillWorkshopQuery = next),
                 onFilePreviewQueryChange: (next) => (state.skillWorkshopFilePreviewQuery = next),
                 onSelect: (key) => {
+                  const proposal = proposals.find((p) => p.key === key);
                   state.skillWorkshopSelectedKey = key;
+                  if (proposal) {
+                    state.skillWorkshopReviewedKeys = rememberSkillWorkshopProposalReviewed(
+                      state.skillWorkshopReviewedKeys,
+                      proposal,
+                    );
+                  }
                   state.skillWorkshopFilePreviewKey = null;
                   state.skillWorkshopFilePreviewQuery = "";
                 },

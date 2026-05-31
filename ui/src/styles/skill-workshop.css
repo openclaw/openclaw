@@ -187,17 +187,16 @@
 }
 
 .sw-row__dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  margin-top: 6px;
+  margin-top: 7px;
   background: var(--border-strong);
   align-self: start;
 }
 
 .sw-row.is-new .sw-row__dot {
-  background: var(--accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 80%, transparent);
 }
 
 .sw-row__title {
