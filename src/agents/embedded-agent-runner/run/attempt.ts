@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
@@ -472,6 +473,31 @@ export {
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
 
+function pluginMetadataSnapshotCoversProvider(
+  snapshot: PluginMetadataSnapshot | undefined,
+  provider: string,
+): snapshot is PluginMetadataSnapshot {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!snapshot || !normalizedProvider) {
+    return false;
+  }
+  return snapshot.manifestRegistry.plugins.some((plugin) => {
+    const ownsProvider = plugin.providers.some(
+      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+    );
+    if (ownsProvider) {
+      return true;
+    }
+    const modelCatalogProviderIds = [
+      ...Object.keys(plugin.modelCatalog?.providers ?? {}),
+      ...Object.keys(plugin.modelCatalog?.aliases ?? {}),
+    ];
+    return modelCatalogProviderIds.some(
+      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+    );
+  });
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -796,6 +822,7 @@ export async function runEmbeddedAttempt(
   const getCurrentAttemptPluginMetadataSnapshot = () => {
     if (!currentPluginMetadataSnapshotResolved) {
       currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        allowScopedSnapshot: true,
         config: params.config,
         env: process.env,
         workspaceDir: effectiveWorkspace,
@@ -809,12 +836,16 @@ export async function runEmbeddedAttempt(
     if (providerRuntimeHandle?.plugin) {
       return providerRuntimeHandle;
     }
+    const pluginMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
     const resolvedHandle = resolveProviderRuntimePluginHandle({
       provider: params.provider,
       modelId: params.modelId,
       config: params.config,
       workspaceDir: effectiveWorkspace,
       env: process.env,
+      ...(pluginMetadataSnapshotCoversProvider(pluginMetadataSnapshot, params.provider)
+        ? { pluginMetadataSnapshot }
+        : {}),
     });
     if (resolvedHandle.plugin) {
       providerRuntimeHandle = resolvedHandle;
