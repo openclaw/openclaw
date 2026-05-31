@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const clientPath = path.resolve("scripts/e2e/lib/openai-chat-tools/client.mjs");
 const dockerRunnerPath = path.resolve("scripts/e2e/openai-chat-tools-docker.sh");
@@ -133,6 +133,28 @@ function toolCallResponse() {
 }
 
 describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
+  let bodyReadTimeoutProbe: {
+    elapsedMs: number;
+    result: ClientResult;
+  };
+
+  beforeAll(async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"choices":');
+    });
+    const port = await listen(server);
+    const startedAt = Date.now();
+    try {
+      bodyReadTimeoutProbe = {
+        result: await runClient(port, {}, 4_000),
+        elapsedMs: Date.now() - startedAt,
+      };
+    } finally {
+      server.close();
+    }
+  });
+
   it("keeps full profile exports out of the Docker build phase", () => {
     const runner = readFileSync(dockerRunnerPath, "utf8");
     const preflightSourceIndex = runner.indexOf('source "$profile_file"');
@@ -179,7 +201,6 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
-
   it("rejects loose timeout env values instead of parsing numeric prefixes", async () => {
     const result = await runClient(1, {
       OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1e3",
@@ -256,23 +277,10 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
   });
 
   it("keeps the request timeout active while reading the response body", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.write('{"choices":');
-    });
-    const port = await listen(server);
-    const startedAt = Date.now();
-    try {
-      const result = await runClient(port, {}, 4_000);
-      const elapsedMs = Date.now() - startedAt;
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/aborted|AbortError/iu);
-      expect(elapsedMs).toBeLessThan(3_500);
-    } finally {
-      server.close();
-    }
+    expect(bodyReadTimeoutProbe.result.error).toBeUndefined();
+    expect(bodyReadTimeoutProbe.result.status).not.toBe(0);
+    expect(bodyReadTimeoutProbe.result.stderr).toMatch(/aborted|AbortError/iu);
+    expect(bodyReadTimeoutProbe.elapsedMs).toBeLessThan(3_500);
   });
 
   it("caps chat completion response bodies before JSON parsing", async () => {

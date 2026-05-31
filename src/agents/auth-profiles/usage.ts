@@ -3,6 +3,7 @@ import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -127,6 +128,15 @@ function resolveActiveWindowUntil(value: unknown, now: number): number {
   return timestampMs !== undefined && timestampMs > now ? timestampMs : 0;
 }
 
+function resolveUsageWindowUntil(now: number, durationMs: number): number {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return now;
+  }
+  return (
+    resolveExpiresAtMsFromDurationMs(Math.max(1, Math.floor(durationMs)), { nowMs: now }) ?? now
+  );
+}
+
 function resolveWhamResetMs(window: WhamUsageWindow | undefined, now: number): number | null {
   if (!window) {
     return null;
@@ -192,7 +202,10 @@ function applyWhamCooldownResult(params: {
   }
   return {
     ...params.computed,
-    cooldownUntil: Math.max(existingActiveCooldownUntil, params.now + params.whamResult.cooldownMs),
+    cooldownUntil: Math.max(
+      existingActiveCooldownUntil,
+      resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
+    ),
   };
 }
 
@@ -263,7 +276,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + primaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, primaryResetMs),
         blockedSource: "wham",
         reason: "wham_personal_rolling",
       };
@@ -275,7 +288,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + secondaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, secondaryResetMs),
         blockedSource: "wham",
         reason: "wham_team_weekly",
       };
@@ -287,7 +300,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + primaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, primaryResetMs),
         blockedSource: "wham",
         reason: "wham_team_rolling",
       };
@@ -615,7 +628,7 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = keepActiveWindowOrRecompute({
       existingUntil: params.existing.disabledUntil,
       now: params.now,
-      recomputedUntil: params.now + backoffMs,
+      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
     });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
@@ -625,7 +638,7 @@ function computeNextProfileUsageStats(params: {
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
       existingUntil: params.existing.cooldownUntil,
       now: params.now,
-      recomputedUntil: params.now + backoffMs,
+      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
     });
     // Update cooldown metadata based on whether the window is still active
     // and whether the same or a different model is failing.

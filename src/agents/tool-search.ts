@@ -403,12 +403,17 @@ function readInteger(value: unknown, fallback: number): number {
 }
 
 let toolSearchCodeModeSupportedForTest: boolean | undefined;
+let toolSearchMinCodeTimeoutMsForTest: number | undefined;
 
 function isToolSearchCodeModeSupported(): boolean {
   if (toolSearchCodeModeSupportedForTest !== undefined) {
     return toolSearchCodeModeSupportedForTest;
   }
   return process.allowedNodeEnvironmentFlags.has("--permission");
+}
+
+function resolveMinCodeTimeoutMs(): number {
+  return toolSearchMinCodeTimeoutMsForTest ?? 1000;
 }
 
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
@@ -427,7 +432,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     enabled: readBoolean(raw.enabled, configured),
     mode,
     codeTimeoutMs: Math.max(
-      1000,
+      resolveMinCodeTimeoutMs(),
       Math.min(60_000, readInteger(raw.codeTimeoutMs, DEFAULT_CODE_TIMEOUT_MS)),
     ),
     searchDefaultLimit: Math.max(
@@ -1687,6 +1692,12 @@ export const testing = {
   isToolSearchCodeModeSupported,
   setToolSearchCodeModeSupportedForTest: (value: boolean | undefined) => {
     toolSearchCodeModeSupportedForTest = value;
+  },
+  setToolSearchMinCodeTimeoutMsForTest: (value: number | undefined) => {
+    toolSearchMinCodeTimeoutMsForTest =
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : undefined;
   },
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,

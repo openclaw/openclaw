@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
@@ -428,7 +429,7 @@ export async function getHealthSnapshot(params?: {
     (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
 
   const start = Date.now();
-  const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
+  const cappedTimeout = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 50);
   const doProbe = params?.probe !== false;
   const includeSensitive = params?.includeSensitive !== false;
   const channels: Record<string, ChannelHealthSummary> = {};

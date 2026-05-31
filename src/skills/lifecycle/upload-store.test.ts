@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createSkillUploadStore,
   MAX_ACTIVE_SKILL_UPLOADS,
@@ -60,6 +60,33 @@ async function expectMissingPath(targetPath: string): Promise<void> {
 }
 
 describe("skill upload store", () => {
+  let activeUploadLimitError: unknown;
+
+  beforeAll(async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-store-"));
+    try {
+      const store = createSkillUploadStore({ rootDir });
+      for (let i = 0; i < MAX_ACTIVE_SKILL_UPLOADS; i += 1) {
+        await store.begin({
+          kind: "skill-archive",
+          slug: `active-${i}`,
+          sizeBytes: 1,
+        });
+      }
+      try {
+        await store.begin({
+          kind: "skill-archive",
+          slug: "too-many",
+          sizeBytes: 1,
+        });
+      } catch (err) {
+        activeUploadLimitError = err;
+      }
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(() => {
     tempDirs = [];
   });
@@ -253,22 +280,8 @@ describe("skill upload store", () => {
   });
 
   it("limits active uploads", async () => {
-    const rootDir = await makeTempDir();
-    const store = createSkillUploadStore({ rootDir });
-    for (let i = 0; i < MAX_ACTIVE_SKILL_UPLOADS; i += 1) {
-      await store.begin({
-        kind: "skill-archive",
-        slug: `active-${i}`,
-        sizeBytes: 1,
-      });
-    }
-
     await expectUploadError(
-      store.begin({
-        kind: "skill-archive",
-        slug: "too-many",
-        sizeBytes: 1,
-      }),
+      Promise.reject(activeUploadLimitError),
       "too many active skill uploads",
     );
   });

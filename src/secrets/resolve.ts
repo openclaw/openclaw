@@ -34,7 +34,12 @@ import {
   secretRefKey,
 } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
-import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
+import {
+  isNonEmptyString,
+  isRecord,
+  normalizePositiveInt,
+  normalizePositiveTimerMs,
+} from "./shared.js";
 
 const DEFAULT_PROVIDER_CONCURRENCY = 4;
 const DEFAULT_MAX_REFS_PER_PROVIDER = 512;
@@ -329,7 +334,7 @@ async function readFileProviderPayload(params: {
 
   const filePath = resolveUserPath(params.providerConfig.path);
   const readPromise = (async () => {
-    const timeoutMs = normalizePositiveInt(
+    const timeoutMs = normalizePositiveTimerMs(
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
     );
@@ -734,8 +739,11 @@ async function resolveExecRefs(params: {
     childEnv[key] = value;
   }
 
-  const timeoutMs = normalizePositiveInt(params.providerConfig.timeoutMs, DEFAULT_EXEC_TIMEOUT_MS);
-  const noOutputTimeoutMs = normalizePositiveInt(
+  const timeoutMs = normalizePositiveTimerMs(
+    params.providerConfig.timeoutMs,
+    DEFAULT_EXEC_TIMEOUT_MS,
+  );
+  const noOutputTimeoutMs = normalizePositiveTimerMs(
     params.providerConfig.noOutputTimeoutMs,
     timeoutMs,
   );

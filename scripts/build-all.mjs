@@ -180,9 +180,15 @@ export const BUILD_ALL_PROFILES = {
 };
 
 export const BUILD_ALL_PROFILE_STEP_ENV = {
+  full: {
+    tsdown: {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+  },
   ciArtifacts: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   gatewayWatch: {
@@ -201,6 +207,7 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   cliStartup: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
     "runtime-postbuild": {
       OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",

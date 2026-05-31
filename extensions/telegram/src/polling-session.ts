@@ -1126,3 +1126,8 @@ const isGetUpdatesConflict = (err: unknown) => {
   const normalizedHaystack = normalizeLowercaseStringOrEmpty(haystack);
   return normalizedHaystack.includes("getupdates");
 };
+
+export const testing = {
+  resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
+    resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
+};

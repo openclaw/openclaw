@@ -60,6 +60,15 @@ const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
+let followIntervalMsForTests: number | undefined;
+
+export function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
+  followIntervalMsForTests = intervalMs;
+}
+
+function resolveFollowIntervalMs(): number {
+  return followIntervalMsForTests ?? FOLLOW_INTERVAL_MS;
+}
 
 function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
@@ -453,7 +462,7 @@ async function followSelections(
           );
         }
       }
-    }, FOLLOW_INTERVAL_MS);
+    }, resolveFollowIntervalMs());
 
     const stop = () => {
       clearInterval(interval);

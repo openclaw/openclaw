@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
@@ -71,6 +71,24 @@ describe("buildMinimaxSpeechProvider", () => {
     const savedEnv = { ...process.env };
     let tempStateDir: string;
     let tempAgentDir: string;
+    let tokenPlanEnvConfigured = false;
+
+    beforeAll(() => {
+      const previous = process.env.MINIMAX_CODING_API_KEY;
+      try {
+        process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
+        tokenPlanEnvConfigured = provider.isConfigured({
+          providerConfig: {},
+          timeoutMs: 30000,
+        });
+      } finally {
+        if (previous === undefined) {
+          delete process.env.MINIMAX_CODING_API_KEY;
+        } else {
+          process.env.MINIMAX_CODING_API_KEY = previous;
+        }
+      }
+    });
 
     beforeEach(async () => {
       tempStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-minimax-tts-auth-"));
@@ -102,8 +120,7 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("returns true when a MiniMax Token Plan env var is set", () => {
-      process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+      expect(tokenPlanEnvConfigured).toBe(true);
     });
 
     it("returns true when a MiniMax portal auth profile is available", async () => {
