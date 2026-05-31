@@ -1041,6 +1041,46 @@ function resolvePackageExportImportPath(value: unknown): string | null {
       : null;
 }
 
+function listRootPackagedWorkspacePackageAliasEntries(params: {
+  packageRoot: string;
+  packageName: string;
+  packageDir: string;
+}): WorkspacePackageAliasEntry[] {
+  const distRoot = path.join(params.packageRoot, "dist", params.packageDir);
+  if (!fs.existsSync(distRoot)) {
+    return [];
+  }
+  const entries: WorkspacePackageAliasEntry[] = [];
+  const visit = (dir: string, prefix = "") => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const relativePath = prefix ? path.join(prefix, entry.name) : entry.name;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath, relativePath);
+        continue;
+      }
+      if (!entry.isFile() || !relativePath.endsWith(".js")) {
+        continue;
+      }
+      const normalizedRelativePath = relativePath.split(path.sep).join("/");
+      const subpath =
+        normalizedRelativePath === "index.js" ? "" : normalizedRelativePath.slice(0, -".js".length);
+      if (subpath.includes("..")) {
+        continue;
+      }
+      entries.push({
+        packageName: params.packageName,
+        packageDir: params.packageDir,
+        subpath,
+        srcFile: `${subpath || "index"}.ts`,
+        distFile: relativePath,
+      });
+    }
+  };
+  visit(distRoot);
+  return entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath));
+}
+
 export function listWorkspacePackageExportAliasEntries(params: {
   packageRoot: string;
   packageName: string;
@@ -1062,7 +1102,7 @@ export function listWorkspacePackageExportAliasEntries(params: {
       : null);
   const exports = packageJson?.exports;
   if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
-    return [];
+    return listRootPackagedWorkspacePackageAliasEntries(params);
   }
   const entries: WorkspacePackageAliasEntry[] = [];
   for (const [exportKey, value] of Object.entries(exports)) {
@@ -1081,7 +1121,9 @@ export function listWorkspacePackageExportAliasEntries(params: {
       distFile,
     });
   }
-  return entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath));
+  return entries.length > 0
+    ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
+    : listRootPackagedWorkspacePackageAliasEntries(params);
 }
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
