@@ -263,7 +263,6 @@ async function sessionFenceRewriteIsBenign(params: {
     !params.previous?.fingerprint.exists ||
     !params.current.exists ||
     !params.previous.text ||
-    !sameSessionFileIdentity(params.previous.fingerprint, params.current) ||
     params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES) ||
     params.current.size > MAX_SAFE_FILE_OFFSET
   ) {
