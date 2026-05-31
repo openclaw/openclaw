@@ -365,6 +365,18 @@ export async function persistCliTurnTranscript(params: {
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
+  const assistant = gapFill
+    ? {
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }
+    : {
+        api: "cli",
+        provider,
+        model,
+        usage: params.result.meta.agentMeta?.usage,
+      };
 
   return await persistTextTurnTranscript({
     body: gapFill ? "" : params.body,
@@ -381,12 +393,7 @@ export async function persistCliTurnTranscript(params: {
     sessionCwd: params.sessionCwd,
     config: params.config,
     embeddedAssistantGapFill: gapFill,
-    assistant: {
-      api: "cli",
-      provider,
-      model,
-      usage: params.result.meta.agentMeta?.usage,
-    },
+    assistant,
   });
 }
 

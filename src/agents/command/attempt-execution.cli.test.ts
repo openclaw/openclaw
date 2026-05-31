@@ -93,7 +93,13 @@ async function readSessionMessages(sessionFile: string) {
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
-        entry.message as { role?: string; content?: unknown; provider?: string; model?: string },
+        entry.message as {
+          role?: string;
+          content?: unknown;
+          api?: string;
+          provider?: string;
+          model?: string;
+        },
     );
 }
 
@@ -770,6 +776,9 @@ describe("CLI attempt execution", () => {
     expect(messages).toHaveLength(1);
     expectRecordFields(requireRecord(messages[0], "assistant message"), {
       role: "assistant",
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
       content: [{ type: "text", text: "already mirrored" }],
     });
 
