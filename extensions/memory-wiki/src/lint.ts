@@ -4,6 +4,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   assessPageFreshness,
   buildClaimContradictionClusters,
@@ -12,7 +13,7 @@ import {
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
+import { renderWikiMarkdown, slugifyWikiSegment, type WikiPageSummary } from "./markdown.js";
 
 type MemoryWikiLintIssue = {
   severity: "error" | "warning";
@@ -50,19 +51,106 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
-function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
-  const validTargets = new Set<string>();
-  for (const page of pages) {
-    const withoutExtension = page.relativePath.replace(/\.md$/i, "");
-    validTargets.add(page.relativePath);
-    validTargets.add(withoutExtension);
-    validTargets.add(path.basename(withoutExtension));
+type WikiLinkTargetIndex = {
+  pathTargets: Set<string>;
+  aliasTargets: Set<string>;
+};
+
+function normalizeLintPathTarget(value: string): string {
+  const withoutFragment = value.trim().replace(/\\/g, "/").split("#")[0] ?? "";
+  const withoutQuery = withoutFragment.split("?")[0] ?? "";
+  return withoutQuery
+    .replace(/\.md$/i, "")
+    .replace(/^\.\/+/, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .trim();
+}
+
+function normalizeLintAliasTarget(value: string): string {
+  return normalizeLowercaseStringOrEmpty(normalizeLintPathTarget(value));
+}
+
+function addPathTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
+  const normalized = raw ? normalizeLintPathTarget(raw) : "";
+  if (!normalized) {
+    return;
   }
+  index.pathTargets.add(normalized);
+  index.pathTargets.add(path.posix.basename(normalized));
+}
+
+function addAliasTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
+  const normalized = raw ? normalizeLintAliasTarget(raw) : "";
+  if (normalized) {
+    index.aliasTargets.add(normalized);
+  }
+}
+
+function addSlugAliasTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
+  const normalized = raw ? normalizeLintPathTarget(raw) : "";
+  if (normalized) {
+    index.aliasTargets.add(slugifyWikiSegment(normalized));
+  }
+}
+
+function addTitleTarget(index: WikiLinkTargetIndex, raw: string | undefined) {
+  addAliasTarget(index, raw);
+  addSlugAliasTarget(index, raw);
+}
+
+function addPathSuffixTargets(index: WikiLinkTargetIndex, raw: string | undefined) {
+  const normalized = raw ? normalizeLintPathTarget(raw) : "";
+  if (!normalized) {
+    return;
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+    const suffix = parts.slice(partIndex).join("/");
+    addPathTarget(index, suffix);
+    addSlugAliasTarget(index, suffix);
+  }
+}
+
+function buildWikiLinkTargetIndex(pages: WikiPageSummary[]): WikiLinkTargetIndex {
+  const index: WikiLinkTargetIndex = {
+    pathTargets: new Set(),
+    aliasTargets: new Set(),
+  };
+  for (const page of pages) {
+    addPathTarget(index, page.relativePath);
+    addTitleTarget(index, page.title);
+    addPathSuffixTargets(index, page.sourcePath);
+    addPathSuffixTargets(index, page.bridgeRelativePath);
+    addPathSuffixTargets(index, page.unsafeLocalRelativePath);
+  }
+  return index;
+}
+
+function hasValidWikiLinkTarget(index: WikiLinkTargetIndex, rawTarget: string): boolean {
+  const pathTarget = normalizeLintPathTarget(rawTarget);
+  if (!pathTarget) {
+    return true;
+  }
+  if (index.pathTargets.has(pathTarget)) {
+    return true;
+  }
+  if (pathTarget.includes("/")) {
+    return false;
+  }
+  return (
+    index.aliasTargets.has(normalizeLintAliasTarget(pathTarget)) ||
+    index.aliasTargets.has(slugifyWikiSegment(pathTarget))
+  );
+}
+
+function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
+  const validTargets = buildWikiLinkTargetIndex(pages);
 
   const issues: MemoryWikiLintIssue[] = [];
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
-      if (!validTargets.has(linkTarget)) {
+      if (!hasValidWikiLinkTarget(validTargets, linkTarget)) {
         issues.push({
           severity: "warning",
           category: "links",
