@@ -104,7 +104,7 @@ describe("migrateLegacyDreamingPayloadShape", () => {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "good morning" },
     } as Record<string, unknown>;
-    const snapshot = jsonRoundTrip(unrelated) as Record<string, unknown>;
+    const snapshot = jsonRoundTrip(unrelated);
     const jobs = [unrelated];
     const result = migrateLegacyDreamingPayloadShape(jobs);
     expect(result).toEqual({ changed: false, rewrittenCount: 0 });

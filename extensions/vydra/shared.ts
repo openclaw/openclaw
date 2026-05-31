@@ -42,8 +42,7 @@ type VydraJobPayload = {
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Vydra webhook payloads are external JSON objects walked defensively by key.
-      (value as Record<string, unknown>)
+    ? (value as Record<string, unknown>)
     : undefined;
 }
 

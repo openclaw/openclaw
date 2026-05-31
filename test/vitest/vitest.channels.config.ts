@@ -12,7 +12,6 @@ export function createChannelsVitestConfig(env?: Record<string, string | undefin
   return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? coreChannelTestInclude, {
     env,
     exclude: ["src/gateway/**", "src/channels/plugins/contracts/**"],
-    isolate: true,
     name: "channels",
     passWithNoTests: true,
   });

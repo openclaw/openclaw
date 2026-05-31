@@ -47,7 +47,6 @@ const ZERO_BASELINE_RULES = [
   "typescript/no-import-type-side-effects",
   "typescript/no-inferrable-types",
   "typescript/no-non-null-asserted-nullish-coalescing",
-  "typescript/no-unsafe-type-assertion",
   "typescript/no-unnecessary-qualifier",
   "typescript/prefer-find",
   "typescript/prefer-for-of",

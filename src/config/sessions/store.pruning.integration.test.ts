@@ -1198,7 +1198,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     };
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
 
-    await saveSessionStore(storePath, jsonRoundTrip(store) as Record<string, SessionEntry>);
+    await saveSessionStore(storePath, jsonRoundTrip(store));
 
     const files = await fs.readdir(testDir);
     const backups = files.filter((file) => file.startsWith("sessions.json.bak."));

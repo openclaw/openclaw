@@ -18,6 +18,7 @@ async function withFakeTimers(run: () => Promise<void>) {
   } finally {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   }
 }
 
@@ -62,8 +63,11 @@ describe("createTypingCallbacks", () => {
   });
 
   afterEach(() => {
-    vi.clearAllTimers();
+    if (vi.isFakeTimers()) {
+      vi.clearAllTimers();
+    }
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("invokes start on reply start", async () => {
@@ -211,15 +215,19 @@ describe("createTypingCallbacks", () => {
 
   it("clamps oversized keepalive intervals before arming timers", async () => {
     await withFakeTimers(async () => {
-      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-      const { callbacks } = createTypingHarness({
+      const { start, callbacks } = createTypingHarness({
         keepaliveIntervalMs: Number.MAX_SAFE_INTEGER,
+        maxDurationMs: 0,
       });
 
       await callbacks.onReplyStart();
       await flushMicrotasks();
 
-      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS - 1);
+      expect(start).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(start).toHaveBeenCalledTimes(2);
       callbacks.onCleanup?.();
     });
   });
@@ -387,15 +395,23 @@ describe("createTypingCallbacks", () => {
 
     it("clamps oversized TTLs before arming timers", async () => {
       await withFakeTimers(async () => {
-        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-        const { callbacks } = createTypingHarness({
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const { stop, callbacks } = createTypingHarness({
+          keepaliveIntervalMs: 0,
           maxDurationMs: Number.MAX_SAFE_INTEGER,
         });
 
         await callbacks.onReplyStart();
         await flushMicrotasks();
 
-        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+        expect(vi.getTimerCount()).toBe(1);
+        await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS - 1);
+        expect(stop).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(stop).toHaveBeenCalledTimes(1);
+        expect(consoleWarn).toHaveBeenCalledWith(
+          `[typing] TTL exceeded (${MAX_TIMER_TIMEOUT_MS}ms), auto-stopping typing indicator`,
+        );
         callbacks.onCleanup?.();
       });
     });
