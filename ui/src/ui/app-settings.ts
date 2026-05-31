@@ -54,6 +54,7 @@ import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
+import { loadWorkboard } from "./controllers/workboard.ts";
 import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
@@ -65,6 +66,7 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import {
   normalizeTextScale,
   saveLocalUserIdentity,
@@ -99,6 +101,7 @@ type SettingsHost = {
   eventLogBuffer: unknown[];
   basePath: string;
   agentsList?: AgentsListResult | null;
+  selectedAgentId?: string | null;
   agentsSelectedId?: string | null;
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   pendingGatewayUrl?: string | null;
@@ -125,6 +128,12 @@ type LocalUserIdentityHost = {
   userName?: string | null;
   userAvatar?: string | null;
 };
+
+function resolveDreamingAgentIdForSession(host: SettingsHost): string {
+  return normalizeAgentId(
+    parseAgentSessionKey(host.sessionKey)?.agentId ?? host.agentsList?.defaultId ?? "main",
+  );
+}
 
 type SettingsAppHost = SettingsHost &
   AgentFilesState &
@@ -426,6 +435,19 @@ export async function refreshActiveTab(host: SettingsHost) {
         break;
       case "activity":
         break;
+      case "workboard":
+        await Promise.all([
+          loadConfig(app),
+          loadSessions(app),
+          loadAgents(app),
+          loadWorkboard({
+            host,
+            client: app.client,
+            force: true,
+            requestUpdate: host.requestUpdate,
+          }),
+        ]);
+        break;
       case "channels":
         await loadChannelsTab(host);
         break;
@@ -436,7 +458,7 @@ export async function refreshActiveTab(host: SettingsHost) {
         await loadUsage(app);
         break;
       case "sessions":
-        await loadSessions(app);
+        await Promise.all([loadConfig(app), loadSessions(app)]);
         break;
       case "cron":
         await loadCron(host);
@@ -452,6 +474,7 @@ export async function refreshActiveTab(host: SettingsHost) {
         await Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]);
         break;
       case "dreams":
+        host.selectedAgentId = resolveDreamingAgentIdForSession(host);
         await loadConfig(app);
         await Promise.all([
           loadDreamingStatus(app),
@@ -777,6 +800,19 @@ export function hasOperatorReadAccess(
   return roleScopesAllow({
     role: auth.role ?? "operator",
     requestedScopes: ["operator.read"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorWriteAccess(
+  auth: { role?: string; scopes?: readonly string[] } | null,
+): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.write"],
     allowedScopes: auth.scopes,
   });
 }

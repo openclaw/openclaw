@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { RuntimeEnv } from "../../runtime.js";
 
 export type StallWatchdogTimeoutMeta = {
@@ -21,10 +22,12 @@ export function createArmableStallWatchdog(params: {
   runtime?: RuntimeEnv;
   onTimeout: (meta: StallWatchdogTimeoutMeta) => void;
 }): ArmableStallWatchdog {
-  const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
-  const checkIntervalMs = Math.max(
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const defaultCheckIntervalMs = Math.min(5_000, Math.max(250, timeoutMs / 6));
+  const checkIntervalMs = resolveTimerTimeoutMs(
+    params.checkIntervalMs,
+    defaultCheckIntervalMs,
     100,
-    Math.floor(params.checkIntervalMs ?? Math.min(5_000, Math.max(250, timeoutMs / 6))),
   );
 
   let armed = false;

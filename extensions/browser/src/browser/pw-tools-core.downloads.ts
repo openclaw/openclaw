@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   armObservedDialogResponseOnPage,
   ensurePageState,
@@ -135,7 +135,7 @@ export async function armFileUploadViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const timeout = Math.max(500, Math.min(120_000, opts.timeoutMs ?? 120_000));
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   state.armIdUpload = bumpUploadArmId();
   const armId = state.armIdUpload;
@@ -155,10 +155,8 @@ export async function armFileUploadViaPlaywright(opts: {
         }
         return;
       }
-      const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-        rootDir: DEFAULT_UPLOAD_DIR,
+      const uploadPathsResult = await resolveStrictExistingUploadPaths({
         requestedPaths: opts.paths,
-        scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
       });
       if (!uploadPathsResult.ok) {
         try {

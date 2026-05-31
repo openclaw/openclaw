@@ -38,7 +38,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
-  onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onReasoningStream?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+    isReasoningSnapshot?: boolean;
+  }) => void | Promise<void>;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
@@ -76,7 +80,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
    */
   builtinToolNames?: ReadonlySet<string>;
   /**
-   * Exact raw names allowed to emit local MEDIA: paths for this run.
+   * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the
    * startup metadata snapshot.
    */

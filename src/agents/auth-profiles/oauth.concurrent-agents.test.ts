@@ -34,7 +34,7 @@ async function loadOAuthModuleForTest() {
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
-  getOAuthProviders: () => [{ id: "openai-codex" }],
+  getOAuthProviders: () => [{ id: "openai" }],
 }));
 
 describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", () => {
@@ -68,8 +68,8 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
   it("refreshes exactly once when many agents share one OAuth profile and all race on expiry", async () => {
     const agentCount = 4;
-    const profileId = "openai-codex:default";
-    const provider = "openai-codex";
+    const profileId = "openai:default";
+    const provider = "openai";
     const accountId = "acct-shared";
     const freshExpiry = Date.now() + 60 * 60 * 1000;
 

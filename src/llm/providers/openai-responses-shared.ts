@@ -11,14 +11,16 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import { calculateCost } from "../model-utils.js";
+import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
   AssistantMessage,
   Context,
   ImageContent,
   Model,
+  SimpleStreamOptions,
   StopReason,
+  StreamOptions,
   TextContent,
   TextSignatureV1,
   ThinkingContent,
@@ -27,8 +29,10 @@ import type {
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
+import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { convertResponsesTools } from "./openai-responses-tools.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -45,18 +49,24 @@ function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): st
 
 function parseTextSignature(
   signature: string | undefined,
-): { id: string; phase?: TextSignatureV1["phase"] } | undefined {
+): { id?: string; phase?: TextSignatureV1["phase"] } | undefined {
   if (!signature) {
     return undefined;
   }
   if (signature.startsWith("{")) {
     try {
       const parsed = JSON.parse(signature) as Partial<TextSignatureV1>;
-      if (parsed.v === 1 && typeof parsed.id === "string") {
-        if (parsed.phase === "commentary" || parsed.phase === "final_answer") {
-          return { id: parsed.id, phase: parsed.phase };
+      if (parsed.v === 1) {
+        const id = typeof parsed.id === "string" ? parsed.id : undefined;
+        const phase =
+          parsed.phase === "commentary" || parsed.phase === "final_answer"
+            ? parsed.phase
+            : undefined;
+        // A reasoning-dropped replay keeps the phase but omits the paired id.
+        if (id !== undefined || phase !== undefined) {
+          return { id, phase };
         }
-        return { id: parsed.id };
+        return undefined;
       }
     } catch {
       // Fall through to legacy plain-string handling.
@@ -80,8 +90,43 @@ export interface OpenAIResponsesStreamOptions {
 export interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
 }
-export { convertResponsesTools } from "./openai-responses-tools.js";
+export { convertResponsesTools };
 export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
+
+type ResponsesRequestOptions = {
+  signal?: AbortSignal;
+  timeout?: number;
+  maxRetries?: number;
+};
+
+type ResponsesStreamRequest = {
+  withResponse(): Promise<{
+    data: AsyncIterable<ResponseStreamEvent>;
+    response: Response;
+  }>;
+};
+
+type ResponsesStreamClient = {
+  responses: {
+    create(
+      params: ResponseCreateParamsStreaming,
+      options: ResponsesRequestOptions,
+    ): ResponsesStreamRequest;
+  };
+};
+
+type ResponsesLifecycleStreamOptions = Pick<
+  StreamOptions,
+  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
+>;
+
+export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
+
+type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
+  reasoningEffort?: ResponsesReasoningEffort;
+  reasoningSummary?: ResponsesReasoningSummary;
+};
 
 // =============================================================================
 // Message conversion
@@ -174,6 +219,7 @@ export function convertResponsesMessages<TApi extends Api>(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      let textFallbackOrdinal = 0;
       const assistantMsg = msg;
       const isDifferentModel =
         assistantMsg.model !== model.id &&
@@ -192,7 +238,15 @@ export function convertResponsesMessages<TApi extends Api>(
           // OpenAI requires id to be max 64 characters
           let msgId = parsedSignature?.id;
           if (!msgId) {
-            msgId = `msg_${msgIndex}`;
+            // Reasoning-dropped/model-switch replay strips textSignature, which can
+            // leave several text blocks in one assistant turn without ids. msgIndex
+            // is per-message, so disambiguate fallbacks to avoid duplicate item ids
+            // (issue #88019).
+            msgId =
+              textFallbackOrdinal === 0
+                ? `msg_${msgIndex}`
+                : `msg_${msgIndex}_${textFallbackOrdinal}`;
+            textFallbackOrdinal += 1;
           } else if (msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
           }
@@ -276,6 +330,153 @@ export function convertResponsesMessages<TApi extends Api>(
   }
 
   return messages;
+}
+
+// =============================================================================
+// Stream lifecycle
+// =============================================================================
+
+export function createResponsesAssistantOutput<TApi extends Api>(
+  model: Model<TApi>,
+  api: Api = model.api,
+): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+export function resolveResponsesReasoningEffort<TApi extends Api>(
+  model: Model<TApi>,
+  reasoning: SimpleStreamOptions["reasoning"] | undefined,
+): ResponsesReasoningEffort | undefined {
+  const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
+  if (!clampedReasoning || clampedReasoning === "off") {
+    return undefined;
+  }
+  return clampedReasoning === "max" ? "xhigh" : clampedReasoning;
+}
+
+export function applyCommonResponsesParams<TApi extends Api>(
+  params: ResponseCreateParamsStreaming,
+  model: Model<TApi>,
+  context: Context,
+  options?: ResponsesCommonParamsOptions,
+  config?: { setDefaultReasoningOff?: boolean },
+): void {
+  if (options?.maxTokens) {
+    params.max_output_tokens = options.maxTokens;
+  }
+
+  if (options?.temperature !== undefined) {
+    params.temperature = options.temperature;
+  }
+
+  if (context.tools && context.tools.length > 0) {
+    params.tools = convertResponsesTools(context.tools, { model });
+  }
+
+  if (!model.reasoning) {
+    return;
+  }
+
+  if (options?.reasoningEffort || options?.reasoningSummary) {
+    const effort = options?.reasoningEffort
+      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
+      : "medium";
+    params.reasoning = {
+      effort: effort as NonNullable<typeof params.reasoning>["effort"],
+      summary: options?.reasoningSummary || "auto",
+    };
+    params.include = ["reasoning.encrypted_content"];
+  } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
+    params.reasoning = {
+      effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<
+        typeof params.reasoning
+      >["effort"],
+    };
+  }
+}
+
+function buildResponsesRequestOptions(
+  options: ResponsesLifecycleStreamOptions | undefined,
+): ResponsesRequestOptions {
+  return {
+    ...(options?.signal ? { signal: options.signal } : {}),
+    ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+    ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+  };
+}
+
+function cleanStreamingScratchBuffers(output: AssistantMessage): void {
+  for (const block of output.content) {
+    delete (block as { index?: number }).index;
+    // partialJson is only a streaming scratch buffer; never persist it.
+    delete (block as { partialJson?: string }).partialJson;
+  }
+}
+
+export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
+  stream: AssistantMessageEventStream;
+  model: Model<TApi>;
+  output: AssistantMessage;
+  options?: ResponsesLifecycleStreamOptions;
+  createClient: () => ResponsesStreamClient;
+  buildParams: () => ResponseCreateParamsStreaming;
+  processStreamOptions?: OpenAIResponsesStreamOptions;
+  formatError: (error: unknown) => string;
+}): Promise<void> {
+  const { stream, model, output, options } = params;
+
+  try {
+    const client = params.createClient();
+    let requestParams = params.buildParams();
+    const nextParams = await options?.onPayload?.(requestParams, model);
+    if (nextParams !== undefined) {
+      requestParams = nextParams as ResponseCreateParamsStreaming;
+    }
+
+    const { data: openaiStream, response } = await client.responses
+      .create(requestParams, buildResponsesRequestOptions(options))
+      .withResponse();
+    await options?.onResponse?.(
+      { status: response.status, headers: headersToRecord(response.headers) },
+      model,
+    );
+    stream.push({ type: "start", partial: output });
+
+    await processResponsesStream(openaiStream, output, stream, model, params.processStreamOptions);
+
+    if (options?.signal?.aborted) {
+      throw new Error("Request was aborted");
+    }
+
+    if (output.stopReason === "aborted" || output.stopReason === "error") {
+      throw new Error("An unknown error occurred");
+    }
+
+    stream.push({ type: "done", reason: output.stopReason, message: output });
+    stream.end();
+  } catch (error) {
+    cleanStreamingScratchBuffers(output);
+    output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+    output.errorMessage = params.formatError(error);
+    stream.push({ type: "error", reason: output.stopReason, error: output });
+    stream.end();
+  }
 }
 
 // =============================================================================

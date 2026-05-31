@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clickChromeMcpCoords,
   clickChromeMcpElement,
   buildChromeMcpArgs,
   decodeChromeMcpStderrTail,
@@ -11,6 +13,7 @@ import {
   listChromeMcpTabs,
   navigateChromeMcpPage,
   openChromeMcpTab,
+  resolveChromeMcpNavigateCallTimeoutMs,
   resetChromeMcpSessionsForTest,
   setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -509,6 +512,31 @@ describe("chrome MCP page parsing", () => {
     expect(result).toBe(123);
   });
 
+  it("defaults non-finite coordinate click delays before injecting the browser script", async () => {
+    const session = createFakeSession();
+    const callTool = vi.fn(async ({ name }: ToolCall) => {
+      if (name === "evaluate_script") {
+        return { content: [{ type: "text", text: "```json\nnull\n```" }] };
+      }
+      throw new Error(`unexpected tool ${name}`);
+    });
+    session.client.callTool = callTool as typeof session.client.callTool;
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await clickChromeMcpCoords({
+      profileName: "chrome-live",
+      targetId: "1",
+      x: 10,
+      y: 20,
+      delayMs: Number.NaN,
+    });
+
+    const callToolMock = callTool as unknown as ToolCallMock;
+    const evaluateCall = callToolMock.mock.calls.find(([call]) => call.name === "evaluate_script");
+    const fn = evaluateCall?.[0].arguments?.function;
+    expect(typeof fn === "string" ? fn : "").toContain("const delayMs = 0;");
+  });
+
   it("does not cache an ephemeral availability probe before the next real attach", async () => {
     let factoryCalls = 0;
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
@@ -894,6 +922,11 @@ describe("chrome MCP page parsing", () => {
       ([call]) => call.name === "navigate_page",
     )?.[0];
     expect(navigateCall?.arguments?.timeout).toBe(20_000);
+  });
+
+  it("caps the navigate_page safety-net timeout", () => {
+    expect(resolveChromeMcpNavigateCallTimeoutMs(10_000)).toBe(15_000);
+    expect(resolveChromeMcpNavigateCallTimeoutMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("resets the Chrome MCP session when a navigate_page call hangs past the safety-net timeout", async () => {

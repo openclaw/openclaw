@@ -1,19 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  normalizeOptionalTrimmedStringList,
-  uniqueStrings,
-} from "../shared/string-normalization.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
   discoverOpenClawPlugins,
   type PluginCandidate,
@@ -46,6 +47,7 @@ import {
   type PluginManifestProviderEndpoint,
   type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
+  type PluginManifestSecretProviderIntegration,
   type PluginManifestSetup,
   type PluginManifestToolMetadata,
   type PluginPackageChannel,
@@ -218,6 +220,7 @@ export type PluginManifestRecord = {
   modelIdNormalization?: PluginManifestModelIdNormalization;
   providerEndpoints?: PluginManifestProviderEndpoint[];
   providerRequest?: PluginManifestProviderRequest;
+  secretProviderIntegrations?: Record<string, PluginManifestSecretProviderIntegration>;
   cliBackends: string[];
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
@@ -534,6 +537,7 @@ function buildRecord(params: {
     modelIdNormalization: params.manifest.modelIdNormalization,
     providerEndpoints: params.manifest.providerEndpoints,
     providerRequest: params.manifest.providerRequest,
+    secretProviderIntegrations: params.manifest.secretProviderIntegrations,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
@@ -866,6 +870,15 @@ function resolveDuplicatePrecedenceRank(params: {
     return 0;
   }
   if (
+    params.candidate.origin === "bundled" &&
+    isBundledPluginInsideDevSourceRoot({
+      rootDir: params.candidate.rootDir,
+      env: params.env,
+    })
+  ) {
+    return 1;
+  }
+  if (
     params.candidate.origin === "global" &&
     matchesInstalledPluginRecord({
       pluginId: params.pluginId,
@@ -875,16 +888,16 @@ function resolveDuplicatePrecedenceRank(params: {
       installRecords: params.installRecords,
     })
   ) {
-    return 1;
+    return 2;
   }
   if (params.candidate.origin === "bundled") {
     // Bundled plugin ids are reserved unless the operator explicitly overrides them.
-    return 2;
-  }
-  if (params.candidate.origin === "workspace") {
     return 3;
   }
-  return 4;
+  if (params.candidate.origin === "workspace") {
+    return 4;
+  }
+  return 5;
 }
 
 function isIntentionalInstalledBundledDuplicate(params: {
@@ -910,8 +923,12 @@ function isIntentionalInstalledBundledDuplicate(params: {
     installRecords: params.installRecords,
   });
   return (
-    (leftIsInstalled && params.right.origin === "bundled") ||
-    (rightIsInstalled && params.left.origin === "bundled")
+    (leftIsInstalled &&
+      params.right.origin === "bundled" &&
+      !isBundledPluginInsideDevSourceRoot({ rootDir: params.right.rootDir, env: params.env })) ||
+    (rightIsInstalled &&
+      params.left.origin === "bundled" &&
+      !isBundledPluginInsideDevSourceRoot({ rootDir: params.left.rootDir, env: params.env }))
   );
 }
 

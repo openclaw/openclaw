@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -89,10 +94,6 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -166,6 +167,7 @@ function loadHeartbeatRunnerRuntime() {
 }
 
 const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
+const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
 
 function hasQueuedWorkInLanes(
   lanes: readonly string[],
@@ -242,6 +244,26 @@ function resolveHeartbeatChannelPlugin(channel: string): ChannelPlugin | undefin
     (entry) => entry.plugin.id === channel,
   )?.plugin;
   return activePlugin ?? getChannelPlugin(channel as ChannelId);
+}
+
+function resolveHeartbeatTimeoutOverrideSeconds(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
+  if (typeof heartbeat?.timeoutSeconds === "number") {
+    return heartbeat.timeoutSeconds;
+  }
+  const agentDefaultTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
+  if (
+    typeof agentDefaultTimeoutSeconds === "number" &&
+    Number.isFinite(agentDefaultTimeoutSeconds)
+  ) {
+    return Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
+  }
+  // The wake dispatcher awaits heartbeat turns serially. Keep unset heartbeat
+  // timeouts tied to the cadence instead of the 48h built-in agent default.
+  const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, heartbeat);
+  if (!intervalMs) {
+    return DEFAULT_HEARTBEAT_TIMEOUT_SECONDS;
+  }
+  return Math.max(1, Math.min(DEFAULT_HEARTBEAT_TIMEOUT_SECONDS, Math.ceil(intervalMs / 1000)));
 }
 
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };
@@ -873,8 +895,8 @@ function buildCommitmentHeartbeatPrompt(params: {
     reason: commitment.reason,
     suggestedText: commitment.suggestedText,
     due: {
-      earliest: new Date(commitment.dueWindow.earliestMs).toISOString(),
-      latest: new Date(commitment.dueWindow.latestMs).toISOString(),
+      earliest: timestampMsToIsoString(commitment.dueWindow.earliestMs) ?? "n/a",
+      latest: timestampMsToIsoString(commitment.dueWindow.latestMs) ?? "n/a",
       timezone: commitment.dueWindow.timezone,
     },
     sourceMessageId: commitment.sourceMessageId,
@@ -1752,8 +1774,7 @@ export async function runHeartbeatOnce(opts: {
     await heartbeatTyping?.onReplyStart();
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
-    const timeoutOverrideSeconds =
-      typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
+    const timeoutOverrideSeconds = resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat);
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
     const replyOpts = {

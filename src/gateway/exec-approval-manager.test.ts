@@ -58,4 +58,13 @@ describe("ExecApprovalManager", () => {
     const cleanupTimer = timers.find((timer) => timer.delay === 15_000);
     expect(cleanupTimer?.handle.unref).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects approval records when expiry would exceed the Date range", () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const manager = new ExecApprovalManager();
+
+    expect(() => manager.create({ command: "echo ok" }, 1, "approval-overflow")).toThrow(
+      "approval expiry is unavailable",
+    );
+  });
 });

@@ -176,6 +176,26 @@
     "target": "Agent harness plugins"
   },
   {
+    "source": "Agent harness plugins (SDK reference)",
+    "target": "Agent harness plugins (SDK reference)"
+  },
+  {
+    "source": "Copilot SDK harness",
+    "target": "Copilot SDK harness"
+  },
+  {
+    "source": "Copilot plugin",
+    "target": "Copilot plugin"
+  },
+  {
+    "source": "GitHub Copilot agent runtime",
+    "target": "GitHub Copilot agent runtime"
+  },
+  {
+    "source": "copilot",
+    "target": "copilot"
+  },
+  {
     "source": "Agent loop",
     "target": "Agent loop"
   },
@@ -1082,6 +1102,18 @@
   {
     "source": "Plugin Manifest",
     "target": "Plugin Manifest"
+  },
+  {
+    "source": "Workboard plugin",
+    "target": "Workboard 插件"
+  },
+  {
+    "source": "workboard",
+    "target": "workboard"
+  },
+  {
+    "source": "Control UI",
+    "target": "Control UI"
   },
   {
     "source": "Z.AI (GLM)",

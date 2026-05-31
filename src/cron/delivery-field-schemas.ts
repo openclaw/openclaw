@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { z, type ZodType } from "zod";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const trimStringPreprocess = (value: unknown) => (typeof value === "string" ? value.trim() : value);
 
@@ -25,10 +25,7 @@ export const DeliveryThreadIdFieldSchema = z.union([
   z.number().finite(),
 ]);
 
-export const TimeoutSecondsFieldSchema = z
-  .number()
-  .finite()
-  .transform((value) => Math.max(0, value));
+export const TimeoutSecondsFieldSchema = z.number().finite().nonnegative();
 
 type ParsedDeliveryInput = {
   mode?: "announce" | "none" | "webhook";

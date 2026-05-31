@@ -42,6 +42,10 @@ const mocks = vi.hoisted(() => ({
   loadCronRunsMock: vi.fn<() => Promise<CronRunsLoadStatus>>(async () => "ok"),
   loadDebugMock: vi.fn(async () => {}),
   loadDevicesMock: vi.fn(async () => {}),
+  loadDreamDiaryMock: vi.fn(async () => {}),
+  loadDreamingStatusMock: vi.fn(async () => {}),
+  loadWikiImportInsightsMock: vi.fn(async () => {}),
+  loadWikiMemoryPalaceMock: vi.fn(async () => {}),
   loadExecApprovalsMock: vi.fn(async () => {}),
   loadLogsMock: vi.fn(async () => {}),
   loadModelAuthStatusStateMock: vi.fn(async () => {}),
@@ -50,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   loadSessionsMock: vi.fn(async () => {}),
   loadSkillsMock: vi.fn(async () => {}),
   loadUsageMock: vi.fn(async () => {}),
+  loadWorkboardMock: vi.fn(async () => {}),
   startDebugPollingMock: vi.fn(),
   startLogsPollingMock: vi.fn(),
   startNodesPollingMock: vi.fn(),
@@ -104,6 +109,12 @@ vi.mock("./controllers/debug.ts", () => ({
 vi.mock("./controllers/devices.ts", () => ({
   loadDevices: mocks.loadDevicesMock,
 }));
+vi.mock("./controllers/dreaming.ts", () => ({
+  loadDreamDiary: mocks.loadDreamDiaryMock,
+  loadDreamingStatus: mocks.loadDreamingStatusMock,
+  loadWikiImportInsights: mocks.loadWikiImportInsightsMock,
+  loadWikiMemoryPalace: mocks.loadWikiMemoryPalaceMock,
+}));
 vi.mock("./controllers/exec-approvals.ts", () => ({
   loadExecApprovals: mocks.loadExecApprovalsMock,
 }));
@@ -129,6 +140,9 @@ vi.mock("./controllers/skills.ts", () => ({
 vi.mock("./controllers/usage.ts", () => ({
   loadUsage: mocks.loadUsageMock,
 }));
+vi.mock("./controllers/workboard.ts", () => ({
+  loadWorkboard: mocks.loadWorkboardMock,
+}));
 
 import { loadChannelsTab, refreshActiveTab, setTab } from "./app-settings.ts";
 
@@ -153,6 +167,7 @@ function createHost() {
     cronRunsJobId: null as string | null,
     sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
     sessionKey: "main",
+    selectedAgentId: null as string | null,
     settings: {},
     basePath: "",
   };
@@ -218,6 +233,27 @@ describe("refreshActiveTab", () => {
     channels: [mocks.loadChannelsMock, false],
     tools: null,
   } as const;
+
+  it("syncs selected agent before refreshing the Dreams tab", async () => {
+    const host = createHost();
+    host.tab = "dreams";
+    host.sessionKey = "agent:research:main";
+    mocks.loadDreamingStatusMock.mockImplementationOnce(async () => {
+      expect(host.selectedAgentId).toBe("research");
+    });
+    mocks.loadDreamDiaryMock.mockImplementationOnce(async () => {
+      expect(host.selectedAgentId).toBe("research");
+    });
+
+    await refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+
+    expect(host.selectedAgentId).toBe("research");
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadDreamingStatusMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadDreamDiaryMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadWikiImportInsightsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadWikiMemoryPalaceMock).toHaveBeenCalledWith(host);
+  });
 
   for (const panel of ["files", "skills", "channels", "tools"] as const) {
     it(`routes agents ${panel} panel refresh through the expected loaders`, async () => {
@@ -294,6 +330,33 @@ describe("refreshActiveTab", () => {
     });
 
     sessions.resolve();
+  });
+
+  it("loads config before rendering session Workboard actions", async () => {
+    const host = createHost();
+    host.tab = "sessions";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes workboard cards with config, sessions, and agents", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadSessionsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(mocks.loadWorkboardMock).toHaveBeenCalledWith({
+      host,
+      client: host.client,
+      force: true,
+      requestUpdate: host.requestUpdate,
+    });
   });
 
   it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {
@@ -387,6 +450,18 @@ describe("refreshActiveTab", () => {
     await vi.waitFor(() => {
       expect(mocks.loadConfigSchemaMock).toHaveBeenCalledOnce();
     });
+  });
+
+  it("loads config, sessions, and agents before rendering the Workboard tab", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadSessionsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
   });
 
   it("does not start the deferred schema refresh when scoped settings fail to load", async () => {

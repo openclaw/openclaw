@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 
 type CollectorMode = "local" | "docker";
 
@@ -112,6 +113,7 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
 ]);
 const DISALLOWED_BODY_NEEDLES = ["OTEL-QA-SECRET", "OTEL-QA-OK"];
 const COLLECTOR_OUTPUT_TAIL_BYTES = 16_000;
+const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/u;
 const MAX_OTLP_COMPRESSED_BODY_BYTES = readPositiveIntegerEnv(
   "OPENCLAW_QA_OTEL_MAX_COMPRESSED_BODY_BYTES",
   2 * 1024 * 1024,
@@ -125,9 +127,24 @@ const MAX_CAPTURED_BODY_TEXT_BYTES = readPositiveIntegerEnv(
   512 * 1024,
 );
 
-function readPositiveIntegerEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+function readPositiveIntegerEnv(
+  name: string,
+  fallback: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[name];
+  if (raw == null || raw.trim() === "") {
+    return fallback;
+  }
+  const value = raw.trim();
+  if (!POSITIVE_INTEGER_PATTERN.test(value)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a safe integer`);
+  }
+  return parsed;
 }
 
 function oversizedBodyError(
@@ -153,6 +170,7 @@ Collector container in front of the receiver.
 }
 
 function parseArgs(argv: string[]): CliOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: CliOptions = {
     collectorMode: "local",
     outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${Date.now().toString(36)}`),
@@ -161,14 +179,14 @@ function parseArgs(argv: string[]): CliOptions {
     help: false,
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     if (arg === "--help" || arg === "-h") {
       options.help = true;
       continue;
     }
     const readValue = () => {
-      const value = argv[index + 1]?.trim();
+      const value = args[index + 1]?.trim();
       if (!value) {
         throw new Error(`${arg} requires a value`);
       }
@@ -1318,6 +1336,8 @@ async function main() {
 export const testing = {
   appendCapturedBodyText,
   decodeRequestBody,
+  parseArgs,
+  readPositiveIntegerEnv,
   readRequestBody,
 };
 

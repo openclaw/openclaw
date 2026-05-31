@@ -1,11 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronEvent } from "./service/state.js";
 import { createCronServiceState } from "./service/state.js";
 import { runMissedJobs } from "./service/timer.js";
+import { saveCronStore } from "./store.js";
+import type { CronJob } from "./types.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-",
@@ -13,9 +13,8 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("CronService restart catch-up", () => {
-  async function writeStoreJobs(storePath: string, jobs: unknown[]) {
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf-8");
+  async function writeStoreJobs(storePath: string, jobs: CronJob[]) {
+    await saveCronStore(storePath, { version: 1, jobs });
   }
 
   function createRestartCronService(params: {
@@ -44,7 +43,7 @@ describe("CronService restart catch-up", () => {
     });
   }
 
-  function createOverdueEveryJob(id: string, nextRunAtMs: number) {
+  function createOverdueEveryJob(id: string, nextRunAtMs: number): CronJob {
     return {
       id,
       name: `job-${id}`,
@@ -59,7 +58,7 @@ describe("CronService restart catch-up", () => {
     };
   }
 
-  function createOverdueCronJob(id: string, nextRunAtMs: number) {
+  function createOverdueCronJob(id: string, nextRunAtMs: number): CronJob {
     return {
       id,
       name: `job-${id}`,
@@ -97,7 +96,7 @@ describe("CronService restart catch-up", () => {
   }
 
   async function withRestartedCron(
-    jobs: unknown[],
+    jobs: CronJob[],
     run: (params: {
       cron: CronService;
       enqueueSystemEvent: ReturnType<typeof vi.fn>;
@@ -394,6 +393,78 @@ describe("CronService restart catch-up", () => {
       async ({ enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(requestHeartbeat).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("keeps missed cron slots paused until run-end error backoff expires after restart", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:01:59.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-long-run-backoff-pending",
+          name: "long run backoff pending",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "do not replay long failed run" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:10:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T04:00:00.000Z"),
+            lastDurationMs: 90_000,
+            lastStatus: "error",
+            consecutiveErrors: 1,
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-long-run-backoff-pending");
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+      },
+    );
+  });
+
+  it("keeps past-due retries paused until run-end error backoff expires after restart", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:01:59.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-long-run-due-retry",
+          name: "long run due retry",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:00:30.000Z"),
+          schedule: {
+            kind: "every",
+            everyMs: 60_000,
+            anchorMs: Date.parse("2025-12-13T04:00:00.000Z"),
+          },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "do not run early retry" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:00:30.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T04:00:00.000Z"),
+            lastDurationMs: 90_000,
+            lastStatus: "error",
+            consecutiveErrors: 1,
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-long-run-due-retry");
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
       },
     );
   });

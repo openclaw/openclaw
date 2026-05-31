@@ -43,6 +43,10 @@ let capturedReplyOptions:
       suppressDefaultToolProgressMessages?: boolean;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
+      onReasoningStream?: (payload?: {
+        text?: string;
+        isReasoningSnapshot?: boolean;
+      }) => Promise<void> | void;
       onItemEvent?: (payload: {
         kind?: string;
         itemId?: string;
@@ -153,6 +157,7 @@ let mockedReplyOptionEvents: Array<
   | { kind: "concurrent_items"; progressTexts: string[] }
   | { kind: "partial"; text: string }
   | { kind: "assistant_start" }
+  | { kind: "reasoning"; text?: string; isReasoningSnapshot?: boolean }
   | { kind: "reasoning_end" }
 > = [];
 
@@ -505,6 +510,7 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         toolCallId?: string;
         itemKind?: string;
         args?: Record<string, unknown>;
+        meta?: string;
         progressText?: string;
         summary?: string;
         title?: string;
@@ -525,6 +531,15 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
               toolName: params.name,
             }
           : undefined;
+      }
+      if (
+        params.itemKind === "analysis" &&
+        params.title === "Reasoning" &&
+        !params.meta &&
+        !params.summary &&
+        !params.progressText
+      ) {
+        return undefined;
       }
       if (
         (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
@@ -909,6 +924,10 @@ vi.mock("../reply.runtime.js", () => ({
       }) => Promise<void> | void;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
+      onReasoningStream?: (payload?: {
+        text?: string;
+        isReasoningSnapshot?: boolean;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
   }) => {
@@ -956,6 +975,11 @@ vi.mock("../reply.runtime.js", () => ({
           );
         } else if (entry.kind === "assistant_start") {
           await params.replyOptions?.onAssistantMessageStart?.();
+        } else if (entry.kind === "reasoning") {
+          await params.replyOptions?.onReasoningStream?.({
+            text: entry.text,
+            isReasoningSnapshot: entry.isReasoningSnapshot,
+          });
         } else if (entry.kind === "reasoning_end") {
           await params.replyOptions?.onReasoningEnd?.();
         } else {
@@ -994,6 +1018,10 @@ vi.mock("../reply.runtime.js", () => ({
       suppressDefaultToolProgressMessages?: boolean;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
+      onReasoningStream?: (payload?: {
+        text?: string;
+        isReasoningSnapshot?: boolean;
+      }) => Promise<void> | void;
       onItemEvent?: (payload: {
         kind?: string;
         itemId?: string;
@@ -1076,6 +1104,11 @@ vi.mock("../reply.runtime.js", () => ({
           await params.replyOptions?.onPartialReply?.({ text: entry.text });
         } else if (entry.kind === "assistant_start") {
           await params.replyOptions?.onAssistantMessageStart?.();
+        } else if (entry.kind === "reasoning") {
+          await params.replyOptions?.onReasoningStream?.({
+            text: entry.text,
+            isReasoningSnapshot: entry.isReasoningSnapshot,
+          });
         } else {
           await params.replyOptions?.onReasoningEnd?.();
         }
@@ -1628,6 +1661,80 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Shelling\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+    );
+  });
+
+  it("shows reasoning text in Slack progress draft previews", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "tool_start", name: "exec" },
+      { kind: "item", itemKind: "analysis", title: "Reasoning" },
+      { kind: "reasoning", text: "Reading" },
+      { kind: "reasoning", text: " the Slack handler" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• exec", "• Reading the Slack handler"].join("\n"),
+    );
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).not.toContain("Reasoning");
+  });
+
+  it("replaces Slack reasoning snapshots instead of appending duplicates", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "tool_start", name: "exec" },
+      { kind: "reasoning", text: "<think>Checking </think>", isReasoningSnapshot: true },
+      {
+        kind: "reasoning",
+        text: "<think>Reading\n\nChecking </think>",
+        isReasoningSnapshot: true,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• exec", "• Reading Checking"].join("\n"),
+    );
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).not.toContain("Checking Reading");
+  });
+
+  it("keeps plain Slack reasoning content that starts with Thinking", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "reasoning",
+        text: "Thinking about Slack preview state",
+        isReasoningSnapshot: true,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• Thinking about Slack preview state"].join("\n"),
     );
   });
 

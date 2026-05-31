@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -7,7 +8,6 @@ import {
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 export async function maybeRepairUiProtocolFreshness(
@@ -24,7 +24,7 @@ export async function maybeRepairUiProtocolFreshness(
     return;
   }
 
-  const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
+  const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
   const uiHealth = await resolveControlUiDistIndexHealth({
     root,
     argv1: process.argv[1],
@@ -92,7 +92,7 @@ export async function maybeRepairUiProtocolFreshness(
           "log",
           `--since=${uiMtimeIso}`,
           "--format=%h %s",
-          "src/gateway/protocol/schema.ts",
+          "packages/gateway-protocol/src/schema.ts",
         ],
         { timeoutMs: 5000 },
       ).catch(() => null);

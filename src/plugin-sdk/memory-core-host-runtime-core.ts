@@ -7,6 +7,7 @@ export {
 export {
   asToolParamsRecord,
   jsonResult,
+  readFiniteNumberParam,
   readNumberParam,
   readPositiveIntegerParam,
   readStringParam,

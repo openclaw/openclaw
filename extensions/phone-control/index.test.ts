@@ -250,6 +250,44 @@ describe("phone-control plugin", () => {
     });
   });
 
+  it("rejects invalid arm durations without mutating phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const typoRes = await command.handler({
+        ...createCommandContext("arm writes forever"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+      const overflowRes = await command.handler({
+        ...createCommandContext("arm writes 9007199254740993d"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      expect(typoRes?.text ?? "").toContain("Invalid duration");
+      expect(overflowRes?.text ?? "").toContain("Invalid duration");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects arm requests when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+        const res = await command.handler({
+          ...createCommandContext("arm writes 30s"),
+          channel: "webchat",
+          gatewayClientScopes: ["operator.admin"],
+        });
+
+        expect(res?.text ?? "").toContain("Invalid duration");
+        expect(writeConfigFile).not.toHaveBeenCalled();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("allows external owner callers without gateway scopes to mutate phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({

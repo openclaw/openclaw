@@ -158,6 +158,28 @@ describe("startGatewayDiscovery", () => {
     );
   });
 
+  it("omits out-of-range SSH discovery ports", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+    process.env.OPENCLAW_SSH_PORT = "65536";
+
+    const service = makeDiscoveryService({ id: "bonjour" });
+
+    await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      wideAreaDiscoveryEnabled: false,
+      tailscaleMode: "serve",
+      mdnsMode: "full",
+      gatewayDiscoveryServices: [service],
+      logDiscovery: makeLogs(),
+    });
+
+    expect(service.service.advertise).toHaveBeenCalledWith(
+      expect.objectContaining({ sshPort: undefined }),
+    );
+  });
+
   it("continues startup when a local discovery service never settles", async () => {
     vi.useFakeTimers();
     process.env.NODE_ENV = "development";

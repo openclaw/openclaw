@@ -547,6 +547,9 @@ describe("runBtwSideQuestion", () => {
     const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
     expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
     expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+    expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
@@ -563,7 +566,7 @@ describe("runBtwSideQuestion", () => {
       id: "gpt-5.5",
       api: "openai-responses",
     });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:work");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai:work");
 
     const result = await runSideQuestion({
       provider: "openai",
@@ -592,7 +595,7 @@ describe("runBtwSideQuestion", () => {
     expect(sideQuestionParams.sessionId).toBe("session-1");
     expect(sideQuestionParams.agentId).toBe("main");
     expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
-    expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
+    expect(sideQuestionParams.authProfileId).toBe("openai:work");
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
     ).toContain("session-1.jsonl");

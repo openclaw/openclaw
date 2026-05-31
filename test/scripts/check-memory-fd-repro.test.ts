@@ -2,13 +2,192 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
+  MEMORY_SEARCH_RESPONSE_MAX_BYTES,
+  classifyMemorySearchInvokeResponse,
   hasChildExited,
+  parseArgs,
+  readBoundedResponseText,
+  readNumber,
+  readPositiveNumber,
   stopGatewayWithRuntime,
   updateGatewayReadyOutputState,
   waitForGatewayReady,
 } from "../../scripts/check-memory-fd-repro.mjs";
 
+function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 describe("check-memory-fd-repro", () => {
+  it("parses file, fd, and timing limits as strict integers", () => {
+    expect(readNumber("0", "limit")).toBe(0);
+    expect(readNumber(" 42 ", "limit")).toBe(42);
+    expect(readPositiveNumber("1", "limit")).toBe(1);
+
+    expect(() => readNumber("1.5", "limit")).toThrow("limit must be a non-negative integer");
+    expect(() => readNumber("1e3", "limit")).toThrow("limit must be a non-negative integer");
+    expect(() => readNumber("10files", "limit")).toThrow("limit must be a non-negative integer");
+    expect(() => readPositiveNumber("0", "limit")).toThrow("limit must be greater than 0");
+  });
+
+  it("rejects loose numeric environment limits before generating files", () => {
+    expect(
+      withEnv(
+        {
+          OPENCLAW_MEMORY_FD_REPRO_FILES: "17",
+          OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "0",
+          OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "0",
+        },
+        () => parseArgs([]),
+      ),
+    ).toMatchObject({
+      fileCount: 17,
+      maxWorkspaceRegFds: 0,
+      sampleDelayMs: 0,
+    });
+
+    expect(() =>
+      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17files" }, () => parseArgs([])),
+    ).toThrow("OPENCLAW_MEMORY_FD_REPRO_FILES must be a non-negative integer");
+    expect(() =>
+      withEnv({ OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: "1e3" }, () => parseArgs([])),
+    ).toThrow("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS must be a non-negative integer");
+  });
+
+  it("lets explicit CLI numeric flags override malformed inherited env defaults", () => {
+    expect(
+      withEnv(
+        {
+          OPENCLAW_MEMORY_FD_REPRO_FILES: "17files",
+          OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "4fds",
+          OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: "1e3",
+          OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "soon",
+          OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS: "later",
+        },
+        () =>
+          parseArgs([
+            "--files",
+            "20",
+            "--max-workspace-reg-fds",
+            "4",
+            "--invoke-timeout-ms",
+            "1000",
+            "--sample-delay-ms",
+            "0",
+            "--settle-delay-ms",
+            "0",
+          ]),
+      ),
+    ).toMatchObject({
+      fileCount: 20,
+      invokeTimeoutMs: 1000,
+      maxWorkspaceRegFds: 4,
+      sampleDelayMs: 0,
+      settleDelayMs: 0,
+    });
+  });
+
+  it("stops parsing options after the argument terminator", () => {
+    expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
+      fileCount: 20,
+    });
+
+    expect(
+      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17" }, () => parseArgs(["--", "--unknown"])),
+    ).toMatchObject({
+      fileCount: 17,
+    });
+  });
+
+  it("accepts the leading package-manager argument separator", () => {
+    expect(parseArgs(["--", "--files", "20", "--allow-non-darwin"])).toMatchObject({
+      allowNonDarwin: true,
+      fileCount: 20,
+    });
+  });
+
+  it("accepts an available memory_search tool payload", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({
+        ok: true,
+        result: {
+          content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      gatewayOk: true,
+      resultCount: 0,
+    });
+  });
+
+  it("rejects disabled memory_search tool payloads", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({
+        ok: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                results: [],
+                disabled: true,
+                unavailable: true,
+                error: 'No API key found for provider "openai".',
+              }),
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      gatewayOk: true,
+      toolDisabled: true,
+      toolUnavailable: true,
+      toolError: 'No API key found for provider "openai".',
+    });
+  });
+
+  it("rejects gateway success envelopes without memory_search details", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({ ok: true, result: { content: [] } }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "memory_search result payload missing or invalid",
+    });
+  });
+
   it("treats signaled gateway children as exited", () => {
     expect(hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
     expect(hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
@@ -83,5 +262,45 @@ describe("check-memory-fd-repro", () => {
 
     expect(state.readySeen).toBe(true);
     expect(state.tail).toBe("w output");
+  });
+
+  it("reads memory_search response bodies under the byte cap", async () => {
+    await expect(
+      readBoundedResponseText(
+        new Response("ok"),
+        "memory_search",
+        MEMORY_SEARCH_RESPONSE_MAX_BYTES,
+      ),
+    ).resolves.toBe("ok");
+  });
+
+  it("rejects oversized memory_search response bodies from content-length", async () => {
+    const response = new Response("ignored", {
+      headers: { "content-length": String(MEMORY_SEARCH_RESPONSE_MAX_BYTES + 1) },
+    });
+
+    await expect(
+      readBoundedResponseText(response, "memory_search", MEMORY_SEARCH_RESPONSE_MAX_BYTES),
+    ).rejects.toThrow(
+      `memory_search response body exceeded ${MEMORY_SEARCH_RESPONSE_MAX_BYTES} bytes`,
+    );
+  });
+
+  it("stops reading memory_search response streams after the byte cap", async () => {
+    const chunk = new Uint8Array(MEMORY_SEARCH_RESPONSE_MAX_BYTES + 1);
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(chunk);
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(
+      readBoundedResponseText(response, "memory_search", MEMORY_SEARCH_RESPONSE_MAX_BYTES),
+    ).rejects.toThrow(
+      `memory_search response body exceeded ${MEMORY_SEARCH_RESPONSE_MAX_BYTES} bytes`,
+    );
   });
 });

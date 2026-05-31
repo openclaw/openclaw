@@ -74,14 +74,14 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
   // the caller supplied one — that's the most reliable signal.
   const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
   const provider = separatorMatch?.[1] ?? trimmed;
-  if (provider === "openai" || provider === "openai-codex") {
+  if (provider === "openai") {
     return "openai";
   }
   if (provider === "anthropic" || provider === "claude-cli") {
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-7`.
+  // `gpt-5.5` or `claude-opus-4-8`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -645,7 +645,7 @@ function execCommandFromToolProgressPrompt(prompt: string) {
 
 function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
   const serialized = JSON.stringify(args);
-  const callSuffix = createHash("sha1")
+  const callSuffix = createHash("sha256")
     .update(name)
     .update("\0")
     .update(serialized)
@@ -1042,6 +1042,41 @@ function isHeartbeatPrompt(text: string) {
   return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
 }
 
+function readFirstMediaPath(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return "";
+  }
+  const media = value as {
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    path?: unknown;
+    filePath?: unknown;
+    attachments?: unknown;
+  };
+  for (const candidate of [media.mediaUrl, media.path, media.filePath]) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  if (Array.isArray(media.mediaUrls)) {
+    const mediaUrl = media.mediaUrls.find(
+      (candidate) => typeof candidate === "string" && candidate.trim(),
+    );
+    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
+      return mediaUrl.trim();
+    }
+  }
+  if (Array.isArray(media.attachments)) {
+    for (const attachment of media.attachments) {
+      const mediaPath = readFirstMediaPath(attachment);
+      if (mediaPath) {
+        return mediaPath;
+      }
+    }
+  }
+  return "";
+}
+
 function buildAssistantText(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
@@ -1068,7 +1103,12 @@ function buildAssistantText(
         ? JSON.stringify(toolJson.results)
         : scenarioToolOutput;
   const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
-  const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
+  const mediaPath =
+    typeof toolJson?.details === "object" &&
+    toolJson.details !== null &&
+    !Array.isArray(toolJson.details)
+      ? readFirstMediaPath((toolJson.details as { media?: unknown }).media)
+      : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
@@ -1184,7 +1224,7 @@ function buildAssistantText(
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
   }
   if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && mediaPath) {
-    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
+    return `Protocol note: generated the QA lighthouse image successfully. Attachment: ${mediaPath}`;
   }
   if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
     return [
@@ -2591,7 +2631,7 @@ async function buildResponsesPayload(
 //
 // The QA parity gate needs two comparable scenario runs: one against the
 // "candidate" (openai/gpt-5.5) and one against the "baseline"
-// (anthropic/claude-opus-4-7). The OpenAI mock above already dispatches all
+// (anthropic/claude-opus-4-8). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
 // shapes into the shared ResponsesInputItem[] format, calls the same
@@ -2814,7 +2854,7 @@ function buildAnthropicMessageResponse(params: {
     id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
     type: "message",
     role: "assistant",
-    model: params.model || "claude-opus-4-7",
+    model: params.model || "claude-opus-4-8",
     content,
     stop_reason: stopReason,
     stop_sequence: null,
@@ -2842,7 +2882,7 @@ function buildAnthropicMessageStreamEvents(params: {
         id: messageId,
         type: "message",
         role: "assistant",
-        model: params.model || "claude-opus-4-7",
+        model: params.model || "claude-opus-4-8",
         content: [],
         stop_reason: null,
         stop_sequence: null,
@@ -2941,7 +2981,7 @@ async function buildMessagesPayload(
   // which then confuses parity consumers that assume the mock always
   // echoes the real provider label. Normalize once and reuse everywhere.
   const normalizedModel =
-    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-7";
+    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-8";
   // Dispatch through the same scenario logic the /v1/responses route uses.
   // Preserve declared tools so route-specific adapters mirror what the
   // real provider request made available to the model.
@@ -2986,7 +3026,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           { id: "gpt-5.5-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
-          { id: "claude-opus-4-7", object: "model" },
+          { id: "claude-opus-4-8", object: "model" },
           { id: "claude-sonnet-4-6", object: "model" },
         ],
       });

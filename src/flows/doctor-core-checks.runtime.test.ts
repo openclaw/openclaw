@@ -6,13 +6,17 @@ const mocks = vi.hoisted(() => ({
   createBundleMcpToolRuntime: vi.fn(),
   createOpenClawCodingTools: vi.fn(),
   disposeBundleRuntime: vi.fn(),
-  loadModelCatalog: vi.fn(async () => []),
+  loadModelCatalog: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
-  findModelInCatalog: () => undefined,
+  findModelInCatalog: (
+    catalog: Array<{ provider?: string; id?: string }>,
+    provider: string,
+    modelId: string,
+  ) => catalog.find((entry) => entry.provider === provider && entry.id === modelId),
   loadModelCatalog: mocks.loadModelCatalog,
 }));
 
@@ -99,6 +103,194 @@ describe("doctor runtime tool schema checks", () => {
         "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor.",
     });
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves direct OpenAI catalog transport while building doctor runtime models", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        compat: { supportsTools: true },
+      },
+    ]);
+    mocks.createOpenClawCodingTools.mockReturnValueOnce([
+      tool("healthy", { type: "object", properties: {} }),
+    ]);
+
+    await collectRuntimeToolSchemaFindings({});
+
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          modelApi: "openai-responses",
+          model: expect.objectContaining({
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("preserves ChatGPT OpenAI catalog transport while building doctor runtime models", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        compat: { supportsTools: true },
+      },
+    ]);
+    mocks.createOpenClawCodingTools.mockReturnValueOnce([
+      tool("healthy", { type: "object", properties: {} }),
+    ]);
+
+    await collectRuntimeToolSchemaFindings({});
+
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          modelApi: "openai-chatgpt-responses",
+          model: expect.objectContaining({
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("reports bundle MCP runtime diagnostics when tool listing fails schema validation", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toContainEqual({
+      checkId: "core/doctor/runtime-tool-schemas",
+      severity: "error",
+      message:
+        'Configured MCP server "dofbot" could not expose runtime tools for schema validation.',
+      path: "mcp.servers.dofbot",
+      requirement: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+      fixHint:
+        "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+    });
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports bundle MCP runtime diagnostics for exact MCP tool allowlists", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { allow: ["dofbot__healthy"] },
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/runtime-tool-schemas",
+        path: "mcp.servers.dofbot",
+      }),
+    );
+  });
+
+  it("reports exact MCP allowlists when the safe server name contains the separator", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "my__server",
+          safeServerName: "my__server",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { allow: ["my__server__healthy"] },
+        mcp: {
+          servers: {
+            my__server: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/runtime-tool-schemas",
+        path: "mcp.servers.my__server",
+      }),
+    );
+  });
+
+  it("reports bundle MCP runtime diagnostics for glob MCP tool allowlists", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { allow: ["*__healthy"] },
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/runtime-tool-schemas",
+        path: "mcp.servers.dofbot",
+      }),
+    );
   });
 
   it("reports unsupported schemas exposed only to a non-default configured agent", async () => {
@@ -237,6 +429,58 @@ describe("doctor runtime tool schema checks", () => {
     await expect(
       collectRuntimeToolSchemaFindings({
         tools: { deny: ["bundle-mcp"] },
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("does not report bundle MCP diagnostics filtered out by the final runtime tool policy", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { deny: ["bundle-mcp"] },
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("does not report bundle MCP diagnostics filtered out by server-level deny policy", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { deny: ["dofbot__*"] },
         mcp: {
           servers: {
             dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },

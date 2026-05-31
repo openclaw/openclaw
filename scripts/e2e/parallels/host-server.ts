@@ -6,6 +6,7 @@ import { die, run, say, sh, warn } from "./host-command.ts";
 import type { HostServer } from "./types.ts";
 
 const HOST_SERVER_STDERR_LIMIT_BYTES = 64 * 1024;
+const HOST_SERVER_STDERR_DRAIN_MS = 5_000;
 
 export function resolveHostIp(explicit = ""): string {
   if (explicit) {
@@ -102,9 +103,19 @@ async function waitForHostServer(
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = appendBoundedOutput(stderr, chunk, HOST_SERVER_STDERR_LIMIT_BYTES);
   });
+  let childClosed = false;
+  const childClose = new Promise<void>((resolve) => {
+    child.once("close", () => {
+      childClosed = true;
+      resolve();
+    });
+  });
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
     if (child.exitCode != null) {
+      if (!childClosed) {
+        await Promise.race([childClose, delay(HOST_SERVER_STDERR_DRAIN_MS)]);
+      }
       die(`host artifact server exited early: ${stderr.trim() || `exit ${child.exitCode}`}`);
     }
     if (await canConnect(port)) {
@@ -137,6 +148,10 @@ async function canConnect(port: number): Promise<boolean> {
       resolve(false);
     });
   });
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export const testing = {

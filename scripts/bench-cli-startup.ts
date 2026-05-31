@@ -429,6 +429,26 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number, label = 
   return parseStrictIntegerOption({ fallback, label, min: 0, raw });
 }
 
+function parseGatewayPortEnv(raw: string | undefined): number {
+  const value = raw?.trim();
+  if (!value) {
+    return 32123;
+  }
+  const bracketHostMatch = /^\[[^\]]+\]:(\d+)$/u.exec(value);
+  if (bracketHostMatch) {
+    return parsePositiveInt(bracketHostMatch[1], 32123, "OPENCLAW_GATEWAY_PORT");
+  }
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return 32123;
+  }
+  const colonCount = value.split(":").length - 1;
+  if (colonCount > 1) {
+    return 32123;
+  }
+  const portRaw = colonCount === 1 ? value.split(":")[1] : value;
+  return parsePositiveInt(portRaw, 32123, "OPENCLAW_GATEWAY_PORT");
+}
+
 function parsePresets(raw: string | undefined): string[] {
   if (!raw) {
     return ["startup"];
@@ -535,8 +555,7 @@ function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> |
   if (commandCase.id !== "configGetGatewayPort" && commandCase.id !== "gatewayHealthJson") {
     return null;
   }
-  const envPort = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT ?? "", 10);
-  const port = Number.isFinite(envPort) && envPort > 0 ? envPort : 32123;
+  const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);
   return {
     gateway: {
       auth: { mode: "none" },
@@ -1004,6 +1023,7 @@ async function main(): Promise<void> {
 export const testing = {
   buildConfigFixture,
   collectFailedSamples,
+  parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
 };

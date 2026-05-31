@@ -1,7 +1,8 @@
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { listFreshTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildSessionAsyncTaskStatusDetails } from "./session-async-task-status.js";
@@ -88,6 +89,7 @@ function isTaskRecentSuccessfulDuplicate(params: {
 }): boolean {
   return (
     params.task.status === "succeeded" &&
+    params.task.terminalOutcome !== "blocked" &&
     Boolean(params.requestKey && params.cachedRequestKey === params.requestKey) &&
     isRecentMediaGenerationTaskRecord({
       task: params.task,
@@ -220,7 +222,7 @@ export function findRecentStartedMediaGenerationTaskForSession(params: {
     return undefined;
   }
   const nowMs = params.nowMs ?? Date.now();
-  const maxAgeMs = Math.max(0, Math.floor(params.maxAgeMs));
+  const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
   const taskLabel = normalizeOptionalString(params.taskLabel);
   pruneRecentMediaGenerationTaskStarts({ maxAgeMs, nowMs, preserveKey: key });
   const entries = recentMediaGenerationTaskStarts.get(key);

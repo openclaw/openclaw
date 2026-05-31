@@ -77,6 +77,8 @@ describe("failover-error", () => {
       }),
     ).toBe("billing");
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ statusCode: "+429" })).toBe("rate_limit");
+    expect(resolveFailoverReasonFromError({ statusCode: "0x1ad" })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 410 })).toBe("timeout");
@@ -1138,7 +1140,7 @@ describe("failover-error", () => {
         status: 500,
         message: OPENAI_SERVER_ERROR_PAYLOAD,
       },
-      { provider: "openai-codex", model: "gpt-5.4" },
+      { provider: "openai", model: "gpt-5.4" },
     );
     expect(err?.reason).toBe("server_error");
     expect(err?.status).toBe(500);

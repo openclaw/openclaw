@@ -1,19 +1,14 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
-import {
-  getShellConfig,
-  getShellEnv,
-  killProcessTree,
-  trackDetachedChildPid,
-  untrackDetachedChildPid,
-} from "../../utils/shell.js";
+import { getShellConfig, getShellEnv, killProcessTree } from "../../utils/shell.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
@@ -31,6 +26,17 @@ const bashSchema = Type.Object({
 export type { BashToolDetails, BashToolInput } from "./tool-contracts.js";
 
 export type { BashOperations } from "./bash-operations.js";
+
+export function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(timeoutSeconds * 1000, 1);
+}
 
 /**
  * Create bash operations using OpenClaw runtime's built-in local shell execution backend.
@@ -56,19 +62,16 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
         });
-        if (child.pid) {
-          trackDetachedChildPid(child.pid);
-        }
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
-        // Set timeout if provided.
-        if (timeout !== undefined && timeout > 0) {
+        const timeoutMs = resolveBashTimeoutMs(timeout);
+        if (timeoutMs !== undefined) {
           timeoutHandle = setTimeout(() => {
             timedOut = true;
             if (child.pid) {
               killProcessTree(child.pid);
             }
-          }, timeout * 1000);
+          }, timeoutMs);
         }
         // Stream stdout and stderr.
         child.stdout?.on("data", onData);
@@ -90,9 +93,6 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         // on inherited stdio handles held by detached descendants.
         waitForChildProcess(child)
           .then((code) => {
-            if (child.pid) {
-              untrackDetachedChildPid(child.pid);
-            }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
@@ -110,9 +110,6 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             resolve({ exitCode: code });
           })
           .catch((err) => {
-            if (child.pid) {
-              untrackDetachedChildPid(child.pid);
-            }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }

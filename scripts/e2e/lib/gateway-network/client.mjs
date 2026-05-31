@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
+import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "./limits.mjs";
-import { waitForWebSocketOpen } from "./open-websocket.mjs";
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;
@@ -40,6 +40,22 @@ function onceFrame(ws, filter, timeoutMs = 10_000) {
   });
 }
 
+function responseError(method, response) {
+  const message = response.error?.message ?? "unknown";
+  return new Error(`${method} failed: ${message}`);
+}
+
+function isRetryableStartupError(message) {
+  return (
+    message.includes("gateway starting") ||
+    message.includes("closed before open") ||
+    message.includes("ws open timeout") ||
+    message.includes("ECONNREFUSED") ||
+    message.includes("ECONNRESET") ||
+    message.includes("timeout")
+  );
+}
+
 let lastError;
 while (Date.now() < deadline) {
   let ws;
@@ -67,33 +83,28 @@ while (Date.now() < deadline) {
     );
 
     const connectRes = await onceFrame(ws, (frame) => frame?.type === "res" && frame?.id === "c1");
-    if (connectRes.ok) {
-      ws.close();
-      console.log("ok");
-      process.exit(0);
-    }
+    if (!connectRes.ok) {
+      lastError = responseError("connect", connectRes);
+      if (!isRetryableStartupError(lastError.message)) {
+        throw lastError;
+      }
+    } else {
+      ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
+      const healthRes = await onceFrame(
+        ws,
+        (frame) => frame?.type === "res" && frame?.id === "h1",
+      );
+      if (healthRes.ok) {
+        ws.close();
+        console.log("ok");
+        process.exit(0);
+      }
 
-    const message = connectRes.error?.message ?? "unknown";
-    lastError = new Error(`connect failed: ${message}`);
-    if (
-      !message.includes("gateway starting") &&
-      !message.includes("ws open timeout") &&
-      !message.includes("ECONNREFUSED") &&
-      !message.includes("ECONNRESET") &&
-      !message.includes("timeout")
-    ) {
-      throw lastError;
+      throw responseError("health", healthRes);
     }
   } catch (error) {
     lastError = error instanceof Error ? error : new Error(String(error));
-    const message = lastError.message;
-    if (
-      !message.includes("gateway starting") &&
-      !message.includes("ws open timeout") &&
-      !message.includes("ECONNREFUSED") &&
-      !message.includes("ECONNRESET") &&
-      !message.includes("timeout")
-    ) {
+    if (!isRetryableStartupError(lastError.message)) {
       throw lastError;
     }
   } finally {

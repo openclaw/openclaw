@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserNonNegativeIntegerValue,
+  parseBrowserPositiveIntegerValue,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
@@ -18,9 +23,11 @@ function parseOptionalIntegerOption(
   if (value === undefined) {
     return undefined;
   }
-  const raw = value.trim();
-  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < opts.min) {
+  const parsed =
+    opts.min === 0
+      ? parseBrowserNonNegativeIntegerValue(value)
+      : parseBrowserPositiveIntegerValue(value);
+  if (parsed === undefined || parsed < opts.min) {
     defaultRuntime.error(danger(`Invalid ${label}: must be an integer >= ${opts.min}`));
     defaultRuntime.exit(1);
     return undefined;
@@ -34,7 +41,7 @@ export function registerBrowserInspectCommands(
 ) {
   browser
     .command("screenshot")
-    .description("Capture a screenshot (MEDIA:<path>)")
+    .description("Capture a screenshot (prints the saved path)")
     .argument("[targetId]", "CDP target id (or unique prefix)")
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
@@ -66,7 +73,7 @@ export function registerBrowserInspectCommands(
           defaultRuntime.writeJson(result);
           return;
         }
-        defaultRuntime.log(`MEDIA:${shortenHomePath(result.path)}`);
+        defaultRuntime.log(shortenHomePath(result.path));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -154,7 +161,7 @@ export function registerBrowserInspectCommands(
           } else {
             defaultRuntime.log(shortenHomePath(opts.out));
             if (result.format === "ai" && result.imagePath) {
-              defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
+              defaultRuntime.log(shortenHomePath(result.imagePath));
             }
           }
           return;
@@ -168,7 +175,7 @@ export function registerBrowserInspectCommands(
         if (result.format === "ai") {
           defaultRuntime.log(result.snapshot);
           if (result.imagePath) {
-            defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
+            defaultRuntime.log(shortenHomePath(result.imagePath));
           }
           return;
         }

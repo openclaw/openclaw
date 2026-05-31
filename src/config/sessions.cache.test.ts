@@ -2,14 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as jsonFiles from "../infra/json-files.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   getSerializedSessionStore,
   getSerializedSessionStoreCacheStatsForTest,
+  getSerializedSessionStorePromptRefs,
   getSessionStoreSnapshotCacheStatsForTest,
   getSessionStoreStringInternStatsForTest,
   readSessionStoreCache,
   setSerializedSessionStore,
+  setSerializedSessionStorePromptRefs,
   writeSessionStoreCache,
 } from "./sessions/store-cache.js";
 import {
@@ -26,6 +29,7 @@ import {
   updateLastRoute,
 } from "./sessions/store.js";
 import type { SessionEntry } from "./sessions/types.js";
+import type { SessionSkillPromptRef } from "./sessions/types.js";
 
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
@@ -99,6 +103,24 @@ describe("Session Store Cache", () => {
       `serialized:${maxEntries + 1}`,
     );
     expect(getSerializedSessionStoreCacheStatsForTest().entries).toBe(maxEntries);
+  });
+
+  it("keeps serialized prompt refs on the serialized cache entry lifecycle", () => {
+    const promptRef: SessionSkillPromptRef = {
+      version: 1,
+      algorithm: "sha256",
+      hash: "a".repeat(64),
+      bytes: 123,
+    };
+    const refs = new Map([["session:1", promptRef]]);
+
+    setSerializedSessionStore("store:refs", "{}");
+    setSerializedSessionStorePromptRefs("store:refs", refs);
+
+    expect(getSerializedSessionStorePromptRefs("store:refs")).toBe(refs);
+
+    setSerializedSessionStore("store:refs", "{}");
+    expect(getSerializedSessionStorePromptRefs("store:refs")).toBeUndefined();
   });
 
   it("should load session store from disk on first call", async () => {
@@ -444,6 +466,7 @@ describe("Session Store Cache", () => {
 
     expect(readSessionUpdatedAt({ storePath, sessionKey: "agent:main:main" })).toBe(updatedAt);
     expect(parseSpy).not.toHaveBeenCalled();
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(1);
 
     parseSpy.mockRestore();
   });
@@ -505,6 +528,33 @@ describe("Session Store Cache", () => {
     mutable["session:1"].origin = { provider: "mutated" };
 
     expect(readSessionStoreSnapshot(storePath)["session:1"].origin?.provider).toBe("openai");
+  });
+
+  it("reads immutable single entries without populating whole-store snapshots", async () => {
+    await saveSessionStore(storePath, {
+      "session:1": createSessionEntry({
+        sessionId: "id-1",
+        skillsSnapshot: {
+          prompt: "single entry prompt ".repeat(200),
+          skills: [{ name: "alpha" }],
+        },
+      }),
+      "session:2": createSessionEntry({ sessionId: "id-2" }),
+    });
+    clearSessionStoreCacheForTest();
+
+    const entry = readSessionEntry(storePath, "session:1");
+
+    expect(entry?.sessionId).toBe("id-1");
+    expect(Object.isFrozen(entry)).toBe(true);
+    expect(Object.isFrozen(entry?.skillsSnapshot?.skills)).toBe(true);
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
+
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(() => {
+      (entry as SessionEntry).displayName = "mutated returned entry";
+    }).toThrow(TypeError);
+    expect(cached["session:1"].displayName).toBe("Test Session 1");
   });
 
   it("does not tag snapshots with stats from writes racing after a disk read", async () => {
@@ -695,6 +745,96 @@ describe("Session Store Cache", () => {
     const cached = loadSessionStore(storePath, { clone: false });
     expect(cached["session:2"]).toBe(untouched);
     expect(cached["session:1"].deliveryContext?.to).toBe("chat-1");
+  });
+
+  it("patches serialized JSON for one-entry updates without stringifying untouched entries", async () => {
+    await saveSessionStore(storePath, {
+      "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Before" }),
+      "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Untouched" }),
+    });
+    const cached = loadSessionStore(storePath, { clone: false });
+    Object.defineProperty(cached["session:2"], "toJSON", {
+      value: () => {
+        throw new Error("full store stringify touched session:2");
+      },
+    });
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: "session:1",
+      update: async () => ({ displayName: "After", updatedAt: 123 }),
+      takeCacheOwnership: true,
+    });
+
+    const disk = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    expect(disk["session:1"].displayName).toBe("After");
+    expect(disk["session:2"].displayName).toBe("Untouched");
+  });
+
+  it("falls back to full projection when untouched entries need prompt blob repair", async () => {
+    const prompt = "skill prompt ".repeat(80);
+    await saveSessionStore(storePath, {
+      "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Before" }),
+      "session:2": createSessionEntry({
+        sessionId: "id-2",
+        skillsSnapshot: {
+          prompt,
+          skills: [{ name: "alpha" }],
+        },
+      }),
+    });
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:2"].skillsSnapshot?.prompt).toBe(prompt);
+    await fs.promises.rm(path.join(testDir, "skills-prompts"), {
+      recursive: true,
+      force: true,
+    });
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: "session:1",
+      update: async () => ({ displayName: "After" }),
+      takeCacheOwnership: true,
+    });
+
+    clearSessionStoreCacheForTest();
+    const loaded = loadSessionStore(storePath);
+    expect(loaded["session:1"].displayName).toBe("After");
+    expect(loaded["session:2"].skillsSnapshot?.prompt).toBe(prompt);
+  });
+
+  it("serializes the normalized entry when applying the one-entry fast path", async () => {
+    await saveSessionStore(storePath, {
+      "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Before" }),
+      "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Untouched" }),
+    });
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: "session:1",
+      update: async () => ({
+        displayName: "After",
+        skillsSnapshot: {
+          prompt: "short prompt",
+          skills: [{ name: "alpha" }],
+          resolvedSkills: [
+            createCanonicalFixtureSkill({
+              name: "alpha",
+              description: "alpha skill",
+              filePath: "/skills/alpha/SKILL.md",
+              baseDir: "/skills/alpha",
+              source: "transient",
+            }),
+          ],
+        } as SessionEntry["skillsSnapshot"],
+      }),
+      takeCacheOwnership: true,
+    });
+
+    const disk = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    expect(disk["session:1"].displayName).toBe("After");
+    expect(disk["session:1"].skillsSnapshot?.prompt).toBe("short prompt");
+    expect("resolvedSkills" in (disk["session:1"].skillsSnapshot ?? {})).toBe(false);
   });
 
   it("restores the writer-owned cache when update result proves the store unchanged", async () => {

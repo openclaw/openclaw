@@ -14,12 +14,12 @@ the finished turn to OpenClaw.
 Runtimes are easy to confuse with providers because both show up near model
 configuration. They are different layers:
 
-| Layer         | Examples                              | What it means                                                       |
-| ------------- | ------------------------------------- | ------------------------------------------------------------------- |
-| Provider      | `openai`, `anthropic`, `openai-codex` | How OpenClaw authenticates, discovers models, and names model refs. |
-| Model         | `gpt-5.5`, `claude-opus-4-6`          | The model selected for the agent turn.                              |
-| Agent runtime | `openclaw`, `codex`, `claude-cli`     | The low level loop or backend that executes the prepared turn.      |
-| Channel       | Telegram, Discord, Slack, WhatsApp    | Where messages enter and leave OpenClaw.                            |
+| Layer         | Examples                                     | What it means                                                       |
+| ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
+| Provider      | `openai`, `anthropic`, `github-copilot`      | How OpenClaw authenticates, discovers models, and names model refs. |
+| Model         | `gpt-5.5`, `claude-opus-4-6`                 | The model selected for the agent turn.                              |
+| Agent runtime | `openclaw`, `codex`, `copilot`, `claude-cli` | The low level loop or backend that executes the prepared turn.      |
+| Channel       | Telegram, Discord, Slack, WhatsApp           | Where messages enter and leave OpenClaw.                            |
 
 You will also see the word **harness** in code. A harness is the implementation
 that provides an agent runtime. For example, the bundled Codex harness
@@ -33,12 +33,16 @@ There are two runtime families:
 
 - **Embedded harnesses** run inside OpenClaw's prepared agent loop. Today this
   is the built-in `openclaw` runtime plus registered plugin harnesses such as
-  `codex`.
+  `codex` and `copilot`.
 - **CLI backends** run a local CLI process while keeping the model ref
-  canonical. For example, `anthropic/claude-opus-4-7` with
+  canonical. For example, `anthropic/claude-opus-4-8` with
   a model-scoped `agentRuntime.id: "claude-cli"` means "select the Anthropic
   model, execute through Claude CLI." `claude-cli` is not an embedded harness id
   and must not be passed to AgentHarness selection.
+
+The `copilot` harness is a separate, opt-in external plugin harness for the
+GitHub Copilot CLI; see [GitHub Copilot agent runtime](/plugins/copilot)
+for the user-facing decision between PI, Codex, and GitHub Copilot agent runtime.
 
 ## Codex surfaces
 
@@ -47,14 +51,14 @@ Most confusion comes from several different surfaces sharing the Codex name:
 | Surface                                          | OpenClaw name/config                 | What it does                                                                                                   |
 | ------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
 | Native Codex app-server runtime                  | `openai/*` model refs                | Runs OpenAI embedded agent turns through Codex app-server. This is the usual ChatGPT/Codex subscription setup. |
-| Codex OAuth auth profiles                        | `openai-codex` auth provider         | Stores ChatGPT/Codex subscription auth that the Codex app-server harness consumes.                             |
+| Codex OAuth auth profiles                        | `openai` OAuth profiles              | Stores ChatGPT/Codex subscription auth that the Codex app-server harness consumes.                             |
 | Codex ACP adapter                                | `runtime: "acp"`, `agentId: "codex"` | Runs Codex through the external ACP/acpx control plane. Use only when ACP/acpx is explicitly asked.            |
 | Native Codex chat-control command set            | `/codex ...`                         | Binds, resumes, steers, stops, and inspects Codex app-server threads from chat.                                |
 | OpenAI Platform API route for non-agent surfaces | `openai/*` plus API-key auth         | Used for direct OpenAI APIs such as images, embeddings, speech, and realtime.                                  |
 
 Those surfaces are intentionally independent. Enabling the `codex` plugin makes
 the native app-server features available; `openclaw doctor --fix` owns legacy
-`openai-codex/*` route repair and stale session pin cleanup. Selecting
+legacy Codex route repair and stale session pin cleanup. Selecting
 `openai/*` for an agent model now means "run this through Codex" unless a
 non-agent OpenAI API surface is being used.
 
@@ -91,9 +95,9 @@ This is the agent-facing decision tree:
    subscription-backed Codex agent experience, use `openai/<model>`.
 3. If the user explicitly chooses **OpenClaw for an OpenAI model**, keep the model ref
    as `openai/<model>` and set provider/model runtime policy to
-   `agentRuntime.id: "openclaw"`. A selected `openai-codex` auth profile is routed
+   `agentRuntime.id: "openclaw"`. A selected `openai` OAuth profile is routed
    internally through OpenClaw's Codex-auth transport.
-4. If legacy config still contains **`openai-codex/*` model refs**, repair it to
+4. If legacy config still contains **legacy Codex model refs**, repair it to
    `openai/<model>` with `openclaw doctor --fix`; doctor keeps the Codex auth
    route by adding provider/model-scoped `agentRuntime.id: "codex"` where the
    old model ref implied it.
@@ -108,7 +112,7 @@ This is the agent-facing decision tree:
 | --------------------------------------- | -------------------------------------------- |
 | Codex app-server chat/thread control    | `/codex ...` from the bundled `codex` plugin |
 | Codex app-server embedded agent runtime | `openai/*` agent model refs                  |
-| OpenAI Codex OAuth                      | `openai-codex` auth profiles                 |
+| OpenAI Codex OAuth                      | `openai` OAuth profiles                      |
 | Claude Code or other external harness   | ACP/acpx                                     |
 
 For the OpenAI-family prefix split, see [OpenAI](/providers/openai) and
@@ -170,9 +174,9 @@ Claude CLI form is:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-4-7",
+      model: "anthropic/claude-opus-4-8",
       models: {
-        "anthropic/claude-opus-4-7": {
+        "anthropic/claude-opus-4-8": {
           agentRuntime: { id: "claude-cli" },
         },
       },
@@ -192,14 +196,42 @@ backend.
 `auto` mode is intentionally conservative for most providers. OpenAI agent
 models are the exception: unset runtime and `auto` both resolve to the Codex
 harness. Explicit OpenClaw runtime config remains an opt-in compatibility route for
-`openai/*` agent turns; when paired with a selected `openai-codex` auth profile,
+`openai/*` agent turns; when paired with a selected `openai` OAuth profile,
 OpenClaw routes that path internally through the Codex-auth transport while
 keeping the public model ref as `openai/*`. Stale OpenAI runtime session pins are
 ignored by runtime selection and can be cleaned with `openclaw doctor --fix`.
 
 If `openclaw doctor` warns that the `codex` plugin is enabled while
-`openai-codex/*` remains in config, treat that as legacy route state. Run
+legacy Codex model refs remain in config, treat that as legacy route state. Run
 `openclaw doctor --fix` to rewrite it to `openai/*` with the Codex runtime.
+
+## GitHub Copilot agent runtime
+
+The external `@openclaw/copilot` plugin registers an opt-in `copilot` runtime
+backed by the GitHub Copilot CLI (`@github/copilot-sdk`). It claims the
+canonical subscription `github-copilot` provider and is **never** selected by
+`auto`. Opt in per-model or per-provider via `agentRuntime.id`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: "github-copilot/gpt-5.5",
+      models: {
+        "github-copilot/gpt-5.5": {
+          agentRuntime: { id: "copilot" },
+        },
+      },
+    },
+  },
+}
+```
+
+The harness claims its provider, runtime, CLI session key, and auth profile
+prefix in `extensions/copilot/doctor-contract-api.ts`, which
+`openclaw doctor` auto-loads. For configuration, auth, transcript mirroring,
+compaction, the doctor probe surface, and the broader PI vs Codex vs Copilot
+SDK decision, see [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## Compatibility contract
 
@@ -236,6 +268,7 @@ runtime policy first. Legacy session runtime pins no longer decide routing.
 
 - [Codex harness](/plugins/codex-harness)
 - [Codex harness runtime](/plugins/codex-harness-runtime)
+- [GitHub Copilot agent runtime](/plugins/copilot)
 - [OpenAI](/providers/openai)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
 - [Agent loop](/concepts/agent-loop)

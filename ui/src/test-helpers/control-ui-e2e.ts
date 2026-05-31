@@ -5,11 +5,28 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import { PROTOCOL_VERSION } from "../../../src/gateway/protocol/version.js";
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+const commonJsOptimizeDeps = [
+  "highlight.js/lib/core",
+  "highlight.js/lib/languages/bash",
+  "highlight.js/lib/languages/cpp",
+  "highlight.js/lib/languages/css",
+  "highlight.js/lib/languages/diff",
+  "highlight.js/lib/languages/go",
+  "highlight.js/lib/languages/java",
+  "highlight.js/lib/languages/javascript",
+  "highlight.js/lib/languages/json",
+  "highlight.js/lib/languages/markdown",
+  "highlight.js/lib/languages/python",
+  "highlight.js/lib/languages/rust",
+  "highlight.js/lib/languages/typescript",
+  "highlight.js/lib/languages/xml",
+  "highlight.js/lib/languages/yaml",
+] as const;
 
 export type MockGatewayRequest = {
   id: string;
@@ -82,11 +99,27 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     },
     logLevel: "error",
     optimizeDeps: {
-      include: ["ipaddr.js", "lit/directives/repeat.js", "markdown-it-task-lists"],
+      include: [
+        "ipaddr.js",
+        "lit/directives/repeat.js",
+        "markdown-it-task-lists",
+        ...commonJsOptimizeDeps,
+      ],
     },
     publicDir: path.join(uiRoot, "public"),
     resolve: {
       alias: {
+        "@openclaw/net-policy/ip": path.join(repoRoot, "packages/net-policy/src/ip.ts"),
+        "@openclaw/net-policy/ipv4": path.join(repoRoot, "packages/net-policy/src/ipv4.ts"),
+        "@openclaw/net-policy/redact-sensitive-url": path.join(
+          repoRoot,
+          "packages/net-policy/src/redact-sensitive-url.ts",
+        ),
+        "@openclaw/net-policy/url-userinfo": path.join(
+          repoRoot,
+          "packages/net-policy/src/url-userinfo.ts",
+        ),
+        "@openclaw/net-policy": path.join(repoRoot, "packages/net-policy/src/index.ts"),
         json5: json5EsmPath,
       },
     },

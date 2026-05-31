@@ -1,32 +1,22 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import {
   danger,
-  DEFAULT_UPLOAD_DIR,
   defaultRuntime,
-  resolveExistingPathsWithinRoot,
+  resolveExistingUploadPaths,
   shortenHomePath,
 } from "../core-api.js";
 import { resolveBrowserActionContext, withBrowserActionTimeoutSlack } from "./shared.js";
 
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
 
-function parsePositiveIntegerOption(value: string, flag: string): number {
-  const trimmed = value.trim();
-  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
-
 async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
-  const result = await resolveExistingPathsWithinRoot({
-    rootDir: DEFAULT_UPLOAD_DIR,
-    requestedPaths: paths,
-    scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-  });
+  const result = await resolveExistingUploadPaths({ requestedPaths: paths });
   if (!result.ok) {
     throw new Error(result.error);
   }
@@ -100,7 +90,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .description("Arm file upload for the next file chooser")
     .argument(
       "<paths...>",
-      "File paths to upload (must be within OpenClaw temp uploads dir, e.g. /tmp/openclaw/uploads/file.pdf)",
+      "File paths to upload from OpenClaw temp uploads or managed inbound media (e.g. /tmp/openclaw/uploads/file.pdf or media://inbound/<id>)",
     )
     .option("--ref <ref>", "Ref id from snapshot to click after arming")
     .option("--input-ref <ref>", "Ref id for <input type=file> to set directly")
@@ -109,7 +99,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next file chooser (default: 120000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (paths: string[], opts, cmd) => {
       try {
@@ -148,7 +138,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next download (default: 120000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
       await runDownloadCommand(cmd, opts, {
@@ -171,7 +161,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the download to start (default: 120000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
       await runDownloadCommand(cmd, opts, {
@@ -194,7 +184,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next dialog (default: 120000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);

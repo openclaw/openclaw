@@ -6,6 +6,13 @@ import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
+  addTimerTimeoutGraceMs,
+  clampTimerTimeoutMs,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TCP_PORT,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   isRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -54,7 +61,6 @@ const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
-const DECIMAL_INTEGER_RE = /^\d+$/;
 
 const voiceCallCliDeps = {
   callGatewayFromCli,
@@ -66,6 +72,9 @@ export const testing = {
   },
   isGatewayUnavailableForLocalFallback,
   parseVoiceCallIntOption,
+  resolveGatewayContinueTimeoutMs,
+  resolveGatewayOperationTimeoutMs,
+  resolveVoiceCallDeadlineMs,
 };
 
 function writeStdoutLine(...values: unknown[]): void {
@@ -79,12 +88,12 @@ function writeStdoutJson(value: unknown): void {
 function parseVoiceCallIntOption(
   raw: string | undefined,
   optionName: string,
-  opts?: { min?: number },
+  opts?: { min?: number; max?: number },
 ): number {
   const min = opts?.min ?? 0;
   const value = raw?.trim() ?? "";
-  const parsed = DECIMAL_INTEGER_RE.test(value) ? Number(value) : Number.NaN;
-  if (!Number.isInteger(parsed) || parsed < min) {
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined || parsed < min || (opts?.max !== undefined && parsed > opts.max)) {
     throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
   }
   return parsed;
@@ -128,15 +137,24 @@ async function callVoiceCallGateway(
 }
 
 function resolveGatewayOperationTimeoutMs(config: VoiceCallConfig): number {
-  return Math.max(VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS, config.ringTimeoutMs + 5000);
+  return Math.max(
+    VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS,
+    addTimerTimeoutGraceMs(config.ringTimeoutMs) ?? 1,
+  );
 }
 
 function resolveGatewayContinueTimeoutMs(config: VoiceCallConfig): number {
   return (
-    config.transcriptTimeoutMs +
-    VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS +
-    VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS
+    clampTimerTimeoutMs(
+      config.transcriptTimeoutMs +
+        VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS +
+        VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS,
+    ) ?? 1
   );
+}
+
+function resolveVoiceCallDeadlineMs(timeoutMs: number, nowMs = Date.now()): number {
+  return nowMs + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
 }
 
 function isUnknownGatewayMethod(err: unknown, method: VoiceCallGatewayMethod): boolean {
@@ -185,7 +203,7 @@ async function pollVoiceCallContinueGateway(params: {
   operationId: string;
   timeoutMs: number;
 }): Promise<unknown> {
-  const deadlineMs = Date.now() + params.timeoutMs;
+  const deadlineMs = resolveVoiceCallDeadlineMs(params.timeoutMs);
 
   while (Date.now() <= deadlineMs) {
     const gateway = await callVoiceCallGateway(
@@ -823,7 +841,7 @@ export function registerVoiceCallCli(params: {
         const servePort = parseVoiceCallIntOption(
           options.port ?? String(config.serve.port ?? 3334),
           "--port",
-          { min: 1 },
+          { min: 1, max: MAX_TCP_PORT },
         );
         const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
