@@ -91,6 +91,16 @@ function emitAndClose(child: MockChild, stream: "stdout" | "stderr", data: strin
   });
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await new Promise((resolve) => scheduleNativeTimeout(resolve, 10));
+  }
+}
+
 function isMcporterCommand(cmd: unknown): boolean {
   if (typeof cmd !== "string") {
     return false;
@@ -263,13 +273,15 @@ describe("QmdMemoryManager", () => {
   async function createManager(params?: {
     mode?: "full" | "status" | "cli";
     cfg?: OpenClawConfig;
+    agentId?: string;
   }) {
     const cfgToUse = params?.cfg ?? cfg;
-    const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId });
+    const selectedAgentId = params?.agentId ?? agentId;
+    const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId: selectedAgentId });
     const manager = trackManager(
       await QmdMemoryManager.create({
         cfg: cfgToUse,
-        agentId,
+        agentId: selectedAgentId,
         resolved,
         mode: params?.mode ?? "status",
       }),
@@ -289,7 +301,10 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
     watchMock.mockClear();
-    withFileLockMock.mockClear();
+    withFileLockMock.mockReset();
+    withFileLockMock.mockImplementation(
+      async <T>(_filePath: string, _options: unknown, fn: () => Promise<T>) => await fn(),
+    );
     logWarnMock.mockClear();
     logDebugMock.mockClear();
     logInfoMock.mockClear();
@@ -4149,6 +4164,66 @@ describe("QmdMemoryManager", () => {
     expect(embedLockTaken).toBe(true);
 
     await manager.close();
+  });
+
+  it("does not hold the per-store write lock while waiting for embed capacity", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: [
+          { id: agentId, default: true, workspace: workspaceDir },
+          { id: "other", workspace: workspaceDir },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation(() => createMockChild());
+
+    let releaseFirstEmbed!: () => void;
+    const firstEmbedLocked = new Promise<void>((resolve) => {
+      withFileLockMock.mockImplementation(
+        async <T>(filePath: string, _options: unknown, fn: () => Promise<T>) => {
+          if (filePath.endsWith(path.join("qmd", "embed.lock")) && !releaseFirstEmbed) {
+            resolve();
+            await new Promise<void>((release) => {
+              releaseFirstEmbed = release;
+            });
+          }
+          return await fn();
+        },
+      );
+    });
+
+    const first = await createManager({ mode: "status" });
+    const second = await createManager({ mode: "status", agentId: "other" });
+    const firstSync = first.manager.sync({ reason: "manual", force: true });
+    await firstEmbedLocked;
+
+    const secondSync = second.manager.sync({ reason: "manual", force: true });
+    try {
+      await waitUntil(() => writeLockCalls().length >= 2);
+
+      // The second manager may run its update, but its embed must not take a store
+      // write lock while it is still queued behind the first embed.
+      expect(writeLockCalls().length).toBe(2);
+    } finally {
+      releaseFirstEmbed();
+    }
+
+    await Promise.all([firstSync, secondSync]);
+    expect(writeLockCalls().length).toBeGreaterThanOrEqual(4);
+
+    await first.manager.close();
+    await second.manager.close();
   });
 
   it("serializes session exports across managers for the same agent", async () => {

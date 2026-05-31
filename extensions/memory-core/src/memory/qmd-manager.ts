@@ -1552,17 +1552,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       if (this.shouldRunEmbed(force)) {
         try {
-          // Take the per-store write lock first (W), then the global embed lock
-          // (E). Update only ever takes W, so this W->E order cannot deadlock with
-          // it, and a long update on this store no longer blocks other agents'
-          // embeds (we are not holding the global lock while waiting for W).
-          await this.withQmdStoreWriteLock(() =>
-            this.withQmdEmbedLock(async () => {
-              await this.runQmd(["embed"], {
-                timeoutMs: this.qmd.update.embedTimeoutMs,
-                discardOutput: true,
-              });
-            }),
+          // Wait for embed capacity before taking the per-store write lock. The
+          // store lock should protect active qmd writes only, not time spent queued
+          // behind unrelated agents' embeds.
+          await this.withQmdEmbedQueue(() =>
+            this.withQmdGlobalEmbedLock(() =>
+              this.withQmdStoreWriteLock(async () => {
+                await this.runQmd(["embed"], {
+                  timeoutMs: this.qmd.update.embedTimeoutMs,
+                  discardOutput: true,
+                });
+              }),
+            ),
           );
           this.lastEmbedAt = Date.now();
           this.embedBackoffUntil = null;
@@ -1772,8 +1773,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
-  private async withQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
-    const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
+  private async withQmdEmbedQueue<T>(task: () => Promise<T>): Promise<T> {
     const queue = getQmdEmbedQueueState();
     const previous = queue.tail;
     let releaseCurrent!: () => void;
@@ -1786,14 +1786,19 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     await previous.catch(() => undefined);
     try {
-      return await withFileLock(
-        lockPath,
-        resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
-        task,
-      );
+      return await task();
     } finally {
       releaseCurrent();
     }
+  }
+
+  private async withQmdGlobalEmbedLock<T>(task: () => Promise<T>): Promise<T> {
+    const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
+    return await withFileLock(
+      lockPath,
+      resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
+      task,
+    );
   }
 
   private async withQmdStoreWriteLock<T>(task: () => Promise<T>): Promise<T> {
@@ -1802,8 +1807,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     // dirty-sync and a background gateway update/embed never write concurrently
     // (writer-vs-writer SQLITE_BUSY, #66339). It lives beside the agent's qmd dir,
     // so writes for different agents still run in parallel. Update takes only this
-    // lock; embed takes this lock before the global embed lock, so the two never
-    // form a cross-lock cycle.
+    // lock; embed first waits for global embed capacity, then takes this lock for
+    // the active qmd write.
     const lockPath = path.join(this.agentStateDir, "qmd-write.lock");
     return await withFileLock(
       lockPath,
