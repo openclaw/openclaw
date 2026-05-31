@@ -455,22 +455,22 @@ export async function withTemporaryEnv(
   );
 
   for (const [key, value] of Object.entries(overrides)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+    setTemporaryEnvEntry(key, value);
   }
 
   try {
     await run();
   } finally {
     for (const [key, value] of Object.entries(previousEntries)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+      setTemporaryEnvEntry(key, value);
     }
   }
+}
+
+function setTemporaryEnvEntry(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    Reflect.deleteProperty(process.env, key);
+    return;
+  }
+  Reflect.set(process.env, key, value);
 }

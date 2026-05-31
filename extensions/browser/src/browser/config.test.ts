@@ -21,22 +21,22 @@ function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
 
   try {
     for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+      setTestEnvEntry(key, value);
     }
     return fn();
   } finally {
     for (const [key, value] of snapshot) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+      setTestEnvEntry(key, value);
     }
   }
+}
+
+function setTestEnvEntry(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    Reflect.deleteProperty(process.env, key);
+    return;
+  }
+  Reflect.set(process.env, key, value);
 }
 
 describe("browser config", () => {

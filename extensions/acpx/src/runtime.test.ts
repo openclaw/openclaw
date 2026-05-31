@@ -55,7 +55,9 @@ function makeRuntime(
   const runtime = new AcpxRuntime(
     {
       cwd: "/tmp",
-      sessionStore: baseStore,
+      sessionStore: baseStore as unknown as ConstructorParameters<
+        typeof AcpxRuntime
+      >[0]["sessionStore"],
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
         list: () => ["codex", "openclaw"],

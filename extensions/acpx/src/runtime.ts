@@ -235,7 +235,7 @@ function createResetAwareSessionStore(
         return record;
       }
       return {
-        ...(record as Record<string, unknown>),
+        ...record,
         openclawLeaseId: lease.leaseId,
         openclawGatewayInstanceId: lease.gatewayInstanceId,
       } as AcpLoadedSessionRecord;
@@ -267,7 +267,7 @@ function createResetAwareSessionStore(
         };
         await params.leaseStore.save(lease);
         recordToSave = {
-          ...(record as Record<string, unknown>),
+          ...record,
           // ACPX uses agentCommand as reuse identity. Lease metadata belongs to
           // our sidecar record, so keep the persisted command stable.
           agentCommand: stableAgentCommand,
