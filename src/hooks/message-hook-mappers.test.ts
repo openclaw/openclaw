@@ -82,6 +82,26 @@ describe("message hook mappers", () => {
             },
           },
         },
+        {
+          pluginId: "thread-claim-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "thread-claim-chat", label: "Thread claim chat" }),
+            messaging: {
+              resolveInboundConversation: ({ to, threadId, threadParentId }) => {
+                if (threadId) {
+                  return {
+                    conversationId: String(threadId),
+                    ...(threadParentId
+                      ? { parentConversationId: `channel:${threadParentId}` }
+                      : {}),
+                  };
+                }
+                return to ? { conversationId: to } : null;
+              },
+            },
+          },
+        },
       ]),
     );
   });
@@ -338,6 +358,28 @@ describe("message hook mappers", () => {
       spanId: undefined,
       parentSpanId: undefined,
       callDepth: undefined,
+    });
+  });
+
+  it("passes thread parent ids to channel plugin claim resolvers", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "thread-claim-chat",
+        Surface: "thread-claim-chat",
+        OriginatingChannel: "thread-claim-chat",
+        To: "channel:1510164477642014740",
+        OriginatingTo: "channel:1510164477642014740",
+        MessageThreadId: "1510164477642014740",
+        ThreadParentId: "1510164477642014999",
+        GroupChannel: "thread",
+        GroupSubject: "guild",
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical)).toMatchObject({
+      channelId: "thread-claim-chat",
+      conversationId: "1510164477642014740",
+      parentConversationId: "channel:1510164477642014999",
     });
   });
 
