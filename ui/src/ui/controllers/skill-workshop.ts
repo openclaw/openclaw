@@ -1,4 +1,3 @@
-import type { ChatSendOptions } from "../app-chat.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   SkillWorkshopAction,
@@ -36,6 +35,13 @@ type SkillProposalSupportFileRecord = {
   sizeBytes: number;
 };
 
+type SkillProposalOrigin = {
+  agentId?: string;
+  sessionKey?: string;
+  runId?: string;
+  messageId?: string;
+};
+
 type SkillProposalRecord = {
   id: string;
   kind: SkillProposalKind;
@@ -45,6 +51,7 @@ type SkillProposalRecord = {
   createdAt: string;
   updatedAt: string;
   proposedVersion: string;
+  origin?: SkillProposalOrigin;
   supportFiles?: SkillProposalSupportFileRecord[];
   target: {
     skillName: string;
@@ -77,7 +84,6 @@ export type SkillWorkshopState = {
   skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   skillWorkshopRevisionKey: string | null;
   skillWorkshopRevisionDraft: string;
-  handleSendChat: (messageOverride?: string, opts?: ChatSendOptions) => Promise<void>;
 };
 
 function getErrorMessage(err: unknown): string {
@@ -176,6 +182,7 @@ function proposalFromManifest(
     oneLine: entry.description,
     body: previousIsCurrent ? previous.body : "",
     status: entry.status,
+    ...(previousIsCurrent && previous.origin ? { origin: previous.origin } : {}),
     version: previousIsCurrent ? previous.version : 1,
     createdAt,
     updatedAt,
@@ -200,6 +207,7 @@ function proposalFromInspect(
     oneLine: record.description,
     body: stripProposalFrontmatter(result.content),
     status: record.status,
+    ...(record.origin ? { origin: record.origin } : {}),
     version: proposedVersionNumber(record.proposedVersion),
     createdAt,
     updatedAt,
@@ -388,6 +396,7 @@ function buildRevisionRequest(proposal: SkillWorkshopProposal, instructions: str
 export async function requestSkillWorkshopRevision(
   state: SkillWorkshopState,
   proposalId: string,
+  sendRevisionRequest: (message: string, proposal: SkillWorkshopProposal) => Promise<void>,
 ): Promise<void> {
   if (state.skillWorkshopActionBusy) {
     return;
@@ -401,7 +410,7 @@ export async function requestSkillWorkshopRevision(
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    await state.handleSendChat(buildRevisionRequest(proposal, instructions));
+    await sendRevisionRequest(buildRevisionRequest(proposal, instructions), proposal);
     state.skillWorkshopRevisionKey = null;
     state.skillWorkshopRevisionDraft = "";
     showActionNotice(state, proposal, "Revision requested");

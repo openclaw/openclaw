@@ -119,6 +119,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
+  createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
   parseSessionsFilterInteger,
@@ -496,7 +497,12 @@ const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v
 const SKILL_WORKSHOP_REVIEWED_KEY = "openclaw:control-ui:skill-workshop-reviewed:v1";
 const SKILL_WORKSHOP_QUEUE_WIDTH_KEY = "openclaw:control-ui:skill-workshop-queue-width:v1";
 const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
+const SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY =
+  "openclaw:control-ui:skill-workshop-current-chat-revisions:v1";
+const SKILL_WORKSHOP_REVISION_SESSIONS_KEY =
+  "openclaw:control-ui:skill-workshop-revision-sessions:v1";
 const MAX_SKILL_WORKSHOP_REVIEWED_KEYS = 500;
+const MAX_SKILL_WORKSHOP_REVISION_SESSIONS = 200;
 const DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH = 360;
 const MIN_SKILL_WORKSHOP_QUEUE_WIDTH = 280;
 const MAX_SKILL_WORKSHOP_QUEUE_WIDTH = 560;
@@ -548,11 +554,83 @@ type SkillWorkshopReviewableProposal = {
   key: string;
   slug?: string;
   status: string;
+  origin?: {
+    agentId?: string;
+    sessionKey?: string;
+  };
   version: number;
   createdAt: number;
   updatedAt?: number;
   isNew: boolean;
 };
+
+type SkillWorkshopRevisionSessionEntry = {
+  sessionKey: string;
+  updatedAt: number;
+};
+
+export function loadSkillWorkshopUseCurrentChatForRevisions(): boolean {
+  return getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY) === "true";
+}
+
+function setSkillWorkshopUseCurrentChatForRevisions(state: AppViewState, enabled: boolean): void {
+  state.skillWorkshopUseCurrentChatForRevisions = enabled;
+  try {
+    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY, String(enabled));
+  } catch {
+    // Storage is only for the UI preference; the current toggle state still applies.
+  }
+}
+
+export function loadSkillWorkshopRevisionSessions(): Record<
+  string,
+  SkillWorkshopRevisionSessionEntry
+> {
+  const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_REVISION_SESSIONS_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const entries = Object.entries(parsed)
+      .flatMap(([proposalId, value]) => {
+        if (!value || typeof value !== "object") {
+          return [];
+        }
+        const record = value as { sessionKey?: unknown; updatedAt?: unknown };
+        const sessionKey = normalizeOptionalString(record.sessionKey);
+        const updatedAt =
+          typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt)
+            ? record.updatedAt
+            : 0;
+        return proposalId && sessionKey ? [[proposalId, { sessionKey, updatedAt }] as const] : [];
+      })
+      .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
+      .slice(0, MAX_SKILL_WORKSHOP_REVISION_SESSIONS);
+    return Object.fromEntries(entries);
+  } catch {
+    return {};
+  }
+}
+
+function saveSkillWorkshopRevisionSessions(
+  sessions: Record<string, SkillWorkshopRevisionSessionEntry>,
+): void {
+  try {
+    const entries = Object.entries(sessions)
+      .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
+      .slice(0, MAX_SKILL_WORKSHOP_REVISION_SESSIONS);
+    getSafeLocalStorage()?.setItem(
+      SKILL_WORKSHOP_REVISION_SESSIONS_KEY,
+      JSON.stringify(Object.fromEntries(entries)),
+    );
+  } catch {
+    // Revision session persistence is a convenience; created sessions remain usable normally.
+  }
+}
 
 export function loadSkillWorkshopReviewedKeys(): string[] {
   const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_REVIEWED_KEY);
@@ -634,44 +712,59 @@ function setSkillWorkshopMode(state: AppViewState, mode: "board" | "today"): voi
   }
 }
 
-function renderSkillWorkshopModeSwitch(state: AppViewState) {
+function renderSkillWorkshopHeaderControls(state: AppViewState) {
   return html`
-    <div
-      class="sw-mode-switch"
-      role="tablist"
-      aria-label="Workshop view"
-      data-mode=${state.skillWorkshopMode}
-    >
-      <button
-        class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
-        role="tab"
-        aria-selected=${state.skillWorkshopMode === "board"}
-        title="Board view"
-        @click=${() => setSkillWorkshopMode(state, "board")}
+    <div class="sw-header-controls">
+      <label class="sw-revision-session-toggle">
+        <input
+          type="checkbox"
+          .checked=${state.skillWorkshopUseCurrentChatForRevisions}
+          @change=${(event: Event) =>
+            setSkillWorkshopUseCurrentChatForRevisions(
+              state,
+              (event.currentTarget as HTMLInputElement).checked,
+            )}
+        />
+        <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
+        <span class="sw-revision-session-toggle__label">Use current chat</span>
+      </label>
+      <div
+        class="sw-mode-switch"
+        role="tablist"
+        aria-label="Workshop view"
+        data-mode=${state.skillWorkshopMode}
       >
-        <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
-          <rect x="3" y="4" width="7" height="16" rx="1.5" />
-          <rect x="14" y="4" width="7" height="9" rx="1.5" />
-          <rect x="14" y="15" width="7" height="5" rx="1.5" />
-        </svg>
-        <span>Board</span>
-      </button>
-      <button
-        class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
-        role="tab"
-        aria-selected=${state.skillWorkshopMode === "today"}
-        title="Today view"
-        @click=${() => setSkillWorkshopMode(state, "today")}
-      >
-        <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
-          <circle cx="12" cy="12" r="4" />
-          <path
-            d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
-          />
-        </svg>
-        <span>Today</span>
-      </button>
-      <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
+        <button
+          class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
+          role="tab"
+          aria-selected=${state.skillWorkshopMode === "board"}
+          title="Board view"
+          @click=${() => setSkillWorkshopMode(state, "board")}
+        >
+          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
+            <rect x="3" y="4" width="7" height="16" rx="1.5" />
+            <rect x="14" y="4" width="7" height="9" rx="1.5" />
+            <rect x="14" y="15" width="7" height="5" rx="1.5" />
+          </svg>
+          <span>Board</span>
+        </button>
+        <button
+          class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
+          role="tab"
+          aria-selected=${state.skillWorkshopMode === "today"}
+          title="Today view"
+          @click=${() => setSkillWorkshopMode(state, "today")}
+        >
+          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path
+              d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
+            />
+          </svg>
+          <span>Today</span>
+        </button>
+        <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
+      </div>
     </div>
   `;
 }
@@ -702,6 +795,126 @@ function rememberSkillWorkshopProposalReviewed<T extends SkillWorkshopReviewable
   const next = [...reviewedKeys, key].slice(-MAX_SKILL_WORKSHOP_REVIEWED_KEYS);
   saveSkillWorkshopReviewedKeys(next);
   return next;
+}
+
+function findSkillWorkshopRevisionSessionRow(
+  state: AppViewState,
+  sessionKey: string | undefined,
+): GatewaySessionRow | null {
+  const key = normalizeOptionalString(sessionKey);
+  if (!key) {
+    return null;
+  }
+  const current = state.sessionsResult?.sessions.find((row) => row.key === key);
+  if (current) {
+    return current;
+  }
+  for (const rows of Object.values(state.chatAgentSessionRowsByAgent ?? {})) {
+    const cached = rows.find((row) => row.key === key);
+    if (cached) {
+      return cached;
+    }
+  }
+  return null;
+}
+
+function isUsableSkillWorkshopRevisionSession(
+  row: GatewaySessionRow | null,
+): row is GatewaySessionRow {
+  return Boolean(row && !row.archived && !row.hasActiveRun);
+}
+
+function rememberSkillWorkshopRevisionSession(
+  state: AppViewState,
+  proposalId: string,
+  sessionKey: string,
+): void {
+  const key = normalizeOptionalString(proposalId);
+  const value = normalizeOptionalString(sessionKey);
+  if (!key || !value) {
+    return;
+  }
+  const next = {
+    ...state.skillWorkshopRevisionSessions,
+    [key]: { sessionKey: value, updatedAt: Date.now() },
+  };
+  state.skillWorkshopRevisionSessions = next;
+  saveSkillWorkshopRevisionSessions(next);
+}
+
+async function ensureSkillWorkshopRevisionSessionsLoaded(
+  state: AppViewState,
+  agentId: string,
+): Promise<void> {
+  const resultAgentId = normalizeOptionalString(state.sessionsResultAgentId);
+  if (resultAgentId === agentId && state.sessionsResult?.sessions.length) {
+    return;
+  }
+  await loadSessions(state, {
+    ...createChatSessionsLoadOverrides(state),
+    agentId,
+  });
+}
+
+async function resolveSkillWorkshopRevisionSessionKey(
+  state: AppViewState,
+  proposal: SkillWorkshopReviewableProposal,
+): Promise<string | null> {
+  if (state.skillWorkshopUseCurrentChatForRevisions) {
+    return normalizeOptionalString(state.sessionKey) ?? null;
+  }
+
+  const agentId = normalizeAgentId(
+    proposal.origin?.agentId ?? resolveSidebarSelectedAgentId(state),
+  );
+  await ensureSkillWorkshopRevisionSessionsLoaded(state, agentId);
+
+  const originRow = findSkillWorkshopRevisionSessionRow(state, proposal.origin?.sessionKey);
+  if (isUsableSkillWorkshopRevisionSession(originRow)) {
+    return originRow.key;
+  }
+
+  const mappedSessionKey = state.skillWorkshopRevisionSessions[proposal.key]?.sessionKey;
+  const mappedRow = findSkillWorkshopRevisionSessionRow(state, mappedSessionKey);
+  if (isUsableSkillWorkshopRevisionSession(mappedRow)) {
+    return mappedRow.key;
+  }
+
+  const labelTarget = normalizeOptionalString(proposal.slug) ?? proposal.key;
+  const created = await createSessionAndRefresh(
+    state as unknown as Parameters<typeof createSessionAndRefresh>[0],
+    {
+      agentId,
+      label: `Skill Workshop: ${labelTarget}`.slice(0, 80),
+    },
+    {
+      ...createChatSessionsLoadOverrides(state),
+      agentId,
+    },
+  );
+  if (created) {
+    rememberSkillWorkshopRevisionSession(state, proposal.key, created);
+  }
+  return created;
+}
+
+async function sendSkillWorkshopRevisionRequest(
+  state: AppViewState,
+  message: string,
+  proposal: SkillWorkshopReviewableProposal,
+): Promise<void> {
+  if (!state.client || !state.connected) {
+    throw new Error("Gateway is not connected.");
+  }
+  const sessionKey = await resolveSkillWorkshopRevisionSessionKey(state, proposal);
+  if (!sessionKey) {
+    throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
+  }
+  switchChatSession(state, sessionKey);
+  if (state.tab !== "chat") {
+    state.setTab("chat" as Tab);
+  }
+  await state.handleSendChat(message);
 }
 
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
@@ -2200,7 +2413,9 @@ export function renderApp(state: AppViewState) {
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
               </div>
               <div class="page-meta">
-                ${state.tab === "skillWorkshop" ? renderSkillWorkshopModeSwitch(state) : nothing}
+                ${state.tab === "skillWorkshop"
+                  ? renderSkillWorkshopHeaderControls(state)
+                  : nothing}
                 ${state.tab === "dreams"
                   ? html`
                       <div class="dreaming-header-controls">
@@ -3118,7 +3333,12 @@ export function renderApp(state: AppViewState) {
                   if (!state.skillWorkshopRevisionDraft.trim()) {
                     return;
                   }
-                  void requestSkillWorkshopRevision(state, key);
+                  void (async () => {
+                    await loadSkillWorkshopProposalDetail(state, key);
+                    await requestSkillWorkshopRevision(state, key, (message, proposal) =>
+                      sendSkillWorkshopRevisionRequest(state, message, proposal),
+                    );
+                  })();
                 },
                 onPreviewFile: (_key, path) => {
                   state.skillWorkshopFilePreviewKey = path;

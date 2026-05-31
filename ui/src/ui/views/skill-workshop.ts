@@ -23,6 +23,12 @@ export type SkillWorkshopProposal = {
   oneLine: string;
   body: string;
   status: SkillWorkshopProposalStatus;
+  origin?: {
+    agentId?: string;
+    sessionKey?: string;
+    runId?: string;
+    messageId?: string;
+  };
   version: number;
   createdAt: number;
   updatedAt?: number;

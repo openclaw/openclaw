@@ -46,6 +46,8 @@ import {
   loadSkillWorkshopQueueWidth,
   loadSkillWorkshopMode,
   loadSkillWorkshopReviewedKeys,
+  loadSkillWorkshopRevisionSessions,
+  loadSkillWorkshopUseCurrentChatForRevisions,
   renderApp,
 } from "./app-render.ts";
 import {
@@ -647,6 +649,8 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopReviewedKeys = loadSkillWorkshopReviewedKeys();
   @state() skillWorkshopQueueWidth = loadSkillWorkshopQueueWidth();
   @state() skillWorkshopMode: "board" | "today" = loadSkillWorkshopMode();
+  @state() skillWorkshopUseCurrentChatForRevisions = loadSkillWorkshopUseCurrentChatForRevisions();
+  @state() skillWorkshopRevisionSessions = loadSkillWorkshopRevisionSessions();
   @state() skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null =
     null;
   @state() skillWorkshopActionNotice: { key: string; label: string; slug: string } | null = null;

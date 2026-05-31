@@ -439,6 +439,8 @@ export type AppViewState = {
     skillWorkshopProposals: SkillWorkshopProposal[];
     skillWorkshopReviewedKeys: string[];
     skillWorkshopQueueWidth: number;
+    skillWorkshopUseCurrentChatForRevisions: boolean;
+    skillWorkshopRevisionSessions: Record<string, { sessionKey: string; updatedAt: number }>;
     skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null;
     skillWorkshopActionNotice: { key: string; label: string; slug: string } | null;
     skillWorkshopRevisionKey: string | null;
