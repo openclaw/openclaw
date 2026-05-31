@@ -411,7 +411,7 @@ export const uk: TranslationMap = {
     usage: "Використання",
     cron: "Завдання Cron",
     skills: "Навички",
-    skillWorkshop: "Skill Workshop",
+    skillWorkshop: "Майстерня Skills",
     nodes: "Вузли",
     chat: "Чат",
     config: "Конфігурація",
@@ -436,7 +436,8 @@ export const uk: TranslationMap = {
     usage: "Використання API та витрати.",
     cron: "Пробудження та повторювані запуски.",
     skills: "Навички та API-ключі.",
-    skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
+    skillWorkshop:
+      "Переглядайте, уточнюйте й застосовуйте пропозиції, перш ніж вони стануть активними Skills.",
     nodes: "Спарені пристрої та команди.",
     chat: "Чат шлюзу для швидких втручань.",
     config: "Редагування openclaw.json.",

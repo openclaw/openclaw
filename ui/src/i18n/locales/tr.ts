@@ -412,7 +412,7 @@ export const tr: TranslationMap = {
     usage: "Kullanım",
     cron: "Cron İşleri",
     skills: "Skills",
-    skillWorkshop: "Skill Workshop",
+    skillWorkshop: "Skill Atölyesi",
     nodes: "Düğümler",
     chat: "Sohbet",
     config: "Yapılandırma",
@@ -437,7 +437,8 @@ export const tr: TranslationMap = {
     usage: "API kullanımı ve maliyetler.",
     cron: "Uyandırmalar ve yinelenen çalıştırmalar.",
     skills: "Skills ve API anahtarları.",
-    skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
+    skillWorkshop:
+      "Teklifleri canlı becerilere dönüşmeden önce gözden geçirin, iyileştirin ve uygulayın.",
     nodes: "Eşleştirilmiş cihazlar ve komutlar.",
     chat: "Hızlı müdahaleler için Gateway sohbeti.",
     config: "openclaw.json dosyasını düzenleyin.",

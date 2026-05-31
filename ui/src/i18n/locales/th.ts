@@ -433,7 +433,7 @@ export const th: TranslationMap = {
     usage: "การใช้งาน API และค่าใช้จ่าย",
     cron: "การปลุกและการทำงานตามรอบ",
     skills: "ทักษะและคีย์ API",
-    skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
+    skillWorkshop: "ตรวจสอบ ปรับแต่ง และนำข้อเสนอไปใช้ก่อนที่จะกลายเป็น Skills ที่ใช้งานจริง",
     nodes: "อุปกรณ์ที่จับคู่และคำสั่ง",
     chat: "แชตเกตเวย์สำหรับการดำเนินการอย่างรวดเร็ว",
     config: "แก้ไข openclaw.json",

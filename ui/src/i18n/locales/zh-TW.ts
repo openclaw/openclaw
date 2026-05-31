@@ -432,7 +432,7 @@ export const zh_TW: TranslationMap = {
     usage: "API 使用情況和成本。",
     cron: "喚醒和重複運行。",
     skills: "技能和 API 密鑰。",
-    skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
+    skillWorkshop: "在提案成為上線技能之前，先進行審閱、調整並套用。",
     nodes: "配對設備和命令。",
     chat: "網關聊天，快速干預。",
     config: "編輯 openclaw.json。",

@@ -438,7 +438,7 @@ export const ja_JP: TranslationMap = {
     usage: "API 使用量とコスト。",
     cron: "ウェイクアップと定期実行。",
     skills: "Skills と API キー。",
-    skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
+    skillWorkshop: "提案がライブスキルになる前に、確認、調整、適用します。",
     nodes: "ペアリング済みデバイスとコマンド。",
     chat: "すばやく介入するための Gateway チャット。",
     config: "openclaw.json を編集。",

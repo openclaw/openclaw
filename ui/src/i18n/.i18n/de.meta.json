@@ -1,14 +1,11 @@
 {
-  "fallbackKeys": [
-    "subtitles.skillWorkshop",
-    "tabs.skillWorkshop"
-  ],
-  "generatedAt": "2026-05-31T21:37:41.515Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-05-31T21:48:18.225Z",
   "locale": "de",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "4f4fe84b520c2fb80a3c0b83d47dff447f14331de9c8348c53043fa7877abdbb",
   "totalKeys": 1295,
-  "translatedKeys": 1293,
+  "translatedKeys": 1295,
   "workflow": 1
 }

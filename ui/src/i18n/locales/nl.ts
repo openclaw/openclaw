@@ -437,7 +437,7 @@ export const nl: TranslationMap = {
     usage: "API-gebruik en kosten.",
     cron: "Wakeups en terugkerende runs.",
     skills: "Skills en API-sleutels.",
-    skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
+    skillWorkshop: "Bekijk, verfijn en pas voorstellen toe voordat ze live Skills worden.",
     nodes: "Gekoppelde apparaten en commando's.",
     chat: "Gateway-chat voor snelle interventies.",
     config: "Bewerk openclaw.json.",
