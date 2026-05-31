@@ -747,7 +747,7 @@ describe("session MCP runtime", () => {
       cfg: {
         mcp: {
           servers: {
-            dofbot: {
+            fuzzplugin: {
               command: process.execPath,
               args: [serverPath],
             },
@@ -761,7 +761,7 @@ describe("session MCP runtime", () => {
 
       expect(catalog.servers).toEqual({});
       expect(catalog.tools).toEqual([]);
-      expect(catalog.diagnostics?.[0]?.serverName).toBe("dofbot");
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("fuzzplugin");
       expect(catalog.diagnostics?.[0]?.message).toContain("Invalid input: expected");
       expect(catalog.diagnostics?.[0]?.message).toContain("object");
     } finally {
@@ -852,7 +852,7 @@ describe("session MCP runtime", () => {
       expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["legacy_tool"]);
       expect(catalog.servers.legacy?.toolCount).toBe(1);
       expect(catalog.servers.legacy?.tools).toBeUndefined();
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("recv tools/list");
+      await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
