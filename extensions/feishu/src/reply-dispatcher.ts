@@ -408,14 +408,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        await streaming.close(text, { note: finalNote });
+        const contentVisible = await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
         // the streaming card.
-        if (text.trim()) {
+        if (contentVisible) {
           markVisibleReplySent();
         }
-        if (streamText) {
+        if (contentVisible && streamText) {
           deliveredFinalTexts.add(streamText);
           if (options?.markClosedForReply !== false && !streamingCloseErroredForReply) {
             streamingClosedForReply = true;

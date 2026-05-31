@@ -82,8 +82,9 @@ vi.mock("./streaming-card.js", () => {
         this.active = true;
       });
       update = vi.fn(async () => {});
-      close = vi.fn(async () => {
+      close = vi.fn(async (text?: string) => {
         this.active = false;
+        return Boolean(text?.trim());
       });
       discard = vi.fn(async () => {
         this.active = false;
@@ -1650,6 +1651,32 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("sends no-visible-reply fallback when streaming close accepts no content", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+
+    await options.deliver({ text: "```md\nvisible answer\n```" }, { kind: "final" });
+    streamingInstances[0].close = vi.fn(async () => {
+      streamingInstances[0].active = false;
+      return false;
+    });
+
+    await options.onIdle?.();
+    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(true);
+
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\nvisible answer\n```", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toContain(
+      "without visible content",
+    );
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
   it("waits for pending streaming close before no-visible-reply fallback", async () => {
     const runtime = createRuntimeLogger();
     const { result, options } = createDispatcherHarness({ runtime });
@@ -1663,6 +1690,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         releaseClose = resolve;
       });
       streamingSession.active = false;
+      return true;
     });
     streamingSession.close = closeMock;
 

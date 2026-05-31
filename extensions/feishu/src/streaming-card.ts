@@ -523,9 +523,9 @@ export class FeishuStreamingSession {
       .catch((e) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<void> {
+  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
     if (!this.state || this.closed) {
-      return;
+      return false;
     }
     this.closed = true;
     this.clearFlushTimer();
@@ -534,6 +534,7 @@ export class FeishuStreamingSession {
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
     const text = finalText ?? pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
+    let visibleContentSent = Boolean(this.state.sentText.trim());
 
     // Only send final update if content differs from what's already displayed.
     // An explicit empty final text clears a transient preview before closeout.
@@ -549,6 +550,7 @@ export class FeishuStreamingSession {
       this.state.currentText = text;
       if (sent) {
         this.state.sentText = text;
+        visibleContentSent = Boolean(text.trim());
       }
     }
 
@@ -588,6 +590,7 @@ export class FeishuStreamingSession {
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
+    return visibleContentSent;
   }
 
   async discard(): Promise<void> {
