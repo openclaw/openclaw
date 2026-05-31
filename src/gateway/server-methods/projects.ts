@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -33,7 +34,6 @@ import {
   updateProject,
   ProjectsStoreError,
 } from "../../projects/store.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
