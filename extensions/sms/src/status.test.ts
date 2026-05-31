@@ -75,6 +75,36 @@ describe("SMS status probe", () => {
         status: "received",
       },
     });
+    const result = await probeSmsAccount({
+      account: createAccount(),
+      timeoutMs: 1000,
+      options: {
+        fetchImpl: createFetch([
+          {
+            incoming_phone_numbers: [
+              {
+                phone_number: "+15557654321",
+                sms_url: "https://gateway.example.com/webhooks/sms",
+                sms_method: "POST",
+              },
+            ],
+          },
+          {
+            messages: [
+              {
+                sid: "SM456",
+                direction: "inbound",
+                status: "received",
+                to: "+15557654321",
+                from: "+15551234567",
+              },
+            ],
+          },
+        ]),
+      },
+    });
+    expect(result.recentInbound).not.toHaveProperty("from");
+    expect(result.recentInbound).not.toHaveProperty("to");
   });
 
   it("detects a Twilio SMS webhook URL mismatch", async () => {

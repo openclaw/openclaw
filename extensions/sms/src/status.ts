@@ -57,7 +57,7 @@ export type SmsProbe = {
   webhook: SmsTwilioWebhookProbe;
   recentInbound?: Pick<
     TwilioMessageLogEntry,
-    "sid" | "direction" | "status" | "from" | "to" | "errorCode" | "dateCreated" | "dateSent"
+    "sid" | "direction" | "status" | "errorCode" | "dateCreated" | "dateSent"
   >;
   hints: string[];
 };
@@ -142,8 +142,6 @@ function recentInboundSummary(
     sid: message.sid,
     direction: message.direction,
     status: message.status,
-    from: message.from,
-    to: message.to,
     errorCode: message.errorCode,
     dateCreated: message.dateCreated,
     dateSent: message.dateSent,
