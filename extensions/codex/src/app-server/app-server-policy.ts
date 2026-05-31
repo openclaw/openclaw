@@ -2,10 +2,11 @@
  * Policy promotion for Codex app-server runs that can safely use OpenClaw tool
  * approvals.
  */
-import type {
-  CodexAppServerRuntimeOptions,
-  CodexPluginConfig,
-  OpenClawExecPolicyForCodexAppServer,
+import {
+  canUseCodexModelBackedApprovalsReviewerForModel,
+  type CodexAppServerRuntimeOptions,
+  type CodexPluginConfig,
+  type OpenClawExecPolicyForCodexAppServer,
 } from "./config.js";
 
 /**
@@ -50,11 +51,12 @@ export function resolveCodexAppServerForModelProvider(params: {
   model?: string;
 }): CodexAppServerRuntimeOptions {
   const explicitProvider = normalizeModelBackedReviewerProvider(params.provider);
-  const modelProvider = inferProviderFromModelRef(params.model);
   if (
     !isCodexModelBackedApprovalsReviewer(params.appServer.approvalsReviewer) ||
-    (canUseCodexModelBackedApprovalsReviewer(explicitProvider) &&
-      canUseCodexModelBackedApprovalsReviewer(modelProvider))
+    canUseCodexModelBackedApprovalsReviewerForModel({
+      modelProvider: explicitProvider,
+      model: params.model,
+    })
   ) {
     return params.appServer;
   }
@@ -78,17 +80,7 @@ function isCodexModelBackedApprovalsReviewer(value: string): boolean {
   return value === "auto_review" || value === "guardian_subagent";
 }
 
-function canUseCodexModelBackedApprovalsReviewer(provider: string | undefined): boolean {
-  return !provider || provider === "codex" || provider === "openai";
-}
-
 function normalizeModelBackedReviewerProvider(provider: string | undefined): string | undefined {
   const normalized = provider?.trim().toLowerCase();
   return normalized || undefined;
-}
-
-function inferProviderFromModelRef(model: string | undefined): string | undefined {
-  const normalized = model?.trim().toLowerCase();
-  const slashIndex = normalized?.indexOf("/") ?? -1;
-  return slashIndex > 0 ? normalized?.slice(0, slashIndex) : undefined;
 }

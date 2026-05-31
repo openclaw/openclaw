@@ -1083,6 +1083,29 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toThrow("tools.exec.mode=auto requires Codex app-server auto approvals");
   });
 
+  it.each([
+    { modelProvider: "lmstudio", model: "local-model" },
+    { modelProvider: "codex", model: "lmstudio/local-model" },
+  ])(
+    "uses user approvals for local-model auto exec before requirements validation",
+    ({ modelProvider, model }) => {
+      const runtime = resolveRuntimeForTest({
+        pluginConfig: {},
+        execMode: "auto",
+        modelProvider,
+        model,
+        requirementsToml:
+          'allowed_approval_policies = ["on-request"]\nallowed_approvals_reviewers = ["user"]\n',
+      });
+
+      expectRuntimePolicy(runtime, {
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "user",
+      });
+    },
+  );
+
   it("keeps normalized OpenClaw auto mode when legacy app-server yolo was schema-defaulted", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {

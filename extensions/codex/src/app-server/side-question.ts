@@ -160,8 +160,19 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
     agentId: sessionAgentId,
   });
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig, execPolicy });
   const authProfileId = params.authProfileId ?? binding.authProfileId;
+  const modelProvider = resolveCodexAppServerModelProvider({
+    provider: params.provider,
+    authProfileId,
+    agentDir: params.agentDir,
+    config: params.cfg,
+  });
+  const appServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig,
+    execPolicy,
+    modelProvider: modelProvider ?? params.provider,
+    model: params.model,
+  });
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
@@ -191,12 +202,6 @@ export async function runCodexAppServerSideQuestion(
     const sideRunParams = buildSideRunAttemptParams(params, { cwd, authProfileId });
     const approvalPolicy = binding.approvalPolicy ?? appServer.approvalPolicy;
     const sandbox = binding.sandbox ?? appServer.sandbox;
-    const modelProvider = resolveCodexAppServerModelProvider({
-      provider: params.provider,
-      authProfileId,
-      agentDir: params.agentDir,
-      config: params.cfg,
-    });
     const modelScopedAppServer = resolveCodexAppServerForModelProvider({
       appServer,
       provider: modelProvider ?? params.provider,
