@@ -14,6 +14,7 @@ import {
   optionalFiniteNumberSchema,
   optionalPositiveIntegerSchema,
 } from "openclaw/plugin-sdk/channel-actions";
+import { BUNDLED_CHAT_CHANNEL_IDS } from "openclaw/plugin-sdk/chat-channel-ids";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -724,6 +725,34 @@ const INBOUND_ENVELOPE_PREFIX_RE =
   /^\[[^\]\n]{0,300}?(?:\s\+(?:\d+[smhdwy]|just now)\b|\s[A-Za-z]{3}\s\d{4}-\d{2}-\d{2})[^\]\n]{0,200}\]\s/;
 
 /**
+ * Marker-free leading envelope header, e.g. `[telegram alice] hello`. The
+ * elapsed/date marker regex above misses this shape because `formatAgentEnvelope`
+ * drops `+<elapsed>`, host, ip, and the absolute timestamp when their inputs are
+ * absent. The minimum real shape is then `[<channel> <from>]` with no markers,
+ * which is indistinguishable from arbitrary user `[label ...]` prose without a
+ * channel-id anchor.
+ *
+ * Anchoring on a known bundled channel id from `BUNDLED_CHAT_CHANNEL_IDS`
+ * (canonical source: src/channels/ids.ts via openclaw/plugin-sdk/chat-channel-ids)
+ * keeps the detector and the formatter in sync: any channel registered in
+ * bundled metadata becomes a recognized envelope prefix automatically. Case
+ * insensitive because the formatter does not lowercase `params.channel` itself;
+ * production paths feed lowercase ids but human-typed examples may capitalize.
+ *
+ * From-label must be at least one non-whitespace token so user prose like
+ * `[note]` or `[telegram] ...` (no following label) is not mistaken for an
+ * envelope. Header part length is capped at 300 chars to match the marker-aware
+ * regex above and avoid catastrophic backtracking.
+ */
+const ENVELOPE_KNOWN_CHANNEL_PATTERN = BUNDLED_CHAT_CHANNEL_IDS.map((id) =>
+  id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+).join("|");
+const INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE = new RegExp(
+  `^\\[(?:${ENVELOPE_KNOWN_CHANNEL_PATTERN})\\s+[^\\]\\n\\s][^\\]\\n]{0,299}\\]\\s`,
+  "i",
+);
+
+/**
  * Group-chat envelope bodies prepend `<Sender>: ` to the raw user text (see
  * `formatInboundEnvelope`). After stripping the leading envelope bracket,
  * this pattern removes that sender prefix so the surviving text is the user's
@@ -774,8 +803,16 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
   // Check for the leading `[Channel sender +elapsed ...]` bracket emitted by
   // formatInboundEnvelope. The agent_end hook receives messages with this
   // header still attached, so unguarded auto-capture would persist envelope
-  // metadata bytes as part of the user's "memory".
+  // metadata bytes as part of the user's "memory". Two regexes: the
+  // marker-aware one catches envelopes that include elapsed/date markers
+  // regardless of channel id (covers third-party channels not in the bundled
+  // list); the known-channel one catches marker-free shapes like
+  // `[telegram alice] hi` that drop every optional part except the channel id
+  // and from label.
   if (INBOUND_ENVELOPE_PREFIX_RE.test(text)) {
+    return true;
+  }
+  if (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE.test(text)) {
     return true;
   }
 
@@ -809,8 +846,12 @@ export function sanitizeForMemoryCapture(text: string): string {
   // (src/auto-reply/envelope.ts). The bracket precedes the user's body text;
   // for group-chat envelopes the body itself is prefixed with `<Sender>: ` so
   // strip that too, but only when an envelope bracket was actually removed
-  // (don't blanket-strip user text that happens to start with `Name: `).
-  const envelopePrefixMatch = INBOUND_ENVELOPE_PREFIX_RE.exec(cleaned);
+  // (don't blanket-strip user text that happens to start with `Name: `). Try
+  // the marker-aware regex first, then fall back to the known-channel regex so
+  // marker-free envelopes (`[telegram alice] hi`) are also sanitized cleanly.
+  const markerAwareMatch = cleaned.match(INBOUND_ENVELOPE_PREFIX_RE);
+  const envelopePrefixMatch =
+    markerAwareMatch ?? cleaned.match(INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE);
   if (envelopePrefixMatch) {
     cleaned = cleaned
       .slice(envelopePrefixMatch[0].length)
