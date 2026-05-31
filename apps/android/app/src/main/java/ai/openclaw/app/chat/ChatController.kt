@@ -69,6 +69,7 @@ class ChatController(
 
   private var lastHealthPollAtMs: Long? = null
 
+  /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
     _healthOk.value = false
     _errorText.value = null
@@ -80,6 +81,7 @@ class ChatController(
     _sessionId.value = null
   }
 
+  /** Loads a chat session, normalizing "main" to the current gateway-provided main session key. */
   fun load(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     val generation = beginHistoryLoad(key, clearMessages = key != _sessionKey.value)
@@ -88,6 +90,7 @@ class ChatController(
     }
   }
 
+  /** Rebinds chat to a new canonical main session key after gateway hello/agent changes. */
   fun applyMainSessionKey(mainSessionKey: String) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
@@ -110,6 +113,7 @@ class ChatController(
     }
   }
 
+  /** Refreshes current chat history and session list without clearing optimistic messages first. */
   fun refresh() {
     val key = normalizeRequestedSessionKey(_sessionKey.value)
     val generation = beginHistoryLoad(key, clearMessages = false)
@@ -122,12 +126,14 @@ class ChatController(
     scope.launch { fetchSessions(limit = limit) }
   }
 
+  /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
     if (normalized == _thinkingLevel.value) return
     _thinkingLevel.value = normalized
   }
 
+  /** Switches to another gateway chat session and starts a fresh history load. */
   fun switchSession(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
@@ -165,6 +171,7 @@ class ChatController(
     return key
   }
 
+  /** Queues a chat send without waiting for gateway acceptance. */
   fun sendMessage(
     message: String,
     thinkingLevel: String,
@@ -179,6 +186,7 @@ class ChatController(
     }
   }
 
+  /** Sends a chat message and returns once the gateway accepts or rejects the request. */
   suspend fun sendMessageAwaitAcceptance(
     message: String,
     thinkingLevel: String,
@@ -277,6 +285,7 @@ class ChatController(
     }
   }
 
+  /** Sends best-effort abort requests for every currently pending gateway run. */
   fun abort() {
     val runIds =
       synchronized(pendingRuns) {
@@ -299,6 +308,7 @@ class ChatController(
     }
   }
 
+  /** Applies gateway chat/agent stream events to local transcript and pending-run state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
