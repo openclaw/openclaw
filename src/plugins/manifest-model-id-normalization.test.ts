@@ -9,6 +9,7 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
@@ -43,20 +44,35 @@ function restoreEnv(): void {
 }
 
 function writeInstallIndex(params: { stateDir: string; pluginDir: string }): void {
-  const indexPath = path.join(params.stateDir, "plugins", "installs.json");
-  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
-  fs.writeFileSync(
-    indexPath,
-    JSON.stringify({
+  writePersistedInstalledPluginIndexSync(
+    {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 1,
+      installRecords: {},
       plugins: [
         {
-          id: "normalizer",
+          pluginId: "normalizer",
+          manifestPath: path.join(params.pluginDir, "openclaw.plugin.json"),
+          manifestHash: "normalizer-manifest",
           rootDir: params.pluginDir,
           origin: "global",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
         },
       ],
-    }),
-    "utf-8",
+      diagnostics: [],
+    },
+    { stateDir: params.stateDir },
   );
 }
 

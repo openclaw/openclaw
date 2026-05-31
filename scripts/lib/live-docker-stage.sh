@@ -78,7 +78,10 @@ try {
   const { DatabaseSync } = await import("node:sqlite");
   db = new DatabaseSync(dbPath);
   try {
+    db.exec("PRAGMA secure_delete = ON;");
     db.prepare("DELETE FROM installed_plugin_index WHERE index_key = ?").run("installed-plugin-index");
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    db.exec("VACUUM;");
   } catch (err) {
     if (!String(err?.message ?? err).includes("no such table")) {
       throw err;
