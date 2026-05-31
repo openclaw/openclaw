@@ -1854,14 +1854,14 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
     }
     if (
-      /MCP_CODE_MODE_FILE_TOOL_RESULT/.test(toolOutput) &&
-      /fixture-note-alpha/.test(toolOutput)
+      toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT") &&
+      toolOutput.includes("fixture-note-alpha")
     ) {
       return buildAssistantEvents(
         "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none improvement=virtual-api-files-were-clear-and-needed-one-exec",
       );
     }
-    if (/MCP_CODE_MODE_FILE_TOOL_RESULT/.test(toolOutput)) {
+    if (toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT")) {
       return buildAssistantEvents(
         "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
       );

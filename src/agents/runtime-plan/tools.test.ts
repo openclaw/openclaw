@@ -136,7 +136,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(result[0]).toBe(normalized);
-    expect(getPluginToolMeta(result[0] as AgentTool)).toMatchObject({
+    expect(getPluginToolMeta(result[0])).toMatchObject({
       pluginId: "bundle-mcp",
       mcp: {
         serverName: "fixture",
