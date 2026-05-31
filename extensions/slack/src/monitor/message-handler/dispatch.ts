@@ -1307,7 +1307,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
     const progressLines =
-      useRichProgressDraft && previewToolProgressLines.length === 0
+      previewToolProgressLines.length === 0
         ? lastNonEmptyPreviewToolProgressLines
         : previewToolProgressLines;
     const previewText = formatChannelProgressDraftText({
@@ -1610,7 +1610,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const onDraftBoundary = !shouldUseDraftStream
     ? undefined
     : async () => {
-        if (hasStreamedMessage) {
+        // Progress drafts are one rolling message that's finalized in place.
+        // Keep boundary cleanup, but don't clear messageId or the next update
+        // posts a new draft instead of editing the existing preview.
+        if (hasStreamedMessage && streamMode !== "status_final") {
           draftStream?.forceNewMessage();
           hasStreamedMessage = false;
           appendRenderedText = "";
