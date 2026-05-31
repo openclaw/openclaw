@@ -1859,6 +1859,7 @@ export function buildGatewaySessionRow(params: {
   agentId?: string;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
+  deriveContextTokensForLightweightRow?: boolean;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
@@ -2077,14 +2078,16 @@ export function buildGatewaySessionRow(params: {
       }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? (resolvePositiveNumber(entry?.contextTokens) ??
-      resolvePositiveNumber(
-        resolveContextTokensForModel({
-          cfg,
-          provider: rowModelProvider,
-          model: rowModel,
-          allowAsyncLoad: false,
-        }),
-      ))
+      (params.deriveContextTokensForLightweightRow === true
+        ? resolvePositiveNumber(
+            resolveContextTokensForModel({
+              cfg,
+              provider: rowModelProvider,
+              model: rowModel,
+              allowAsyncLoad: false,
+            }),
+          )
+        : undefined))
     : (resolvePositiveNumber(entry?.contextTokens) ??
       resolvePositiveNumber(transcriptUsage?.contextTokens) ??
       resolvePositiveNumber(
@@ -2377,6 +2380,7 @@ export function buildGatewaySessionInfo(params: {
     storeChildSessionsByKey,
     skipTranscriptUsageFallback: true,
     lightweightListRow: true,
+    deriveContextTokensForLightweightRow: true,
   });
 }
 

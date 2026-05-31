@@ -461,7 +461,9 @@ describe("refreshChat", () => {
     (host as ChatHost & { sessionsResultAgentId: string }).sessionsResultAgentId = "main";
 
     await refreshChat(host, { scheduleScroll: false });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(host.sessionsResult).toBe(previousSessionsResult);
     expect(request).toHaveBeenCalledWith(
@@ -501,7 +503,9 @@ describe("refreshChat", () => {
     (host as ChatHost & { sessionsResultAgentId: string }).sessionsResultAgentId = "main";
 
     await refreshChat(host, { scheduleScroll: false });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(request).toHaveBeenCalledWith(
       "chat.send",
@@ -532,7 +536,9 @@ describe("refreshChat", () => {
     });
 
     await refreshChat(host, { scheduleScroll: false });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(request).toHaveBeenCalledWith(
       "chat.send",
@@ -601,7 +607,9 @@ describe("refreshChat", () => {
     });
 
     await refreshChat(host, { scheduleScroll: false });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     expect(host.chatQueue).toEqual(restoredQueue);
