@@ -353,33 +353,35 @@ function unwrapJob(raw: UnknownRecord) {
  *   "sessionTarget" + "name"  → "sessionTargetName"   (value = name string)
  */
 function recoverConcatenatedKeys(obj: UnknownRecord): void {
+  // Early exit for the common case: no recovery keys present
+  if (!("namePayload" in obj || "scheduleKind" in obj || "sessionTargetName" in obj)) {
+    return;
+  }
+
   // Pattern 1: "namePayload" → extract payload object (only if payload missing)
-  if ("namePayload" in obj && isRecord(obj.namePayload) && !("payload" in obj)) {
-    obj.payload = obj.namePayload as UnknownRecord;
-    delete obj.namePayload;
-  } else if ("namePayload" in obj && "payload" in obj) {
-    // Mixed input: both canonical and recovery keys present - discard recovery key
+  if ("namePayload" in obj) {
+    if (!("payload" in obj) && isRecord(obj.namePayload)) {
+      obj.payload = obj.namePayload as UnknownRecord;
+    }
     delete obj.namePayload;
   }
 
   // Pattern 2: "scheduleKind" → extract schedule object (only if schedule missing)
-  if ("scheduleKind" in obj && isRecord(obj.scheduleKind) && !("schedule" in obj)) {
-    obj.schedule = obj.scheduleKind as UnknownRecord;
-    delete obj.scheduleKind;
-  } else if ("scheduleKind" in obj && "schedule" in obj) {
-    // Mixed input: discard recovery key
+  if ("scheduleKind" in obj) {
+    if (!("schedule" in obj) && isRecord(obj.scheduleKind)) {
+      obj.schedule = obj.scheduleKind as UnknownRecord;
+    }
     delete obj.scheduleKind;
   }
 
   // Pattern 3: "sessionTargetName" → extract name (only if name missing)
-  if ("sessionTargetName" in obj && !("name" in obj)) {
-    obj.name = obj.sessionTargetName;
-    delete obj.sessionTargetName;
-    if (!("sessionTarget" in obj)) {
-      obj.sessionTarget = "isolated";
+  if ("sessionTargetName" in obj) {
+    if (!("name" in obj)) {
+      obj.name = obj.sessionTargetName;
+      if (!("sessionTarget" in obj)) {
+        obj.sessionTarget = "isolated";
+      }
     }
-  } else if ("sessionTargetName" in obj && "name" in obj) {
-    // Mixed input: discard recovery key
     delete obj.sessionTargetName;
   }
 }
