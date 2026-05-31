@@ -58,7 +58,7 @@ function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
 }
 
-function stripSelfProviderPrefix(provider: string, model: string): string {
+export function stripSelfProviderModelPrefix(provider: string, model: string): string {
   const prefix = `${normalizeLowercaseStringOrEmpty(provider)}/`;
   const trimmed = model.trim();
   return normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)
@@ -114,7 +114,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
     normalizedProvider === "google-gemini-cli" ||
     normalizedProvider === "google-vertex"
   ) {
-    return normalizeGooglePreviewModelId(stripSelfProviderPrefix(normalizedProvider, model));
+    return normalizeGooglePreviewModelId(model);
   }
   if (normalizedProvider === "openrouter") {
     const trimmed = model.trim();
@@ -139,8 +139,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-4.6": "claude-opus-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
-    const providerModel = stripSelfProviderPrefix(normalizedProvider, model);
-    const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
+    const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
     return normalizeLowercaseStringOrEmpty(aliased).startsWith("claude-")
       ? `anthropic/${aliased}`
       : aliased;
@@ -164,11 +163,10 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
       "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
     };
-    const providerModel = stripSelfProviderPrefix(normalizedProvider, model);
-    return xaiAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
+    return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
   }
   if (normalizedProvider === "openai") {
-    return stripSelfProviderPrefix(normalizedProvider, model);
+    return model;
   }
   if (normalizedProvider === "together") {
     return normalizeTogetherModelId(model);
