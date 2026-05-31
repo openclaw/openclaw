@@ -1,4 +1,24 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  applyEmbeddingBatchOutputLine,
+  buildBatchHeaders,
+  buildEmbeddingBatchGroupOptions,
+  EMBEDDING_BATCH_ENDPOINT,
+  extractBatchErrorMessage,
+  formatUnavailableBatchError,
+  mapBatchEmbeddingsByIndex,
+  normalizeBatchBaseUrl,
+  postJsonWithRetry,
+  resolveBatchCompletionFromStatus,
+  resolveCompletedBatchResult,
+  runEmbeddingBatchGroups,
+  throwIfBatchTerminalFailure,
+  uploadBatchJsonlFile,
+  withRemoteHttpResponse,
+  type BatchCompletionResult,
+  type EmbeddingBatchStatus,
+  type ProviderBatchOutputLine,
+} from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -7,6 +27,7 @@ import type {
   EmbeddingInput,
   EmbeddingProvider,
   EmbeddingProviderAdapter,
+  EmbeddingProviderBatchOptions,
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
@@ -28,6 +49,24 @@ export type OpenAICompatibleEmbeddingClient = {
 type OpenAICompatibleEmbeddingResponse = {
   data?: unknown;
 };
+
+type OpenAICompatibleBatchRequest = {
+  custom_id: string;
+  method: "POST";
+  url: typeof EMBEDDING_BATCH_ENDPOINT;
+  body: {
+    model: string;
+    input: string;
+    dimensions?: number;
+    input_type?: string;
+  };
+};
+
+type OpenAICompatibleBatchStatus = EmbeddingBatchStatus;
+type OpenAICompatibleBatchOutputLine = ProviderBatchOutputLine;
+
+const OPENAI_COMPATIBLE_BATCH_COMPLETION_WINDOW = "24h";
+const OPENAI_COMPATIBLE_BATCH_MAX_REQUESTS = 50000;
 
 type ConfiguredEmbeddingProvider = {
   api?: string;
@@ -286,6 +325,240 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
+async function submitOpenAICompatibleBatch(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  requests: OpenAICompatibleBatchRequest[];
+  agentId: string;
+}): Promise<OpenAICompatibleBatchStatus> {
+  const baseUrl = normalizeBatchBaseUrl(params.client);
+  const inputFileId = await uploadBatchJsonlFile({
+    client: params.client,
+    requests: params.requests,
+    errorPrefix: "openai-compatible batch file upload failed",
+  });
+
+  return await postJsonWithRetry<OpenAICompatibleBatchStatus>({
+    url: `${baseUrl}/batches`,
+    headers: buildBatchHeaders(params.client, { json: true }),
+    ssrfPolicy: params.client.ssrfPolicy,
+    body: {
+      input_file_id: inputFileId,
+      endpoint: EMBEDDING_BATCH_ENDPOINT,
+      completion_window: OPENAI_COMPATIBLE_BATCH_COMPLETION_WINDOW,
+      metadata: {
+        source: "openclaw-memory",
+        agent: params.agentId,
+      },
+    },
+    errorPrefix: "openai-compatible batch create failed",
+  });
+}
+
+async function fetchOpenAICompatibleBatchResource<T>(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  path: string;
+  errorPrefix: string;
+  parse: (res: Response) => Promise<T>;
+}): Promise<T> {
+  const baseUrl = normalizeBatchBaseUrl(params.client);
+  return await withRemoteHttpResponse({
+    url: `${baseUrl}${params.path}`,
+    ssrfPolicy: params.client.ssrfPolicy,
+    init: {
+      headers: buildBatchHeaders(params.client, { json: true }),
+    },
+    auditContext: "embedding-provider:openai-compatible-batch",
+    onResponse: async (res) => {
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`${params.errorPrefix} failed: ${res.status} ${text}`);
+      }
+      return await params.parse(res);
+    },
+  });
+}
+
+async function fetchOpenAICompatibleBatchStatus(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  batchId: string;
+}): Promise<OpenAICompatibleBatchStatus> {
+  return await fetchOpenAICompatibleBatchResource({
+    client: params.client,
+    path: `/batches/${params.batchId}`,
+    errorPrefix: "openai-compatible batch status",
+    parse: async (res) => (await res.json()) as OpenAICompatibleBatchStatus,
+  });
+}
+
+async function fetchOpenAICompatibleFileContent(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  fileId: string;
+}): Promise<string> {
+  return await fetchOpenAICompatibleBatchResource({
+    client: params.client,
+    path: `/files/${params.fileId}/content`,
+    errorPrefix: "openai-compatible batch file content",
+    parse: async (res) => await res.text(),
+  });
+}
+
+function parseOpenAICompatibleBatchOutput(text: string): OpenAICompatibleBatchOutputLine[] {
+  if (!text.trim()) {
+    return [];
+  }
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      try {
+        return JSON.parse(line) as OpenAICompatibleBatchOutputLine;
+      } catch {
+        throw new Error("OpenAI-compatible embedding batch output contained malformed JSONL");
+      }
+    });
+}
+
+async function readOpenAICompatibleBatchError(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  errorFileId: string;
+}): Promise<string | undefined> {
+  try {
+    const content = await fetchOpenAICompatibleFileContent({
+      client: params.client,
+      fileId: params.errorFileId,
+    });
+    return extractBatchErrorMessage(parseOpenAICompatibleBatchOutput(content));
+  } catch (err) {
+    return formatUnavailableBatchError(err);
+  }
+}
+
+async function waitForOpenAICompatibleBatch(params: {
+  client: OpenAICompatibleEmbeddingClient;
+  batchId: string;
+  wait: boolean;
+  pollIntervalMs: number;
+  timeoutMs: number;
+  debug?: (message: string, data?: Record<string, unknown>) => void;
+  initial?: OpenAICompatibleBatchStatus;
+}): Promise<BatchCompletionResult> {
+  const start = Date.now();
+  let current: OpenAICompatibleBatchStatus | undefined = params.initial;
+  while (true) {
+    const status =
+      current ??
+      (await fetchOpenAICompatibleBatchStatus({
+        client: params.client,
+        batchId: params.batchId,
+      }));
+    const state = status.status ?? "unknown";
+    if (state === "completed") {
+      return resolveBatchCompletionFromStatus({
+        provider: "openai-compatible",
+        batchId: params.batchId,
+        status,
+      });
+    }
+    await throwIfBatchTerminalFailure({
+      provider: "openai-compatible",
+      status: { ...status, id: params.batchId },
+      readError: async (errorFileId) =>
+        await readOpenAICompatibleBatchError({
+          client: params.client,
+          errorFileId,
+        }),
+    });
+    if (!params.wait) {
+      throw new Error(`openai-compatible batch ${params.batchId} still ${state}; wait disabled`);
+    }
+    if (Date.now() - start > params.timeoutMs) {
+      throw new Error(
+        `openai-compatible batch ${params.batchId} timed out after ${params.timeoutMs}ms`,
+      );
+    }
+    params.debug?.(
+      `openai-compatible batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    current = undefined;
+  }
+}
+
+async function runOpenAICompatibleEmbeddingBatches(
+  params: {
+    client: OpenAICompatibleEmbeddingClient;
+    agentId: string;
+    requests: OpenAICompatibleBatchRequest[];
+  } & Pick<
+    EmbeddingProviderBatchOptions,
+    "wait" | "concurrency" | "pollIntervalMs" | "timeoutMs" | "debug"
+  >,
+): Promise<Map<string, number[]>> {
+  return await runEmbeddingBatchGroups({
+    ...buildEmbeddingBatchGroupOptions(params, {
+      maxRequests: OPENAI_COMPATIBLE_BATCH_MAX_REQUESTS,
+      debugLabel: "memory embeddings: openai-compatible batch submit",
+    }),
+    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+      const batchInfo = await submitOpenAICompatibleBatch({
+        client: params.client,
+        requests: group,
+        agentId: params.agentId,
+      });
+      if (!batchInfo.id) {
+        throw new Error("openai-compatible batch create failed: missing batch id");
+      }
+      const batchId = batchInfo.id;
+
+      params.debug?.("memory embeddings: openai-compatible batch created", {
+        batchId: batchInfo.id,
+        status: batchInfo.status,
+        group: groupIndex + 1,
+        groups,
+        requests: group.length,
+      });
+
+      const completed = await resolveCompletedBatchResult({
+        provider: "openai-compatible",
+        status: batchInfo,
+        wait: params.wait,
+        waitForBatch: async () =>
+          await waitForOpenAICompatibleBatch({
+            client: params.client,
+            batchId,
+            wait: params.wait,
+            pollIntervalMs: params.pollIntervalMs,
+            timeoutMs: params.timeoutMs,
+            debug: params.debug,
+            initial: batchInfo,
+          }),
+      });
+
+      const content = await fetchOpenAICompatibleFileContent({
+        client: params.client,
+        fileId: completed.outputFileId,
+      });
+      const outputLines = parseOpenAICompatibleBatchOutput(content);
+      const errors: string[] = [];
+      const remaining = new Set(group.map((request) => request.custom_id));
+
+      for (const line of outputLines) {
+        applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+      }
+
+      if (errors.length > 0) {
+        throw new Error(`openai-compatible batch ${batchInfo.id} failed: ${errors.join("; ")}`);
+      }
+      if (remaining.size > 0) {
+        throw new Error(
+          `openai-compatible batch ${batchInfo.id} missing ${remaining.size} embedding responses`,
+        );
+      }
+    },
+  });
+}
+
 async function postEmbeddingRequest(params: {
   client: OpenAICompatibleEmbeddingClient;
   input: string[];
@@ -409,6 +682,31 @@ export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter 
       runtime: {
         id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
         inlineBatchTimeoutMs: 10 * 60_000,
+        sourceWideBatchEmbed: true,
+        batchEmbed: async (batch) => {
+          const inputType = client.documentInputType ?? client.inputType;
+          const byCustomId = await runOpenAICompatibleEmbeddingBatches({
+            client,
+            agentId: batch.agentId,
+            requests: batch.chunks.map((chunk, index) => ({
+              custom_id: String(index),
+              method: "POST",
+              url: EMBEDDING_BATCH_ENDPOINT,
+              body: {
+                model: client.model,
+                input: chunk.text,
+                ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+                ...(inputType ? { input_type: inputType } : {}),
+              },
+            })),
+            wait: batch.wait,
+            concurrency: batch.concurrency,
+            pollIntervalMs: batch.pollIntervalMs,
+            timeoutMs: batch.timeoutMs,
+            debug: batch.debug,
+          });
+          return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
+        },
         cacheKeyData: {
           provider: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
           baseUrl: client.baseUrl,

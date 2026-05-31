@@ -30,6 +30,9 @@ afterAll(() => {
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
 let providerRuntimeBatchCalls: string[][] = [];
+let providerRuntimeBatchGate: Promise<void> | null = null;
+let providerRuntimeActiveBatchCalls = 0;
+let providerRuntimeMaxActiveBatchCalls = 0;
 let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
 let providerCloseGate: Promise<void> | null = null;
@@ -140,8 +143,18 @@ vi.mock("./embeddings.js", () => {
                 id: providerId,
                 ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
                 batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
-                  providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
-                  return batch.chunks.map((chunk) => embedText(chunk.text));
+                  providerRuntimeActiveBatchCalls += 1;
+                  providerRuntimeMaxActiveBatchCalls = Math.max(
+                    providerRuntimeMaxActiveBatchCalls,
+                    providerRuntimeActiveBatchCalls,
+                  );
+                  try {
+                    await providerRuntimeBatchGate;
+                    providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
+                    return batch.chunks.map((chunk) => embedText(chunk.text));
+                  } finally {
+                    providerRuntimeActiveBatchCalls -= 1;
+                  }
                 },
               },
             }
@@ -233,6 +246,9 @@ describe("memory index", () => {
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
     providerRuntimeBatchCalls = [];
+    providerRuntimeBatchGate = null;
+    providerRuntimeActiveBatchCalls = 0;
+    providerRuntimeMaxActiveBatchCalls = 0;
     providerCloseCalls = 0;
     providerCloseFailuresRemaining = 0;
     providerCloseGate = null;
@@ -454,6 +470,35 @@ describe("memory index", () => {
       ]);
     } finally {
       await manager.close?.();
+    }
+  });
+
+  it("keeps custom batch runtimes concurrent without source-wide opt in", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-custom-batch-concurrency.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    let releaseBatchGate: (() => void) | undefined;
+    providerRuntimeBatchGate = new Promise((resolve) => {
+      releaseBatchGate = resolve;
+    });
+    const syncPromise = manager.sync({ reason: "test" });
+    let waitError: unknown;
+    try {
+      await vi.waitFor(() => expect(providerRuntimeMaxActiveBatchCalls).toBeGreaterThan(1));
+    } catch (err) {
+      waitError = err;
+    } finally {
+      releaseBatchGate?.();
+      await syncPromise;
+      await manager.close?.();
+    }
+    if (waitError) {
+      throw waitError;
     }
   });
 

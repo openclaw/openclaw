@@ -100,6 +100,8 @@ describe("memory-core generic embedding provider bridge", () => {
                 id: "virtual-generic",
                 inlineQueryTimeoutMs: 1234,
                 inlineBatchTimeoutMs: 5678,
+                sourceWideBatchEmbed: true,
+                batchEmbed: async (batch) => batch.chunks.map((_chunk, index) => [index, 42]),
                 cacheKeyData: {
                   provider: "virtual-generic",
                   model: options.model,
@@ -132,6 +134,8 @@ describe("memory-core generic embedding provider bridge", () => {
       id: "virtual-generic",
       inlineQueryTimeoutMs: 1234,
       inlineBatchTimeoutMs: 5678,
+      sourceWideBatchEmbed: true,
+      batchEmbed: expect.any(Function),
       cacheKeyData: {
         provider: "virtual-generic",
         model: "virtual-model",
@@ -139,6 +143,20 @@ describe("memory-core generic embedding provider bridge", () => {
       },
     });
 
+    await expect(
+      result.runtime?.batchEmbed?.({
+        agentId: "main",
+        chunks: [{ text: "doc-a" }, { text: "doc-b" }],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 0,
+        timeoutMs: 1000,
+        debug: () => {},
+      }),
+    ).resolves.toEqual([
+      [0, 42],
+      [1, 42],
+    ]);
     await expect(result.provider?.embedQuery("query")).resolves.toEqual([1, 2, 3]);
     await expect(result.provider?.embedBatch(["doc-a", "doc-b"])).resolves.toEqual([
       [0, 7],

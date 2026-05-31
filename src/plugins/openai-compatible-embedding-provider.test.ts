@@ -42,13 +42,86 @@ function createOptions(
   };
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readRawBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  const text = Buffer.concat(chunks).toString("utf8");
-  return JSON.parse(text) as Record<string, unknown>;
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return JSON.parse(await readRawBody(req)) as Record<string, unknown>;
+}
+
+async function startBatchServer(): Promise<{
+  baseUrl: string;
+  uploads: string[];
+  batches: Array<Record<string, unknown>>;
+}> {
+  const uploads: string[] = [];
+  const batches: Array<Record<string, unknown>> = [];
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      if (req.method === "POST" && req.url === "/v1/files") {
+        uploads.push(await readRawBody(req));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "file-input" }));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/v1/batches") {
+        batches.push(await readJsonBody(req));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({ id: "batch-1", status: "completed", output_file_id: "file-output" }),
+        );
+        return;
+      }
+      if (req.method === "GET" && req.url === "/v1/files/file-output/content") {
+        res.writeHead(200, { "content-type": "application/jsonl" });
+        res.end(
+          [
+            JSON.stringify({
+              custom_id: "0",
+              response: { status_code: 200, body: { data: [{ embedding: [1, 0] }] } },
+            }),
+            JSON.stringify({
+              custom_id: "1",
+              response: { status_code: 200, body: { data: [{ embedding: [2, 1] }] } },
+            }),
+          ].join("\n"),
+        );
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: `unexpected ${req.method} ${req.url}` }));
+    } catch (error) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  servers.push({
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  });
+
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    uploads,
+    batches,
+  };
 }
 
 async function startEmbeddingServer(params?: {
@@ -127,7 +200,7 @@ describe("openai-compatible generic embedding provider", () => {
     });
   });
 
-  it("registers as a generic embedding provider with no memory-specific policy", async () => {
+  it("registers as a generic embedding provider with source-wide batch runtime", async () => {
     expect(openAICompatibleEmbeddingProviderAdapter.id).toBe("openai-compatible");
     expect(openAICompatibleEmbeddingProviderAdapter.transport).toBe("remote");
     expect(openAICompatibleEmbeddingProviderAdapter.authProviderId).toBeUndefined();
@@ -141,6 +214,8 @@ describe("openai-compatible generic embedding provider", () => {
     );
 
     expect(result.provider?.id).toBe("openai-compatible");
+    expect(result.runtime?.sourceWideBatchEmbed).toBe(true);
+    expect(result.runtime?.batchEmbed).toEqual(expect.any(Function));
     expect(result.runtime?.cacheKeyData).toMatchObject({
       provider: "openai-compatible",
       baseUrl: server.baseUrl,
@@ -176,6 +251,47 @@ describe("openai-compatible generic embedding provider", () => {
     expect(
       (result.runtime!.cacheKeyData as { headers?: Record<string, string> }).headers,
     ).not.toHaveProperty("x-api-key");
+  });
+
+  it("runs OpenAI-compatible remote batch embeddings through batch endpoints", async () => {
+    const server = await startBatchServer();
+    const result = await openAICompatibleEmbeddingProviderAdapter.create(
+      createOptions({
+        model: "mistral/mistral-embed",
+        dimensions: 128,
+        documentInputType: "document",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(
+      result.runtime?.batchEmbed?.({
+        agentId: "main",
+        chunks: [{ text: "alpha" }, { text: "beta" }],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 0,
+        timeoutMs: 1000,
+        debug: () => {},
+      }),
+    ).resolves.toEqual([
+      [1, 0],
+      [2, 1],
+    ]);
+
+    expect(server.uploads).toHaveLength(1);
+    expect(server.uploads[0]).toContain('"custom_id":"0"');
+    expect(server.uploads[0]).toContain('"input":"alpha"');
+    expect(server.uploads[0]).toContain('"dimensions":128');
+    expect(server.uploads[0]).toContain('"input_type":"document"');
+    expect(server.batches).toEqual([
+      {
+        input_file_id: "file-input",
+        endpoint: "/v1/embeddings",
+        completion_window: "24h",
+        metadata: { source: "openclaw-memory", agent: "main" },
+      },
+    ]);
   });
 
   it("posts OpenAI-compatible embedding requests without warming up during create", async () => {

@@ -12,6 +12,7 @@ import {
   chunkMarkdown,
   hashText,
   remapChunkLines,
+  runWithConcurrency,
   type MemoryChunk,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -798,9 +799,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       !batchEmbed ||
       this.providerRuntime?.sourceWideBatchEmbed !== true
     ) {
-      for (const entry of entries) {
-        await this.indexFile(entry, options);
-      }
+      await runWithConcurrency(
+        entries.map((entry) => async () => await this.indexFile(entry, options)),
+        this.getIndexConcurrency(),
+      );
       return;
     }
 
