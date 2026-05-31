@@ -1752,6 +1752,28 @@ describe("plugin sdk alias helpers", () => {
     ).toBe(fs.realpathSync(modelCatalogCore.distFile));
   });
 
+  it("derives acp-core aliases from packaged root dist when package metadata is absent", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+    const acpRuntimeErrors = path.join(fixture.root, "dist", "acp-core", "runtime", "errors.js");
+    mkdirSafeDir(path.dirname(acpRuntimeErrors));
+    fs.writeFileSync(acpRuntimeErrors, "export {};\n", "utf-8");
+    const cwdWithoutOpenClawPackage = makeTempDir();
+
+    const aliases = withCwd(cwdWithoutOpenClawPackage, () =>
+      withEnv({ NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+      ),
+    );
+
+    expect(fs.realpathSync(aliases["@openclaw/acp-core/runtime/errors"] ?? "")).toBe(
+      fs.realpathSync(acpRuntimeErrors),
+    );
+  });
+
   it("aliases bundled plugin package public surfaces for source plugin transforms", () => {
     const { fixture, sourceApiPath, sourceRuntimeApiPath } =
       createBundledPluginPackagePublicSurfaceAliasFixture();

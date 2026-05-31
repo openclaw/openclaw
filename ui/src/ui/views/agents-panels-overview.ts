@@ -130,7 +130,7 @@ export function renderAgentOverview(params: {
           <div class="mono">${runtime}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Thinking Default</div>
+          <div class="label">${t("agents.context.thinkingDefault")}</div>
           <div class="mono">${thinkingDefault}</div>
         </div>
         <div class="agent-kv">

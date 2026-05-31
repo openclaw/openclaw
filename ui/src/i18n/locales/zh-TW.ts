@@ -265,6 +265,7 @@ export const zh_TW: TranslationMap = {
       openFilesTab: "Open Files tab",
       primaryModel: "Primary Model",
       runtime: "執行階段",
+      thinkingDefault: "預設思考層級",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
       skillsFilter: "Skills Filter",

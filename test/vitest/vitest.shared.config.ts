@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import {
@@ -95,6 +96,14 @@ function sourcePackageAlias(packageId: string, subpath?: string) {
       ),
     ),
   };
+}
+
+function sourcePackageAliasesFromExports(packageId: string, exports: Record<string, unknown>) {
+  return Object.keys(exports)
+    .map((exportKey) => (exportKey === "." ? undefined : exportKey.slice(2)))
+    .filter((subpath) => subpath === undefined || (subpath && !subpath.includes("..")))
+    .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))
+    .map((subpath) => sourcePackageAlias(packageId, subpath));
 }
 
 export function resolveSharedVitestWorkerConfig(params: {
@@ -401,20 +410,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core", "read-response-with-limit"),
       sourcePackageAlias("media-core"),
-      sourcePackageAlias("acp-core", "meta"),
-      sourcePackageAlias("acp-core", "normalize-text"),
-      sourcePackageAlias("acp-core", "numeric-options"),
-      sourcePackageAlias("acp-core", "record-shared"),
-      sourcePackageAlias("acp-core", "session"),
-      sourcePackageAlias("acp-core", "session-interaction-mode"),
-      sourcePackageAlias("acp-core", "session-lineage-meta"),
-      sourcePackageAlias("acp-core", "types"),
-      sourcePackageAlias("acp-core", "runtime/error-text"),
-      sourcePackageAlias("acp-core", "runtime/errors"),
-      sourcePackageAlias("acp-core", "runtime/session-identifiers"),
-      sourcePackageAlias("acp-core", "runtime/session-identity"),
-      sourcePackageAlias("acp-core", "runtime/types"),
-      sourcePackageAlias("acp-core"),
+      ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),

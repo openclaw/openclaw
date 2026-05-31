@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
@@ -296,7 +296,8 @@ describe("renderAgents", () => {
     await Promise.resolve();
 
     const thinkingKv = Array.from(container.querySelectorAll(".agent-kv")).find(
-      (entry) => entry.querySelector(".label")?.textContent?.trim() === "Thinking Default",
+      (entry) =>
+        entry.querySelector(".label")?.textContent?.trim() === t("agents.context.thinkingDefault"),
     );
     expect(thinkingKv?.textContent).toContain("xhigh");
   });

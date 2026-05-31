@@ -266,6 +266,7 @@ export const ar: TranslationMap = {
       openFilesTab: "فتح تبويب الملفات",
       primaryModel: "النموذج الأساسي",
       runtime: "وقت التشغيل",
+      thinkingDefault: "مستوى التفكير الافتراضي",
       identityName: "اسم الهوية",
       identityAvatar: "صورة الهوية",
       skillsFilter: "مرشح Skills",

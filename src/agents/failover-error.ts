@@ -9,7 +9,7 @@ import {
 } from "./embedded-agent-helpers/errors.js";
 import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
-import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
@@ -262,8 +262,8 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   };
 }
 
-function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set()): boolean {
-  if (isSessionWriteLockTimeoutError(err)) {
+function hasSessionWriteLockContention(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (isSessionWriteLockAcquireError(err)) {
     return true;
   }
   if (!err || typeof err !== "object") {
@@ -275,9 +275,9 @@ function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set())
   seen.add(err);
   const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
   return (
-    hasSessionWriteLockTimeout(candidate.error, seen) ||
-    hasSessionWriteLockTimeout(candidate.cause, seen) ||
-    hasSessionWriteLockTimeout(candidate.reason, seen)
+    hasSessionWriteLockContention(candidate.error, seen) ||
+    hasSessionWriteLockContention(candidate.cause, seen) ||
+    hasSessionWriteLockContention(candidate.reason, seen)
   );
 }
 
@@ -315,7 +315,7 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
  * See #83510.
  */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (!hasSessionWriteLockTimeout(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+  if (!hasSessionWriteLockContention(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
     return false;
   }
   if (isFailoverError(err)) {
@@ -331,7 +331,7 @@ function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (hasSessionWriteLockTimeout(err)) {
+  if (hasSessionWriteLockContention(err)) {
     return false;
   }
   if (readErrorName(err) === "TimeoutError") {
@@ -351,7 +351,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (readErrorName(err) !== "AbortError") {
     return false;
   }
-  if (hasSessionWriteLockTimeout(err)) {
+  if (hasSessionWriteLockContention(err)) {
     return false;
   }
   const message = getErrorMessage(err);
@@ -460,7 +460,7 @@ function resolveFailoverClassificationFromErrorInternal(
   const hasExplicitFailoverMetadata =
     typeof inferSignalStatus(signal) === "number" ||
     (codeReason !== null && codeReason !== "timeout");
-  const hasSessionLock = hasSessionWriteLockTimeout(err);
+  const hasSessionLock = hasSessionWriteLockContention(err);
 
   const classification = classifyFailoverSignal(signal);
   const nestedCandidates = getNestedErrorCandidates(err);

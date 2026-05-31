@@ -2630,6 +2630,69 @@ describe("createFollowupRunner compaction", () => {
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
     expect(sessionStore.main?.compactionCount).toBe(2);
   });
+
+  it("registers the post-preflight session id for lifecycle event stamping", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const sessionEntry: SessionEntry = {
+      sessionId: "old-session",
+      updatedAt: Date.now(),
+      sessionFile: "/tmp/old-session.jsonl",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        followupRun: FollowupRun;
+        sessionEntry?: SessionEntry;
+        sessionStore?: Record<string, SessionEntry>;
+        sessionKey?: string;
+      }) => {
+        const updatedEntry: SessionEntry = {
+          ...(params.sessionEntry ?? sessionEntry),
+          sessionId: "new-session",
+          sessionFile: "/tmp/new-session.jsonl",
+          updatedAt: Date.now(),
+        };
+        params.followupRun.run.sessionId = updatedEntry.sessionId;
+        params.followupRun.run.sessionFile = "/tmp/new-session.jsonl";
+        if (params.sessionKey && params.sessionStore) {
+          params.sessionStore[params.sessionKey] = updatedEntry;
+        }
+        return updatedEntry;
+      },
+    );
+
+    let observedRunId: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { runId: string; sessionId?: string }) => {
+        observedRunId = params.runId;
+        expect(params.sessionId).toBe("new-session");
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(createQueuedRun());
+
+    expect(observedRunId).toBeDefined();
+    expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe("new-session");
+    realAgentEvents.resetAgentRunContextForTest();
+  });
 });
 
 describe("createFollowupRunner bootstrap warning dedupe", () => {

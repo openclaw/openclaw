@@ -699,7 +699,7 @@ describe("cron method validation", () => {
       params: {
         name: "bad-cron",
         enabled: true,
-        schedule: { kind: "cron", cron: "not-a-cron-expr" },
+        schedule: { kind: "cron", expr: "not-a-cron-expr" },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "ping" },
@@ -725,7 +725,7 @@ describe("cron method validation", () => {
       params: {
         id: existingJob.id,
         patch: {
-          schedule: { kind: "cron", cron: "99 * * * *" },
+          schedule: { kind: "cron", expr: "99 * * * *" },
         },
       } as never,
       respond: respond as never,

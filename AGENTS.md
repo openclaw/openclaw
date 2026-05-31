@@ -85,6 +85,9 @@ Skills own workflows; root owns hard policy and routing.
 - Plugin SDK exception: shipped external API gets new API first plus named compat/deprecation, small tests/docs if useful, removal plan.
 - Migrate internal/bundled callers to modern API in the same change. Do not let internal compat become permanent architecture.
 - Channels are implementation under `src/channels/**`; plugin authors get SDK seams. Providers own auth/catalog/runtime hooks; core owns generic loop.
+- Message/channel plugins stay transport-only. They render portable presentation/actions, enforce transport limits, and map native callback envelopes. They do not own product command trees, plugin/provider policy, or feature-specific menus.
+- Portable command UI must use typed presentation actions, not raw string inference. Do not make channels guess that `value` starting with `/` means a native command; core/owner plugins declare command actions, channels map them when supported.
+- Raw callback data is transport/private. Approval, command, URL, web-app, and select actions must stay distinguishable before channel encoding so transport adapters do not special-case product strings.
 - Agent run terminal state: normalize/merge via `src/agents/agent-run-terminal-outcome.ts`; do not rederive timeout/cancel precedence in projections.
 - Hot paths should carry prepared facts forward: provider id, model ref, channel id, target, capability family, attachment class. Do not rediscover with broad plugin/provider/channel/capability loaders.
 - Do not fix repeated request-time discovery with scattered caches. Move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches.
@@ -140,6 +143,7 @@ Skills own workflows; root owns hard policy and routing.
 - Maintainer decision closes the cluster: if deciding reported behavior/proposed fix is not planned, comment+close all directly associated open issues/PRs unless explicitly told to keep one open. Associated means linked PRs/issues, duplicates, companion workaround PRs, and the canonical issue for the rejected behavior.
 - Do not leave associated issues open for hypothetical future repros. Close with rationale; ask for a new issue or reopen only if concrete new evidence appears. Close comment states: decision, why, supported alternative, and what evidence would change the decision.
 - Issue/PR numbers need a short summary every time; assume the reader has not opened or read them.
+- Before presenting a batch of issues/PRs, use smart subagents to verify live state and current `main`; omit closed/fixed items, and comment+close items already fixed on `main` when maintainer action is authorized.
 - PR review answer: bug/behavior, URL(s), affected surface, provenance for regressions when traceable, best-fix judgment, evidence from code/tests/CI/current or shipped behavior.
 - PR reviewable findings: post them on the PR, not chat-only, so author sees actionable feedback.
 - Issue/PR final answer: last line is the full GitHub URL.
@@ -227,7 +231,7 @@ Skills own workflows; root owns hard policy and routing.
 - User says `commit`: your changes only. `commit all`: all changes in grouped chunks. `push`: may `git pull --rebase` first.
 - User says `ship it`: commit intended changes, pull --rebase, push.
 - Do not delete/rename unexpected files; ask if blocking, else ignore.
-- Bulk PR close/reopen >5: ask with count/scope.
+- Bulk PR close/reopen >20: ask with count/scope.
 
 ## Security / Release
 
