@@ -2999,6 +2999,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     messagingToolSentTargets?: unknown[];
     finalAssistantText?: string;
     payloadText?: string;
+    successfulCronAdds?: number;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -3018,6 +3019,9 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       ...(params.messagingToolSentTargets
         ? { messagingToolSentTargets: params.messagingToolSentTargets }
         : {}),
+      ...(params.successfulCronAdds === undefined
+        ? {}
+        : { successfulCronAdds: params.successfulCronAdds }),
     });
 
     const sessionCtx = {
@@ -3097,6 +3101,11 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
     });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+  });
+
+  it("still warns when only an unrelated cron side effect succeeded", async () => {
+    await runPrivateFinalCase({ successfulCronAdds: 1 });
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does not warn on an intentional NO_REPLY turn even when metadata payloads remain", async () => {

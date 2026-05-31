@@ -18,15 +18,15 @@ const SENTENCE_TERMINATOR_REGEX = /[.!?]+(?:\s|$)/g;
 export function shouldWarnAboutPrivateMessageToolFinal(params: {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   sendPolicyDenied: boolean;
-  successfulSideEffectDelivery: boolean;
+  successfulSourceReplyDelivery: boolean;
   finalText: string;
 }): boolean {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
     return false;
   }
-  // A send-policy denial is an intentional block, and a successful tool/block
-  // delivery means the contract was honored — neither is message loss.
-  if (params.sendPolicyDenied || params.successfulSideEffectDelivery) {
+  // A send-policy denial is an intentional block, and a successful source-reply
+  // delivery means the contract was honored. Other side effects do not count.
+  if (params.sendPolicyDenied || params.successfulSourceReplyDelivery) {
     return false;
   }
   const trimmed = params.finalText.trim();

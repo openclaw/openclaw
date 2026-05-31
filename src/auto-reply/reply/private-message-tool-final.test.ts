@@ -4,7 +4,7 @@ import { shouldWarnAboutPrivateMessageToolFinal } from "./private-message-tool-f
 const base = {
   sourceReplyDeliveryMode: "message_tool_only" as const,
   sendPolicyDenied: false,
-  successfulSideEffectDelivery: false,
+  successfulSourceReplyDelivery: false,
   finalText:
     "Here is the answer the user asked for. It includes enough detail to look like a visible response rather than an internal no-op note.",
 };
@@ -34,7 +34,7 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
 
   it("does not flag when the message tool already delivered this turn", () => {
     expect(
-      shouldWarnAboutPrivateMessageToolFinal({ ...base, successfulSideEffectDelivery: true }),
+      shouldWarnAboutPrivateMessageToolFinal({ ...base, successfulSourceReplyDelivery: true }),
     ).toBe(false);
   });
 
