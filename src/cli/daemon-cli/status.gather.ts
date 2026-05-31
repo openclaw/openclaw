@@ -329,11 +329,10 @@ export type DaemonStatus = {
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
   /**
-   * Plugin version drift report. Only populated when `gatherDaemonStatus` is
-   * called with `deep: true`. Surfaces externalized (npm/ClawHub) plugins
-   * whose installed version does not match the running gateway version,
-   * which can happen after `npm install -g openclaw@<v>` updates the gateway
-   * binary without a corresponding `openclaw plugins update`.
+   * Plugin version drift report. Surfaces active official external plugins
+   * whose installed version does not match the running gateway version, which
+   * can happen after `npm install -g openclaw@<v>` updates the gateway binary
+   * without a corresponding `openclaw plugins update`.
    */
   pluginVersionDrift?: PluginVersionDriftReport;
 };
@@ -646,32 +645,24 @@ export async function gatherDaemonStatus(
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
-  // Plugin version drift detection (deep-only).
-  // Compares each externalized (npm/ClawHub) plugin's installed version
-  // against the *running* gateway version reported by the probe handshake,
-  // falling back to the invoking CLI VERSION only when no gateway version is
-  // available (e.g. probe skipped or gateway down). Reading the install
-  // records with the merged daemon environment ensures we inspect the managed
-  // service's profile/state dir rather than the invoking CLI process's, so a
-  // CLI run under a different profile does not produce false drift. Bundled
-  // plugins ship inside the gateway package and never drift. Best-effort: a
-  // failure to read the install records is non-fatal and the report is omitted.
+  // Plugin version drift detection.
+  // Compares active official external plugins against the *running* gateway
+  // version reported by the probe handshake, falling back to the invoking CLI
+  // VERSION only when no gateway version is available. Reading records with the
+  // merged daemon environment inspects the managed service's profile/state dir.
+  // Best-effort: unreadable install records omit this advisory report.
   let pluginVersionDrift: PluginVersionDriftReport | undefined;
-  if (opts.deep) {
-    try {
-      const installRecords = await loadInstalledPluginIndexInstallRecords({
-        env: mergedDaemonEnv as NodeJS.ProcessEnv,
-      });
-      pluginVersionDrift = detectPluginVersionDrift({
-        gatewayVersion: gatewayVersion ?? VERSION,
-        installRecords,
-        config: daemonCfg,
-      });
-    } catch {
-      // Non-fatal: status output should still render even if the install
-      // index is unreadable. Drift detection is purely advisory.
-      pluginVersionDrift = undefined;
-    }
+  try {
+    const installRecords = await loadInstalledPluginIndexInstallRecords({
+      env: mergedDaemonEnv as NodeJS.ProcessEnv,
+    });
+    pluginVersionDrift = detectPluginVersionDrift({
+      gatewayVersion: gatewayVersion ?? VERSION,
+      installRecords,
+      config: daemonCfg,
+    });
+  } catch {
+    pluginVersionDrift = undefined;
   }
 
   return {

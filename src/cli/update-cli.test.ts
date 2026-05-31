@@ -211,9 +211,12 @@ vi.mock("../utils.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/update.js", () => ({
+vi.mock("../plugins/official-external-install-records.js", () => ({
   resolveTrustedSourceLinkedOfficialClawHubSpec: vi.fn(() => undefined),
   resolveTrustedSourceLinkedOfficialNpmSpec: vi.fn(() => undefined),
+}));
+
+vi.mock("../plugins/update.js", () => ({
   syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
 }));

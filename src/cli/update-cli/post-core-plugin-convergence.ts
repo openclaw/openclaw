@@ -5,12 +5,12 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
 import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
-import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
-import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "../../plugins/update.js";
+} from "../../plugins/official-external-install-records.js";
+import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
+import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import { VERSION } from "../../version.js";
 import {
   runPluginPayloadSmokeCheck,

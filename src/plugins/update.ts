@@ -45,6 +45,10 @@ import {
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import {
+  resolveTrustedSourceLinkedOfficialClawHubSpec,
+  resolveTrustedSourceLinkedOfficialNpmSpec,
+} from "./official-external-install-records.js";
+import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
@@ -518,53 +522,6 @@ function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
     return false;
   }
   return (record.clawhubUrl ?? "").replace(/\/+$/, "") === "https://clawhub.ai";
-}
-
-export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-}): string | undefined {
-  if (params.record.source !== "npm") {
-    return undefined;
-  }
-  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
-  if (!entry) {
-    return undefined;
-  }
-  const officialSpec = resolveOfficialExternalPluginInstall(entry)?.npmSpec;
-  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
-  if (!officialSpec || !officialPackageName) {
-    return undefined;
-  }
-  const recordedPackageNames = [
-    params.record.resolvedName,
-    resolveNpmSpecPackageName(params.record.spec),
-    resolveNpmSpecPackageName(params.record.resolvedSpec),
-  ].filter((value): value is string => Boolean(value));
-  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
-}
-
-export function resolveTrustedSourceLinkedOfficialClawHubSpec(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-}): string | undefined {
-  if (params.record.source !== "clawhub") {
-    return undefined;
-  }
-  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
-  if (!entry) {
-    return undefined;
-  }
-  const officialSpec = resolveOfficialExternalPluginInstall(entry)?.clawhubSpec;
-  const officialPackageName = resolveClawHubSpecPackageName(officialSpec);
-  if (!officialSpec || !officialPackageName) {
-    return undefined;
-  }
-  const recordedPackageNames = [
-    params.record.clawhubPackage,
-    resolveClawHubSpecPackageName(params.record.spec),
-  ].filter((value): value is string => Boolean(value));
-  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
 }
 
 function resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate(params: {

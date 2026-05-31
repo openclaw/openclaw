@@ -908,7 +908,7 @@ describe("gatherDaemonStatus", () => {
       server: { version: "2026.5.4", connId: "c1" },
     } as never);
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
-      "@openclaw/whatsapp": {
+      whatsapp: {
         source: "npm",
         resolvedName: "@openclaw/whatsapp",
         resolvedVersion: "2026.5.4",
@@ -933,7 +933,7 @@ describe("gatherDaemonStatus", () => {
       server: { version: "2026.5.4", connId: "c1" },
     } as never);
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
-      "@openclaw/whatsapp": {
+      whatsapp: {
         source: "npm",
         resolvedName: "@openclaw/whatsapp",
         resolvedVersion: "2026.5.3",
@@ -947,9 +947,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
-    expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual([
-      "@openclaw/whatsapp",
-    ]);
+    expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
 
   it("reads install records from the merged daemon service environment, not the CLI process env", async () => {
@@ -971,14 +969,28 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("does not read install records or compute drift when not in deep mode", async () => {
+  it("reads install records and computes drift outside deep mode", async () => {
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+      whatsapp: {
+        source: "npm",
+        resolvedName: "@openclaw/whatsapp",
+        resolvedVersion: "2026.5.3",
+      },
+    } as never);
+
     const status = await gatherDaemonStatus({
       rpc: {},
       probe: true,
       deep: false,
     });
 
-    expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-    expect(status.pluginVersionDrift).toBeUndefined();
+    expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        }),
+      }),
+    );
+    expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
 });
