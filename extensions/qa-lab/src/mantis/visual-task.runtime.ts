@@ -516,7 +516,7 @@ export async function runMantisVisualDriver(
       runner,
       stdio: "inherit",
     });
-    await new Promise((resolve) => {
+    await new Promise<void>((resolve) => {
       setTimeout(resolve, opts.settleMs ?? DEFAULT_SETTLE_MS);
     });
     await runCommandWithExternalOutput({

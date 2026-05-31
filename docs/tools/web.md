@@ -13,8 +13,9 @@ The `web_search` tool searches the web using your configured provider and
 returns results. Results are cached by query for 15 minutes (configurable).
 
 OpenClaw also includes `x_search` for X (formerly Twitter) posts and
-`web_fetch` for lightweight URL fetching. In this phase, `web_fetch` stays
-local while `web_search` and `x_search` can use xAI Responses under the hood.
+`web_fetch` for lightweight URL fetching. Exact public X/Twitter post URLs or
+numeric status IDs are read through the key-free public FxTwitter API. Broader
+X search queries can use xAI Responses when an xAI key is configured.
 
 <Info>
   `web_search` is a lightweight HTTP tool, not browser automation. For
@@ -45,7 +46,13 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
     await web_search({ query: "OpenClaw plugin SDK" });
     ```
 
-    For X posts, use:
+    For an exact public X post, paste the post URL:
+
+    ```javascript
+    await x_search({ query: "https://x.com/Twitter/status/1580661436132757506" });
+    ```
+
+    For broader X search, use a normal query. Broader search uses xAI when configured:
 
     ```javascript
     await x_search({ query: "dinner recipes" });
@@ -256,15 +263,23 @@ When you choose **Kimi** during `openclaw onboard` or
 - the Moonshot API region (`https://api.moonshot.ai/v1` or `https://api.moonshot.cn/v1`)
 - the default Kimi web-search model (defaults to `kimi-k2.6`)
 
-For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
-same xAI auth profile as chat, or the `XAI_API_KEY` / plugin web-search
-credential used by Grok web search.
-Legacy `tools.web.x_search.*` config is auto-migrated by `openclaw doctor --fix`.
-When you choose Grok during `openclaw onboard` or `openclaw configure --section web`,
-OpenClaw can also offer optional `x_search` setup with the same credential.
-This is a separate follow-up step inside the Grok path, not a separate top-level
-web-search provider choice. If you pick another provider, OpenClaw does not
-show the `x_search` prompt.
+For `x_search`, exact public post reads need no API key. OpenClaw detects
+`x.com`, `twitter.com`, `fxtwitter.com`, `fixupx.com`, and `vxtwitter.com`
+status URLs, then calls `https://api.fxtwitter.com/2/status/{id}` with guarded
+network fetches. OpenClaw returns a sanitized result with wrapped untrusted
+post content, citations, source URL, status ID, author handle, engagement
+counts, and media summary metadata. It does not expose the raw FxTwitter API
+object to the model.
+
+For broader X search queries, configure `plugins.entries.xai.config.xSearch.*`.
+It uses the same xAI auth profile as chat, or the `XAI_API_KEY` / plugin
+web-search credential used by Grok web search. Legacy `tools.web.x_search.*`
+config is auto-migrated by `openclaw doctor --fix`. When you choose Grok during
+`openclaw onboard` or `openclaw configure --section web`, OpenClaw can also
+offer optional `x_search` setup with the same credential. This is a separate
+follow-up step inside the Grok path, not a separate top-level web-search
+provider choice. If you pick another provider, OpenClaw does not show the
+broader `x_search` prompt.
 
 ### Storing API keys
 
@@ -338,18 +353,20 @@ show the `x_search` prompt.
 
 ## x_search
 
-`x_search` queries X (formerly Twitter) posts using xAI and returns
-AI-synthesized answers with citations. It accepts natural-language queries and
-optional structured filters. OpenClaw only enables the built-in xAI `x_search`
-tool on the request that serves this tool call.
+`x_search` handles two X (formerly Twitter) lookup modes. Exact public post
+URLs and numeric status IDs are read through the key-free FxTwitter API and
+return sanitized wrapped post content, citations, source metadata, engagement
+counts, and media summary metadata. Broader natural-language X searches use xAI
+and return AI-synthesized answers with citations when xAI auth is configured.
+If xAI auth is missing, broader searches return a missing-key tool result while
+exact post reads still work.
 
 <Note>
-  xAI documents `x_search` as supporting keyword search, semantic search, user
-  search, and thread fetch. For per-post engagement stats such as reposts,
-  replies, bookmarks, or views, prefer a targeted lookup for the exact post URL
-  or status ID. Broad keyword searches may find the right post but return less
-  complete per-post metadata. A good pattern is: locate the post first, then
-  run a second `x_search` query focused on that exact post.
+  For per-post engagement stats such as reposts, replies, bookmarks, or views,
+  prefer the exact post URL or status ID so OpenClaw can use the key-free
+  FxTwitter path. xAI-backed broad keyword searches may find the right post but
+  return less complete per-post metadata. A good pattern is: locate the post
+  first, then run a second `x_search` query focused on that exact post.
 </Note>
 
 ### x_search config
@@ -389,7 +406,7 @@ legacy `tools.web.search.grok.baseUrl`, and finally the public xAI endpoint.
 
 | Parameter                    | Description                                            |
 | ---------------------------- | ------------------------------------------------------ |
-| `query`                      | Search query (required)                                |
+| `query`                      | Search query, exact post URL, or numeric status ID     |
 | `allowed_x_handles`          | Restrict results to specific X handles                 |
 | `excluded_x_handles`         | Exclude specific X handles                             |
 | `from_date`                  | Only include posts on or after this date (YYYY-MM-DD)  |

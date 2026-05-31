@@ -1,6 +1,38 @@
+import { readFileSync } from "node:fs";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type {
+  AnyAgentTool,
+  OpenClawPluginToolFactory,
+  PluginRuntime,
+} from "openclaw/plugin-sdk/core";
+import { buildPluginApi } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import xaiPlugin from "./index.js";
 import { createXSearchTool } from "./x-search.js";
+
+function registerXaiTools(config: Record<string, unknown> = {}) {
+  const tools: Array<AnyAgentTool | OpenClawPluginToolFactory> = [];
+  const noopLogger = { info() {}, warn() {}, error() {}, debug() {} };
+  const api = buildPluginApi({
+    id: "xai",
+    name: "xAI Plugin",
+    source: "test",
+    registrationMode: "full",
+    config: config as OpenClawConfig,
+    pluginConfig: {},
+    runtime: {} as PluginRuntime,
+    logger: noopLogger,
+    resolvePath: (input) => input,
+    handlers: {
+      registerTool(tool) {
+        tools.push(tool as never);
+      },
+    },
+  });
+  xaiPlugin.register(api);
+  return tools;
+}
 
 function installXSearchFetch(payload?: Record<string, unknown>) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
@@ -26,7 +58,51 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
         ),
     } as Response),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+  return mockFetch;
+}
+
+function installFxTwitterPostFetch(params?: {
+  id?: string;
+  handle?: string;
+  createdTimestamp?: number;
+}) {
+  const id = params?.id ?? "1580661436132757506";
+  const handle = params?.handle ?? "Twitter";
+  const createdTimestamp = params?.createdTimestamp ?? 1665694028;
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: () =>
+        Promise.resolve({
+          code: 200,
+          status: {
+            type: "status",
+            id,
+            url: `https://twitter.com/${handle}/status/${id}`,
+            text: "a hit Tweet",
+            created_at: "Thu Oct 13 20:47:08 +0000 2022",
+            created_timestamp: createdTimestamp,
+            author: { name: handle, screen_name: handle },
+            likes: 43852,
+            reposts: 2422,
+            quotes: 12,
+            replies: 4675,
+            views: 100000,
+            media: {
+              photos: [{ type: "photo", url: "https://pbs.twimg.com/media/example.jpg" }],
+            },
+            raw_text: "raw-only-injection",
+            extra_payload: {
+              prompt: "raw-only-prompt-injection",
+            },
+          },
+        }),
+    } as Response),
+  );
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -68,7 +144,35 @@ function parseFirstRequestBody(mockFetch: ReturnType<typeof installXSearchFetch>
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("xai plugin x_search registration", () => {
+  it("keeps x_search in the default manifest tool set for key-free exact post reads", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { toolMetadata?: Record<string, { optional?: boolean }> };
+
+    expect(manifest.toolMetadata?.x_search?.optional).not.toBe(true);
+  });
+
+  it("registers the lazy x_search tool without an xAI key so exact FxTwitter posts can run", async () => {
+    const tools = registerXaiTools({});
+    const tool = tools
+      .filter((entry): entry is OpenClawPluginToolFactory => typeof entry === "function")
+      .flatMap((factory) => {
+        const registration = factory({ config: {}, runtimeConfig: {} });
+        return Array.isArray(registration) ? registration : [registration];
+      })
+      .find((entry) => entry?.name === "x_search");
+
+    expect(tool?.name).toBe("x_search");
+    const result = await tool?.execute?.("x-search:missing-key", {
+      query: "openclaw from:openclaw",
+    });
+    expect(result?.details).toMatchObject({ error: "missing_xai_api_key" });
+  });
 });
 
 describe("xai x_search tool", () => {
@@ -181,6 +285,141 @@ describe("xai x_search tool", () => {
     expect((result?.details as { citations?: string[] } | undefined)?.citations).toEqual([
       "https://x.com/openclaw/status/1",
     ]);
+  });
+
+  it("reads an exact X post URL through key-free FxTwitter without an xAI key", async () => {
+    const mockFetch = installFxTwitterPostFetch();
+    const tool = createXSearchTool({ config: {} });
+
+    const result = await tool?.execute?.("x-search:fxtwitter", {
+      query: "https://x.com/Twitter/status/1580661436132757506",
+    });
+
+    expect(tool?.name).toBe("x_search");
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain(
+      "https://api.fxtwitter.com/2/status/1580661436132757506",
+    );
+    const details = result?.details as { provider?: string; content?: string; post?: unknown };
+    expect(details.provider).toBe("fxtwitter");
+    expect(details.content).toContain("a hit Tweet");
+    expect(details.content).toContain("likes: 43852");
+    expect(details.post).toBeUndefined();
+    expect(JSON.stringify(details)).not.toContain("raw-only-injection");
+    expect(JSON.stringify(details)).not.toContain("raw-only-prompt-injection");
+  });
+
+  it("bypasses stale xAI auth resolution for exact FxTwitter post URLs", async () => {
+    installFxTwitterPostFetch();
+    const resolveApiKeyForProvider = vi.fn(async () => {
+      throw new Error("stale xAI OAuth profile");
+    });
+    const tool = createXSearchTool({
+      config: {},
+      auth: {
+        hasAuthForProvider: (providerId) => providerId === "xai",
+        resolveApiKeyForProvider,
+      },
+    });
+
+    const result = await tool?.execute?.("x-search:fxtwitter-stale-auth", {
+      query: "https://x.com/Twitter/status/1580661436132757506",
+    });
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      provider: "fxtwitter",
+      statusId: "1580661436132757506",
+    });
+  });
+
+  it("filters exact FxTwitter posts by allowed handle", async () => {
+    installFxTwitterPostFetch({ id: "1580661436132757510", handle: "Twitter" });
+    const tool = createXSearchTool({ config: {} });
+
+    const result = await tool?.execute?.("x-search:fxtwitter-allowed-filter", {
+      query: "https://x.com/Twitter/status/1580661436132757510",
+      allowed_x_handles: ["openclaw"],
+    });
+
+    expect(result?.details).toMatchObject({
+      provider: "fxtwitter",
+      filtered: true,
+      filterReason: "post_author_not_in_allowed_x_handles",
+      handle: "Twitter",
+    });
+  });
+
+  it("filters exact FxTwitter posts by excluded handle", async () => {
+    installFxTwitterPostFetch({ id: "1580661436132757511", handle: "Twitter" });
+    const tool = createXSearchTool({ config: {} });
+
+    const result = await tool?.execute?.("x-search:fxtwitter-excluded-filter", {
+      query: "https://x.com/Twitter/status/1580661436132757511",
+      excluded_x_handles: ["twitter"],
+    });
+
+    expect(result?.details).toMatchObject({
+      provider: "fxtwitter",
+      filtered: true,
+      filterReason: "post_author_in_excluded_x_handles",
+      handle: "Twitter",
+    });
+  });
+
+  it("filters exact FxTwitter posts outside the requested date range", async () => {
+    installFxTwitterPostFetch({
+      id: "1580661436132757512",
+      handle: "Twitter",
+      createdTimestamp: 1665694028,
+    });
+    const tool = createXSearchTool({ config: {} });
+
+    const result = await tool?.execute?.("x-search:fxtwitter-date-filter", {
+      query: "https://x.com/Twitter/status/1580661436132757512",
+      from_date: "2026-01-01",
+    });
+
+    expect(result?.details).toMatchObject({
+      provider: "fxtwitter",
+      filtered: true,
+      filterReason: "post_before_from_date",
+      handle: "Twitter",
+    });
+  });
+
+  it("keeps exact FxTwitter cache entries filter-safe", async () => {
+    const mockFetch = installFxTwitterPostFetch({
+      id: "1580661436132757513",
+      handle: "Twitter",
+    });
+    const tool = createXSearchTool({ config: {} });
+
+    const unfiltered = await tool?.execute?.("x-search:fxtwitter-cache-open", {
+      query: "https://x.com/Twitter/status/1580661436132757513",
+    });
+    const filtered = await tool?.execute?.("x-search:fxtwitter-cache-filtered", {
+      query: "https://x.com/Twitter/status/1580661436132757513",
+      excluded_x_handles: ["Twitter"],
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(unfiltered?.details).toMatchObject({ provider: "fxtwitter" });
+    expect((unfiltered?.details as { filtered?: unknown } | undefined)?.filtered).toBeUndefined();
+    expect(filtered?.details).toMatchObject({
+      provider: "fxtwitter",
+      filtered: true,
+      filterReason: "post_author_in_excluded_x_handles",
+    });
+  });
+
+  it("keeps generic x_search on the xAI missing-key path", async () => {
+    const tool = createXSearchTool({ config: {} });
+
+    const result = await tool?.execute?.("x-search:missing-key", {
+      query: "openclaw from:openclaw",
+    });
+
+    expect(result?.details).toMatchObject({ error: "missing_xai_api_key" });
   });
 
   it("routes x_search through plugin-owned xSearch.baseUrl", async () => {

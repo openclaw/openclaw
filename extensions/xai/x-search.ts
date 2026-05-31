@@ -9,6 +9,13 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
+  buildFxTwitterPostPayload,
+  buildFxTwitterFilteredPostPayload,
+  evaluateFxTwitterPostFilters,
+  extractFxTwitterPostReference,
+  requestFxTwitterPost,
+} from "./src/fxtwitter-post.js";
+import {
   isXaiToolEnabled,
   resolveXaiToolApiKeyWithAuth,
   type XaiToolAuthContext,
@@ -136,27 +143,17 @@ export function createXSearchTool(options?: {
 }) {
   const xSearchConfig = resolveXSearchConfig(options?.config);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
-  if (
-    !resolveXSearchEnabled({
-      cfg: options?.config,
-      config: xSearchConfig,
-      runtimeConfig: runtimeConfig ?? undefined,
-      auth: options?.auth,
-    })
-  ) {
+  if (xSearchConfig?.enabled === false) {
     return null;
   }
+  const xaiSearchEnabled = resolveXSearchEnabled({
+    cfg: options?.config,
+    config: xSearchConfig,
+    runtimeConfig: runtimeConfig ?? undefined,
+    auth: options?.auth,
+  });
 
   return createXSearchToolDefinition(async (_toolCallId: string, args: Record<string, unknown>) => {
-    const apiKey = await resolveXSearchApiKey({
-      sourceConfig: options?.config,
-      runtimeConfig: runtimeConfig ?? undefined,
-      auth: options?.auth,
-    });
-    if (!apiKey) {
-      return jsonResult(buildMissingXSearchApiKeyPayload());
-    }
-
     const query = readStringParam(args, "query", { required: true });
     const allowedXHandles = readStringArrayParam(args, "allowed_x_handles");
     const excludedXHandles = readStringArrayParam(args, "excluded_x_handles");
@@ -164,6 +161,66 @@ export function createXSearchTool(options?: {
     const toDate = normalizeOptionalIsoDate(readStringParam(args, "to_date"), "to_date");
     if (fromDate && toDate && fromDate > toDate) {
       throw new PluginToolInputError("from_date must be on or before to_date");
+    }
+
+    const exactPostRef = extractFxTwitterPostReference(query);
+    if (exactPostRef) {
+      const cacheKey = JSON.stringify([
+        "x_search",
+        "fxtwitter",
+        exactPostRef.id,
+        allowedXHandles ?? null,
+        excludedXHandles ?? null,
+        fromDate ?? null,
+        toDate ?? null,
+      ]);
+      const cached = readCache(X_SEARCH_CACHE, cacheKey);
+      if (cached) {
+        return jsonResult({ ...cached.value, cached: true });
+      }
+      const startedAt = Date.now();
+      const result = await requestFxTwitterPost({
+        ref: exactPostRef,
+        timeoutSeconds: resolveTimeoutSeconds(xSearchConfig?.timeoutSeconds, 30),
+      });
+      const tookMs = Date.now() - startedAt;
+      const filterResult = evaluateFxTwitterPostFilters({
+        post: result.post,
+        ref: exactPostRef,
+        filters: { allowedXHandles, excludedXHandles, fromDate, toDate },
+      });
+      const payload = filterResult.passes
+        ? buildFxTwitterPostPayload({
+            query,
+            ref: exactPostRef,
+            apiUrl: result.apiUrl,
+            tookMs,
+            post: result.post,
+          })
+        : buildFxTwitterFilteredPostPayload({
+            query,
+            ref: exactPostRef,
+            apiUrl: result.apiUrl,
+            tookMs,
+            filter: filterResult,
+          });
+      writeCache(
+        X_SEARCH_CACHE,
+        cacheKey,
+        payload,
+        resolveCacheTtlMs(xSearchConfig?.cacheTtlMinutes, 15),
+      );
+      return jsonResult(payload);
+    }
+
+    const apiKey = await resolveXSearchApiKey({
+      sourceConfig: options?.config,
+      runtimeConfig: runtimeConfig ?? undefined,
+      auth: options?.auth,
+    });
+
+    if (!xaiSearchEnabled || !apiKey) {
+      return jsonResult(buildMissingXSearchApiKeyPayload());
     }
 
     const xSearchOptions: XaiXSearchOptions = {

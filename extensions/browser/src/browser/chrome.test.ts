@@ -89,7 +89,7 @@ async function withMockChromeCdpServer(params: {
     res.writeHead(404);
     res.end();
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ maxPayload: 1024 * 1024, noServer: true });
   server.on("upgrade", (req, socket, head) => {
     if (!req.url?.startsWith(params.wsPath)) {
       socket.destroy();
@@ -729,7 +729,7 @@ describe("browser chrome helpers", () => {
       res.writeHead(404);
       res.end();
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ maxPayload: 1024 * 1024, noServer: true });
     server.on("upgrade", (req, socket, head) => {
       if (req.url?.startsWith("/e/bad")) {
         socket.destroy();

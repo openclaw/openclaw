@@ -22,11 +22,7 @@ import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
-import {
-  isXaiToolEnabled,
-  resolveFallbackXaiAuth,
-  type XaiToolAuthContext,
-} from "./src/tool-auth-shared.js";
+import { resolveFallbackXaiAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import { buildXaiMediaUnderstandingProvider } from "./stt.js";
@@ -73,10 +69,6 @@ function classifyXaiFailoverReason(errorMessage: string) {
   return undefined;
 }
 
-function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boolean {
-  return isXaiToolEnabled({ sourceConfig: config as never, auth });
-}
-
 function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   return resolveCodeExecutionEnabled({
     sourceConfig: config,
@@ -86,15 +78,12 @@ function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boo
   });
 }
 
-function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
+function isXSearchEnabled(config: unknown): boolean {
   const resolved =
     config && typeof config === "object"
       ? resolveEffectiveXSearchConfig(config as never)
       : undefined;
-  if (resolved?.enabled === false) {
-    return false;
-  }
-  return hasResolvableXaiApiKey(config, auth);
+  return resolved?.enabled !== false;
 }
 
 function createLazyCodeExecutionTool(ctx: {
@@ -131,7 +120,7 @@ function createLazyXSearchTool(ctx: {
   resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
 }) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
-  if (!isXSearchEnabled(effectiveConfig, ctx)) {
+  if (!isXSearchEnabled(effectiveConfig)) {
     return null;
   }
 

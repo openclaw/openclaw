@@ -17,9 +17,12 @@ export function createXSearchToolDefinition(
     label: "X Search",
     name: "x_search",
     description:
-      "Search X (formerly Twitter) using xAI, including targeted post or thread lookups. For per-post stats like reposts, replies, bookmarks, or views, prefer the exact post URL or status ID.",
+      "Search X (formerly Twitter) using xAI, or read an exact public X/Twitter post URL or status ID through the key-free FxTwitter API. For per-post stats like reposts, replies, bookmarks, or views, prefer the exact post URL or status ID.",
     parameters: Type.Object({
-      query: Type.String({ description: "X search query string." }),
+      query: Type.String({
+        description:
+          "X search query string, exact X/Twitter post URL, or numeric status ID. Exact posts use the key-free FxTwitter API.",
+      }),
       allowed_x_handles: Type.Optional(
         Type.Array(Type.String({ minLength: 1 }), {
           description: "Only include posts from these X handles.",
