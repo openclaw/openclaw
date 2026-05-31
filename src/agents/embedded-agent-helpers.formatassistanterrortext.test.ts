@@ -244,6 +244,11 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
+  it("keeps plain HTTP rate-limit guidance user-facing", () => {
+    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
+    expect(formatAssistantErrorText(msg)).toContain("24 hours");
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("24 hours");
+  });
 
   it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
     const msg = makeAssistantError(
