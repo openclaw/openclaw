@@ -128,21 +128,45 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
+function resolveLocalMessagesHomeDir(): string | undefined {
+  const home = process.env.HOME?.trim();
+  if (home) {
+    return home;
+  }
+  try {
+    return os.homedir().trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveLocalMessagesDbPath(dbPath: string): string {
-  return dbPath.startsWith("~")
-    ? path.join(os.homedir(), dbPath.slice(1).replace(/^\/+/, ""))
-    : dbPath;
+  if (!dbPath.startsWith("~")) {
+    return dbPath;
+  }
+  const home = resolveLocalMessagesHomeDir();
+  return home ? path.join(home, dbPath.slice(1).replace(/^\/+/, "")) : dbPath;
 }
 
 function resolveIMessageWatchSourceDbPath(params: {
   catchupEnabled: boolean;
+  cliPath: string;
   dbPath?: string;
   remoteHost?: string;
 }): string | undefined {
   if (params.catchupEnabled || params.remoteHost) {
     return undefined;
   }
-  return params.dbPath?.trim() || undefined;
+  const configured = params.dbPath?.trim();
+  if (configured) {
+    return configured;
+  }
+  const cliPath = params.cliPath.trim();
+  if (cliPath !== "imsg" && path.basename(cliPath) !== "imsg") {
+    return undefined;
+  }
+  const home = resolveLocalMessagesHomeDir();
+  return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
 }
 
 async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<number | null> {
@@ -296,6 +320,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }
   const watchSourceDbPath = resolveIMessageWatchSourceDbPath({
     catchupEnabled: catchupCfg.enabled,
+    cliPath,
     dbPath,
     remoteHost,
   });

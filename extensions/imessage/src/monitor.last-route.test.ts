@@ -245,6 +245,34 @@ describe("iMessage monitor last-route updates", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
+  it("uses the default local chat.db path for the startup watermark", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-default-home-"));
+    tempDirs.push(homeDir);
+    vi.stubEnv("HOME", homeDir);
+    await createMessagesDbWithMaxRowid(4000, path.join(homeDir, "Library", "Messages", "chat.db"));
+    const client = {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async () => client as never);
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true, since_rowid: 4000 },
+      { timeoutMs: 10_000 },
+    );
+  });
+
   it("accepts live watch notifications after startup when catchup is disabled", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-30T05:23:18.000Z"));
