@@ -215,9 +215,14 @@ export type CronRunResult =
 /** Remove result that distinguishes missing jobs from failed removal. */
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
 
+/** Created cron job returned by service mutation calls. */
 export type CronAddResult = CronJob;
+/** Updated cron job returned by service mutation calls. */
 export type CronUpdateResult = CronJob;
 
+/** Chronological job list returned by service read calls. */
 export type CronListResult = CronJob[];
+/** Normalized create input accepted by the cron service. */
 export type CronAddInput = CronJobCreate;
+/** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
