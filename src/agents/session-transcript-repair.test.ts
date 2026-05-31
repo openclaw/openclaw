@@ -435,6 +435,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
       toolCallId,
       toolName: "read",
       content: [{ type: "text", text }],
+      details: { openclawSyntheticMissingToolResult: true },
       isError: true,
     };
   }
@@ -490,6 +491,30 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]?.isError).not.toBe(true);
     expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
+  });
+
+  it("real error matching custom synthetic text stays first without marker", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      {
+        role: "toolResult" as const,
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "aborted" }],
+        isError: true,
+      },
+      makeRealResult("call_1"),
+    ]);
+
+    const result = repairToolUseResultPairing(input, { missingToolResultText: "aborted" });
+
+    const toolResults = result.messages.filter((m) => m.role === "toolResult") as Array<{
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    }>;
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]?.isError).toBe(true);
+    expect(toolResults[0]?.content?.[0]?.text).toBe("aborted");
   });
 
   it("real first, synthetic second → keeps real", () => {
