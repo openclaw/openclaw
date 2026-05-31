@@ -44,6 +44,8 @@ function resolveCronTaskChildSessionKey(params: {
   }
   const explicitSessionKey = params.job.sessionKey?.trim();
   if (explicitSessionKey) {
+    // Explicit session bindings must win over generated cron session keys so
+    // task drill-down opens the same transcript the cron run actually used.
     return explicitSessionKey;
   }
   if (params.job.sessionTarget !== "isolated") {
