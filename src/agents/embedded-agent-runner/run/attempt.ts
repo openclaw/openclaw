@@ -308,6 +308,7 @@ import {
   rotateTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "../compaction-successor-transcript.js";
+import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
@@ -2984,12 +2985,13 @@ export async function runEmbeddedAttempt(
             sessionFile: params.sessionFile,
             reason: "timeout",
           });
-          void sessionLockController.releaseHeldLockForAbort().catch((err) => {
-            log.warn(
-              `failed to release session lock on timeout abort: runId=${params.runId} ${String(err)}`,
-            );
-          });
         }
+        releaseEmbeddedAttemptSessionLockForAbort({
+          sessionLockController,
+          log,
+          runId: params.runId,
+          abortKind: isTimeout ? "timeout abort" : "abort",
+        });
       };
       abortRunForExternalSignal = abortRun;
       const idleTimeoutTrigger: ((error: Error) => void) | undefined = (error) => {
