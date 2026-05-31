@@ -394,12 +394,16 @@ async function runInternalExecAutoReviewForApprovalRequest(params: {
   if (!input) {
     return undefined;
   }
+  const reviewerConfig = resolveExecReviewerConfig(params.paramsForRun, params.agentId);
+  if (!canUseInternalExecAutoReviewReviewer(reviewerConfig)) {
+    return undefined;
+  }
   const decision = await waitForInternalExecAutoReviewDecision({
     signal: params.signal,
     promise: reviewExecRequestWithConfiguredModel({
       cfg: params.paramsForRun.config,
       agentId: params.agentId ?? params.paramsForRun.agentId,
-      reviewer: resolveExecReviewerConfig(params.paramsForRun, params.agentId),
+      reviewer: reviewerConfig,
       input,
     }),
   });
@@ -497,6 +501,28 @@ function resolveExecReviewerConfig(
   const globalExec = readUnknownRecord(readUnknownRecord(configRoot?.tools)?.exec);
   const agentExec = resolveAgentExecConfig(configRoot, agentId ?? params.agentId);
   return readUnknownRecord(agentExec?.reviewer) ?? readUnknownRecord(globalExec?.reviewer);
+}
+
+function canUseInternalExecAutoReviewReviewer(
+  reviewerConfig: Record<string, unknown> | undefined,
+): boolean {
+  const model = readExecReviewerModelRef(reviewerConfig);
+  const slashIndex = model?.indexOf("/") ?? -1;
+  if (!model || slashIndex <= 0) {
+    return false;
+  }
+  return model.slice(0, slashIndex).trim().toLowerCase() === "openai";
+}
+
+function readExecReviewerModelRef(
+  reviewerConfig: Record<string, unknown> | undefined,
+): string | undefined {
+  const model = reviewerConfig?.model;
+  if (typeof model === "string") {
+    return model.trim() || undefined;
+  }
+  const primary = readUnknownRecord(model)?.primary;
+  return typeof primary === "string" && primary.trim() ? primary.trim() : undefined;
 }
 
 function resolveAgentExecConfig(

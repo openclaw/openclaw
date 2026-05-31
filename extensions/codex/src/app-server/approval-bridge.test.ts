@@ -311,7 +311,7 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
-  it("uses the default exec auto-review model before falling back to plugin approval", async () => {
+  it("falls back to plugin approval when no exec auto-review model is configured", async () => {
     const params = createParams();
     params.config = {
       tools: {
@@ -340,22 +340,59 @@ describe("Codex app-server approval bridge", () => {
     });
 
     expect(result).toEqual({ decision: "accept" });
-    expect(mockReviewExecRequestWithConfiguredModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: params.config,
-        agentId: "main",
-        reviewer: undefined,
-        input: expect.objectContaining({
-          command: "node --version",
-          host: "codex-app-server",
-        }),
-      }),
-    );
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
   });
+
+  it.each(["lmstudio/local-model", "local-model"])(
+    "falls back to plugin approval for unsafe exec auto-review model %s",
+    async (model) => {
+      const params = createParams();
+      params.config = {
+        tools: {
+          exec: {
+            mode: "auto",
+            reviewer: {
+              model,
+            },
+          },
+        },
+      } as EmbeddedRunAttemptParams["config"];
+      mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+        decision: "allow-once",
+        rationale: "unsafe self review",
+        risk: "low",
+      });
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "plugin:approval-local-reviewer", status: "accepted" })
+        .mockResolvedValueOnce({ id: "plugin:approval-local-reviewer", decision: "allow-once" });
+
+      const result = await handleCodexAppServerApprovalRequest({
+        method: "item/commandExecution/requestApproval",
+        requestParams: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-auto-review-local",
+          command: "node --version",
+        },
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        execPolicy: { mode: "auto" },
+        internalExecAutoReview: true,
+      });
+
+      expect(result).toEqual({ decision: "accept" });
+      expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+      expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+        "plugin.approval.request",
+        "plugin.approval.waitDecision",
+      ]);
+    },
+  );
 
   it("keeps permission amendment command approvals on the plugin approval route", async () => {
     const params = createParams();
