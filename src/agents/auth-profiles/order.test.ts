@@ -227,6 +227,33 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toStrictEqual(["fixture-provider:primary"]);
   });
 
+  it("does not fall back past an explicit configured auth order", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:primary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-primary",
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            "fixture-provider": ["fixture-provider:missing"],
+          },
+        },
+      },
+      store,
+      provider: "fixture-provider",
+    });
+
+    expect(order).toStrictEqual([]);
+  });
+
   it("lets Codex auth use friendly OpenAI auth order entries", async () => {
     const store: AuthProfileStore = {
       version: 1,

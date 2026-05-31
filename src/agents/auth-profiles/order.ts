@@ -246,6 +246,9 @@ export function resolveAuthProfileOrder(params: {
     : undefined;
   const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
   const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
+  const explicitOrderFromStore =
+    directStoredOrder !== undefined ||
+    (directExplicitOrder === undefined && aliasStoredOrder !== undefined);
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(([profileId, profile]) =>
@@ -299,11 +302,15 @@ export function resolveAuthProfileOrder(params: {
     }).eligible;
   let filtered = baseOrder.filter(isValidProfile);
 
-  // Repair explicit order drift from older setup flows or deleted credentials:
-  // order state can also name config-only profiles, so only fall back when every
-  // ordered id is missing from the persisted credential store and none is usable.
+  // Repair stored-order and config-profile drift from older setup flows:
+  // bare config auth.order is a hard constraint, but configured profile ids
+  // can drift from their stored credential ids and still need repair.
   const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
-  if (filtered.length === 0 && allBaseProfilesMissing) {
+  if (
+    filtered.length === 0 &&
+    allBaseProfilesMissing &&
+    (explicitOrderFromStore || explicitProfiles.length > 0)
+  ) {
     filtered = storeProfiles.filter(isValidProfile);
   }
 
