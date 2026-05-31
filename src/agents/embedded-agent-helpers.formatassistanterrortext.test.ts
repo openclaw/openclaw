@@ -437,6 +437,7 @@ describe("formatAssistantErrorText", () => {
     const variants = [
       "401 Unauthorized",
       "HTTP 401 Unauthorized: token expired",
+      "HTTP 401: Incorrect API key provided",
       'status code: 401, message: "expired token"',
     ];
     for (const raw of variants) {

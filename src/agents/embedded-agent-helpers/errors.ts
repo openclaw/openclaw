@@ -350,7 +350,7 @@ const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
 const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
 const AUTH_INVALID_TOKEN_HINT_RE =
-  /\bunauthorized\b|\binvalid[_\s-]?api[_\s-]?key\b|\b(?:invalid|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|expired|stale)\b/i;
+  /\bunauthorized\b|\b(?:invalid|incorrect|expired|stale)[_\s-]?api[_\s-]?key\b|\b(?:invalid|incorrect|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|incorrect|expired|stale)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const PROXY_ERROR_RE =
