@@ -344,31 +344,43 @@ function unwrapJob(raw: UnknownRecord) {
  * Recover from local-llamacpp parameter serialization bugs where adjacent
  * top-level property names get concatenated into a single key.
  *
+ * Only backfills missing canonical fields; does not overwrite existing ones.
+ * This ensures normal input with canonical keys is not accidentally modified.
+ *
  * Corruption patterns observed (issue #88439):
  *   "name" + "payload"        → "namePayload"         (value = payload object)
  *   "schedule"                → "scheduleKind"        (value = schedule object including nested kind)
  *   "sessionTarget" + "name"  → "sessionTargetName"   (value = name string)
  */
 function recoverConcatenatedKeys(obj: UnknownRecord): void {
-  // Pattern 1: "namePayload" → extract payload object
-  if ("namePayload" in obj && isRecord(obj.namePayload)) {
+  // Pattern 1: "namePayload" → extract payload object (only if payload missing)
+  if ("namePayload" in obj && isRecord(obj.namePayload) && !("payload" in obj)) {
     obj.payload = obj.namePayload as UnknownRecord;
+    delete obj.namePayload;
+  } else if ("namePayload" in obj && "payload" in obj) {
+    // Mixed input: both canonical and recovery keys present - discard recovery key
     delete obj.namePayload;
   }
 
-  // Pattern 2: "scheduleKind" → extract schedule object with nested kind
-  if ("scheduleKind" in obj && isRecord(obj.scheduleKind)) {
+  // Pattern 2: "scheduleKind" → extract schedule object (only if schedule missing)
+  if ("scheduleKind" in obj && isRecord(obj.scheduleKind) && !("schedule" in obj)) {
     obj.schedule = obj.scheduleKind as UnknownRecord;
+    delete obj.scheduleKind;
+  } else if ("scheduleKind" in obj && "schedule" in obj) {
+    // Mixed input: discard recovery key
     delete obj.scheduleKind;
   }
 
-  // Pattern 3: "sessionTargetName" → extract name, restore default sessionTarget
-  if ("sessionTargetName" in obj) {
+  // Pattern 3: "sessionTargetName" → extract name (only if name missing)
+  if ("sessionTargetName" in obj && !("name" in obj)) {
     obj.name = obj.sessionTargetName;
     delete obj.sessionTargetName;
     if (!("sessionTarget" in obj)) {
       obj.sessionTarget = "isolated";
     }
+  } else if ("sessionTargetName" in obj && "name" in obj) {
+    // Mixed input: discard recovery key
+    delete obj.sessionTargetName;
   }
 }
 

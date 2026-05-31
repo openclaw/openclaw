@@ -1081,7 +1081,61 @@ describe("local-llamacpp concatenated key recovery", () => {
     expect(normalized.scheduleKind).toBeUndefined();
     expect(normalized.sessionTargetName).toBeUndefined();
   });
-});
+
+  // Mixed input tests: canonical keys win, recovery keys are discarded
+  it("discards namePayload when payload is already present", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "test-job",
+      enabled: true,
+      payload: { kind: "agentTurn", message: "canonical payload" },
+      namePayload: { kind: "agentTurn", message: "corrupted payload" },
+      schedule: { kind: "every", everyMs: 60000 },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.payload).toEqual({ kind: "agentTurn", message: "canonical payload" });
+    expect(normalized.namePayload).toBeUndefined();
+  });
+
+  it("discards scheduleKind when schedule is already present", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "test-job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60000 },
+      scheduleKind: { kind: "cron", expr: "* * * * *" },
+      payload: { kind: "agentTurn", message: "hi" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.schedule).toEqual({ kind: "every", everyMs: 60000 });
+    expect(normalized.scheduleKind).toBeUndefined();
+  });
+
+  it("discards sessionTargetName when name is already present", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "canonical-name",
+      enabled: true,
+      sessionTargetName: "corrupted-name",
+      schedule: { kind: "every", everyMs: 60000 },
+      payload: { kind: "agentTurn", message: "hi" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.name).toBe("canonical-name");
+    expect(normalized.sessionTargetName).toBeUndefined();
+  });
+
+  it("preserves explicit sessionTarget in mixed input", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "test-job",
+      enabled: true,
+      sessionTarget: "isolated", // Use "isolated" to avoid "current" being resolved
+      sessionTargetName: "ignored-name",
+      schedule: { kind: "every", everyMs: 60000 },
+      payload: { kind: "agentTurn", message: "test" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.name).toBe("test-job");
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.sessionTargetName).toBeUndefined();
+  });
 
   it("recovers concatenated keys in cron.update patch input", () => {
     const normalized = normalizeCronJobPatch({
@@ -1103,3 +1157,19 @@ describe("local-llamacpp concatenated key recovery", () => {
     expect(normalized.scheduleKind).toBeUndefined();
     expect(normalized.sessionTargetName).toBeUndefined();
   });
+
+  it("discards recovery keys in cron.update when canonical keys present", () => {
+    const normalized = normalizeCronJobPatch({
+      id: "test-job",
+      name: "canonical-name",
+      sessionTargetName: "ignored-name",
+      payload: { kind: "agentTurn", message: "canonical" },
+      namePayload: { kind: "agentTurn", message: "ignored" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.name).toBe("canonical-name");
+    expect(normalized.payload).toEqual({ kind: "agentTurn", message: "canonical" });
+    expect(normalized.sessionTargetName).toBeUndefined();
+    expect(normalized.namePayload).toBeUndefined();
+  });
+});
