@@ -403,6 +403,8 @@ export const en: TranslationMap = {
     activity: "Activity",
     overview: "Overview",
     workboard: "Workboard",
+    projects: "Projects",
+    snesStudio: "SNES Studio",
     channels: "Channels",
     instances: "Instances",
     sessions: "Sessions",

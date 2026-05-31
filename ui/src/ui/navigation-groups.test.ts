@@ -20,6 +20,8 @@ describe("TAB_GROUPS", () => {
       "overview",
       "activity",
       "workboard",
+      "projects",
+      "snesStudio",
       "instances",
       "sessions",
       "usage",
