@@ -1,9 +1,9 @@
 // Shared OpenAI-compatible `tool_choice` contract for the Chat Completions
 // (`/v1/chat/completions`) and Responses (`/v1/responses`) HTTP endpoints. Both
-// accept `required` and pinned-function choices, narrow the exposed client
-// tools, nudge the model with a system prompt, and must reject a turn that omits
-// the demanded structured tool call. Keeping the constraint shape, prompt
-// wording, and satisfaction check here keeps the two endpoints from drifting.
+// accept `required` and pinned-function choices for caller-supplied client tools.
+// The agent runtime cannot force every upstream provider, so the HTTP boundary
+// narrows exposed tools, nudges the model, then rejects turns without a matching
+// structured client-tool call. Keeping this here keeps the endpoints aligned.
 
 export type ToolChoiceConstraint = { type: "required" } | { type: "function"; name: string };
 

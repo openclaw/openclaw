@@ -642,6 +642,42 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(clientTools[0]?.function?.strict).toBe(true);
       await ensureResponseConsumed(resToolChoice);
 
+      mockAgentOnce([{ text: "ok" }], {
+        stopReason: "tool_calls",
+        pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
+      });
+      const resWrappedToolChoice = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        tools: [
+          {
+            type: "function",
+            name: "get_weather",
+            description: "Get weather",
+          },
+          {
+            type: "function",
+            name: "get_time",
+            description: "Get time",
+            strict: true,
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "get_time" } },
+      });
+      expect(resWrappedToolChoice.status).toBe(200);
+      const wrappedClientTools =
+        (
+          firstAgentOpts() as
+            | {
+                clientTools?: Array<{ function?: { name?: string; strict?: boolean } }>;
+              }
+            | undefined
+        )?.clientTools ?? [];
+      expect(wrappedClientTools).toHaveLength(1);
+      expect(wrappedClientTools[0]?.function?.name).toBe("get_time");
+      expect(wrappedClientTools[0]?.function?.strict).toBe(true);
+      await ensureResponseConsumed(resWrappedToolChoice);
+
       const resUnknownTool = await postResponses(port, {
         model: "openclaw",
         input: "hi",
@@ -1070,6 +1106,47 @@ describe("OpenResponses HTTP API (e2e)", () => {
       model: "openclaw",
       input: "check the weather",
       tools: WEATHER_TOOL,
+      tool_choice: { type: "function", name: "get_weather" },
+    });
+
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as {
+      status?: string;
+      error?: { code?: string; message?: string };
+    };
+    expect(json.status).toBe("failed");
+    expect(json.error?.code).toBe("api_error");
+    expect(json.error?.message ?? "").toContain("tool_choice required a get_weather tool call");
+    await ensureResponseConsumed(res);
+  });
+
+  it("rejects a non-streaming function tool_choice when the agent calls a different tool", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Calling another tool." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "check the weather",
+      tools: [
+        {
+          type: "function",
+          name: "get_weather",
+          description: "Get weather",
+        },
+        {
+          type: "function",
+          name: "get_time",
+          description: "Get time",
+        },
+      ],
       tool_choice: { type: "function", name: "get_weather" },
     });
 

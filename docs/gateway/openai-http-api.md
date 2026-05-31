@@ -236,7 +236,7 @@ The endpoint returns `400 invalid_request_error` for unsupported tool variants, 
 - `tool_choice` variants such as `allowed_tools` and `custom`
 - `tool_choice.function.name` values that do not match provided `tools`
 
-For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client tool set, instructs the runtime to call tools before responding, and returns an error if the agent response does not include a matching structured tool call.
+For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and returns an error if the agent response does not include a matching structured client-tool call. This contract applies to the caller-supplied HTTP `tools` list, not every internal OpenClaw agent tool.
 
 ### Non-streaming tool response shape
 

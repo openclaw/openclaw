@@ -1060,6 +1060,9 @@ export async function handleOpenAiHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
+      // `tool_choice` is an HTTP client-tool contract. The provider may still
+      // ignore the prompt, so enforce after the run using structured pending
+      // client tool calls instead of accepting prose that only says it called.
       if (
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({
@@ -1200,6 +1203,9 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      // Hold prose until the run proves the requested client-tool call exists.
+      // If the provider ignores `tool_choice`, no partial text should leak
+      // before the stream fails with an OpenAI-compatible error payload.
       if (toolChoiceConstraint) {
         bufferedAssistantContent += content;
         return;
@@ -1249,6 +1255,9 @@ export async function handleOpenAiHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
+      // Streaming enforces the same post-run client-tool contract as the
+      // non-streaming path; buffered assistant prose is only flushed when the
+      // matching structured call is present.
       if (
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({

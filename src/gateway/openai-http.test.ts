@@ -835,6 +835,44 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "Calling a different tool." }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [{ id: "call_1", name: "get_time", arguments: "{}" }],
+          },
+        } as never);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          tool_choice: { type: "function", function: { name: "get_weather" } },
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "get_weather",
+                description: "Get current weather",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+            {
+              type: "function",
+              function: {
+                name: "get_time",
+                description: "Get current time",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+          ],
+          messages: [{ role: "user", content: "weather?" }],
+        });
+        expect(res.status).toBe(502);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("api_error");
+        expect(json.error?.message ?? "").toContain("tool_choice required a get_weather tool call");
+      }
+
+      {
+        agentCommand.mockClear();
         const res = await postChatCompletions(port, {
           model: "openclaw",
           tool_choice: "required",

@@ -119,12 +119,12 @@ Accepted for schema compatibility but ignored when building the prompt.
 
 ## Tools (client-side function tools)
 
-Provide tools with `tools: [{ type: "function", function: { name, description?, parameters? } }]`.
+Provide tools with `tools: [{ type: "function", name, description?, parameters? }]`.
 
 If the agent decides to call a tool, the response returns a `function_call` output item.
 You then send a follow-up request with `function_call_output` to continue the turn.
 
-For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client tools, instructs the runtime to call a tool before responding, and rejects the turn if it does not include a matching structured tool call. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event. This matches the `/v1/chat/completions` contract.
+For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and rejects the turn if it does not include a matching structured client-tool call. This contract applies to the caller-supplied HTTP `tools` list, not every internal OpenClaw agent tool. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event. This matches the `/v1/chat/completions` contract.
 
 ## Images (`input_image`)
 
