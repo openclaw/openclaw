@@ -184,6 +184,14 @@ const config = {
       entry: ["src/*.ts!"],
       project: ["src/**/*.ts!"],
     },
+    "packages/media-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/acp-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
     "packages/terminal-core": {
       entry: ["src/*.ts!"],
       project: ["src/**/*.ts!"],
