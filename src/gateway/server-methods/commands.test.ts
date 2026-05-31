@@ -412,7 +412,7 @@ describe("commands.list handler", () => {
       name: `${longToken}-${argIndex}`,
       description: longDescription,
       type: "string" as const,
-      choices: Array.from({ length: COMMAND_ARG_CHOICES_MAX_ITEMS + 5 }, (_, choiceIndex) => ({
+      choices: Array.from({ length: COMMAND_ARG_CHOICES_MAX_ITEMS + 5 }, (_Local, choiceIndex) => ({
         value: `${longToken}-${choiceIndex}`,
         label: `${longToken}-${choiceIndex}`,
       })),

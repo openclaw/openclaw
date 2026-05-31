@@ -2071,9 +2071,9 @@ export async function runAgentTurnWithFallback(params: {
                   },
                   transformResult:
                     params.followupRun.currentInboundEventKind === "room_event"
-                      ? (result) =>
+                      ? (resultLocal) =>
                           keepCliSessionBindingOnlyWhenReused({
-                            result,
+                            result: resultLocal,
                             existingSessionId: cliSessionBinding?.sessionId,
                             onDroppedReplacement: () => {
                               droppedCliSessionReplacement = true;

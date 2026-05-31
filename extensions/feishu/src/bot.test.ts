@@ -162,13 +162,6 @@ function buildDefaultResolveRoute(): ResolvedAgentRoute {
     matchedBy: "default",
   };
 }
-
-function createUnboundConfiguredRoute(
-  route: NonNullable<ConfiguredBindingRoute>["route"],
-): ConfiguredBindingRoute {
-  return { bindingResolution: null, route };
-}
-
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   return {
     channel: {

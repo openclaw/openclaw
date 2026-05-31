@@ -83,11 +83,6 @@ async function createAgentDir() {
   tempDirs.push(dir);
   return dir;
 }
-
-function registerProviderForTest() {
-  return registerProviderWithPluginConfig({});
-}
-
 function requireFirstMockArg<T>(
   mock: { mock: { calls: Array<[T, ...unknown[]]> } },
   label: string,

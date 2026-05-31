@@ -1247,7 +1247,7 @@ export async function runEmbeddedAgent(
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
       };
-      const maybeEscalateRateLimitProfileFallback = (params: {
+      const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
         failoverModel: string;
         logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
@@ -1260,13 +1260,13 @@ export async function runEmbeddedAgent(
         log.warn(
           `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
         );
-        params.logFallbackDecision("fallback_model", { status });
+        paramsLocal.logFallbackDecision("fallback_model", { status });
         throw new FailoverError(
           "The AI service is temporarily rate-limited. Please try again in a moment.",
           {
             reason: "rate_limit",
-            provider: params.failoverProvider,
-            model: params.failoverModel,
+            provider: paramsLocal.failoverProvider,
+            model: paramsLocal.failoverModel,
             profileId: lastProfileId,
             sessionId: activeSessionId,
             lane: globalLane,
@@ -3616,9 +3616,9 @@ export async function runEmbeddedAgent(
             step: "bundle-mcp-retire",
             log,
             cleanup: async () => {
-              const onError = (error: unknown, sessionId: string) => {
+              const onError = (errorLocal: unknown, sessionId: string) => {
                 log.warn(
-                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
+                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
                 );
               };
               const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({

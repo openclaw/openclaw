@@ -174,7 +174,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     }
   }
 
-  function recordAndCheck(params: {
+  function recordAndCheck(paramsLocal: {
     scopeId: string;
     conversationId: string;
     senderId: string;
@@ -182,27 +182,32 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     settings: PairLoopGuardSettings;
     nowMs?: number;
   }): PairLoopGuardResult {
-    if (!params.settings.enabled) {
+    if (!paramsLocal.settings.enabled) {
       return { suppressed: false };
     }
-    if (!params.scopeId || !params.conversationId || !params.senderId || !params.receiverId) {
+    if (
+      !paramsLocal.scopeId ||
+      !paramsLocal.conversationId ||
+      !paramsLocal.senderId ||
+      !paramsLocal.receiverId
+    ) {
       return { suppressed: false };
     }
-    if (params.senderId === params.receiverId) {
+    if (paramsLocal.senderId === paramsLocal.receiverId) {
       return { suppressed: false };
     }
 
-    const maxEventsPerWindow = Math.floor(params.settings.maxEventsPerWindow);
-    const windowMs = Math.floor(params.settings.windowMs);
-    const cooldownMs = Math.floor(params.settings.cooldownMs);
+    const maxEventsPerWindow = Math.floor(paramsLocal.settings.maxEventsPerWindow);
+    const windowMs = Math.floor(paramsLocal.settings.windowMs);
+    const cooldownMs = Math.floor(paramsLocal.settings.cooldownMs);
     if (maxEventsPerWindow <= 0 || windowMs <= 0 || cooldownMs <= 0) {
       return { suppressed: false };
     }
 
-    const nowMs = params.nowMs ?? Date.now();
+    const nowMs = paramsLocal.nowMs ?? Date.now();
     pruneInactiveTrackedPairs(nowMs);
 
-    const key = buildPairKey(params);
+    const key = buildPairKey(paramsLocal);
     let entry = tracked.get(key);
     if (!entry) {
       entry = { recentMs: [], windowMs, cooldownStartedAtMs: 0, cooldownUntilMs: 0 };

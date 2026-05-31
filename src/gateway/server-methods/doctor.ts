@@ -1214,7 +1214,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
           candidates: preview.deep.candidates.map((candidate) => {
             const promoted =
               typeof candidate.promotedAt === "string" && candidate.promotedAt.length > 0;
-            const payload: DoctorMemoryRemHarnessCandidatePayload = {
+            const payloadLocal: DoctorMemoryRemHarnessCandidatePayload = {
               key: candidate.key,
               path: candidate.path,
               startLine: candidate.startLine,
@@ -1230,9 +1230,9 @@ export const doctorHandlers: GatewayRequestHandlers = {
               promoted,
             };
             if (promoted) {
-              payload.promotedAt = candidate.promotedAt;
+              payloadLocal.promotedAt = candidate.promotedAt;
             }
-            return payload;
+            return payloadLocal;
           }),
         },
       };

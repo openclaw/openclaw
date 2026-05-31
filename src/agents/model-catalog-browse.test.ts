@@ -98,7 +98,7 @@ describe("loadModelCatalogForBrowse", () => {
 
     await expect(resultPromise).resolves.toEqual([]);
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
-    expect(timeoutHandle.unref).toHaveBeenCalledOnce();
+    expect(timeoutHandle["unref"]).toHaveBeenCalledOnce();
     expect(clearTimeout).toHaveBeenCalledExactlyOnceWith(timeoutHandle);
   });
 

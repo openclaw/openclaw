@@ -272,7 +272,7 @@ export async function waitForTerminalGatewayDedupe(params: {
       if (onAbort) {
         params.signal?.removeEventListener("abort", onAbort);
       }
-      removeWaiter?.();
+      removeWaiterLocal?.();
       resolve(snapshot);
     };
 
@@ -283,7 +283,7 @@ export async function waitForTerminalGatewayDedupe(params: {
       }
     };
 
-    const removeWaiter: (() => void) | undefined = addWaiter(params.runId, onWake);
+    const removeWaiterLocal: (() => void) | undefined = addWaiter(params.runId, onWake);
     onWake();
     if (settled) {
       return;

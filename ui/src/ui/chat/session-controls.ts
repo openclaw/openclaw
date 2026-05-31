@@ -910,7 +910,7 @@ function resolveThinkingLevelOptions(
   model: string | null,
   catalog: readonly ThinkingCatalogEntry[],
 ): GatewayThinkingLevelOption[] {
-  const sessionModelMatchesDefaults =
+  const sessionModelMatchesDefaultsLocal =
     (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
     (!activeRow?.model || activeRow.model === defaults?.model);
   const catalogEntry =
@@ -919,7 +919,7 @@ function resolveThinkingLevelOptions(
       : undefined;
   const explicitLevels =
     (activeRow?.thinkingLevels?.length ? activeRow.thinkingLevels : null) ??
-    (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+    (sessionModelMatchesDefaultsLocal && defaults?.thinkingLevels?.length
       ? defaults.thinkingLevels
       : null);
   if (explicitLevels) {
@@ -930,7 +930,7 @@ function resolveThinkingLevelOptions(
   }
   const explicitLabels =
     (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
-    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+    (sessionModelMatchesDefaultsLocal && defaults?.thinkingOptions?.length
       ? defaults.thinkingOptions
       : null);
   if (catalogEntry?.reasoning === false) {

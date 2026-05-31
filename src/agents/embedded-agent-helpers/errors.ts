@@ -287,6 +287,8 @@ export type ProviderRuntimeFailureKind =
   | "callback_timeout"
   | "callback_validation"
   | "auth_html"
+  /** Plain provider HTTP 401 auth failure that should not leak raw text to chat users. */
+  | "auth_invalid_token"
   | "upstream_html"
   | "proxy"
   | "rate_limit"
@@ -347,6 +349,8 @@ const TIMEOUT_ERROR_CODES = new Set([
 const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
 const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
+const AUTH_INVALID_TOKEN_HINT_RE =
+  /\bunauthorized\b|\b(?:invalid|incorrect|expired|stale)[_\s-]?api[_\s-]?key\b|\b(?:invalid|incorrect|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|incorrect|expired|stale)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const PROXY_ERROR_RE =
@@ -1110,6 +1114,24 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isSchemaErrorMessage(message)) {
     return "schema";
   }
+  // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the
+  // same failover reason also covers plain 403 and status-less auth payloads.
+  // Require positive 401 evidence so we do not claim the wrong HTTP status.
+  const messageMentions401 = /\b401\b/.test(message);
+  const messageMentions403 = /\b403\b/.test(message);
+  const has401Evidence =
+    status === 401 || (status === undefined && messageMentions401 && !messageMentions403);
+  const hasPermissionScopeSignal =
+    AUTH_SCOPE_HINT_RE.test(message) || AUTH_SCOPE_NAME_RE.test(message);
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "auth" &&
+    has401Evidence &&
+    AUTH_INVALID_TOKEN_HINT_RE.test(message) &&
+    !hasPermissionScopeSignal
+  ) {
+    return "auth_invalid_token";
+  }
   if (
     failoverClassification?.kind === "reason" &&
     (failoverClassification.reason === "timeout" || failoverClassification.reason === "overloaded")
@@ -1211,6 +1233,14 @@ export function formatAssistantErrorText(
     return (
       "Authentication failed at the provider. " +
       "Re-authenticate and verify your provider credentials and account access."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "auth_invalid_token") {
+    return (
+      "Authentication failed (provider returned HTTP 401). " +
+      "Your provider token may have expired — try the request again in a moment. " +
+      "If the failure persists, re-authenticate this provider."
     );
   }
 

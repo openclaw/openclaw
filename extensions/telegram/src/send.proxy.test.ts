@@ -122,7 +122,7 @@ describe("telegram proxy client", () => {
   });
 
   it("reuses cached Telegram client options for repeated sends with same account transport settings", async () => {
-    const { proxyFetch, fetchImpl } = prepareProxyFetch();
+    const { proxyFetch, fetchImpl: _fetchImpl } = prepareProxyFetch();
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "production");
 

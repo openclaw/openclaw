@@ -221,7 +221,7 @@ describe("registerCoreHealthChecks", () => {
       "core/doctor/skills-readiness",
     );
 
-    expect(check.repair).toBeTypeOf("function");
+    expect(check["repair"]).toBeTypeOf("function");
 
     const findings = await check.detect({
       mode: "lint",

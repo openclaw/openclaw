@@ -76,7 +76,7 @@ function formatGrepCall(
 ): string {
   const pattern = str(args?.pattern);
   const rawPath = str(args?.path);
-  const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
+  const pathLocal = rawPath !== null ? shortenPath(rawPath || ".") : null;
   const glob = str(args?.glob);
   const limit = args?.limit;
   const invalidArg = invalidArgText(theme);
@@ -84,7 +84,7 @@ function formatGrepCall(
     theme.fg("toolTitle", theme.bold("grep")) +
     " " +
     (pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`)) +
-    theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
+    theme.fg("toolOutput", ` in ${pathLocal === null ? invalidArg : pathLocal}`);
   if (glob) {
     text += theme.fg("toolOutput", ` (${glob})`);
   }
@@ -423,9 +423,9 @@ export function createGrepToolDefinition(
       text.setText(formatGrepCall(args, theme));
       return text;
     },
-    renderResult(result, options, theme, context) {
+    renderResult(result, optionsLocal, theme, context) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatGrepResult(result, options, theme, context.showImages));
+      text.setText(formatGrepResult(result, optionsLocal, theme, context.showImages));
       return text;
     },
   };

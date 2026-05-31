@@ -57,7 +57,7 @@ const {
     handlers: Map<string, EventHandler>;
   };
 
-  const createConnectionMock = (): MockConnection => {
+  const createConnectionMockLocal = (): MockConnection => {
     const handlers = new Map<string, EventHandler>();
     const daveSetPassthroughMode = vi.fn();
     const connection: MockConnection = {
@@ -98,9 +98,9 @@ const {
     return connection;
   };
 
-  const getVoiceConnectionMock = vi.fn((): MockConnection | undefined => undefined);
+  const getVoiceConnectionMockLocal = vi.fn((): MockConnection | undefined => undefined);
 
-  const realtimeSessionMock = {
+  const realtimeSessionMockLocal = {
     bridge: { supportsToolResultContinuation: true },
     acknowledgeMark: vi.fn(),
     close: vi.fn(),
@@ -114,9 +114,9 @@ const {
   };
 
   return {
-    createConnectionMock,
-    getVoiceConnectionMock,
-    joinVoiceChannelMock: vi.fn(() => createConnectionMock()),
+    createConnectionMock: createConnectionMockLocal,
+    getVoiceConnectionMock: getVoiceConnectionMockLocal,
+    joinVoiceChannelMock: vi.fn(() => createConnectionMockLocal()),
     entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
       return undefined;
     }),
@@ -148,7 +148,7 @@ const {
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     })),
-    createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMock),
+    createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMockLocal),
     controlRealtimeVoiceAgentRunMock: vi.fn<() => Promise<RealtimeVoiceAgentControlResult>>(
       async () => ({
         ok: false,
@@ -163,7 +163,7 @@ const {
         suppress: false,
       }),
     ),
-    realtimeSessionMock,
+    realtimeSessionMock: realtimeSessionMockLocal,
     decodeOpusStreamMock: vi.fn(),
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),

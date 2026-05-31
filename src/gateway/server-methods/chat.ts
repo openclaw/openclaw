@@ -3540,7 +3540,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             async () => {
               const returnedAgentErrorPayloads = agentRunStarted
                 ? deliveredReplies
-                    .map((entry) => entry.payload)
+                    .map((entryInner) => entryInner.payload)
                     .filter((payload) => payload.isError)
                 : [];
               const returnedAgentErrorMessage =
@@ -3574,7 +3574,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               // broadcasting the final UI event.
               if (!agentRunStarted) {
                 const btwReplies = deliveredReplies
-                  .map((entry) => entry.payload)
+                  .map((entryScoped) => entryScoped.payload)
                   .filter(isBtwReplyPayload);
                 const btwText = btwReplies
                   .map((payload) => payload.text.trim())
@@ -3606,8 +3606,8 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const rawFinalPayloads = appendedWebchatAgentMedia
                     ? []
                     : deliveredReplies
-                        .filter((entry) => entry.kind === "final")
-                        .map((entry) => entry.payload);
+                        .filter((entryItem) => entryItem.kind === "final")
+                        .map((entryCandidate) => entryCandidate.payload);
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
@@ -3742,7 +3742,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                         stripManagedOutgoingAssistantContentBlocks(assistantContent);
                       const fallbackText =
                         extractAssistantDisplayText(fallbackAssistantContent) ?? displayReply;
-                      const now = Date.now();
+                      const nowValue = Date.now();
                       message = {
                         role: "assistant",
                         ...(fallbackAssistantContent?.length
@@ -3751,7 +3751,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                             ? { content: [{ type: "text", text: fallbackText }] }
                             : {}),
                         ...(fallbackText ? { text: fallbackText } : {}),
-                        timestamp: now,
+                        timestamp: nowValue,
                         ...(ttsSupplementMarker
                           ? { openclawTtsSupplement: ttsSupplementMarker }
                           : {}),
@@ -3772,8 +3772,8 @@ export const chatHandlers: GatewayRequestHandlers = {
                 }
               } else {
                 const sourceReplyPayloads = deliveredReplies
-                  .filter((entry) => entry.kind === "final")
-                  .map((entry) => entry.payload)
+                  .filter((entryEntry) => entryEntry.kind === "final")
+                  .map((entryResult) => entryResult.payload)
                   .filter(isSourceReplyTranscriptMirrorPayload);
                 if (sourceReplyPayloads.length > 0) {
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
@@ -3915,22 +3915,22 @@ export const chatHandlers: GatewayRequestHandlers = {
                       });
                     }
 
-                    const attachSourceReplyManagedImages = async (params: {
+                    const attachSourceReplyManagedImages = async (paramsLocal: {
                       messageId?: string;
                       request: (typeof sourceReplyPersistenceRequests)[number];
                     }) => {
-                      if (!params.request.state.hasManagedOutgoingContent) {
-                        params.request.state.backedManagedOutgoingContent = true;
+                      if (!paramsLocal.request.state.hasManagedOutgoingContent) {
+                        paramsLocal.request.state.backedManagedOutgoingContent = true;
                         return;
                       }
-                      if (!params.messageId) {
+                      if (!paramsLocal.messageId) {
                         return;
                       }
                       await attachManagedOutgoingImagesToMessage({
-                        messageId: params.messageId,
-                        blocks: params.request.state.persistedContent,
+                        messageId: paramsLocal.messageId,
+                        blocks: paramsLocal.request.state.persistedContent,
                       });
-                      params.request.state.backedManagedOutgoingContent = true;
+                      paramsLocal.request.state.backedManagedOutgoingContent = true;
                     };
 
                     if (resolvedTranscriptPath && sourceReplyPersistenceRequests.length > 0) {
@@ -3987,17 +3987,18 @@ export const chatHandlers: GatewayRequestHandlers = {
                           await readSessionTranscriptIndex(resolvedTranscriptPath);
                         const firstRewriteEntryIndex =
                           rewriteIndex?.entries.findIndex(
-                            (entry) =>
-                              typeof entry.id === "string" && rewriteTargetIds.has(entry.id),
+                            (entryValue) =>
+                              typeof entryValue.id === "string" &&
+                              rewriteTargetIds.has(entryValue.id),
                           ) ?? -1;
                         const canRewriteSourceReplyMirrors =
                           firstRewriteEntryIndex >= 0 &&
                           rewriteIndex?.entries
                             .slice(firstRewriteEntryIndex)
                             .every(
-                              (entry) =>
-                                typeof entry.id !== "string" ||
-                                allowedSourceReplyMirrorIds.has(entry.id),
+                              (entryLocal) =>
+                                typeof entryLocal.id !== "string" ||
+                                allowedSourceReplyMirrorIds.has(entryLocal.id),
                             ) === true;
                         if (canRewriteSourceReplyMirrors) {
                           const result = await rewriteTranscriptEntriesInSessionFile({
@@ -4054,7 +4055,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     const sourceReplyText =
                       sourceReplyTextFromContent ??
                       (sourceReplyContent.length === 0 ? displayReply : undefined);
-                    const now = Date.now();
+                    const nowLocal = Date.now();
                     const message = {
                       role: "assistant",
                       ...(sourceReplyContent?.length
@@ -4063,7 +4064,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                           ? { content: [{ type: "text", text: sourceReplyText }] }
                           : {}),
                       ...(sourceReplyText ? { text: sourceReplyText } : {}),
-                      timestamp: now,
+                      timestamp: nowLocal,
                       stopReason: "stop",
                       usage: { input: 0, output: 0, totalTokens: 0 },
                     };

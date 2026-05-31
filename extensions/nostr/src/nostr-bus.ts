@@ -684,11 +684,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   // Get profile state function
   const getProfileState = async () => {
-    const state = await readNostrProfileState({ accountId });
+    const stateLocal = await readNostrProfileState({ accountId });
     return {
-      lastPublishedAt: state?.lastPublishedAt ?? null,
-      lastPublishedEventId: state?.lastPublishedEventId ?? null,
-      lastPublishResults: state?.lastPublishResults ?? null,
+      lastPublishedAt: stateLocal?.lastPublishedAt ?? null,
+      lastPublishedEventId: stateLocal?.lastPublishedEventId ?? null,
+      lastPublishResults: stateLocal?.lastPublishResults ?? null,
     };
   };
 

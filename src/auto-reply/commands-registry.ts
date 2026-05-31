@@ -154,7 +154,7 @@ export function findCommandByNativeName(
     (command) =>
       command.scope !== "text" &&
       [resolveNativeName(command, provider, options), ...(command.nativeAliases ?? [])].some(
-        (name) => normalizeOptionalLowercaseString(name) === normalized,
+        (nameLocal) => normalizeOptionalLowercaseString(nameLocal) === normalized,
       ),
   );
 }

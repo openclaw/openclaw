@@ -557,7 +557,7 @@ describe("control UI routing", () => {
     });
     expect(app.tab).toBe("chat");
     expect(window.location.pathname).toBe("/chat");
-    expect(app.client?.request).toHaveBeenCalledWith("sessions.create", {
+    expect(app.client?.["request"]).toHaveBeenCalledWith("sessions.create", {
       agentId: "main",
       parentSessionKey: "agent:main:main",
       emitCommandHooks: true,

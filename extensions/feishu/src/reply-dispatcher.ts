@@ -440,27 +440,27 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
-  const sendChunkedTextReply = async (params: {
+  const sendChunkedTextReply = async (paramsLocal: {
     text: string;
     useCard: boolean;
     infoKind?: string;
     sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
-    const chunkSource = params.useCard
-      ? params.text
-      : core.channel.text.convertMarkdownTables(params.text, tableMode);
+    const chunkSource = paramsLocal.useCard
+      ? paramsLocal.text
+      : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
       core.channel.text.chunkTextWithMode(chunkSource, textChunkLimit, chunkMode),
     );
     for (const [index, chunk] of chunks.entries()) {
-      await params.sendChunk({
+      await paramsLocal.sendChunk({
         chunk,
         isFirst: index === 0,
       });
     }
-    if (params.infoKind === "final") {
-      deliveredFinalTexts.add(params.text);
+    if (paramsLocal.infoKind === "final") {
+      deliveredFinalTexts.add(paramsLocal.text);
     }
   };
 
@@ -744,7 +744,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!isChannelProgressDraftWorkToolName(payload.name)) {
               return;
             }
-            const statusLine = formatChannelProgressDraftLineForEntry(
+            const statusLineLocal = formatChannelProgressDraftLineForEntry(
               account.config,
               {
                 event: "tool",
@@ -756,8 +756,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 detailMode: payload.detailMode,
               },
             );
-            if (statusLine) {
-              updateStreamingStatusLine(statusLine);
+            if (statusLineLocal) {
+              updateStreamingStatusLine(statusLineLocal);
             }
           }
         : undefined,

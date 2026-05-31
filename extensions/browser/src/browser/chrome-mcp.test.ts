@@ -490,11 +490,11 @@ describe("chrome MCP page parsing", () => {
       url: "about:blank",
       type: "page",
     });
-    expect(session.client.callTool).toHaveBeenCalledWith({
+    expect(session.client["callTool"]).toHaveBeenCalledWith({
       name: "new_page",
       arguments: { url: "about:blank", timeout: 5000 },
     });
-    const callToolMock = session.client.callTool as unknown as ToolCallMock;
+    const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
     const callNames = callToolMock.mock.calls.map(([call]) => call.name);
     expect(callNames).not.toContain("navigate_page");
   });
@@ -917,7 +917,7 @@ describe("chrome MCP page parsing", () => {
       // intentionally no timeoutMs
     });
 
-    const callToolMock = session.client.callTool as unknown as ToolCallMock;
+    const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
     const navigateCall = callToolMock.mock.calls.find(
       ([call]) => call.name === "navigate_page",
     )?.[0];

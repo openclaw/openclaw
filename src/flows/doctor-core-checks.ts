@@ -725,7 +725,9 @@ function filterUnavailableSkillsForScope(
   unavailable: readonly SkillStatusEntry[],
   paths: readonly (string | undefined)[] | undefined,
 ): SkillStatusEntry[] {
-  const scopedPaths = new Set(paths?.filter((path): path is string => path !== undefined) ?? []);
+  const scopedPaths = new Set(
+    paths?.filter((pathLocal): pathLocal is string => pathLocal !== undefined) ?? [],
+  );
   if (scopedPaths.size === 0) {
     return [...unavailable];
   }

@@ -687,7 +687,7 @@ function decodeLogRequest(body: Buffer): CapturedLogRecord[] {
   return records;
 }
 
-function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
+function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
   const capturedRequests: CapturedRequest[] = [];
   const capturedSpans: CapturedSpan[] = [];
   const capturedMetrics: CapturedMetric[] = [];
@@ -743,7 +743,7 @@ function startLocalOtlpReceiver(disallowedBodyNeedles: string[] = []) {
     if (logRecords.length > 0) {
       capturedLogRecords.push(...logRecords);
     }
-    appendCapturedBodyText(capturedBodyText, signal, body, undefined, disallowedBodyNeedles);
+    appendCapturedBodyText(capturedBodyText, signal, body, undefined, disallowedBodyNeedlesLocal);
     capturedRequests.push({
       path: requestPath,
       signal,

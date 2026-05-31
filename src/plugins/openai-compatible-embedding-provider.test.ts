@@ -172,7 +172,7 @@ describe("openai-compatible generic embedding provider", () => {
     });
     expect(result.runtime?.cacheKeyData).not.toHaveProperty("authorization");
     expect(
-      (result.runtime?.cacheKeyData as { headers?: Record<string, string> }).headers,
+      (result.runtime!.cacheKeyData as { headers?: Record<string, string> }).headers,
     ).not.toHaveProperty("x-api-key");
   });
 

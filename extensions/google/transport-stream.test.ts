@@ -10,14 +10,14 @@ const {
   googleAuthGetAccessTokenMock,
   googleAuthMock,
 } = vi.hoisted(() => {
-  const googleAuthGetAccessTokenMock = vi.fn();
+  const googleAuthGetAccessTokenMockLocal = vi.fn();
   return {
     buildGuardedModelFetchMock: vi.fn(),
     guardedFetchMock: vi.fn(),
-    googleAuthGetAccessTokenMock,
+    googleAuthGetAccessTokenMock: googleAuthGetAccessTokenMockLocal,
     googleAuthMock: vi.fn(function GoogleAuthMock() {
       return {
-        getAccessToken: googleAuthGetAccessTokenMock,
+        getAccessToken: googleAuthGetAccessTokenMockLocal,
       };
     }),
   };

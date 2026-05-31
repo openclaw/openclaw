@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -15,7 +16,6 @@ import {
   redactForDevToolLog,
   redactHomePath,
 } from "../lib/dev-tooling-safety.ts";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -473,10 +473,10 @@ async function discordWebhookApi<T>(params: {
   timeoutMs?: number;
 }): Promise<T> {
   const suffix = params.query ? `?${params.query}` : "";
-  const path = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
+  const pathLocal = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
   return requestDiscordJson<T>({
     method: params.method,
-    path,
+    path: pathLocal,
     headers: {
       "Content-Type": "application/json",
     },

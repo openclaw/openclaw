@@ -257,7 +257,8 @@ jobs:
             return -1;
           }
 
-          for (let start = input.indexOf("["); start !== -1; start = input.indexOf("[", start + 1)) {
+          for (const match of input.matchAll(/\[/g)) {
+            const start = match.index;
             const end = arrayEndFrom(start);
             if (end === -1) {
               continue;

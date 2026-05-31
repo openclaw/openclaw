@@ -1330,7 +1330,7 @@ describe("collectCodexRouteWarnings", () => {
       model: "openai/gpt-5.4",
       provider: "lossless-claw",
     });
-    expect((result.cfg.agents?.list?.[0] as Record<string, unknown>).compaction).toEqual({
+    expect((result.cfg.agents!.list![0] as Record<string, unknown>).compaction).toEqual({
       provider: "custom-summary",
     });
     expect(result.warnings).toStrictEqual([

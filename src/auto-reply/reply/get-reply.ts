@@ -354,10 +354,11 @@ export async function getReplyFromConfig(
 
   const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
     resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
-      const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+      const workspaceDirRawLocal =
+        resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
       return {
-        workspaceDirRaw,
-        workspaceDirForNativeCommand: workspaceDirRaw,
+        workspaceDirRaw: workspaceDirRawLocal,
+        workspaceDirForNativeCommand: workspaceDirRawLocal,
         agentDir: resolveAgentDir(cfg, agentId),
         timeoutMs: resolveAgentTimeoutMs({
           cfg,

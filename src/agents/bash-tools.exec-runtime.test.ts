@@ -784,7 +784,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "/tmp",
       env: { PATH: "/usr/bin" },
@@ -796,6 +796,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];
@@ -827,7 +828,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "C:\\tmp",
       env: { Path: "C:\\Windows\\System32" },
@@ -839,6 +840,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];

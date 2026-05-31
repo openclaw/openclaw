@@ -346,7 +346,7 @@ describe("startGatewayPostAttachRuntime", () => {
       events.push("sentinel");
       return null;
     });
-    const startGatewaySidecars = vi.fn(async () => {
+    const startGatewaySidecarsInner = vi.fn(async () => {
       events.push("sidecars");
       return { pluginServices: null, postReadySidecars: [] };
     });
@@ -355,7 +355,7 @@ describe("startGatewayPostAttachRuntime", () => {
       createPostAttachParams(),
       createPostAttachRuntimeDeps({
         refreshLatestUpdateRestartSentinel,
-        startGatewaySidecars,
+        startGatewaySidecars: startGatewaySidecarsInner,
       }),
     );
 
@@ -381,7 +381,7 @@ describe("startGatewayPostAttachRuntime", () => {
           };
         }),
     );
-    const startGatewaySidecars = vi.fn(async () => {
+    const startGatewaySidecarsScoped = vi.fn(async () => {
       events.push("sidecars");
       return { pluginServices: null, postReadySidecars: [] };
     });
@@ -391,13 +391,13 @@ describe("startGatewayPostAttachRuntime", () => {
       createPostAttachRuntimeDeps({
         logGatewayStartup,
         refreshLatestUpdateRestartSentinel: vi.fn(async () => null),
-        startGatewaySidecars,
+        startGatewaySidecars: startGatewaySidecarsScoped,
       }),
     );
 
     await vi.waitFor(() => {
       expect(logGatewayStartup).toHaveBeenCalledTimes(1);
-      expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+      expect(startGatewaySidecarsScoped).toHaveBeenCalledTimes(1);
     });
     expect(events).toEqual(["startup-log-start", "sidecars"]);
 
@@ -417,7 +417,7 @@ describe("startGatewayPostAttachRuntime", () => {
       events.push("update-check");
       return stopUpdateCheck;
     });
-    const startGatewaySidecars = vi.fn(async () => {
+    const startGatewaySidecarsItem = vi.fn(async () => {
       events.push("sidecars");
       return { pluginServices: null, postReadySidecars: [] };
     });
@@ -427,7 +427,7 @@ describe("startGatewayPostAttachRuntime", () => {
       createPostAttachRuntimeDeps({
         refreshLatestUpdateRestartSentinel: vi.fn(async () => null),
         scheduleGatewayUpdateCheck,
-        startGatewaySidecars,
+        startGatewaySidecars: startGatewaySidecarsItem,
       }),
     );
     events.push("returned");
@@ -609,7 +609,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const onStartupPluginsLoaded = vi.fn(() => {
       events.push("startup-loaded");
     });
-    const startGatewaySidecars = vi.fn(async (params) => {
+    const startGatewaySidecarsCandidate = vi.fn(async (params) => {
       events.push("sidecars");
       expect(params.pluginRegistry).toBe(loadedPluginRegistry);
       return { pluginServices: null, postReadySidecars: [] };
@@ -628,7 +628,7 @@ describe("startGatewayPostAttachRuntime", () => {
           startupTrace: trace.startupTrace,
         }),
       },
-      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsCandidate }),
     );
 
     expect(events).toEqual([
@@ -675,7 +675,7 @@ describe("startGatewayPostAttachRuntime", () => {
       events.push("startup-loaded-start");
       return attachmentFinished;
     });
-    const startGatewaySidecars = vi.fn(async () => {
+    const startGatewaySidecarsEntry = vi.fn(async () => {
       events.push("sidecars");
       return { pluginServices: null, postReadySidecars: [] };
     });
@@ -691,13 +691,13 @@ describe("startGatewayPostAttachRuntime", () => {
           onStartupPluginsLoaded,
         }),
       },
-      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsEntry }),
     );
 
     await vi.waitFor(() => {
       expect(events).toEqual(["startup-loaded-start"]);
     });
-    expect(startGatewaySidecars).not.toHaveBeenCalled();
+    expect(startGatewaySidecarsEntry).not.toHaveBeenCalled();
 
     if (!finishAttachment) {
       throw new Error("Expected startup plugin attachment release callback to be initialized");
@@ -883,20 +883,20 @@ describe("startGatewayPostAttachRuntime", () => {
         resumeSidecars = () => resolve({ pluginServices: null, postReadySidecars: [] });
       },
     );
-    const startGatewaySidecars = vi.fn(async () => {
+    const startGatewaySidecarsResult = vi.fn(async () => {
       return await sidecarsReady;
     });
     let returned = false;
 
     const runtimePromise = startGatewayPostAttachRuntime(
       createPostAttachParams(),
-      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsResult }),
     ).then(() => {
       returned = true;
     });
 
     await vi.waitFor(() => {
-      expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+      expect(startGatewaySidecarsResult).toHaveBeenCalledTimes(1);
     });
     await Promise.resolve();
     expect(returned).toBe(false);
@@ -1752,7 +1752,7 @@ describe("startGatewayPostAttachRuntime", () => {
         resumeSidecars = () => resolve({ pluginServices: null, postReadySidecars: [] });
       },
     );
-    const startGatewaySidecars = vi.fn(async () => {
+    const startGatewaySidecarsValue = vi.fn(async () => {
       return await sidecarsReady;
     });
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
@@ -1763,12 +1763,12 @@ describe("startGatewayPostAttachRuntime", () => {
         unavailableGatewayMethods,
         deferSidecars: true,
       },
-      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
     );
 
     await vi.waitFor(
       () => {
-        expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+        expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
       },
       { timeout: 10_000 },
     );
@@ -1784,7 +1784,7 @@ describe("startGatewayPostAttachRuntime", () => {
       expect([...unavailableGatewayMethods]).toStrictEqual([]);
     });
     expect([...unavailableGatewayMethods]).toStrictEqual([]);
-    expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+    expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
   });
 
   it("loads lazy startup plugins before returning with deferred sidecars", async () => {
@@ -1795,7 +1795,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const loaded = { pluginRegistry, gatewayMethods: ["core.ping"] };
     const loadStartupPlugins = vi.fn(async () => loaded);
     const onStartupPluginsLoaded = vi.fn();
-    const startGatewaySidecars = vi.fn(async () => ({
+    const startGatewaySidecarsLocal = vi.fn(async () => ({
       pluginServices: null,
       postReadySidecars: [],
     }));
@@ -1808,15 +1808,15 @@ describe("startGatewayPostAttachRuntime", () => {
           onStartupPluginsLoaded,
         }),
       },
-      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsLocal }),
     );
 
     expect(loadStartupPlugins).toHaveBeenCalledTimes(1);
     expect(onStartupPluginsLoaded).toHaveBeenCalledWith(loaded);
-    expect(startGatewaySidecars).not.toHaveBeenCalled();
+    expect(startGatewaySidecarsLocal).not.toHaveBeenCalled();
 
     await vi.waitFor(() => {
-      expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+      expect(startGatewaySidecarsLocal).toHaveBeenCalledTimes(1);
     });
   });
 

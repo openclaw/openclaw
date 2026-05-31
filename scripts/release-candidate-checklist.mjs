@@ -209,11 +209,11 @@ async function workflowRuns(repo, workflowFile) {
   const data = await githubApi(
     `repos/${repo}/actions/workflows/${workflowFile}/runs?event=workflow_dispatch&per_page=100`,
   );
-  return (data.workflow_runs ?? []).map((run) => ({
-    databaseId: run.id,
-    workflowName: run.name,
-    event: run.event,
-    createdAt: run.created_at,
+  return (data.workflow_runs ?? []).map((runEntry) => ({
+    databaseId: runEntry.id,
+    workflowName: runEntry.name,
+    event: runEntry.event,
+    createdAt: runEntry.created_at,
   }));
 }
 
@@ -249,7 +249,9 @@ async function resolveRunArtifactName(repo, runId, preferredName, prefix) {
 }
 
 async function beforeRunIds(repo, workflowFile) {
-  return new Set((await workflowRuns(repo, workflowFile)).map((run) => String(run.databaseId)));
+  return new Set(
+    (await workflowRuns(repo, workflowFile)).map((runResult) => String(runResult.databaseId)),
+  );
 }
 
 function runAndEcho(command, args) {
@@ -293,10 +295,10 @@ async function findNewRunId(repo, workflowFile, workflowName, beforeIds) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const match = (await workflowRuns(repo, workflowFile))
       .filter(
-        (run) =>
-          run.workflowName === workflowName &&
-          run.event === "workflow_dispatch" &&
-          !beforeIds.has(String(run.databaseId)),
+        (runValue) =>
+          runValue.workflowName === workflowName &&
+          runValue.event === "workflow_dispatch" &&
+          !beforeIds.has(String(runValue.databaseId)),
       )
       .toSorted((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")))[0];
     if (match?.databaseId) {
@@ -574,14 +576,14 @@ async function runTelegramIfNeeded(options, artifactName) {
   const runId =
     dispatchedRunId ||
     (await findNewRunId(options.repo, workflowFile, "NPM Telegram Beta E2E", before));
-  const run = await waitForSuccessfulRun(options.repo, runId, {
+  const runLocal = await waitForSuccessfulRun(options.repo, runId, {
     workflowName: "NPM Telegram Beta E2E",
     workflowRef: options.workflowRef,
   });
   return {
     status: "passed",
     runId,
-    url: run.url,
+    url: runLocal.url,
     artifactName,
     providerMode: options.telegramProviderMode,
   };

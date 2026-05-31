@@ -312,7 +312,7 @@ export function createAppServerHarness(
   return {
     request,
     requests,
-    async waitForMethod(method: string, timeoutMs: number = appServerHarnessWait.timeout) {
+    waitForMethod: async (method: string, timeoutMs: number = appServerHarnessWait.timeout) => {
       await vi.waitFor(
         () => {
           if (!requests.some((entry) => entry.method === method)) {
@@ -330,15 +330,15 @@ export function createAppServerHarness(
         { interval: 1, timeout: timeoutMs },
       );
     },
-    async notify(notification: CodexServerNotification) {
+    notify: async (notification: CodexServerNotification) => {
       await sendNotification(notification);
     },
     waitForServerRequestHandler,
-    async handleServerRequest(request: Parameters<AppServerRequestHandler>[0]) {
+    handleServerRequest: async (requestLocal: Parameters<AppServerRequestHandler>[0]) => {
       const handler = await waitForServerRequestHandler();
-      return handler(request);
+      return handler(requestLocal);
     },
-    async completeTurn(params: { threadId: string; turnId: string }) {
+    completeTurn: async (params: { threadId: string; turnId: string }) => {
       await sendNotification({
         method: "turn/completed",
         params: {
@@ -348,7 +348,7 @@ export function createAppServerHarness(
         },
       });
     },
-    close() {
+    close: () => {
       for (const handler of closeHandlers) {
         handler();
       }

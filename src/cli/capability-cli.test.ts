@@ -149,10 +149,10 @@ const mocks = vi.hoisted(() => ({
       options?: { providerId?: string },
     ) => {
       const providerId = options?.providerId ?? config.tools?.web?.search?.provider ?? "tavily";
-      const path = `plugins.entries.${providerId}.config.webSearch.apiKey`;
+      const pathValue = `plugins.entries.${providerId}.config.webSearch.apiKey`;
       return {
-        targetIds: new Set([path]),
-        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+        targetIds: new Set([pathValue]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([pathValue]) } : {}),
       };
     },
   ),
@@ -161,13 +161,13 @@ const mocks = vi.hoisted(() => ({
       _config: { tools?: { web?: { fetch?: { provider?: string } } } },
       options?: { providerId?: string },
     ) => {
-      const path =
+      const pathLocal =
         options?.providerId === "firecrawl"
           ? "plugins.entries.firecrawl.config.webSearch.apiKey"
           : "plugins.entries.firecrawl.config.webFetch.apiKey";
       return {
-        targetIds: new Set([path]),
-        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+        targetIds: new Set([pathLocal]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([pathLocal]) } : {}),
       };
     },
   ),
@@ -2012,7 +2012,7 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
         "models.providers.*.apiKey",
       ),
     ).toBe(true);
@@ -2225,7 +2225,7 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
         "models.providers.*.apiKey",
       ),
     ).toBe(true);

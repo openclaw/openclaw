@@ -421,8 +421,8 @@ export function createBashToolDefinition(
         clearUpdateTimer();
       }
     },
-    renderCall(args, theme, context) {
-      void theme;
+    renderCall(args, themeValue, context) {
+      void themeValue;
       const state = context.state;
       if (context.executionStarted && state.startedAt === undefined) {
         state.startedAt = Date.now();
@@ -432,13 +432,13 @@ export function createBashToolDefinition(
       text.setText(formatBashCall(args));
       return text;
     },
-    renderResult(result, options, theme, context) {
-      void theme;
+    renderResult(result, optionsLocal, themeLocal, context) {
+      void themeLocal;
       const state = context.state;
-      if (state.startedAt !== undefined && options.isPartial && !state.interval) {
+      if (state.startedAt !== undefined && optionsLocal.isPartial && !state.interval) {
         state.interval = setInterval(() => context.invalidate(), 1000);
       }
-      if (!options.isPartial || context.isError) {
+      if (!optionsLocal.isPartial || context.isError) {
         state.endedAt ??= Date.now();
         if (state.interval) {
           clearInterval(state.interval);
@@ -451,7 +451,7 @@ export function createBashToolDefinition(
       rebuildBashResultRenderComponent(
         component,
         result,
-        options,
+        optionsLocal,
         context.showImages,
         state.startedAt,
         state.endedAt,

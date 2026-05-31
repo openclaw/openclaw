@@ -2601,36 +2601,39 @@ export function renderApp(state: AppViewState) {
                   void saveAgentFile(state, resolvedAgentId, name, content);
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
-                  const basePath = resolveAgentToolsPath(agentId, Boolean(profile || clearAllow));
-                  if (!basePath) {
+                  const basePathItem = resolveAgentToolsPath(
+                    agentId,
+                    Boolean(profile || clearAllow),
+                  );
+                  if (!basePathItem) {
                     return;
                   }
                   if (profile) {
-                    updateConfigFormValue(state, [...basePath, "profile"], profile);
+                    updateConfigFormValue(state, [...basePathItem, "profile"], profile);
                   } else {
-                    removeConfigFormValue(state, [...basePath, "profile"]);
+                    removeConfigFormValue(state, [...basePathItem, "profile"]);
                   }
                   if (clearAllow) {
-                    removeConfigFormValue(state, [...basePath, "allow"]);
+                    removeConfigFormValue(state, [...basePathItem, "allow"]);
                   }
                 },
                 onToolsOverridesChange: (agentId, alsoAllow, deny) => {
-                  const basePath = resolveAgentToolsPath(
+                  const basePathCandidate = resolveAgentToolsPath(
                     agentId,
                     alsoAllow.length > 0 || deny.length > 0,
                   );
-                  if (!basePath) {
+                  if (!basePathCandidate) {
                     return;
                   }
                   if (alsoAllow.length > 0) {
-                    updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);
+                    updateConfigFormValue(state, [...basePathCandidate, "alsoAllow"], alsoAllow);
                   } else {
-                    removeConfigFormValue(state, [...basePath, "alsoAllow"]);
+                    removeConfigFormValue(state, [...basePathCandidate, "alsoAllow"]);
                   }
                   if (deny.length > 0) {
-                    updateConfigFormValue(state, [...basePath, "deny"], deny);
+                    updateConfigFormValue(state, [...basePathCandidate, "deny"], deny);
                   } else {
-                    removeConfigFormValue(state, [...basePath, "deny"]);
+                    removeConfigFormValue(state, [...basePathCandidate, "deny"]);
                   }
                 },
                 onConfigReload: () => loadConfig(state, { discardPendingChanges: true }),
@@ -2699,18 +2702,18 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   const modelEntry = resolveAgentModelFormEntry(index);
-                  const { basePath, existing } = modelEntry;
+                  const { basePath: basePathEntry, existing } = modelEntry;
                   if (!modelId) {
-                    removeConfigFormValue(state, basePath);
+                    removeConfigFormValue(state, basePathEntry);
                   } else if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
                     const next = {
                       primary: modelId,
                       ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
                     };
-                    updateConfigFormValue(state, basePath, next);
+                    updateConfigFormValue(state, basePathEntry, next);
                   } else {
-                    updateConfigFormValue(state, basePath, modelId);
+                    updateConfigFormValue(state, basePathEntry, modelId);
                   }
                   void refreshVisibleToolsEffectiveForCurrentSession(state);
                 },
@@ -2736,7 +2739,7 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
-                  const { basePath, existing } = resolveAgentModelFormEntry(index);
+                  const { basePath: basePathResult, existing } = resolveAgentModelFormEntry(index);
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
@@ -2753,16 +2756,16 @@ export function renderApp(state: AppViewState) {
                   const primary = resolvePrimary() ?? effectivePrimary;
                   if (normalized.length === 0) {
                     if (primary) {
-                      updateConfigFormValue(state, basePath, primary);
+                      updateConfigFormValue(state, basePathResult, primary);
                     } else {
-                      removeConfigFormValue(state, basePath);
+                      removeConfigFormValue(state, basePathResult);
                     }
                     return;
                   }
                   if (!primary) {
                     return;
                   }
-                  updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
+                  updateConfigFormValue(state, basePathResult, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
                   stageDefaultAgentConfigEntry(state, agentId);
@@ -2878,11 +2881,11 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onBindAgent: (agentIndex, nodeId) => {
-                  const basePath = ["agents", "list", agentIndex, "tools", "exec", "node"];
+                  const basePathLocal = ["agents", "list", agentIndex, "tools", "exec", "node"];
                   if (nodeId) {
-                    updateConfigFormValue(state, basePath, nodeId);
+                    updateConfigFormValue(state, basePathLocal, nodeId);
                   } else {
-                    removeConfigFormValue(state, basePath);
+                    removeConfigFormValue(state, basePathLocal);
                   }
                 },
                 onSaveBindings: () => saveConfig(state),

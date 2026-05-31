@@ -6,7 +6,6 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -182,11 +181,6 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("ok");
     return res;
   };
-
-  const waitForLifecycleWaiter = async (runId: string) => {
-    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
-  };
-
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
       sessionKey: "main",
@@ -1349,12 +1343,12 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portValue }) => {
       await withMainSessionStore(async () => {
         let scopedWs: WebSocket | undefined;
 
         try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          scopedWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
           trackConnectChallengeNonce(scopedWs);
           await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
           await connectOk(scopedWs, {
@@ -1394,12 +1388,12 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not rotate sessions for operator.write reset triggers", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portLocal }) => {
       await withMainSessionStore(async () => {
         let scopedWs: WebSocket | undefined;
 
         try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          scopedWs = new WebSocket(`ws://127.0.0.1:${portLocal}`);
           trackConnectChallengeNonce(scopedWs);
           await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
           await connectOk(scopedWs, {

@@ -264,7 +264,7 @@ describe("parseSlashCommand", () => {
         name: `${longName}-${argIndex}`,
         description: longDescription,
         type: "string" as const,
-        choices: Array.from({ length: 55 }, (_, choiceIndex) => ({
+        choices: Array.from({ length: 55 }, (_Local, choiceIndex) => ({
           value: `${longName}-${choiceIndex}`,
           label: `${longName}-${choiceIndex}`,
         })),

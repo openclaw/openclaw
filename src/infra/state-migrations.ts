@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listBundledChannelLegacySessionSurfaces,
@@ -18,6 +19,7 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -2183,8 +2185,8 @@ async function collectChannelLegacyStateMigrationPlans(params: {
   // Legacy state detection belongs on a narrow setup-entry surface so doctor
   // does not cold-load unrelated runtime channel code.
   const detectors = listBundledChannelLegacyStateMigrationDetectors({ config: params.cfg });
-  for (const detectLegacyStateMigrations of detectors) {
-    const detected = await detectLegacyStateMigrations({
+  for (const detectLegacyStateMigrationsLocal of detectors) {
+    const detected = await detectLegacyStateMigrationsLocal({
       cfg: params.cfg,
       env: params.env,
       stateDir: params.stateDir,
@@ -2652,6 +2654,11 @@ export async function runLegacyStateMigrations(params: {
   const sessions = await migrateLegacySessions(detected, now, {
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
   });
+  const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.config ?? ({} as OpenClawConfig),
+    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
+    now,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -2664,6 +2671,7 @@ export async function runLegacyStateMigrations(params: {
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
       ...sessions.changes,
+      ...acpSessionMetadata.changes,
       ...agentDir.changes,
       ...channelPlans.changes,
     ],
@@ -2674,6 +2682,7 @@ export async function runLegacyStateMigrations(params: {
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
       ...sessions.warnings,
+      ...acpSessionMetadata.warnings,
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
@@ -2839,6 +2848,80 @@ export async function migrateOrphanedSessionKeys(params: {
   return { changes, warnings };
 }
 
+async function migrateLegacyAcpSessionMetadata(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const env = params.env ?? process.env;
+  const now = params.now ?? (() => Date.now());
+  const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  const scope = params.cfg.session?.scope as SessionScope | undefined;
+  const seenStorePaths = new Set<string>();
+
+  for (const target of targets) {
+    const storePath = target.storePath;
+    if (seenStorePaths.has(storePath) || !fileExists(storePath)) {
+      continue;
+    }
+    seenStorePaths.add(storePath);
+    let parsed: ReturnType<typeof readSessionStoreJson5>;
+    try {
+      parsed = readSessionStoreJson5(storePath);
+    } catch (err) {
+      warnings.push(`Could not read ${storePath}: ${String(err)}`);
+      continue;
+    }
+    if (!parsed.ok) {
+      continue;
+    }
+
+    const normalized: Record<string, SessionEntry> = {};
+    let migrated = 0;
+    for (const [sessionKey, entry] of Object.entries(parsed.store)) {
+      const normalizedEntry = normalizeSessionEntry(entry);
+      if (!normalizedEntry) {
+        continue;
+      }
+      if (normalizedEntry.acp) {
+        const canonicalSessionKey = canonicalizeSessionKeyForAgent({
+          key: sessionKey,
+          agentId: target.agentId,
+          mainKey,
+          scope,
+          skipCrossAgentRemap: true,
+        });
+        writeAcpSessionMetaForMigration({
+          sessionKey: canonicalSessionKey,
+          sessionId: normalizedEntry.sessionId,
+          meta: normalizedEntry.acp,
+          env,
+          now,
+        });
+        delete normalizedEntry.acp;
+        migrated++;
+      }
+      normalized[sessionKey] = normalizedEntry;
+    }
+    if (migrated === 0) {
+      continue;
+    }
+    try {
+      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
+      changes.push(
+        `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`,
+      );
+    } catch (err) {
+      warnings.push(`Failed to write ACP metadata migration source ${storePath}: ${String(err)}`);
+    }
+  }
+
+  return { changes, warnings };
+}
+
 function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
@@ -2884,6 +2967,11 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     env,
   });
+  const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.cfg,
+    env,
+    now: params.now,
+  });
 
   const logMigrationResults = (changes: string[], warnings: string[]) => {
     const logger = params.log ?? createSubsystemLogger("state-migrations");
@@ -2925,6 +3013,7 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...orphanKeys.changes,
+      ...acpSessionMetadata.changes,
       ...pluginStateSidecar.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
@@ -2934,6 +3023,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...orphanKeys.warnings,
+      ...acpSessionMetadata.warnings,
       ...pluginStateSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
@@ -2945,6 +3035,7 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         orphanKeys.changes.length > 0 ||
+        acpSessionMetadata.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
         deliveryQueues.changes.length > 0 ||
@@ -2964,11 +3055,22 @@ export async function autoMigrateLegacyState(params: {
     !detected.taskStateSidecars.hasLegacy &&
     !detected.deliveryQueues.hasLegacy
   ) {
-    const changes = [...stateDirResult.changes, ...orphanKeys.changes];
-    const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
+    const changes = [
+      ...stateDirResult.changes,
+      ...orphanKeys.changes,
+      ...acpSessionMetadata.changes,
+    ];
+    const warnings = [
+      ...stateDirResult.warnings,
+      ...orphanKeys.warnings,
+      ...acpSessionMetadata.warnings,
+    ];
     logMigrationResults(changes, warnings);
     return {
-      migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
+      migrated:
+        stateDirResult.migrated ||
+        orphanKeys.changes.length > 0 ||
+        acpSessionMetadata.changes.length > 0,
       skipped: false,
       changes,
       warnings,
@@ -2995,6 +3097,11 @@ export async function autoMigrateLegacyState(params: {
   const sessions = await migrateLegacySessions(detected, now, {
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
   });
+  const postSessionAcpMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.cfg,
+    env,
+    now,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -3002,24 +3109,28 @@ export async function autoMigrateLegacyState(params: {
   const changes = [
     ...stateDirResult.changes,
     ...orphanKeys.changes,
+    ...acpSessionMetadata.changes,
     ...pluginStateSidecar.changes,
     ...taskStateSidecars.changes,
     ...deliveryQueues.changes,
     ...preSessionChannelPlans.changes,
     ...pluginPlans.changes,
     ...sessions.changes,
+    ...postSessionAcpMetadata.changes,
     ...agentDir.changes,
     ...channelPlans.changes,
   ];
   const warnings = [
     ...stateDirResult.warnings,
     ...orphanKeys.warnings,
+    ...acpSessionMetadata.warnings,
     ...pluginStateSidecar.warnings,
     ...taskStateSidecars.warnings,
     ...deliveryQueues.warnings,
     ...preSessionChannelPlans.warnings,
     ...pluginPlans.warnings,
     ...sessions.warnings,
+    ...postSessionAcpMetadata.warnings,
     ...agentDir.warnings,
     ...channelPlans.warnings,
   ];

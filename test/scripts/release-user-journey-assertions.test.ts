@@ -1,9 +1,8 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { runReleaseUserJourneyAssertion } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 
@@ -48,55 +47,6 @@ async function withEnv<T>(env: Record<string, string>, callback: () => Promise<T
       }
     }
   }
-}
-
-async function waitForFile(filePath: string, timeoutMs = 3000): Promise<string> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (existsSync(filePath)) {
-      return readFileSync(filePath, "utf8");
-    }
-    await delay(25);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) {
-    return;
-  }
-  child.kill("SIGTERM");
-  const startedAt = Date.now();
-  while (child.exitCode === null && Date.now() - startedAt < 1000) {
-    await delay(25);
-  }
-  if (child.exitCode === null) {
-    child.kill("SIGKILL");
-  }
-}
-
-function startTcpFixture(portPath: string, connectionHandlerSource: string) {
-  return spawn(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      [
-        'import net from "node:net";',
-        'import fs from "node:fs";',
-        `const server = net.createServer(${connectionHandlerSource});`,
-        'server.listen(0, "127.0.0.1", () => {',
-        "  const address = server.address();",
-        "  fs.writeFileSync(process.env.PORT_FILE, String(address.port));",
-        "});",
-        "setInterval(() => {}, 1000);",
-      ].join("\n"),
-    ],
-    {
-      env: { ...process.env, PORT_FILE: portPath },
-      stdio: "pipe",
-    },
-  );
 }
 
 async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise<{

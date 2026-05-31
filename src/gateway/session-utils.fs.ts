@@ -577,7 +577,7 @@ export async function readSessionMessagesAsync(
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
   if (opts.mode === "recent") {
-    const { mode: modeValue, ...recentOpts } = opts;
+    const { mode: _modeValue, ...recentOpts } = opts;
     return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
   }
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);

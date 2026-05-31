@@ -1365,8 +1365,8 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionKey: params.sessionKey,
           skipMaintenance: true,
           takeCacheOwnership: true,
-          update: async (entry) => ({
-            memoryFlushFailureCount: Math.max(0, entry.memoryFlushFailureCount ?? 0) + 1,
+          update: async (sessionEntry) => ({
+            memoryFlushFailureCount: Math.max(0, sessionEntry.memoryFlushFailureCount ?? 0) + 1,
             memoryFlushLastFailedAt: failedAt,
             memoryFlushLastFailureError: truncatedError,
           }),
@@ -1413,9 +1413,9 @@ export async function runMemoryFlushIfNeeded(params: {
             sessionKey: params.sessionKey,
             skipMaintenance: true,
             takeCacheOwnership: true,
-            update: async (entry) => ({
+            update: async (sessionEntry) => ({
               memoryFlushAt: memoryDeps.now(),
-              memoryFlushCompactionCount: entry.compactionCount ?? 0,
+              memoryFlushCompactionCount: sessionEntry.compactionCount ?? 0,
             }),
           });
           if (exhaustedEntry) {

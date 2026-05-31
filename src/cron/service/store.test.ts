@@ -55,19 +55,6 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
     ...params,
   };
 }
-
-function expectWarnedJob(params: { storePath: string; jobId: string; message: string }) {
-  const warnCalls = logger.warn.mock.calls as unknown as Array<
-    [{ storePath?: string; jobId?: string }, string]
-  >;
-  const warning = warnCalls.find(
-    ([metadata, message]) => metadata.jobId === params.jobId && message.includes(params.message),
-  );
-  expect(warning?.[0].storePath).toBe(params.storePath);
-  expect(warning?.[0].jobId).toBe(params.jobId);
-  expect(warning?.[1]).toContain(params.message);
-}
-
 describe("cron service store seam coverage", () => {
   it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
     const { storePath } = await makeStorePath();

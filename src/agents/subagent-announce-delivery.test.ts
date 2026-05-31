@@ -40,18 +40,6 @@ const slackThreadOrigin = {
 function createGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeCallGateway;
 }
-
-function createGatewaySequenceMock(
-  responses: Record<string, unknown>[],
-): ReturnType<typeof vi.fn> & typeof runtimeCallGateway {
-  let index = 0;
-  return vi.fn(async () => {
-    const response = responses[Math.min(index, responses.length - 1)] ?? {};
-    index += 1;
-    return response;
-  }) as unknown as ReturnType<typeof vi.fn> & typeof runtimeCallGateway;
-}
-
 function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
 }

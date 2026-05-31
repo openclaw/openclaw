@@ -37,10 +37,10 @@ vi.mock("../runtime/registry.js", () => ({
 
 export const hoisted = hoistedMocks;
 
-export const {
-  AcpSessionManager,
-  testing: { resetAcpSessionManagerForTests },
-} = await import("./manager.js");
+const managerModule = await import("./manager.js");
+export const AcpSessionManager = managerModule.AcpSessionManager;
+export const resetAcpSessionManagerForTests = () =>
+  managerModule.testing.resetAcpSessionManagerForTests();
 export const { AcpRuntimeError } = await import("../runtime/errors.js");
 
 export const baseCfg = {

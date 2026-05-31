@@ -546,17 +546,17 @@ async function runBridgeRequest(params: {
       }
       case "namespace": {
         const namespaceId = values[0];
-        const path = values[1];
+        const pathLocal = values[1];
         const callArgs = values[2];
         if (typeof namespaceId !== "string") {
           throw new ToolInputError("namespace id must be a string.");
         }
-        if (!Array.isArray(path) || !path.every((entry) => typeof entry === "string")) {
+        if (!Array.isArray(pathLocal) || !pathLocal.every((entry) => typeof entry === "string")) {
           throw new ToolInputError("namespace path must be an array of strings.");
         }
         value = await params.namespaceRuntime.invoke(
           namespaceId,
-          path,
+          pathLocal,
           Array.isArray(callArgs) ? callArgs : [],
           async (request) => {
             const entry = request.catalogId

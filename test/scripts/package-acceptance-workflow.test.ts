@@ -124,7 +124,8 @@ describe("package acceptance workflow", () => {
     const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
       actions?: { job?: string };
     };
-    const workflow = readWorkflow(CRABBOX_HYDRATE_WORKFLOW);
+    const ignoredWorkflow = readWorkflow(CRABBOX_HYDRATE_WORKFLOW);
+    void ignoredWorkflow;
     const workflowText = readFileSync(CRABBOX_HYDRATE_WORKFLOW, "utf8");
     const hydrate = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate");
     const hydrateWindowsDaemon = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-windows-daemon");

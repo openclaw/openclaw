@@ -9,7 +9,7 @@ const mocks = {
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
   disposeAgentHarnesses: vi.fn(async () => undefined),
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
-  triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (eventValue) => undefined),
+  triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
 };
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;

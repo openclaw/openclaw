@@ -175,14 +175,6 @@ describe("oxlint config", () => {
         ],
         rules: {
           "typescript/no-explicit-any": "off",
-          "typescript/unbound-method": "off",
-          "eslint/no-unsafe-optional-chaining": "off",
-        },
-      },
-      {
-        files: ["src/agents/embedded-agent-runner/run/attempt.ts"],
-        rules: {
-          "eslint/no-shadow": "error",
         },
       },
     ]);

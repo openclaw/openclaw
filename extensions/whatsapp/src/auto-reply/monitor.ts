@@ -308,7 +308,7 @@ export async function monitorWebChannel(
       try {
         connection = await controller.openConnection({
           connectionId,
-          createListener: async ({ sock, connection }) => {
+          createListener: async ({ sock, connection: connectionLocal }) => {
             const onMessage = createWebOnMessageHandler({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -319,7 +319,7 @@ export async function monitorWebChannel(
               groupHistories,
               groupMemberNames,
               echoTracker,
-              backgroundTasks: connection.backgroundTasks,
+              backgroundTasks: connectionLocal.backgroundTasks,
               replyResolver: activeReplyResolver,
               replyLogger,
               baseMentionConfig,

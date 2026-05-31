@@ -394,10 +394,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
               token: account.token,
               inputs,
               missingTokenNote: "missing Discord token",
-              resolveWithToken: async ({ token, inputs }) =>
+              resolveWithToken: async ({ token, inputs: inputsValue }) =>
                 (await loadDiscordResolveChannelsModule()).resolveDiscordChannelAllowlist({
                   token,
-                  entries: inputs,
+                  entries: inputsValue,
                 }),
               mapResolved: (entry) => ({
                 input: entry.input,
@@ -415,10 +415,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             token: account.token,
             inputs,
             missingTokenNote: "missing Discord token",
-            resolveWithToken: async ({ token, inputs }) =>
+            resolveWithToken: async ({ token, inputs: inputsLocal }) =>
               (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({
                 token,
-                entries: inputs,
+                entries: inputsLocal,
               }),
             mapResolved: (entry) => ({
               input: entry.input,

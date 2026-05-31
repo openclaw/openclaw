@@ -138,6 +138,10 @@ const workerConfig = resolveSharedVitestWorkerConfig({
   isWindows,
   localScheduling,
 });
+const dependencyModuleDirectories = ["/node_modules/", "/openclaw-pnpm-node-modules/"];
+const dependencyExternalPatterns = [
+  /\/openclaw-pnpm-node-modules\/(?!.*\/?vite\w*\/dist\/client\/env\.mjs$).*\.(?:cjs\.js|mjs)$/u,
+];
 const sourcePluginSdkSubpaths = [
   ...new Set([...pluginSdkSubpaths, ...privateLocalOnlyPluginSdkSubpaths]),
 ].toSorted((left, right) => left.localeCompare(right));
@@ -436,6 +440,14 @@ export const sharedVitestConfig = {
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
+    deps: {
+      moduleDirectories: dependencyModuleDirectories,
+    },
+    server: {
+      deps: {
+        external: dependencyExternalPatterns,
+      },
+    },
     forceRerunTriggers: [
       "package.json",
       "pnpm-lock.yaml",

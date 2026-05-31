@@ -97,7 +97,7 @@ describe("qa-bus server", () => {
   it("wakes stale-cursor long polls as soon as matching account traffic arrives", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
-    stops.push(bus.stop);
+    stops.push(bus["stop"]);
 
     const pending = pollQaBus({
       baseUrl: bus.baseUrl,

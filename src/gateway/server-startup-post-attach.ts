@@ -463,8 +463,8 @@ async function cleanupStaleSessionLocks(params: {
       if (result.cleaned.length === 0) {
         continue;
       }
-      const markRestartAbortedMainSessionsFromLocks = await getMarker();
-      await markRestartAbortedMainSessionsFromLocks({
+      const markRestartAbortedMainSessionsFromLocksLocal = await getMarker();
+      await markRestartAbortedMainSessionsFromLocksLocal({
         sessionsDir,
         cleanedLocks: result.cleaned,
       });

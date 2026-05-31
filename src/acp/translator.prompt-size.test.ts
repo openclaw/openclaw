@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, it, vi } from "vitest";
 import { expectOversizedPromptRejected } from "./translator.bridge-test-helpers.js";
 
 vi.mock("./commands.js", () => ({

@@ -50,6 +50,7 @@ import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
+  isConfiguredChannel,
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
@@ -636,6 +637,9 @@ async function hasConfiguredCurrentSourceChannel(input: RunMessageActionParams):
     normalizeMessageChannel(input.toolContext?.currentChannelProvider) ??
     normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
   if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
+  if (!isConfiguredChannel(input.cfg, provider)) {
     return false;
   }
   if (!resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })) {

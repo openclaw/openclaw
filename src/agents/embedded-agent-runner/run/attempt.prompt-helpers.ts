@@ -440,8 +440,8 @@ function extractUserMessagePromptText(content: unknown): string | undefined {
   }
   const text = content
     .flatMap((part) => {
-      const text = stringifyStructuredContentPart(part);
-      return text ? [text] : [];
+      const textLocal = stringifyStructuredContentPart(part);
+      return textLocal ? [textLocal] : [];
     })
     .join("\n")
     .trim();

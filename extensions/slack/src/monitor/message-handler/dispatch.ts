@@ -635,7 +635,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       },
       onStartError: (err) => {
         logTypingFailure({
-          log: (message) => runtime.error?.(danger(message)),
+          log: (messageValue) => runtime.error?.(danger(messageValue)),
           channel: "slack",
           action: "start",
           target: typingTarget,
@@ -644,7 +644,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       },
       onStopError: (err) => {
         logTypingFailure({
-          log: (message) => runtime.error?.(danger(message)),
+          log: (messageLocal) => runtime.error?.(danger(messageLocal)),
           channel: "slack",
           action: "stop",
           target: typingTarget,

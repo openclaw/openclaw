@@ -1216,8 +1216,11 @@ describe("message tool schema scoping", () => {
       });
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
+      const presentationSchemaJson = JSON.stringify(properties.presentation);
 
       expect(properties).toHaveProperty("presentation");
+      expect(presentationSchemaJson).toContain('"action"');
+      expect(presentationSchemaJson).toContain('"command"');
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -1945,6 +1948,7 @@ describe("message tool reasoning tag sanitization", () => {
               buttons: [
                 {
                   label: "<think>button rationale</think>Approve",
+                  action: { type: "command", command: "/codex approve" },
                   value: "approve",
                 },
               ],
@@ -1970,7 +1974,13 @@ describe("message tool reasoning tag sanitization", () => {
         { type: "text", text: "Ship it" },
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve" }],
+          buttons: [
+            {
+              label: "Approve",
+              action: { type: "command", command: "/codex approve" },
+              value: "approve",
+            },
+          ],
         },
         {
           type: "select",

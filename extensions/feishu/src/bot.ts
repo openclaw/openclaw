@@ -808,10 +808,10 @@ export async function handleFeishuMessage(params: {
     if (!isGroup && route.matchedBy === "default") {
       const dynamicCfg = feishuCfg?.dynamicAgentCreation as DynamicAgentCreationConfig | undefined;
       if (dynamicCfg?.enabled) {
-        const runtime = getFeishuRuntime();
+        const runtimeLocal = getFeishuRuntime();
         const result = await maybeCreateDynamicAgent({
           cfg,
-          runtime,
+          runtime: runtimeLocal,
           senderOpenId: ctx.senderOpenId,
           dynamicCfg,
           configWritesAllowed: resolveChannelConfigWrites({
@@ -1387,22 +1387,22 @@ export async function handleFeishuMessage(params: {
           .map((id) => (id ? normalizeFeishuAllowEntry(id) : ""))
           .find((recipient) => recipient === pinnedMainDmOwner)
       : undefined;
-    const buildFeishuInboundLastRouteUpdate = (params: {
+    const buildFeishuInboundLastRouteUpdate = (paramsLocal: {
       accountId: string;
       sessionKey: string;
     }) => {
       const inboundLastRouteSessionKey =
-        params.sessionKey === route.sessionKey
+        paramsLocal.sessionKey === route.sessionKey
           ? resolveInboundLastRouteSessionKey({
               route,
-              sessionKey: params.sessionKey,
+              sessionKey: paramsLocal.sessionKey,
             })
-          : params.sessionKey;
+          : paramsLocal.sessionKey;
       return {
         sessionKey: inboundLastRouteSessionKey,
         channel: "feishu" as const,
         to: feishuTo,
-        accountId: params.accountId,
+        accountId: paramsLocal.accountId,
         ...(lastRouteThreadId ? { threadId: lastRouteThreadId } : {}),
         mainDmOwnerPin:
           !isGroup && inboundLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner

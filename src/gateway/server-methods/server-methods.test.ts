@@ -1829,7 +1829,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
     return {
@@ -2063,7 +2063,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
     const ownerClient = {
       connId: "conn-owner",
@@ -2682,7 +2682,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
 
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
@@ -2704,7 +2704,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
 
     void manager.register(
@@ -2754,7 +2754,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
     const respondOne = vi.fn();

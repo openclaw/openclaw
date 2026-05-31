@@ -663,6 +663,7 @@ export function createFollowupRunner(params: {
           ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
           runId,
+          sessionId: run.sessionId,
           abortSignal: runAbortSignal,
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
@@ -760,9 +761,9 @@ export function createFollowupRunner(params: {
                   },
                   transformResult:
                     queued.currentInboundEventKind === "room_event"
-                      ? (result) =>
+                      ? (resultLocal) =>
                           keepCliSessionBindingOnlyWhenReused({
-                            result,
+                            result: resultLocal,
                             existingSessionId: cliSessionBinding?.sessionId,
                             onDroppedReplacement: () => {
                               droppedCliSessionReplacement = true;

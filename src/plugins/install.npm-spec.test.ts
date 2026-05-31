@@ -1455,17 +1455,17 @@ describe("installPluginFromNpmSpec", () => {
           );
         }
         if (isNpmPeerPlannerInstallCommand(argv)) {
-          const npmRoot = options?.cwd;
-          if (!npmRoot) {
+          const npmRootLocal = options?.cwd;
+          if (!npmRootLocal) {
             throw new Error(`unexpected npm peer planner command: ${argv.join(" ")}`);
           }
           const manifest = JSON.parse(
-            fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+            fs.readFileSync(path.join(npmRootLocal, "package.json"), "utf8"),
           ) as {
             dependencies?: Record<string, string>;
           };
           writeNpmRootPackageLock({
-            npmRoot,
+            npmRoot: npmRootLocal,
             dependencies: manifest.dependencies ?? {},
             packages: [],
           });

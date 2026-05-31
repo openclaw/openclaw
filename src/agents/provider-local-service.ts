@@ -251,12 +251,12 @@ async function startAndWaitForLocalService(params: {
   const child = managed.process;
   managed.lastExit = undefined;
   child.unref();
-  child.once("exit", (code, signal) => {
+  child.once("exit", (code, signalLocal) => {
     log.info(
-      `${provider} local service exited: ${signal ? `signal=${signal}` : `code=${code ?? 0}`}`,
+      `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}`,
     );
     if (managed.process === child) {
-      managed.lastExit = { code, signal };
+      managed.lastExit = { code, signal: signalLocal };
       managed.process = undefined;
     }
   });

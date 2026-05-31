@@ -954,7 +954,11 @@ export async function acquireSessionWriteLock(params: {
             orphanPayloadGraceMs,
           });
         },
-        shouldRemoveStaleLock: async ({ lockPath, normalizedTargetPath, payload }) => {
+        shouldRemoveStaleLock: async ({
+          lockPath: lockPathLocal,
+          normalizedTargetPath,
+          payload,
+        }) => {
           await yieldEventLoop();
           const nowMs = Date.now();
           const heldByThisProcess = sessionLockHeldByThisProcess(normalizedTargetPath);
@@ -968,7 +972,7 @@ export async function acquireSessionWriteLock(params: {
             respectMaxHold: !heldByThisProcess,
           });
           return await shouldRemoveContendedLockFile(
-            lockPath,
+            lockPathLocal,
             inspected,
             staleMs,
             nowMs,

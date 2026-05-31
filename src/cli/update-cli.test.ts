@@ -437,14 +437,6 @@ describe("update-cli", () => {
     expect(call?.channel).toBe(channel);
     return call;
   };
-
-  const commandCall = (index = 0) => {
-    const calls = vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<
-      [string[], Record<string, unknown>]
-    >;
-    return calls[index];
-  };
-
   const commandCalls = () =>
     vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<
       [string[], Record<string, unknown>]

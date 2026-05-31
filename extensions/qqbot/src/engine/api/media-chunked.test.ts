@@ -200,8 +200,8 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     // plus one complete. Because concurrency=2 the order of part_finish is
     // not strictly deterministic, so match on path + payload key.
     client.request.mockImplementation(
-      async (_token: string, _method: string, path: string, body: Record<string, unknown>) => {
-        if (path.endsWith("/upload_prepare")) {
+      async (_token: string, _method: string, pathLocal: string, body: Record<string, unknown>) => {
+        if (pathLocal.endsWith("/upload_prepare")) {
           expect(body.file_type).toBe(MediaFileType.FILE);
           expect(typeof body.md5).toBe("string");
           expect(typeof body.sha1).toBe("string");
@@ -209,16 +209,16 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
           expect(body.file_size).toBe(FIXTURE_BUFFER.length);
           return prepareResp;
         }
-        if (path.endsWith("/upload_part_finish")) {
+        if (pathLocal.endsWith("/upload_part_finish")) {
           expect(body.upload_id).toBe("uid-1");
           expect(typeof body.part_index).toBe("number");
           return {};
         }
-        if (path.endsWith("/files")) {
+        if (pathLocal.endsWith("/files")) {
           expect(body.upload_id).toBe("uid-1");
           return completeResp;
         }
-        throw new Error(`unexpected path ${path}`);
+        throw new Error(`unexpected path ${pathLocal}`);
       },
     );
 

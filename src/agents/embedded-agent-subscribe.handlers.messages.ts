@@ -990,18 +990,20 @@ export function handleMessageEnd(
       return;
     }
     const {
-      text: cleanedText,
-      mediaUrls,
+      text: cleanedTextLocal,
+      mediaUrls: mediaUrlsLocal,
       audioAsVoice,
       replyToId,
       replyToTag,
       replyToCurrent,
     } = splitResult;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-    if (hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice })) {
+    if (
+      hasAssistantVisibleReply({ text: cleanedTextLocal, mediaUrls: mediaUrlsLocal, audioAsVoice })
+    ) {
       ctx.emitBlockReply({
-        text: cleanedText,
-        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        text: cleanedTextLocal,
+        mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
         audioAsVoice,
         replyToId,
         replyToTag,

@@ -3678,70 +3678,73 @@ describe("openai transport stream", () => {
         baseUrl: "https://proxy.example.com/v1",
       },
     },
-  ])("replays assistant phase metadata for $label responses payloads", ({ label, model }) => {
-    const params = buildOpenAIResponsesParams(
-      {
-        ...model,
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as Model<"openai-responses">,
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-            timestamp: 1,
-            content: [
-              {
-                type: "text",
-                text: "Working...",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_commentary",
-                  phase: "commentary",
-                }),
+  ])(
+    "replays assistant phase metadata for $label responses payloads",
+    ({ label: _label, model }) => {
+      const params = buildOpenAIResponsesParams(
+        {
+          ...model,
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } as Model<"openai-responses">,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
               },
-            ],
-          },
-          {
-            role: "user",
-            content: "Continue",
-            timestamp: 2,
-          },
-        ],
-        tools: [],
-      } as never,
-      undefined,
-    ) as {
-      input?: Array<{ role?: string; id?: string; phase?: string }>;
-    };
+              stopReason: "stop",
+              timestamp: 1,
+              content: [
+                {
+                  type: "text",
+                  text: "Working...",
+                  textSignature: JSON.stringify({
+                    v: 1,
+                    id: "msg_commentary",
+                    phase: "commentary",
+                  }),
+                },
+              ],
+            },
+            {
+              role: "user",
+              content: "Continue",
+              timestamp: 2,
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as {
+        input?: Array<{ role?: string; id?: string; phase?: string }>;
+      };
 
-    const assistantItem = params.input?.find((item) => item.role === "assistant");
-    expectRecordFields(assistantItem, {
-      role: "assistant",
-      phase: "commentary",
-    });
-    if (model.api === "openai-chatgpt-responses") {
-      expect(assistantItem?.id).toBeUndefined();
-    } else {
-      expect(assistantItem?.id).toBe("msg_commentary");
-    }
-  });
+      const assistantItem = params.input?.find((item) => item.role === "assistant");
+      expectRecordFields(assistantItem, {
+        role: "assistant",
+        phase: "commentary",
+      });
+      if (model.api === "openai-chatgpt-responses") {
+        expect(assistantItem?.id).toBeUndefined();
+      } else {
+        expect(assistantItem?.id).toBe("msg_commentary");
+      }
+    },
+  );
 
   it("strips the internal cache boundary from OpenAI system prompts", () => {
     const params = buildOpenAIResponsesParams(

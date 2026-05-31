@@ -495,8 +495,10 @@ export function registerBrowserManageCommands(
         if (printJsonResult(parent, result)) {
           return;
         }
-        const tab = (result as { tab?: BrowserTab }).tab;
-        defaultRuntime.log(`labeled tab ${tab?.tabId ?? targetId} as ${tab?.label ?? label}`);
+        const tabValue = (result as { tab?: BrowserTab }).tab;
+        defaultRuntime.log(
+          `labeled tab ${tabValue?.tabId ?? targetId} as ${tabValue?.label ?? label}`,
+        );
       });
     });
 
@@ -555,7 +557,7 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const tab = await callBrowserRequest<BrowserTab>(
+        const tabLocal = await callBrowserRequest<BrowserTab>(
           parent,
           {
             method: "POST",
@@ -565,11 +567,11 @@ export function registerBrowserManageCommands(
           },
           { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
         );
-        if (printJsonResult(parent, tab)) {
+        if (printJsonResult(parent, tabLocal)) {
           return;
         }
         defaultRuntime.log(
-          `opened: ${tab.url}\n${tab.tabId ? `tab: ${tab.tabId}\n` : ""}${tab.label ? `label: ${tab.label}\n` : ""}id: ${tab.targetId}`,
+          `opened: ${tabLocal.url}\n${tabLocal.tabId ? `tab: ${tabLocal.tabId}\n` : ""}${tabLocal.label ? `label: ${tabLocal.label}\n` : ""}id: ${tabLocal.targetId}`,
         );
       });
     });

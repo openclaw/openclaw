@@ -1336,7 +1336,7 @@ async function* parseWebSocket(
 }
 
 function requestBodyWithoutInput(body: RequestBody): RequestBody {
-  const { input, previous_response_id: previousResponseId, ...rest } = body;
+  const { input: _input, previous_response_id: _previousResponseId, ...rest } = body;
   return rest;
 }
 

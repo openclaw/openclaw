@@ -9,7 +9,10 @@ import {
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { sanitizeTelegramCallbackData } from "./approval-callback-data.js";
-import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
+import {
+  buildTelegramNativeCommandCallbackData,
+  buildTelegramOpaqueCallbackData,
+} from "./native-command-callback-data.js";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
@@ -42,7 +45,7 @@ function toTelegramInlineButton(
       style,
     };
   }
-  const callbackData = button.value ? toTelegramCallbackData(button.value) : undefined;
+  const callbackData = toTelegramCallbackData(button);
   if (callbackData) {
     return {
       text: button.label,
@@ -60,19 +63,22 @@ function toTelegramInlineButton(
   return undefined;
 }
 
-function toTelegramCallbackData(value: string): string | undefined {
-  const sanitizedValue = sanitizeTelegramCallbackData(value);
-  if (!sanitizedValue) {
-    return undefined;
+function toTelegramCallbackData(button: MessagePresentationButton): string | undefined {
+  if (button.action?.type === "command") {
+    const command = button.action.command.trim();
+    if (!command) {
+      return undefined;
+    }
+    if (parseExecApprovalCommandText(command)) {
+      return sanitizeTelegramCallbackData(command);
+    }
+    const callbackData = buildTelegramNativeCommandCallbackData(command);
+    return sanitizeTelegramCallbackData(callbackData);
   }
-  if (parseExecApprovalCommandText(sanitizedValue)) {
-    return sanitizedValue;
+  if (button.action?.type === "callback") {
+    return sanitizeTelegramCallbackData(buildTelegramOpaqueCallbackData(button.action.value));
   }
-  const commandText = sanitizedValue.trim();
-  const callbackData = commandText.startsWith("/")
-    ? buildTelegramNativeCommandCallbackData(commandText)
-    : sanitizedValue;
-  return sanitizeTelegramCallbackData(callbackData);
+  return button.value ? sanitizeTelegramCallbackData(button.value) : undefined;
 }
 
 function chunkInteractiveButtons(
@@ -135,6 +141,7 @@ export function buildTelegramPresentationButtons(
     chunkInteractiveButtons(
       block.options.map((option) => ({
         label: option.label,
+        action: option.action,
         value: option.value,
       })),
       rows,

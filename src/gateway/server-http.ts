@@ -582,7 +582,7 @@ export function createGatewayHttpServer(opts: {
       const pluginPathContext = handlePluginRequest
         ? resolvePluginRoutePathContext(scopedRequestPath)
         : null;
-      const resolvedAuth = getResolvedAuth();
+      const resolvedAuthValue = getResolvedAuth();
       const requestStages: GatewayHttpRequestStage[] = [
         {
           name: "gateway-probes",
@@ -591,7 +591,7 @@ export function createGatewayHttpServer(opts: {
               req,
               res,
               scopedRequestPath,
-              resolvedAuth,
+              resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               getReadiness,
@@ -607,7 +607,7 @@ export function createGatewayHttpServer(opts: {
           name: "models",
           run: async () =>
             (await getModelsHttpModule()).handleOpenAiModelsHttpRequest(req, res, {
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -619,7 +619,7 @@ export function createGatewayHttpServer(opts: {
           name: "embeddings",
           run: async () =>
             (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, {
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -631,7 +631,7 @@ export function createGatewayHttpServer(opts: {
           name: "tools-invoke",
           run: async () =>
             (await getToolsInvokeHttpModule()).handleToolsInvokeHttpRequest(req, res, {
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -643,7 +643,7 @@ export function createGatewayHttpServer(opts: {
           name: "sessions-kill",
           run: async () =>
             (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, {
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -655,7 +655,7 @@ export function createGatewayHttpServer(opts: {
           name: "sessions-history",
           run: async () =>
             (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               getResolvedAuth,
               trustedProxies,
               allowRealIpFallback,
@@ -668,7 +668,7 @@ export function createGatewayHttpServer(opts: {
           name: "openresponses",
           run: async () =>
             (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               config: openResponsesConfig,
               trustedProxies,
               allowRealIpFallback,
@@ -681,7 +681,7 @@ export function createGatewayHttpServer(opts: {
           name: "openai",
           run: async () =>
             (await getOpenAiHttpModule()).handleOpenAiHttpRequest(req, res, {
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               config: openAiChatCompletionsConfig,
               trustedProxies,
               allowRealIpFallback,
@@ -705,7 +705,7 @@ export function createGatewayHttpServer(opts: {
               await getPluginNodeCapabilityAuthModule();
             const ok = await authorizePluginNodeCapabilityRequest({
               req,
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               clients,
@@ -734,7 +734,7 @@ export function createGatewayHttpServer(opts: {
           pluginPathContext,
           handlePluginRequest,
           shouldEnforcePluginGatewayAuth,
-          resolvedAuth,
+          resolvedAuth: resolvedAuthValue,
           trustedProxies,
           allowRealIpFallback,
           rateLimiter,
@@ -749,7 +749,7 @@ export function createGatewayHttpServer(opts: {
               req,
               res,
               {
-                auth: resolvedAuth,
+                auth: resolvedAuthValue,
                 trustedProxies,
                 allowRealIpFallback,
                 rateLimiter,
@@ -766,7 +766,7 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               config: configSnapshot,
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -779,7 +779,7 @@ export function createGatewayHttpServer(opts: {
             const { resolveAgentAvatar } = await getIdentityAvatarModule();
             return handleControlUiAvatarRequest(req, res, {
               basePath: controlUiBasePath,
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -796,7 +796,7 @@ export function createGatewayHttpServer(opts: {
               config: configSnapshot,
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
               root: controlUiRoot,
-              auth: resolvedAuth,
+              auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -865,7 +865,7 @@ export function attachGatewayUpgradeHandler(opts: {
       if (scopedNodeCapability.rewrittenUrl) {
         req.url = scopedNodeCapability.rewrittenUrl;
       }
-      const resolvedAuth = getResolvedAuth();
+      const resolvedAuthLocal = getResolvedAuth();
       const requestPath = scopedNodeCapability.pathname;
       const pathContext = resolvePluginRoutePathContext(requestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
@@ -875,7 +875,7 @@ export function attachGatewayUpgradeHandler(opts: {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
           req,
-          auth: resolvedAuth,
+          auth: resolvedAuthLocal,
           trustedProxies,
           allowRealIpFallback,
           clients,
@@ -904,7 +904,7 @@ export function attachGatewayUpgradeHandler(opts: {
           const { checkGatewayHttpRequestAuth } = await getHttpAuthUtilsModule();
           const authCheck = await checkGatewayHttpRequestAuth({
             req,
-            auth: resolvedAuth,
+            auth: resolvedAuthLocal,
             trustedProxies,
             allowRealIpFallback,
             rateLimiter,

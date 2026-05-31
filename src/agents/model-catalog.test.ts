@@ -241,7 +241,7 @@ describe("loadModelCatalog", () => {
     }));
     vi.doMock("./agent-scope.js", () => ({
       resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string) => {
-        const entry = cfg.agents?.list?.find((entry) => entry.id === agentId);
+        const entry = cfg.agents?.list?.find((entryEntry) => entryEntry.id === agentId);
         return entry?.workspace ?? cfg.agents?.defaults?.workspace ?? "/tmp/openclaw-workspace";
       },
       resolveDefaultAgentDir: () => "/tmp/openclaw",
@@ -1072,9 +1072,11 @@ describe("loadModelCatalog", () => {
 
     const entry = requireCatalogEntry(result, "openai", "gpt-5.4");
     expect(entry.name).toBe("GPT-5.3 Codex");
-    expect(result.some((entry) => entry.provider === "openai" && entry.id === "gpt-5.4-mini")).toBe(
-      false,
-    );
+    expect(
+      result.some(
+        (entryResult) => entryResult.provider === "openai" && entryResult.id === "gpt-5.4-mini",
+      ),
+    ).toBe(false);
   });
 
   it("merges provider-owned supplemental catalog entries", async () => {
@@ -1274,7 +1276,7 @@ describe("loadModelCatalog", () => {
     });
 
     const entry = requireCatalogEntry(result, "vllm", "Qwen/Qwen3-8B");
-    expect(result.filter((entry) => entry.provider === "vllm")).toHaveLength(1);
+    expect(result.filter((entryValue) => entryValue.provider === "vllm")).toHaveLength(1);
     expect(entry.name).toBe("Qwen3 8B");
     expect(entry.reasoning).toBe(true);
     expect(entry.compat).toEqual(
@@ -1325,7 +1327,7 @@ describe("loadModelCatalog", () => {
     });
 
     const entry = requireCatalogEntry(result, "vllm", "Qwen/Qwen3-8B");
-    expect(result.filter((entry) => entry.provider === "vllm")).toHaveLength(1);
+    expect(result.filter((entryLocal) => entryLocal.provider === "vllm")).toHaveLength(1);
     expect(entry.name).toBe("Qwen3 8B");
     expect(entry.reasoning).toBe(true);
     expect(entry.compat).toEqual(

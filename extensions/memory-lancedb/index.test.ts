@@ -361,7 +361,7 @@ describe("memory plugin e2e", () => {
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-18.md"), "# Daily\n", "utf8");
-    const registerMemoryCapability = vi.fn();
+    const registerMemoryCapabilityLocal = vi.fn();
     const mockApi = {
       id: "memory-lancedb",
       name: "Memory (LanceDB)",
@@ -383,7 +383,7 @@ describe("memory plugin e2e", () => {
         error: vi.fn(),
         debug: vi.fn(),
       },
-      registerMemoryCapability,
+      registerMemoryCapability: registerMemoryCapabilityLocal,
       registerTool: vi.fn(),
       registerCli: vi.fn(),
       registerService: vi.fn(),
@@ -393,7 +393,7 @@ describe("memory plugin e2e", () => {
 
     memoryPlugin.register(mockApi as any);
     const capability = firstObjectArg(
-      registerMemoryCapability as unknown as MockCallSource,
+      registerMemoryCapabilityLocal as unknown as MockCallSource,
       "memory capability",
     );
     const publicArtifacts = capability.publicArtifacts as
@@ -2327,7 +2327,7 @@ describe("memory plugin e2e", () => {
     }));
 
     try {
-      const { default: memoryPlugin } = await import("./index.js");
+      const { default: memoryPluginItem } = await import("./index.js");
       const registeredTools: any[] = [];
       const mockApi = {
         id: "memory-lancedb",
@@ -2360,7 +2360,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      memoryPlugin.register(mockApi as any);
+      memoryPluginItem.register(mockApi as any);
       const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
       if (!recallTool) {
         throw new Error("memory_recall tool was not registered");
@@ -2479,9 +2479,9 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema accepts storageOptions with string values", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
+    const { default: memoryPluginCandidate } = await import("./index.js");
 
-    const config = memoryPlugin.configSchema?.parse?.({
+    const config = memoryPluginCandidate.configSchema?.parse?.({
       embedding: {
         apiKey: OPENAI_API_KEY,
         model: "text-embedding-3-small",
@@ -2502,14 +2502,14 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema resolves env vars in storageOptions", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
+    const { default: memoryPluginEntry } = await import("./index.js");
     const previousAccessKey = process.env.TEST_MEMORY_STORAGE_ACCESS_KEY;
     const previousSecretKey = process.env.TEST_MEMORY_STORAGE_SECRET_KEY;
     process.env.TEST_MEMORY_STORAGE_ACCESS_KEY = "env-access";
     process.env.TEST_MEMORY_STORAGE_SECRET_KEY = "env-secret";
 
     try {
-      const config = memoryPlugin.configSchema?.parse?.({
+      const config = memoryPluginEntry.configSchema?.parse?.({
         embedding: {
           apiKey: OPENAI_API_KEY,
           model: "text-embedding-3-small",
@@ -2542,14 +2542,14 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema rejects missing env vars in storageOptions", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
+    const { default: memoryPluginResult } = await import("./index.js");
     const previousMissing = process.env.TEST_MEMORY_STORAGE_MISSING;
 
     try {
       delete process.env.TEST_MEMORY_STORAGE_MISSING;
 
       expect(() => {
-        memoryPlugin.configSchema?.parse?.({
+        memoryPluginResult.configSchema?.parse?.({
           embedding: {
             apiKey: OPENAI_API_KEY,
             model: "text-embedding-3-small",
@@ -2570,10 +2570,10 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema rejects storageOptions with non-string values", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
+    const { default: memoryPluginValue } = await import("./index.js");
 
     expect(() => {
-      memoryPlugin.configSchema?.parse?.({
+      memoryPluginValue.configSchema?.parse?.({
         embedding: {
           apiKey: OPENAI_API_KEY,
           model: "text-embedding-3-small",
@@ -2845,7 +2845,7 @@ describe("memory plugin e2e", () => {
     }));
 
     try {
-      const { default: memoryPlugin } = await import("./index.js");
+      const { default: memoryPluginLocal } = await import("./index.js");
       const registeredTools: any[] = [];
       const mockApi = {
         id: "memory-lancedb",
@@ -2869,7 +2869,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      memoryPlugin.register(mockApi as any);
+      memoryPluginLocal.register(mockApi as any);
       const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
       if (!forgetTool) {
         throw new Error("expected memory_forget tool registration");

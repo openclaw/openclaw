@@ -145,12 +145,12 @@ export async function saveCronStore(
   await saveCronJobsStore(storePath, store, opts);
 }
 
-export async function loadCronQuarantineFile(path: string): Promise<CronQuarantineFile> {
+export async function loadCronQuarantineFile(pathLocal: string): Promise<CronQuarantineFile> {
   try {
-    const raw = await fs.promises.readFile(path, "utf-8");
+    const raw = await fs.promises.readFile(pathLocal, "utf-8");
     const parsed = parseJsonWithJson5Fallback(raw);
     if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.jobs)) {
-      throw new Error(`Unsupported cron quarantine file shape at ${path}`);
+      throw new Error(`Unsupported cron quarantine file shape at ${pathLocal}`);
     }
     const jobs = parsed.jobs.map((entry, index) => {
       if (
@@ -158,7 +158,7 @@ export async function loadCronQuarantineFile(path: string): Promise<CronQuaranti
         typeof entry.reason !== "string" ||
         (!isRecord(entry.job) && !("raw" in entry))
       ) {
-        throw new Error(`Unsupported cron quarantine entry at ${path} index ${index}`);
+        throw new Error(`Unsupported cron quarantine entry at ${pathLocal} index ${index}`);
       }
       const sourceIndex = typeof entry.sourceIndex === "number" ? entry.sourceIndex : -1;
       const quarantinedAtMs =

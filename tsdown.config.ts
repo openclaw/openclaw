@@ -107,7 +107,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
       return false;
     }
     const haystack = normalizedLogHaystack(log);
-    return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
+    return SUPPRESSED_EVAL_WARNING_PATHS.some((pathLocal) => haystack.includes(pathLocal));
   }
 
   return {

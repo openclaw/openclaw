@@ -432,8 +432,8 @@ function assertInstalled() {
         "migration providers",
       ],
     };
-    for (const [field, [ids, label]] of Object.entries(pluginSurfaceIds)) {
-      expectIncludesAny(inspect.plugin?.[field], ids, label);
+    for (const [field, [ids, labelLocal]] of Object.entries(pluginSurfaceIds)) {
+      expectIncludesAny(inspect.plugin?.[field], ids, labelLocal);
     }
     expectMissing(inspect.plugin?.agentHarnessIds, "kitchen-sink-agent-harness", "agent harnesses");
     expectIncludes(inspect.services, "kitchen-sink-service", "services");

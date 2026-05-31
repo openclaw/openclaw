@@ -2109,7 +2109,8 @@ describe("TelegramPollingSession", () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
     const log = vi.fn();
-    const setStatus = vi.fn();
+    const ignoredSetStatus = vi.fn();
+    void ignoredSetStatus;
     const events: string[] = [];
     const firstBot = {
       api: {

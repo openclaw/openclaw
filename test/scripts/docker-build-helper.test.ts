@@ -96,7 +96,7 @@ function packageBackedDockerRunnerPaths(): string[] {
     .filter((entry) => entry.endsWith("-docker.sh"))
     .map((entry) => join("scripts/e2e", entry))
     .filter((path) => readFileSync(path, "utf8").includes("docker_e2e_prepare_package_tgz"))
-    .sort();
+    .toSorted();
 }
 
 function shellQuote(value: string): string {

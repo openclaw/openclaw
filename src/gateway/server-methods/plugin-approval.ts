@@ -171,9 +171,15 @@ export function createPluginApprovalHandlers(
                 },
               },
         resolvedEventName: "plugin.approval.resolved",
-        buildResolvedEvent: ({ approvalId, decision, resolvedBy, snapshot, nowMs }) => ({
+        buildResolvedEvent: ({
+          approvalId,
+          decision: decisionLocal,
+          resolvedBy,
+          snapshot,
+          nowMs,
+        }) => ({
           id: approvalId,
-          decision,
+          decision: decisionLocal,
           resolvedBy,
           ts: nowMs,
           request: snapshot.request,

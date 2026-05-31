@@ -9,6 +9,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -1373,7 +1374,14 @@ export async function dispatchReplyFromConfig(
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
+  const sessionAcpMeta = sessionStoreEntry.sessionKey
+    ? readAcpSessionMeta({ sessionKey: sessionStoreEntry.sessionKey })
+    : undefined;
+  const sessionEntryWithAcp =
+    sessionAcpMeta && sessionStoreEntry.entry
+      ? { ...sessionStoreEntry.entry, acp: sessionAcpMeta }
+      : sessionStoreEntry.entry;
+  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
   const normalizedRouteReplyChannel = normalizeMessageChannel(replyRoute.channel);
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
   const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);

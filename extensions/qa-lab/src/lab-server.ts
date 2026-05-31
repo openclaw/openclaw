@@ -387,7 +387,7 @@ export async function startQaLabServer(
       if (req.method === "GET" && url.pathname === "/api/capture/startup-status") {
         const proxyUrl = captureSettings.proxyUrl || "http://127.0.0.1:7799";
         const gatewayUrl = controlUiUrl || "http://127.0.0.1:18789/";
-        const [proxy, gateway] = await Promise.all([
+        const [proxy, gatewayLocal] = await Promise.all([
           probeTcpReachability(proxyUrl),
           probeTcpReachability(gatewayUrl),
         ]);
@@ -398,7 +398,7 @@ export async function startQaLabServer(
               label: "Proxy",
             },
             gateway: {
-              ...gateway,
+              ...gatewayLocal,
               label: "Gateway",
             },
             qaLab: {

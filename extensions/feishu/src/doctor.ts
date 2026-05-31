@@ -752,7 +752,6 @@ async function repairFeishuDoctorState(params: {
         },
         {
           skipMaintenance: true,
-          allowDropAcpMetaSessionKeys: [...keys],
         },
       );
       const removed = removedEntries.length;

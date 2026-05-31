@@ -147,6 +147,18 @@ export type AcpSessionManagerDeps = {
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
 };
 
+export type WriteManagerSessionMeta = (params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  mutate: (
+    current: SessionAcpMeta | undefined,
+    entry: SessionEntry | undefined,
+  ) => SessionAcpMeta | null | undefined;
+  failOnError?: boolean;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+}) => Promise<SessionEntry | null>;
+
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
   readSessionEntry: readAcpSessionEntry,

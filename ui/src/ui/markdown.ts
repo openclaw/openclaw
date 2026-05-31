@@ -610,11 +610,11 @@ md.renderer.rules.code_block = (tokens, idx, _options, env) => {
 };
 
 export function toSanitizedMarkdownHtml(
-  markdown: string,
+  markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const input = stripUnsupportedCitationControlMarkers(markdown).trim();
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
   if (!input) {
     return "";
   }

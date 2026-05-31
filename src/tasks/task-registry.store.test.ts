@@ -16,7 +16,6 @@ import {
   findTaskByRunId,
   getTaskRegistrySnapshot,
   listFreshTasksForOwnerKey,
-  markTaskLostById,
   maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
 } from "./task-registry.js";

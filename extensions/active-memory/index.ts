@@ -605,25 +605,25 @@ function resolveRecallRunChannelContext(params: {
     (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
-  const resolveReturnValue = (params: {
+  const resolveReturnValue = (paramsLocal: {
     resolvedChannel?: string;
     resolvedChannelStrength?: "strong" | "weak";
   }) => {
     const trustedResolvedChannel =
-      params.resolvedChannelStrength === "strong" ? params.resolvedChannel : undefined;
+      paramsLocal.resolvedChannelStrength === "strong" ? paramsLocal.resolvedChannel : undefined;
     return {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
         runnableExplicitChannel ??
-        params.resolvedChannel,
+        paramsLocal.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
         explicitProvider ??
         runnableExplicitChannel ??
-        params.resolvedChannel,
+        paramsLocal.resolvedChannel,
     };
   };
   const resolvedSessionKey =

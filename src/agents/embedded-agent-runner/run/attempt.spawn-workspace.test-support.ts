@@ -939,7 +939,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.buildEmbeddedMessageActionDiscoveryInputMock
     .mockReset()
-    .mockImplementation((params) => params);
+    .mockImplementation((paramsLocal) => paramsLocal);
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
     const options = args[0] as
       | {

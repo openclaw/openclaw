@@ -222,7 +222,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
         async ({ clientSecret: secret, sdpAnswerMaxBytes, timeoutMs }) => {
           const responseBodyTooLargeError = (label: string, maxBytes: number): Error =>
             new Error(`${label} response body exceeded ${maxBytes} bytes`);
-          const readBoundedText = async (
+          const readBoundedTextLocal = async (
             response: Response,
             label: string,
             maxBytes: number,
@@ -341,7 +341,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
                 if (!response.ok) {
                   throw new Error(`OpenAI Realtime SDP offer failed (${response.status})`);
                 }
-                return await readBoundedText(
+                return await readBoundedTextLocal(
                   response,
                   "OpenAI Realtime SDP answer",
                   sdpAnswerMaxBytes,

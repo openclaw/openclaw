@@ -855,7 +855,9 @@ describe("handleMessageEnd", () => {
       [unroutedEnvelope, undefined, new Set(["message"]), undefined, unroutedEnvelope],
     ] as const) {
       const emitBlockReply = vi.fn();
-      const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+      const consumeReplyDirectives = vi.fn((textLocal: string) =>
+        textLocal ? { text: textLocal } : null,
+      );
       const ctx = createMessageEndContext({
         emitBlockReply,
         consumeReplyDirectives,

@@ -1166,7 +1166,7 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(deliverReply).toHaveBeenCalledTimes(1);
     expect(rememberSentText).not.toHaveBeenCalled();
-    const warnMock = replyLogger.warn as unknown as { mock: { calls: unknown[][] } };
+    const warnMock = replyLogger["warn"] as unknown as { mock: { calls: unknown[][] } };
     const warningContext = requireMockArg(warnMock, 0, 0, "warning context");
     expectRecordFields(warningContext, {
       replyKind: "final",
@@ -1262,7 +1262,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.(error, { kind: "final" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       {
         err: { type: "Error", message: "send failed", stack: error.stack },
         replyKind: "final",
@@ -1311,7 +1311,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.(error, { kind: "final" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: expect.objectContaining({
           type: "BoomLikeError",
@@ -1349,7 +1349,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.("plain string rejection", { kind: "block" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: "plain string rejection",
         replyKind: "block",
@@ -1386,7 +1386,7 @@ describe("whatsapp inbound dispatch", () => {
 
     getCapturedOnError()?.(objectRejection, { kind: "tool" });
 
-    expect(replyLogger.error).toHaveBeenCalledWith(
+    expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
         err: objectRejection,
         replyKind: "tool",

@@ -211,6 +211,7 @@ async function getApplyFallbackCandidateSelectionToEntry() {
 type FallbackRunnerParams = {
   provider: string;
   model: string;
+  sessionId?: string;
   abortSignal?: AbortSignal;
   run: (provider: string, model: string) => Promise<unknown>;
   classifyResult?: (params: {
@@ -1152,6 +1153,7 @@ describe("runAgentTurnWithFallback", () => {
       "runEmbeddedAgent params",
     );
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
+    expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 

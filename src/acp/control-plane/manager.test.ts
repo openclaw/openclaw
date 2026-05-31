@@ -3,20 +3,16 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
-  findTaskByRunId,
   requireTaskByRunId,
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
 import { isAcpTurnActive } from "./active-turns.js";
 import {
-  type AcpRuntime,
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
   createDeferred,
   createRuntime,
-  expectMockCallFields,
-  expectNoMockCallFields,
   expectRecordFields,
   expectRejectedRecord,
   extractRuntimeOptionsFromUpserts,
@@ -26,7 +22,6 @@ import {
   hoisted,
   installAcpSessionManagerTestLifecycle,
   mockCallArg,
-  mockCallArgs,
   readySessionMeta,
   type OpenClawConfig,
   resetAcpSessionManagerForTests,

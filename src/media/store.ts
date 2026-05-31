@@ -396,7 +396,7 @@ async function saveMediaSiblingTempFile(params: {
       mode: MEDIA_FILE_MODE,
       tempPrefix: params.tempPrefix,
       writeTemp: params.writeTemp,
-      resolveFinalPath: (result) => path.join(params.dir, result.id),
+      resolveFinalPath: (resultLocal) => path.join(params.dir, resultLocal.id),
     }),
   );
   return buildSavedMediaResult({ dir: params.dir, ...result });
