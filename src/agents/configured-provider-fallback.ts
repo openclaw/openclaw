@@ -16,6 +16,35 @@ export function resolveConfiguredProviderFallback(params: {
   }
   const defaultProviderConfig = configuredProviders[params.defaultProvider];
   const defaultModel = params.defaultModel?.trim();
+
+  // When a specific model was requested, try to find a configured provider
+  // that carries that exact model. This preserves the user's model choice
+  // and only switches the provider — which is the correct behavior when
+  // the default provider doesn't carry the model but another provider does.
+  // Previously, the function would replace BOTH provider and model with the
+  // first available provider's first model, producing incorrect refs like
+  // "ollama/kimi-k2.6:cloud" when the user specified "openai/gpt-5.5".
+  if (defaultModel) {
+    const providerWithModel = Object.entries(configuredProviders).find(
+      ([, providerCfg]) =>
+        providerCfg &&
+        Array.isArray(providerCfg.models) &&
+        providerCfg.models.some((model) => model?.id === defaultModel),
+    );
+    if (providerWithModel) {
+      return { provider: providerWithModel[0], model: defaultModel };
+    }
+    // The default provider is not configured and no other provider has the
+    // requested model. Return null so the caller preserves the explicitly-
+    // specified provider/model pair rather than silently replacing it with
+    // an unrelated provider's first model.
+    if (!defaultProviderConfig) {
+      return null;
+    }
+  }
+
+  // If the default provider is configured and either has no model requirement
+  // or already has the requested model, no fallback is needed.
   const defaultProviderHasDefaultModel =
     !!defaultProviderConfig &&
     !!defaultModel &&
@@ -24,6 +53,10 @@ export function resolveConfiguredProviderFallback(params: {
   if (defaultProviderConfig && (!defaultModel || defaultProviderHasDefaultModel)) {
     return null;
   }
+
+  // No specific model was requested (or the default provider IS configured
+  // but doesn't carry the model). Fall back to the first provider that has
+  // any models configured.
   const availableProvider = Object.entries(configuredProviders).find(
     ([, providerCfg]) =>
       providerCfg &&
