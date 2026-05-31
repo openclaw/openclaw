@@ -3100,6 +3100,10 @@ export async function runEmbeddedAttempt(
         }
       };
 
+      const abortActiveRunExternally = () => {
+        externalAbort = true;
+        abortRun();
+      };
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -3115,10 +3119,8 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        cancel: () => {
-          abortRun();
-        },
-        abort: abortRun,
+        cancel: abortActiveRunExternally,
+        abort: abortActiveRunExternally,
       };
       let lastAssistant: AssistantMessage | undefined;
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
