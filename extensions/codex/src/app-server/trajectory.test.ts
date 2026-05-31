@@ -80,7 +80,9 @@ describe("Codex trajectory recorder", () => {
     expect(content).not.toContain("secret");
     expect(content).not.toContain("sk-test-secret-token");
     expect(content).not.toContain("sk-other-secret-token");
-    expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+    }
     expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(true);
   });
 
@@ -154,27 +156,30 @@ describe("Codex trajectory recorder", () => {
     expect(recorder).toBeNull();
   });
 
-  it("refuses to append through a symlinked parent directory", async () => {
-    const tmpDir = makeTempDir();
-    const targetDir = path.join(tmpDir, "target");
-    const linkDir = path.join(tmpDir, "link");
-    fs.mkdirSync(targetDir);
-    fs.symlinkSync(targetDir, linkDir);
-    const recorder = createCodexTrajectoryRecorder({
-      cwd: tmpDir,
-      attempt: {
-        sessionFile: path.join(linkDir, "session.jsonl"),
-        sessionId: "session-1",
-        model: { api: "responses" },
-      } as never,
-      env: {},
-    });
+  it.runIf(process.platform !== "win32")(
+    "refuses to append through a symlinked parent directory",
+    async () => {
+      const tmpDir = makeTempDir();
+      const targetDir = path.join(tmpDir, "target");
+      const linkDir = path.join(tmpDir, "link");
+      fs.mkdirSync(targetDir);
+      fs.symlinkSync(targetDir, linkDir);
+      const recorder = createCodexTrajectoryRecorder({
+        cwd: tmpDir,
+        attempt: {
+          sessionFile: path.join(linkDir, "session.jsonl"),
+          sessionId: "session-1",
+          model: { api: "responses" },
+        } as never,
+        env: {},
+      });
 
-    recorder?.recordEvent("session.started");
-    await recorder?.flush();
+      recorder?.recordEvent("session.started");
+      await recorder?.flush();
 
-    expect(fs.existsSync(path.join(targetDir, "session.trajectory.jsonl"))).toBe(false);
-  });
+      expect(fs.existsSync(path.join(targetDir, "session.trajectory.jsonl"))).toBe(false);
+    },
+  );
 
   it("honors OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES override", async () => {
     const tmpDir = makeTempDir();
