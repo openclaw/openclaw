@@ -96,6 +96,39 @@ describe("sms secret contract", () => {
     expect(resolved.warnings).toStrictEqual([]);
   });
 
+  it("keeps top-level authToken active for env-backed default senders plus named accounts", async () => {
+    const resolved = await resolveSmsSecretAssignments(
+      {
+        channels: {
+          sms: {
+            enabled: true,
+            authToken: { source: "env", provider: "default", id: "TWILIO_DEFAULT_TOKEN" },
+            accounts: {
+              support: {
+                enabled: true,
+                accountSid: "AC456",
+                authToken: { source: "env", provider: "default", id: "TWILIO_SUPPORT_TOKEN" },
+                fromNumber: "+15558675309",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        TWILIO_ACCOUNT_SID: "AC-env",
+        TWILIO_PHONE_NUMBER: "+15550001111",
+        TWILIO_DEFAULT_TOKEN: "resolved-default-token",
+        TWILIO_SUPPORT_TOKEN: "resolved-support-token",
+      },
+    );
+
+    expect(resolved.config.channels?.sms?.authToken).toBe("resolved-default-token");
+    expect(resolved.config.channels?.sms?.accounts?.support?.authToken).toBe(
+      "resolved-support-token",
+    );
+    expect(resolved.warnings).toStrictEqual([]);
+  });
+
   it("treats top-level authToken refs as inactive when all enabled accounts override them", async () => {
     const resolved = await resolveSmsSecretAssignments(
       {

@@ -43,6 +43,21 @@ function hasTopLevelSmsAccount(channel: Record<string, unknown>): boolean {
   return false;
 }
 
+function hasEnvBackedDefaultSmsAccount(env: NodeJS.ProcessEnv): boolean {
+  for (const name of [
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_PHONE_NUMBER",
+    "TWILIO_SMS_FROM",
+    "TWILIO_MESSAGING_SERVICE_SID",
+  ]) {
+    if (typeof env[name] === "string" && env[name].trim().length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
   defaults?: SecretDefaults;
@@ -56,7 +71,9 @@ export function collectRuntimeConfigAssignments(params: {
   const hasExplicitDefaultAccount = surface.accounts.some(
     ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
   );
-  const topLevelSmsAccountActive = hasTopLevelSmsAccount(sms) && !hasExplicitDefaultAccount;
+  const topLevelSmsAccountActive =
+    (hasTopLevelSmsAccount(sms) || hasEnvBackedDefaultSmsAccount(params.context.env)) &&
+    !hasExplicitDefaultAccount;
   collectConditionalChannelFieldAssignments({
     channelKey: "sms",
     field: "authToken",
