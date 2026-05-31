@@ -27,7 +27,7 @@ export type GatewayClientId = (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_C
 
 // Back-compat naming (internal): these values are IDs, not display names.
 export const GATEWAY_CLIENT_NAMES = GATEWAY_CLIENT_IDS;
-/** Deprecated alias kept for internal callers that still use "name" terminology. */
+/** Compatibility alias for internal callers that still use "name" terminology. */
 export type GatewayClientName = GatewayClientId;
 
 export const GATEWAY_CLIENT_MODES = {
