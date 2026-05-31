@@ -885,4 +885,53 @@ describe("sessions_send gating", () => {
     expect(entries.map((entry) => entry.type)).toContain("accepted");
     expect(entries.every((entry) => entry.handoffId === handoff.id)).toBe(true);
   });
+
+  it("returns a rejected handoff and terminal ledger event when target start fails", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-start-fail-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const tool = createMainSessionsSendTool();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        throw new Error("target start failed");
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-handoff-start-fail", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("target start failed");
+    const handoff = requireRecord(details.handoff, "handoff");
+    expect(handoff.status).toBe("rejected");
+    expect(handoff.delivery).toEqual({ status: "pending", mode: "announce" });
+
+    const rawLedger = await fs.readFile(resolveSessionsSendHandoffLedgerPath(), "utf-8");
+    const entries = rawLedger
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(entries.map((entry) => entry.type)).toEqual(["created", "failed"]);
+    expect(entries.at(-1)).toMatchObject({
+      handoffId: handoff.id,
+      type: "failed",
+      status: "rejected",
+      error: "target start failed",
+    });
+  });
 });

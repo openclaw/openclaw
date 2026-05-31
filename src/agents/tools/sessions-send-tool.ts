@@ -176,6 +176,23 @@ async function startAgentRun(params: {
   } catch (err) {
     const messageText =
       err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+    const failedHandoff = params.handoff
+      ? buildSessionsSendHandoffAck({
+          id: params.handoff.id,
+          status: "rejected",
+          delivery: params.handoff.delivery,
+        })
+      : undefined;
+    if (failedHandoff) {
+      await recordSessionsSendHandoffEvent({
+        handoffId: failedHandoff.id,
+        type: "failed",
+        status: "rejected",
+        runId: params.runId,
+        targetDisplayKey: params.sessionKey,
+        error: messageText,
+      });
+    }
     return {
       ok: false,
       result: jsonResult({
@@ -183,7 +200,7 @@ async function startAgentRun(params: {
         status: "error",
         error: messageText,
         sessionKey: params.sessionKey,
-        ...(params.handoff ? { handoff: params.handoff } : {}),
+        ...(failedHandoff ? { handoff: failedHandoff } : {}),
       }),
     };
   }
