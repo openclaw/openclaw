@@ -5,6 +5,8 @@ import {
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
+  createBundleLspToolRuntimeMock,
+  createBundleMcpToolRuntimeMock,
   createAgentSessionMock,
   createPreparedEmbeddedAgentSettingsManagerMock,
   createOpenClawCodingToolsMock,
@@ -510,6 +512,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
 
     const sessionOptions = expectRecordFields(mockCallArg(createAgentSessionMock), {});
+    const bundleMcpOptions = expectRecordFields(mockCallArg(createBundleMcpToolRuntimeMock), {});
+    expect(bundleMcpOptions.reservedToolNames).toEqual(
+      expect.arrayContaining(["mockplugin_lookup", "fuzzplugin_move_delta"]),
+    );
+    const bundleLspOptions = expectRecordFields(mockCallArg(createBundleLspToolRuntimeMock), {});
+    expect(bundleLspOptions.reservedToolNames).toEqual(
+      expect.arrayContaining(["mockplugin_lookup", "fuzzplugin_move_delta"]),
+    );
     expect(
       (sessionOptions.customTools as Array<{ name: string }>).map((tool) => tool.name),
     ).toEqual(["mockplugin_lookup"]);

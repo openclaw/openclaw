@@ -4,6 +4,7 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   filterProviderNormalizableTools,
   type RuntimeToolSchemaDiagnostic,
+  type RuntimeToolSchemaInspection,
 } from "./tool-schema-projection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -73,12 +74,31 @@ export function hasReadableRuntimeToolName(tools: readonly AnyAgentTool[], name:
   return false;
 }
 
-export function filterProviderNormalizableRuntimeTools(params: {
+export function collectReadableQuarantinedRuntimeToolNames(params: {
+  tools: readonly AnyAgentTool[];
+  diagnostics: readonly RuntimeToolSchemaDiagnostic[];
+}): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const diagnostic of params.diagnostics) {
+    if (
+      seen.has(diagnostic.toolName) ||
+      !hasReadableRuntimeToolName(params.tools, diagnostic.toolName)
+    ) {
+      continue;
+    }
+    seen.add(diagnostic.toolName);
+    names.push(diagnostic.toolName);
+  }
+  return names;
+}
+
+export function inspectProviderNormalizableRuntimeTools(params: {
   tools: readonly AnyAgentTool[];
   runId: string;
   sessionKey?: string;
   sessionId?: string;
-}): AnyAgentTool[] {
+}): RuntimeToolSchemaInspection<AnyAgentTool> {
   const projection = filterProviderNormalizableTools(params.tools);
   logRuntimeToolSchemaQuarantine({
     diagnostics: projection.diagnostics,
@@ -87,7 +107,16 @@ export function filterProviderNormalizableRuntimeTools(params: {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
   });
-  return [...projection.tools];
+  return { tools: [...projection.tools], diagnostics: projection.diagnostics };
+}
+
+export function filterProviderNormalizableRuntimeTools(params: {
+  tools: readonly AnyAgentTool[];
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+}): AnyAgentTool[] {
+  return [...inspectProviderNormalizableRuntimeTools(params).tools];
 }
 
 export function logRuntimeToolSchemaQuarantine(params: {

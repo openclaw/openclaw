@@ -202,9 +202,11 @@ import {
 } from "../../tool-allowlist-guard.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import {
+  collectReadableQuarantinedRuntimeToolNames,
   filterProviderNormalizableRuntimeTools,
   filterRuntimeToolsWithReadableNames,
   hasReadableRuntimeToolName,
+  inspectProviderNormalizableRuntimeTools,
   logRuntimeToolSchemaQuarantine,
 } from "../../tool-schema-quarantine.js";
 import {
@@ -1413,15 +1415,21 @@ export async function runEmbeddedAttempt(
       model: params.model,
     };
     const activeToolsRaw = toolsEnabled ? toolsRaw : [];
-    const providerNormalizableTools =
-      activeToolsRaw.length > 0
-        ? filterProviderNormalizableRuntimeTools({
-            tools: activeToolsRaw,
-            runId: params.runId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-          })
-        : activeToolsRaw;
+    let providerNormalizableTools = activeToolsRaw;
+    let preNormalizationQuarantinedToolNames: string[] = [];
+    if (activeToolsRaw.length > 0) {
+      const providerNormalizableProjection = inspectProviderNormalizableRuntimeTools({
+        tools: activeToolsRaw,
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+      });
+      providerNormalizableTools = [...providerNormalizableProjection.tools];
+      preNormalizationQuarantinedToolNames = collectReadableQuarantinedRuntimeToolNames({
+        tools: activeToolsRaw,
+        diagnostics: providerNormalizableProjection.diagnostics,
+      });
+    }
     const tools = normalizeAgentRuntimeTools({
       runtimePlan: params.runtimePlan,
       tools: providerNormalizableTools,
@@ -1434,6 +1442,10 @@ export async function runEmbeddedAttempt(
       model: params.model,
       runtimeHandle: getProviderRuntimeHandle(),
     });
+    const activeReservedToolNames = [
+      ...tools.map((tool) => tool.name),
+      ...preNormalizationQuarantinedToolNames,
+    ];
     const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
@@ -1452,7 +1464,7 @@ export async function runEmbeddedAttempt(
       ? await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
+            ...activeReservedToolNames,
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
           ],
         })
@@ -1467,7 +1479,7 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
+            ...activeReservedToolNames,
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
             ...filterRuntimeToolsWithReadableNames(bundleMcpRuntime?.tools ?? []).map(
               (tool) => tool.name,

@@ -353,6 +353,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         throw new Error("fuzz tool parameters are unreadable");
       },
     });
+    hoisted.getOrCreateSessionMcpRuntimeMock.mockResolvedValue({ runtime: "bundle-mcp" });
     hoisted.createOpenClawCodingToolsMock.mockReturnValue([
       {
         name: "healthy_lookup",
@@ -392,6 +393,17 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       0,
       "createAgentSession options",
     );
+    expect(
+      mockParams(
+        hoisted.materializeBundleMcpToolsForRunMock,
+        0,
+        "materializeBundleMcpToolsForRun options",
+      ).reservedToolNames,
+    ).toEqual(expect.arrayContaining(["healthy_lookup", "fuzzplugin_move_angles"]));
+    expect(
+      mockParams(hoisted.createBundleLspToolRuntimeMock, 0, "createBundleLspToolRuntime options")
+        .reservedToolNames,
+    ).toEqual(expect.arrayContaining(["healthy_lookup", "fuzzplugin_move_angles"]));
     const customTools = requireRecords(sessionOptions.customTools, "customTools");
     expect(customTools.map((tool) => tool.name)).toEqual(["healthy_lookup"]);
     expect(activeToolNames).toEqual([["healthy_lookup"]]);

@@ -113,8 +113,10 @@ import { createAgentSession, estimateTokens, SessionManager } from "../sessions/
 import { detectRuntimeShell } from "../shell-utils.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import {
+  collectReadableQuarantinedRuntimeToolNames,
   filterProviderNormalizableRuntimeTools,
   filterRuntimeToolsWithReadableNames,
+  inspectProviderNormalizableRuntimeTools,
   logRuntimeToolSchemaQuarantine,
 } from "../tool-schema-quarantine.js";
 import {
@@ -831,21 +833,31 @@ async function compactEmbeddedAgentSessionDirectOnce(
       model,
     };
     const activeToolsRaw = toolsEnabled ? toolsRaw : [];
-    const providerNormalizableTools =
-      activeToolsRaw.length > 0
-        ? filterProviderNormalizableRuntimeTools({
-            tools: activeToolsRaw,
-            runId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-          })
-        : activeToolsRaw;
+    let providerNormalizableTools = activeToolsRaw;
+    let preNormalizationQuarantinedToolNames: string[] = [];
+    if (activeToolsRaw.length > 0) {
+      const providerNormalizableProjection = inspectProviderNormalizableRuntimeTools({
+        tools: activeToolsRaw,
+        runId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+      });
+      providerNormalizableTools = [...providerNormalizableProjection.tools];
+      preNormalizationQuarantinedToolNames = collectReadableQuarantinedRuntimeToolNames({
+        tools: activeToolsRaw,
+        diagnostics: providerNormalizableProjection.diagnostics,
+      });
+    }
     const tools = runtimePlan.tools.normalize(providerNormalizableTools, runtimePlanModelContext);
+    const activeReservedToolNames = [
+      ...tools.map((tool) => tool.name),
+      ...preNormalizationQuarantinedToolNames,
+    ];
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-          reservedToolNames: tools.map((tool) => tool.name),
+          reservedToolNames: activeReservedToolNames,
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
@@ -853,7 +865,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
+            ...activeReservedToolNames,
             ...filterRuntimeToolsWithReadableNames(bundleMcpRuntime?.tools ?? []).map(
               (tool) => tool.name,
             ),

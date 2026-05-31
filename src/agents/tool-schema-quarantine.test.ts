@@ -22,7 +22,10 @@ vi.mock("../plugins/tools.js", () => ({
     tool.name === "mockplugin_lookup" ? { pluginId: "mockplugin" } : undefined,
 }));
 
-import { logRuntimeToolSchemaQuarantine } from "./tool-schema-quarantine.js";
+import {
+  collectReadableQuarantinedRuntimeToolNames,
+  logRuntimeToolSchemaQuarantine,
+} from "./tool-schema-quarantine.js";
 
 describe("logRuntimeToolSchemaQuarantine", () => {
   beforeEach(() => {
@@ -82,5 +85,41 @@ describe("logRuntimeToolSchemaQuarantine", () => {
       }),
     );
     expect(String(warnMock.mock.calls[0]?.[0])).toContain("tool[0]: tool[0] is unreadable");
+  });
+});
+
+describe("collectReadableQuarantinedRuntimeToolNames", () => {
+  it("keeps readable quarantined names and ignores unreadable fallback names", () => {
+    const unreadableName: Record<string, unknown> = {
+      parameters: { type: "object", properties: {} },
+    };
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name is unreadable");
+      },
+    });
+    const badParameters = {
+      name: "fuzzplugin_move_angles",
+      parameters: {},
+    };
+
+    expect(
+      collectReadableQuarantinedRuntimeToolNames({
+        tools: [unreadableName, badParameters] as never,
+        diagnostics: [
+          {
+            toolName: "tool[0]",
+            toolIndex: 0,
+            violations: ["tool[0].name is unreadable"],
+          },
+          {
+            toolName: "fuzzplugin_move_angles",
+            toolIndex: 1,
+            violations: ["fuzzplugin_move_angles.parameters is not JSON-serializable"],
+          },
+        ],
+      }),
+    ).toEqual(["fuzzplugin_move_angles"]);
   });
 });
