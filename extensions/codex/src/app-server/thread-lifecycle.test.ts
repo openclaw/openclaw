@@ -103,6 +103,28 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("message,");
   });
 
+  it("uses the shared Skill Workshop guidance when skill_workshop is available", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          name: "skill_workshop",
+          description: "Manage skill proposals",
+          inputSchema: { type: "object" },
+          namespace: "openclaw",
+          deferLoading: true,
+        },
+      ],
+    });
+
+    expect(instructions).toContain("## Skill Workshop");
+    expect(instructions).toContain(
+      "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
+    );
+    expect(instructions).toContain(
+      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
+    );
+  });
+
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [

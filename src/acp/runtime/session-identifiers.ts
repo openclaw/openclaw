@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpIdentity, SessionAcpMeta } from "../../config/sessions/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeText } from "../normalize-text.js";
 import { isSessionIdentityPending, resolveSessionIdentityFromMeta } from "./session-identity.js";
 

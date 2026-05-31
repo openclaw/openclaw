@@ -31,5 +31,5 @@ export {
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromDurationOrEpoch,
   resolveExpiresAtMsFromEpochSeconds,
-} from "../shared/number-coercion.js";
+} from "../../packages/normalization-core/src/number-coercion.js";
 export { MAX_TCP_PORT, parseTcpPort } from "../infra/tcp-port.js";

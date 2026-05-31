@@ -287,22 +287,7 @@ describe("activation planner", () => {
       {
         pluginId: "openai",
         origin: "bundled",
-        reasons: ["manifest-provider-owner"],
-      },
-    ]);
-
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "provider",
-          provider: "openai",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "openai",
-        origin: "bundled",
-        reasons: ["manifest-setup-provider-owner"],
+        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
       },
     ]);
 

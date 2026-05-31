@@ -28,6 +28,14 @@ function makeTempDir() {
   return makeTrackedTempDir("openclaw-manifest-registry", tempDirs);
 }
 
+function makeOpenClawDevSourceRoot() {
+  const root = makeTempDir();
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  mkdirSafe(path.join(root, "src"));
+  mkdirSafe(path.join(root, "extensions"));
+  return root;
+}
+
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
   fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
 }
@@ -580,6 +588,41 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(registry)).toBe(0);
     expect(registry.plugins).toHaveLength(1);
     expect(registry.plugins[0]?.origin).toBe("global");
+  });
+
+  it("prefers dev source bundled plugins over installed globals with the same id", () => {
+    const devSourceRoot = makeOpenClawDevSourceRoot();
+    const bundledDir = path.join(devSourceRoot, "extensions", "codex");
+    const globalDir = makeTempDir();
+    const manifest = { id: "codex", configSchema: { type: "object" } };
+    mkdirSafe(bundledDir);
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
+      installRecords: {
+        codex: {
+          source: "npm",
+          installPath: globalDir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
   });
 
   it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {

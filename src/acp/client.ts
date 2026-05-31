@@ -11,8 +11,8 @@ import {
   type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,

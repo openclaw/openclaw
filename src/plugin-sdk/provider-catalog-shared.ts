@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-} from "../shared/number-coercion.js";
+} from "../../packages/normalization-core/src/number-coercion.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";

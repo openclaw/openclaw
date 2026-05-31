@@ -31,6 +31,7 @@ const manifest = JSON.parse(
   };
   providerEndpoints?: Array<{ endpointClass?: string; hosts?: string[] }>;
   providerAuthAliases?: Record<string, string>;
+  legacyPluginIds?: string[];
 };
 
 const packageJson = JSON.parse(
@@ -105,6 +106,7 @@ describe("OpenAI plugin manifest", () => {
   });
 
   it("routes setup through the OpenAI setup runtime", () => {
+    expect(manifest.legacyPluginIds).toEqual(["openai-codex"]);
     expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
     expect(manifest.providerAuthAliases).toBeUndefined();
   });

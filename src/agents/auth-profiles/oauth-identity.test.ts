@@ -1,5 +1,5 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
   isSafeToCopyOAuthIdentity,
   isSameOAuthIdentity,

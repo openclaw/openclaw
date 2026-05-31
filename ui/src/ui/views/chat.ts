@@ -165,6 +165,7 @@ export type ChatProps = {
     defaultId?: string;
   } | null;
   currentAgentId: string;
+  fullMessageAgentId?: string;
   onAgentChange: (agentId: string) => void;
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
@@ -1262,6 +1263,8 @@ export function renderChat(props: ChatProps) {
               }
               return renderMessageGroup(item, {
                 onOpenSidebar: props.onOpenSidebar,
+                sessionKey: props.sessionKey,
+                agentId: props.fullMessageAgentId,
                 showReasoning,
                 showToolCalls: props.showToolCalls,
                 autoExpandToolCalls: Boolean(props.autoExpandToolCalls),

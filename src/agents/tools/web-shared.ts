@@ -2,8 +2,8 @@ import {
   asDateTimestampMs,
   MAX_TIMER_TIMEOUT_SECONDS,
   resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type CacheEntry<T> = {
   value: T;

@@ -27,14 +27,17 @@ import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import { isRemoteEnvironment, openUrl } from "./setup-browser.js";
-import type {
-  ProviderAuthDefaultModelMigration,
-  ProviderAuthMethod,
-  ProviderAuthOptionBag,
-  ProviderPlugin,
-} from "./types.js";
+import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+type ProviderAuthDefaultModelMigration = {
+  fromProviderIds: string[];
+  whenModelIdMatchesDefault?: boolean;
+};
+
+const OPENAI_PROVIDER_ID = "openai";
+const LEGACY_CODEX_PROVIDER_IDS = ["codex", "openai-codex"] as const;
 
 export type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -68,6 +71,19 @@ function formatModelRefForDisplay(modelRef: string, provider: ProviderPlugin): s
     return modelRef;
   }
   return formatLiteralProviderPrefixedModelRef(provider.id, modelRef);
+}
+
+function resolveInternalDefaultModelMigration(params: {
+  provider: ProviderPlugin;
+  method: ProviderAuthMethod;
+}): ProviderAuthDefaultModelMigration | undefined {
+  if (params.provider.id !== OPENAI_PROVIDER_ID) {
+    return undefined;
+  }
+  if (params.method.kind !== "oauth" && params.method.kind !== "device_code") {
+    return undefined;
+  }
+  return { fromProviderIds: [...LEGACY_CODEX_PROVIDER_IDS] };
 }
 
 function restoreConfiguredPrimaryModel(
@@ -325,7 +341,6 @@ export async function runProviderPluginAuthMethod(params: {
 }): Promise<{
   config: OpenClawConfig;
   defaultModel?: string;
-  defaultModelMigration?: ProviderAuthDefaultModelMigration;
 }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
@@ -391,9 +406,6 @@ export async function runProviderPluginAuthMethod(params: {
   return {
     config: nextConfig,
     ...(defaultModel ? { defaultModel } : {}),
-    ...(result.defaultModelMigration
-      ? { defaultModelMigration: result.defaultModelMigration }
-      : {}),
   };
 }
 
@@ -537,7 +549,10 @@ export async function applyAuthChoiceLoadedPluginProvider(
         configBeforeProviderAuth,
         selectedModel,
         selectedModelDisplay,
-        defaultModelMigration: applied.defaultModelMigration,
+        defaultModelMigration: resolveInternalDefaultModelMigration({
+          provider: resolved.provider,
+          method: resolved.method,
+        }),
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
         runtime: params.runtime,
@@ -632,7 +647,7 @@ export async function applyAuthChoicePluginProvider(
         configBeforeProviderAuth,
         selectedModel,
         selectedModelDisplay,
-        defaultModelMigration: applied.defaultModelMigration,
+        defaultModelMigration: resolveInternalDefaultModelMigration({ provider, method }),
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
         runtime: params.runtime,

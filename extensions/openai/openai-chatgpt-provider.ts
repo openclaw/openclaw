@@ -46,8 +46,6 @@ import {
 import { resolveOpenAICodexThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
-const LEGACY_CODEX_PROVIDER_ID = "codex";
-const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
@@ -107,11 +105,6 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
 ] as const;
-const OPENAI_CODEX_DEFAULT_MODEL_MIGRATION: NonNullable<
-  ProviderAuthResult["defaultModelMigration"]
-> = {
-  fromProviderIds: [LEGACY_CODEX_PROVIDER_ID, LEGACY_OPENAI_CODEX_PROVIDER_ID],
-};
 
 function isOpenAIOrLegacyCodexProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
@@ -445,7 +438,6 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
-    defaultModelMigration: OPENAI_CODEX_DEFAULT_MODEL_MIGRATION,
     configPatch: buildOpenAICodexAuthConfigPatch(),
     access: creds.access,
     refresh: creds.refresh,
@@ -497,7 +489,6 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
       defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
-      defaultModelMigration: OPENAI_CODEX_DEFAULT_MODEL_MIGRATION,
       configPatch: buildOpenAICodexAuthConfigPatch(),
       access: creds.access,
       refresh: creds.refresh,

@@ -1,4 +1,4 @@
-import { timestampMsToIsoString } from "../../../../src/shared/number-coercion.js";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { extractTextCached } from "./message-extract.ts";
 
 /**

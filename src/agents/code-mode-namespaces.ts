@@ -1,4 +1,4 @@
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 
 const FORBIDDEN_NAMESPACE_PATH_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
 const NAMESPACE_PATH_KEY_SEPARATOR = "\u0000";

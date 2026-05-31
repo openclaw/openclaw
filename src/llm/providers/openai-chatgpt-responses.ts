@@ -20,7 +20,10 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
   });
 }
 
-import { resolveTimerTimeoutMs, clampTimerTimeoutMs } from "../../shared/number-coercion.js";
+import {
+  resolveTimerTimeoutMs,
+  clampTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";

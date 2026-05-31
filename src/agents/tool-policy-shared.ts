@@ -1,5 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   CORE_TOOL_GROUPS,
   resolveCoreToolProfilePolicy,

@@ -555,6 +555,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
         modelId: "gpt-5.4",
+        authProfileMode: "oauth",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.2-codex"
@@ -582,6 +583,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
         modelId: "gpt-5.5",
+        authProfileMode: "oauth",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.5"
@@ -614,6 +616,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
         modelId: "gpt-5.4-mini",
+        authProfileMode: "oauth",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.4"
@@ -647,6 +650,12 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider.prepareExtraParams?.({
           provider: "openai",
           modelId: "gpt-5.4",
+          model: createModel({
+            id: "gpt-5.4",
+            provider: "openai",
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          }),
           extraParams: { temperature: 0.2 },
         }),
       ).toEqual({
@@ -685,7 +694,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         }),
       ).resolves.toEqual({
         provider: "openai",
-        displayName: "Codex",
+        displayName: "OpenAI",
         windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
         plan: "Plus",
       });

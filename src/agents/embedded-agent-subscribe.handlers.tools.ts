@@ -1,4 +1,12 @@
 import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecordField,
+} from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
@@ -19,11 +27,6 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  asOptionalObjectRecord,
-  asOptionalRecord as readRecordField,
-} from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";

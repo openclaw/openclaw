@@ -117,7 +117,7 @@ export function describeOpenAIProviderCatalogContract() {
         const { openaiProvider } = await contractDepsPromise;
         expectCodexMissingAuthHint(
           (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
-          "openai/gpt-*",
+          "openai/gpt-5.5",
         );
       });
 

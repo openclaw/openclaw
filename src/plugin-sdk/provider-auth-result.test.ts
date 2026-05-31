@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_DATE_TIMESTAMP_MS } from "../shared/number-coercion.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../../packages/normalization-core/src/number-coercion.js";
 import { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 
 describe("buildOauthProviderAuthResult", () => {
@@ -109,7 +109,7 @@ describe("buildOauthProviderAuthResult", () => {
     });
   });
 
-  it("preserves provider-owned default model migration metadata", () => {
+  it("does not expose default model migration metadata through OAuth auth results", () => {
     const result = buildOauthProviderAuthResult({
       providerId: "openai",
       defaultModel: "openai/gpt-5.5",
@@ -117,10 +117,10 @@ describe("buildOauthProviderAuthResult", () => {
       defaultModelMigration: {
         fromProviderIds: ["codex", "openai-codex"],
       },
+    } as Parameters<typeof buildOauthProviderAuthResult>[0] & {
+      defaultModelMigration: { fromProviderIds: string[] };
     });
 
-    expect(result.defaultModelMigration).toEqual({
-      fromProviderIds: ["codex", "openai-codex"],
-    });
+    expect("defaultModelMigration" in result).toBe(false);
   });
 });

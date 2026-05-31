@@ -1,11 +1,11 @@
-import { sanitizeAgentId } from "../routing/session-key.js";
-import { timestampMsToIsoString } from "../shared/number-coercion.js";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,

@@ -1,5 +1,5 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { readErrorName } from "../infra/errors.js";
-import { parseStrictNonNegativeInteger } from "../shared/number-coercion.js";
 import {
   classifyFailoverSignal,
   inferSignalStatus,

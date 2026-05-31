@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
@@ -14,8 +16,6 @@ import {
   resolveAssistantMessagePhase,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,

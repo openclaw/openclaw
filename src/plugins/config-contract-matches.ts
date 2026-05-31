@@ -1,5 +1,5 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 export type PluginConfigContractMatch = {

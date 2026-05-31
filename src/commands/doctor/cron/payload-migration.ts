@@ -1,7 +1,7 @@
 import {
   normalizeOptionalLowercaseString,
   readStringValue as readString,
-} from "../../../shared/string-coerce.js";
+} from "../../../../packages/normalization-core/src/string-coerce.js";
 
 type UnknownRecord = Record<string, unknown>;
 

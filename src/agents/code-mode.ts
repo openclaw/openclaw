@@ -2,14 +2,14 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { Type } from "typebox";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
-} from "../shared/number-coercion.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {

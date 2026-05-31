@@ -1,12 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { isPathInside } from "../../infra/path-safety.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   SKILL_WORKSHOP_MANIFEST_SCHEMA,

@@ -1,3 +1,11 @@
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
@@ -10,14 +18,6 @@ import {
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import {
-  resolveExpiresAtMsFromDurationMs,
-  timestampMsToIsoString,
-} from "../../shared/number-coercion.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 

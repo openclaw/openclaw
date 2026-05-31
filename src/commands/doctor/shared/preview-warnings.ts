@@ -1,4 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
@@ -13,8 +15,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 

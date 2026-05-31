@@ -820,7 +820,7 @@
   font-size: var(--control-ui-text-sm);
   transform: translateY(0.8px);
   color: color-mix(in srgb, var(--text) 76%, var(--muted) 24%);
-  flex: 1 1 18rem;
+  flex: 0 1 auto;
   max-width: 100%;
   overflow: visible;
   overflow-wrap: anywhere;

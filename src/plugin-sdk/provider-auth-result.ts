@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "../../packages/normalization-core/src/number-coercion.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
@@ -8,7 +9,6 @@ import {
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
-import { asDateTimestampMs } from "../shared/number-coercion.js";
 
 function normalizeAgentModelConfigForAuthResult(value: unknown): unknown {
   if (typeof value === "string") {
@@ -131,7 +131,6 @@ export function buildOauthProviderAuthResult(params: {
   profilePrefix?: string;
   credentialExtra?: Record<string, unknown>;
   configPatch?: Partial<OpenClawConfig>;
-  defaultModelMigration?: ProviderAuthResult["defaultModelMigration"];
   notes?: string[];
 }): ProviderAuthResult {
   const email = params.email ?? undefined;
@@ -170,9 +169,6 @@ export function buildOauthProviderAuthResult(params: {
         } as Partial<OpenClawConfig>),
     ),
     defaultModel,
-    ...(params.defaultModelMigration
-      ? { defaultModelMigration: params.defaultModelMigration }
-      : {}),
     notes: params.notes,
   };
 }

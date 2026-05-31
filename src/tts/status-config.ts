@@ -1,12 +1,12 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.js";
-import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
-import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.js";
+import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import { resolveEffectiveTtsConfig, type TtsConfigResolutionContext } from "./tts-config.js";

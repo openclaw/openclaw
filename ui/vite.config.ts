@@ -119,7 +119,10 @@ function resolveTsconfigPathAlias(key: string, target: string): ControlUiViteAli
     };
   }
 
-  if (key.includes("*", keyWildcardIndex + 1) || target.includes("*", targetWildcardIndex + 1)) {
+  if (
+    key.slice(keyWildcardIndex + 1).includes("*") ||
+    target.slice(targetWildcardIndex + 1).includes("*")
+  ) {
     return null;
   }
 

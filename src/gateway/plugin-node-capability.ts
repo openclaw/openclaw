@@ -1,11 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   asDateTimestampMs,
   asPositiveSafeInteger,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { safeEqualSecret } from "../security/secret-equal.js";
 
 export const PLUGIN_NODE_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 const PLUGIN_NODE_CAPABILITY_QUERY_PARAM = "oc_cap";

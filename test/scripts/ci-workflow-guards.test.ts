@@ -6,6 +6,10 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function readCriticalQualityWorkflow() {
+  return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
+}
+
 describe("ci workflow guards", () => {
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
@@ -207,5 +211,38 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain(
       "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source",
     );
+  });
+
+  it("keeps network CodeQL off unrelated source-only refactors", () => {
+    const workflow = readCriticalQualityWorkflow();
+    const networkConfig = readFileSync(
+      ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
+      "utf8",
+    );
+    const networkSelector = workflow.slice(
+      workflow.indexOf(".github/codeql/codeql-network-runtime-boundary-critical-quality.yml"),
+      workflow.indexOf("network-runtime-boundary:"),
+    );
+    const broadCodeqlSelector = workflow.slice(
+      workflow.indexOf(".github/codeql/*|.github/workflows/codeql-critical-quality.yml"),
+      workflow.indexOf("src/**/*.test.ts|src/**/*.test.tsx"),
+    );
+
+    expect(broadCodeqlSelector).not.toContain("network_runtime=true");
+    expect(networkSelector).toContain(
+      ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
+    );
+    expect(networkSelector).not.toContain("src/*.ts|src/**/*.ts");
+    expect(networkSelector).not.toContain("extensions/*.ts|extensions/**/*.ts");
+    expect(networkSelector).toContain("src/infra/net/*");
+    expect(networkSelector).toContain("src/infra/ssh-tunnel.ts");
+    expect(networkSelector).toContain("packages/net-policy/src/*");
+    expect(networkConfig).not.toContain("\n  - src\n");
+    expect(networkConfig).not.toContain("\n  - extensions\n");
+    expect(networkConfig).toContain("\n  - src/infra/net\n");
+    expect(networkConfig).toContain("\n  - packages/net-policy/src\n");
+    expect(workflow).toContain("Fast PR network boundary diff scan");
+    expect(workflow).toContain("Network runtime boundary-sensitive added lines");
+    expect(workflow).toContain("if: ${{ github.event_name != 'pull_request' }}");
   });
 });

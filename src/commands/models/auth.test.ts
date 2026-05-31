@@ -1,8 +1,8 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 
 type AuthRunCall = {
   agentDir?: string;

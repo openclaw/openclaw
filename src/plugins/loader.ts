@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAgentHarnesses,
   listRegisteredAgentHarnesses,
@@ -19,7 +20,6 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -52,6 +52,7 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import {
   discoverOpenClawPlugins,
   type PluginCandidate,
@@ -545,13 +546,17 @@ function runPluginRegisterSync(
   }
 }
 
-function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
+function createPluginModuleLoader(options: {
+  devSourceRoot?: string | null;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+}) {
   const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
   const createLoaderForModule = (modulePath: string) => {
     installOpenClawPluginSdkNativeResolver({
       argv1: process.argv[1],
       moduleUrl: import.meta.url,
       pluginModulePath: modulePath,
+      devSourceRoot: options.devSourceRoot,
       pluginSdkResolution: options.pluginSdkResolution,
     });
     return getCachedPluginModuleLoader({
@@ -559,11 +564,13 @@ function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkRes
       modulePath,
       importerUrl: import.meta.url,
       loaderFilename: modulePath,
+      devSourceRoot: options.devSourceRoot,
       aliasMap: buildPluginLoaderAliasMap(
         modulePath,
         process.argv[1],
         import.meta.url,
         options.pluginSdkResolution,
+        options.devSourceRoot,
       ),
       pluginSdkResolution: options.pluginSdkResolution,
     });
@@ -906,6 +913,7 @@ function buildCacheKey(params: {
   activationMetadataKey?: string;
   installs?: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
+  devSourceRoot?: string | null;
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
@@ -927,6 +935,7 @@ function buildCacheKey(params: {
   });
   const { roots, loadPaths } = discoveryContext;
   const bundledPackage = resolveBundledPackageCacheIdentity(roots.stock);
+  const devSourceRoot = params.devSourceRoot ?? "";
   const installs = Object.fromEntries(
     Object.entries(params.installs ?? {}).map(([pluginId, install]) => [
       pluginId,
@@ -964,6 +973,7 @@ function buildCacheKey(params: {
   const activationMode = params.activate === false ? "snapshot" : "active";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     bundledPackage,
+    devSourceRoot,
     discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
     ...params.plugins,
     installs,
@@ -1280,6 +1290,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     ...(options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env })),
     ...cfg.plugins?.installs,
   };
+  const devSourceRoot = resolveOpenClawDevSourceRoot(env);
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: shouldResolveRawConfigEnvVars
@@ -1291,6 +1302,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     }),
     installs: installRecords,
     env,
+    devSourceRoot,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     forceSetupOnlyChannelPlugins,
@@ -1322,6 +1334,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
     installRecords,
+    devSourceRoot,
     cacheKey,
   };
 }
@@ -1717,6 +1730,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     cacheKey,
     runtimeSubagentMode,
     installRecords,
+    devSourceRoot,
   } = resolvePluginLoadCacheContext(options);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
@@ -1765,7 +1779,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     // Lazy: avoid creating module loaders when all plugins are disabled (common in unit tests).
-    const loadPluginModule = createPluginModuleLoader(options);
+    const loadPluginModule = createPluginModuleLoader({
+      devSourceRoot,
+      pluginSdkResolution: options.pluginSdkResolution,
+    });
 
     let createPluginRuntimeFactory:
       | ((options?: CreatePluginRuntimeOptions) => PluginRuntime)
@@ -1777,6 +1794,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         return createPluginRuntimeFactory;
       }
       const runtimeModuleResolution = resolvePluginRuntimeModulePathWithDiagnostics({
+        devSourceRoot,
         pluginSdkResolution: options.pluginSdkResolution,
       });
       const runtimeModulePath = runtimeModuleResolution.resolvedPath;
@@ -2772,13 +2790,17 @@ export async function loadOpenClawPluginCliRegistry(
     onlyPluginIds,
     cacheKey,
     installRecords,
+    devSourceRoot,
   } = resolvePluginLoadCacheContext({
     ...options,
     activate: false,
   });
   const logger = options.logger ?? defaultLogger();
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
-  const loadPluginModule = createPluginModuleLoader(options);
+  const loadPluginModule = createPluginModuleLoader({
+    devSourceRoot,
+    pluginSdkResolution: options.pluginSdkResolution,
+  });
   const { registry, registerCli } = createPluginRegistry({
     logger,
     runtime: {} as PluginRuntime,

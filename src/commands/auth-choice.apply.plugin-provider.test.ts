@@ -179,8 +179,6 @@ function buildOpenAIProviderWithDefaultModelPatch(
     kind: "device_code",
   },
 ): ProviderPlugin {
-  const defaultModelMigration =
-    method.kind === "api_key" ? undefined : { fromProviderIds: ["codex", "openai-codex"] };
   return {
     id: OPENAI_PROVIDER_ID,
     label: "OpenAI",
@@ -210,8 +208,47 @@ function buildOpenAIProviderWithDefaultModelPatch(
             },
           },
           defaultModel: OPENAI_DEFAULT_MODEL,
-          ...(defaultModelMigration ? { defaultModelMigration } : {}),
         }),
+      },
+    ],
+  };
+}
+
+function buildProviderWithIgnoredDefaultModelMigration(): ProviderPlugin {
+  return {
+    id: LOCAL_PROVIDER_ID,
+    label: LOCAL_PROVIDER_LABEL,
+    auth: [
+      {
+        id: LOCAL_AUTH_METHOD_ID,
+        label: LOCAL_PROVIDER_LABEL,
+        kind: "device_code",
+        run: async () =>
+          ({
+            profiles: [
+              {
+                profileId: LOCAL_PROFILE_ID,
+                credential: {
+                  type: "token",
+                  provider: LOCAL_PROVIDER_ID,
+                  token: "local-provider-token",
+                },
+              },
+            ],
+            configPatch: {
+              agents: {
+                defaults: {
+                  models: {
+                    [LOCAL_DEFAULT_MODEL]: { alias: "Local default" },
+                  },
+                },
+              },
+            },
+            defaultModel: LOCAL_DEFAULT_MODEL,
+            defaultModelMigration: { fromProviderIds: ["codex"] },
+          }) as Awaited<ReturnType<ProviderAuthMethod["run"]>> & {
+            defaultModelMigration: { fromProviderIds: string[] };
+          },
       },
     ],
   };
@@ -543,6 +580,48 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       `Kept existing default model ${LEGACY_CODEX_DEFAULT_MODEL}; ${OPENAI_DEFAULT_MODEL} is available.`,
+      "Model configured",
+    );
+  });
+
+  it("ignores plugin-returned default migration metadata outside the internal OpenAI path", async () => {
+    const provider = buildProviderWithIgnoredDefaultModelMigration();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+    const note = vi.fn(async () => {});
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: LEGACY_CODEX_DEFAULT_MODEL },
+              models: {
+                [LEGACY_CODEX_DEFAULT_MODEL]: { alias: "Codex" },
+              },
+            },
+          },
+        },
+        prompter: {
+          note,
+        } as unknown as ApplyAuthChoiceParams["prompter"],
+        preserveExistingDefaultModel: true,
+      }),
+    );
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: LEGACY_CODEX_DEFAULT_MODEL,
+    });
+    expect(result?.config.agents?.defaults?.models).toEqual({
+      [LEGACY_CODEX_DEFAULT_MODEL]: { alias: "Codex" },
+      [LOCAL_DEFAULT_MODEL]: { alias: "Local default" },
+    });
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      `Kept existing default model ${LEGACY_CODEX_DEFAULT_MODEL}; ${LOCAL_DEFAULT_MODEL} is available.`,
       "Model configured",
     );
   });

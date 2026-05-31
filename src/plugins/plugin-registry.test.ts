@@ -379,6 +379,7 @@ describe("plugin registry facade", () => {
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
         id: "openai",
+        legacyPluginIds: ["openai-codex"],
         configSchema: { type: "object" },
         providers: ["openai", "openai"],
         channels: ["openai-chat"],
