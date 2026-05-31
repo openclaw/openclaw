@@ -38,6 +38,7 @@ describe("exec foreground failures", () => {
 
     const result = await tool.execute("call-timeout", {
       command: longDelayCmd,
+      host: "gateway",
     });
 
     expect(result.content[0]?.type).toBe("text");
