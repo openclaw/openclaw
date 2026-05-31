@@ -133,8 +133,16 @@ export function resolveProbeBudgetMs(
   overallMs: number,
   target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
 ): number {
-  if (target.kind === "configRemote" || target.kind === "explicit") {
+  if (target.kind === "explicit") {
     return overallMs;
+  }
+  if (target.kind === "configRemote") {
+    // Active configured remote targets (gateway.mode === "remote") legitimately
+    // need the full caller budget for a healthy remote RPC. An *inactive*
+    // configured remote — e.g. local mode with a stale leftover gateway.remote.url
+    // — must keep the short remote cap so a dead remote host does not consume the
+    // entire caller timeout before the active local probe runs.
+    return target.active ? overallMs : Math.min(1500, overallMs);
   }
   if (target.kind === "sshTunnel") {
     return Math.min(2000, overallMs);

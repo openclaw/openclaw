@@ -369,7 +369,7 @@ describe("resolveProbeBudgetMs", () => {
     ).toBe(2_500);
   });
 
-  it("lets configured and explicit remote probes use the full caller budget", () => {
+  it("lets active configured and explicit remote probes use the full caller budget", () => {
     expect(
       resolveProbeBudgetMs(15_000, {
         kind: "configRemote",
@@ -384,6 +384,26 @@ describe("resolveProbeBudgetMs", () => {
         url: "wss://gateway.example/ws",
       }),
     ).toBe(15_000);
+  });
+
+  it("keeps inactive configured remote probes (local mode with a stale remote URL) on the short cap", () => {
+    // gateway.mode === "local" but a leftover gateway.remote.url is still present:
+    // resolveTargets marks the configRemote target active === false. A dead remote
+    // host must not consume the full caller budget before the active local probe.
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "configRemote",
+        active: false,
+        url: "wss://stale-remote.example/ws",
+      }),
+    ).toBe(1500);
+    expect(
+      resolveProbeBudgetMs(500, {
+        kind: "configRemote",
+        active: false,
+        url: "wss://stale-remote.example/ws",
+      }),
+    ).toBe(500);
   });
 
   it("keeps ssh tunnel probes on the short cap", () => {
