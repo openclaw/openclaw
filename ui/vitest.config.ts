@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig, defineProject } from "vitest/config";
+import type { BrowserConfigOptions } from "vitest/node";
 import {
   jsdomOptimizedDeps,
   resolveDefaultVitestPool,
@@ -13,6 +14,8 @@ const sharedUiTestConfig = {
   isolate: false,
   pool: resolveDefaultVitestPool(),
 } as const;
+const browserProvider = playwright() as unknown as BrowserConfigOptions["provider"];
+
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/chat-responsive.browser.test.ts",
   "src/ui/views/sessions.browser.test.ts",
@@ -64,7 +67,7 @@ export default defineConfig({
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
           browser: {
             enabled: true,
-            provider: playwright(),
+            provider: browserProvider,
             instances: [{ browser: "chromium", name: "chromium" }],
             headless: true,
             ui: false,

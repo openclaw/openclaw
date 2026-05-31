@@ -181,22 +181,7 @@
       ]
     },
     "x_search": {
-      "authSignals": [
-        {
-          "provider": "xai"
-        }
-      ],
-      "configSignals": [
-        {
-          "rootPath": "plugins.entries.xai.config",
-          "overlayPath": "webSearch",
-          "required": ["apiKey"]
-        },
-        {
-          "rootPath": "tools.web.search.grok",
-          "required": ["apiKey"]
-        }
-      ]
+      "optional": true
     }
   },
   "configContracts": {

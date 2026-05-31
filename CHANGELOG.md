@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- X Search: read exact public X/Twitter post URLs and numeric status IDs through the key-free public FxTwitter API before falling back to xAI-backed broader X search.
 - Docs: add a dedicated Skill Workshop guide covering governed skill creation, reviewable proposals, CLI, Gateway, agent tool behavior, approval policy, support files, and recovery. Thanks @shakkernerd.
 - Skills: let the `skill_workshop` agent tool apply, reject, and quarantine explicit proposals through the guarded review flow. Thanks @shakkernerd.
 - Skills: let proposals carry approved support files under standard skill folders, with scanner, hash, and rollback safeguards. Thanks @shakkernerd.

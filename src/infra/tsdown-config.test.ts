@@ -227,26 +227,37 @@ describe("tsdown config", () => {
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
-      for (const dependency of [
-        "@anthropic-ai/vertex-sdk",
-        "@discordjs/voice",
-        "@lancedb/lancedb",
-        "@larksuiteoapi/node-sdk",
-        "@slack/bolt",
-        "@slack/web-api",
-        "@vitest/expect",
-        "matrix-js-sdk",
-        "qrcode-terminal",
-        "vitest",
-      ]) {
-        expect(neverBundle).toContain(dependency);
-      }
+      expect(neverBundle).toEqual(
+        expect.arrayContaining([
+          "@anthropic-ai/vertex-sdk",
+          "@discordjs/voice",
+          "@lancedb/lancedb",
+          "@larksuiteoapi/node-sdk",
+          "@slack/bolt",
+          "@slack/web-api",
+          "@vitest/expect",
+          "@whiskeysockets/baileys",
+          "axios",
+          "fast-uri",
+          "matrix-js-sdk",
+          "pino",
+          "prism-media",
+          "qrcode-terminal",
+          "typescript",
+          "vitest",
+        ]),
+      );
     }
     if (typeof external !== "function") {
       throw new Error("expected unified graph external predicate");
     }
     const externalize = external;
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
+    expect(externalize("vitest", undefined, false)).toBe(true);
+    expect(externalize("@vitest/expect", undefined, false)).toBe(true);
+    expect(externalize("fast-uri/types/index.d.ts", undefined, true)).toBe(true);
+    expect(externalize("axios/index.d.cts", undefined, true)).toBe(true);
+    expect(externalize("prism-media/typings/index.d.ts", undefined, true)).toBe(true);
   });
 
   it("always bundles plugin SDK package-local runtime dependencies", () => {
