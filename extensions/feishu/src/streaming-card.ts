@@ -453,14 +453,13 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
-    if (!mergedInput || mergedInput === this.state.currentText) {
+    if (!text || text === this.state.currentText) {
       return;
     }
-    this.pendingText = mergedInput;
+    this.pendingText = text;
     this.clearFlushTimer();
 
-    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.currentText, mergedInput);
+    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.currentText, text);
     const now = Date.now();
     if (!shouldForceUpdate && now - this.lastUpdateTime < this.updateThrottleMs) {
       this.schedulePendingFlush();
@@ -472,22 +471,21 @@ export class FeishuStreamingSession {
       if (!this.state || this.closed) {
         return;
       }
-      const nextText = this.pendingText ?? mergedInput;
-      const mergedText = mergeStreamingText(this.state.currentText, nextText);
-      if (!mergedText || mergedText === this.state.currentText) {
+      const nextText = this.pendingText ?? text;
+      if (!nextText || nextText === this.state.currentText) {
         return;
       }
-      const appendContent = resolveStreamingCardAppendContent(this.state.sentText, mergedText);
+      const appendContent = resolveStreamingCardAppendContent(this.state.sentText, nextText);
       if (!appendContent) {
         return;
       }
       this.pendingText = null;
-      this.state.currentText = mergedText;
+      this.state.currentText = nextText;
       const sent = await this.updateCardContent(appendContent, (e) =>
         this.log?.(`Update failed: ${String(e)}`),
       );
       if (sent && this.state) {
-        this.state.sentText = mergedText;
+        this.state.sentText = nextText;
       }
     });
     await this.queue;
