@@ -1,10 +1,11 @@
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
@@ -16,6 +17,10 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
     callGatewayFromCli: gatewayRuntime.callGatewayFromCli,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", () => ({
+  getRuntimeConfig: gatewayRuntime.getRuntimeConfig,
+}));
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -74,6 +79,13 @@ async function captureStdout(run: () => Promise<void>): Promise<string> {
 }
 
 describe("registerWorkboardCli", () => {
+  beforeEach(() => {
+    gatewayRuntime.callGatewayFromCli.mockReset();
+    gatewayRuntime.getRuntimeConfig.mockReset();
+    gatewayRuntime.getRuntimeConfig.mockReturnValue({});
+    delete process.env.OPENCLAW_GATEWAY_URL;
+  });
+
   it("redacts claim tokens from card JSON output", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Claimed worker", status: "running" });
@@ -104,6 +116,26 @@ describe("registerWorkboardCli", () => {
     await expect(
       program.parseAsync(["workboard", "dispatch", "--url", "ws://remote"], { from: "user" }),
     ).rejects.toThrow("ECONNREFUSED");
+
+    const after = await store.get(card.id);
+    expect(after?.status).toBe("ready");
+    expect(after?.metadata?.automation?.dispatchCount).toBeUndefined();
+  });
+
+  it("does not fall back to local dispatch for configured remote gateways", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Configured remote target", status: "ready" });
+    const program = createProgram(store);
+    gatewayRuntime.getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+    });
+    gatewayRuntime.callGatewayFromCli.mockRejectedValueOnce(
+      new Error("connect ECONNREFUSED gateway.example:443"),
+    );
+
+    await expect(program.parseAsync(["workboard", "dispatch"], { from: "user" })).rejects.toThrow(
+      "ECONNREFUSED",
+    );
 
     const after = await store.get(card.id);
     expect(after?.status).toBe("ready");

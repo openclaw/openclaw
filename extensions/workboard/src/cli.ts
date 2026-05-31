@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import type { WorkboardDispatchResult, WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
@@ -106,6 +107,17 @@ function hasExplicitGatewayTarget(options: GatewayOptions): boolean {
   return Boolean(options.url?.trim() || options.token?.trim());
 }
 
+function hasConfiguredRemoteGatewayTarget(): boolean {
+  if (process.env.OPENCLAW_GATEWAY_URL?.trim()) {
+    return true;
+  }
+  try {
+    return getRuntimeConfig().gateway?.mode === "remote";
+  } catch {
+    return false;
+  }
+}
+
 export function registerWorkboardCli(params: { program: Command; store: WorkboardStore }): void {
   const workboard = params.program
     .command("workboard")
@@ -203,7 +215,11 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         writeLine(`dispatch complete: started=${started} failures=${failures}`);
       }
     } catch (error) {
-      if (!isGatewayUnavailableError(error) || hasExplicitGatewayTarget(options)) {
+      if (
+        !isGatewayUnavailableError(error) ||
+        hasExplicitGatewayTarget(options) ||
+        hasConfiguredRemoteGatewayTarget()
+      ) {
         throw error;
       }
       const result = redactDispatchResult(await params.store.dispatch());
