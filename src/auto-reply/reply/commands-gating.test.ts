@@ -504,6 +504,28 @@ describe("command gating", () => {
     expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_CDP_API_KEY_65623");
   });
 
+  it("redacts secret-shaped values from /config set acknowledgements", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      valid: true,
+      parsed: { gateway: { auth: { mode: "token" } } },
+    });
+    const params = buildParams(
+      '/config set gateway.auth.token="OPENCLAW_CONFIG_SET_CANARY_TOKEN_65623"',
+      {
+        commands: { config: true, text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+    );
+    params.command.senderIsOwner = true;
+
+    const result = await handleConfigCommand(params, true);
+    const output = result?.reply?.text ?? "";
+
+    expect(output).toContain("Config updated: gateway.auth.token=");
+    expect(output).toContain(REDACTED_SENTINEL);
+    expect(output).not.toContain("OPENCLAW_CONFIG_SET_CANARY_TOKEN_65623");
+  });
+
   it("returns explicit unauthorized replies for native privileged commands", async () => {
     const configParams = buildParams("/config show", {
       commands: { config: true, text: true },
