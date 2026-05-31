@@ -120,6 +120,7 @@ function resolveAnthropicVertexProjectIdFromAdc(
     return undefined;
   }
   try {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- ADC credentials are external JSON; only optional project ids are consumed.
     const parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as AdcProjectFile;
     return (
       normalizeOptionalSecretInput(parsed.project_id) ||

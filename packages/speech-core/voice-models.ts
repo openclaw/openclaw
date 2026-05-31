@@ -101,6 +101,7 @@ export function voiceProviderSupportsModel(
 }
 
 export function resolveVoiceModelRefs(config: unknown): VoiceModelRef[] {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Voice model config is an open config object; fields are normalized individually below.
   const voiceModel = config as VoiceModelConfig | undefined;
   if (typeof voiceModel === "string") {
     const parsed = parseVoiceModelRef(voiceModel);
@@ -212,6 +213,7 @@ export function getVoiceProviderConfig<TConfig extends Record<string, unknown>>(
   const configuredKeys = Object.keys(params.providerConfigs);
   for (const candidate of candidates) {
     if (Object.hasOwn(params.providerConfigs, candidate)) {
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Empty provider config preserves the caller-specific config record type.
       return params.providerConfigs[candidate] ?? ({} as TConfig);
     }
     const normalizedCandidate = normalizeLowercaseString(candidate);
@@ -219,9 +221,11 @@ export function getVoiceProviderConfig<TConfig extends Record<string, unknown>>(
       (key) => normalizeLowercaseString(key) === normalizedCandidate,
     );
     if (matchingKey) {
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Empty provider config preserves the caller-specific config record type.
       return params.providerConfigs[matchingKey] ?? ({} as TConfig);
     }
   }
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Empty provider config preserves the caller-specific config record type.
   return {} as TConfig;
 }
 

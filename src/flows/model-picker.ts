@@ -421,17 +421,17 @@ function createPreferredProviderMatcher(params: {
     if (cached !== undefined) {
       return cached;
     }
-    const preferredOwners = preferredOwnerPluginIdSet;
+    if (!preferredOwnerPluginIdSet) {
+      entryProviderCache.set(normalizedEntryProvider, false);
+      return false;
+    }
     const value =
-      preferredOwners !== undefined &&
-      Boolean(
-        resolveOwningPluginIdsForProviderRef({
-          provider: normalizedEntryProvider,
-          config: params.cfg,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        })?.some((pluginId) => preferredOwners.has(pluginId)),
-      );
+      resolveOwningPluginIdsForProviderRef({
+        provider: normalizedEntryProvider,
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      })?.some((pluginId) => preferredOwnerPluginIdSet.has(pluginId)) ?? false;
     entryProviderCache.set(normalizedEntryProvider, value);
     return value;
   };
