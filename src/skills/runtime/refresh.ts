@@ -61,6 +61,8 @@ const workspaceWatchTargets = new Map<string, WatchTarget[]>();
 // filesystem changes require a fresh root scan.
 const workspaceWatchTargetCache = new Map<string, WatchTargetCacheEntry>();
 const workspaceWatchLastEnsuredAt = new Map<string, number>();
+// Session turns re-ensure their workspace; entries older than this are treated
+// as abandoned subscriptions and evicted by the next ensure call.
 const SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS = 60 * 60_000;
 
 setSkillsChangeListenerErrorHandler((err) => {
