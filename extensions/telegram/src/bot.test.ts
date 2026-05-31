@@ -636,7 +636,7 @@ describe("createTelegramBot", () => {
     await callbackHandler({
       callbackQuery: {
         id: "cbq-approve-capability-free",
-        data: "/approve 138e9b8c allow-once",
+        data: "tgcmd:/approve 138e9b8c allow-once",
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },

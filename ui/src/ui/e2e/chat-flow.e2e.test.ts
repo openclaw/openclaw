@@ -129,6 +129,49 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps chat usable while sessions are still loading", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.list"],
+      historyMessages: [
+        {
+          content: [{ text: "History renders before sessions finish.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.getByText("History renders before sessions finish.").waitFor({ timeout: 10_000 });
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .waitFor({ state: "visible", timeout: 10_000 });
+
+      const sessionsList = await gateway.waitForRequest("sessions.list");
+      expect(requireRecord(sessionsList.params)).toMatchObject({
+        includeGlobal: true,
+        includeUnknown: true,
+        limit: 50,
+      });
+
+      await gateway.resolveDeferred("sessions.list");
+      await page.getByRole("button", { name: "Chat session" }).waitFor({
+        state: "visible",
+        timeout: 10_000,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps a delayed chat.send ACK visible as pending until the ACK resolves", async () => {
     const context = await browser.newContext({
       locale: "en-US",

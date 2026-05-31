@@ -8,6 +8,7 @@ import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveTerminalDynamicToolBatchAction,
+  shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   shouldReleaseTurnAfterTerminalDynamicTool,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
@@ -362,5 +363,27 @@ describe("dynamic tool execution helpers", () => {
         hasPendingTerminalDynamicToolRelease: true,
       }),
     ).toBe("release-pending-terminal");
+  });
+
+  it("does not let async-start tool results block terminal side-effect batches", () => {
+    const asyncStartedResponse = {
+      contentItems: [{ type: "inputText" as const, text: "Background task started." }],
+      success: true,
+    };
+    Object.defineProperty(asyncStartedResponse, "asyncStarted", {
+      configurable: true,
+      enumerable: false,
+      value: true,
+    });
+
+    expect(shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(asyncStartedResponse)).toBe(
+      false,
+    );
+    expect(
+      shouldBlockTerminalReleaseForNonTerminalDynamicToolResult({
+        contentItems: [{ type: "inputText", text: "regular output" }],
+        success: true,
+      }),
+    ).toBe(true);
   });
 });

@@ -1,9 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntry } from "../config/sessions/types.js";
 
 type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
 
-type SessionInteractionEntry = Pick<SessionEntry, "spawnedBy" | "parentSessionKey" | "acp">;
+type SessionInteractionEntry = {
+  spawnedBy?: string;
+  parentSessionKey?: string;
+  acp?: unknown;
+};
 
 function resolveAcpSessionInteractionMode(
   entry?: SessionInteractionEntry | null,

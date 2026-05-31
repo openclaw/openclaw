@@ -491,22 +491,6 @@ describe("gateway server cron", () => {
       expect(missingGetRes.ok).toBe(false);
       expect(missingGetRes.error?.code).toBe("INVALID_REQUEST");
       expect(missingGetRes.error?.message).toContain("cron job not found: missing-job-id");
-
-      const wrappedAtMs = Date.now() + 1000;
-      const wrappedRes = await directCronReq(cronState, "cron.add", {
-        data: {
-          name: "wrapped",
-          schedule: { at: new Date(wrappedAtMs).toISOString() },
-          payload: { kind: "systemEvent", text: "hello" },
-        },
-      });
-      expect(wrappedRes.ok).toBe(true);
-      const wrappedPayload = wrappedRes.payload as
-        | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
-        | undefined;
-      expect(wrappedPayload?.sessionTarget).toBe("main");
-      expect(wrappedPayload?.wakeMode).toBe("now");
-      expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
     } finally {
       await cleanupCronTestRun({
         cronState,
@@ -648,7 +632,7 @@ describe("gateway server cron", () => {
       const updateRes = await directCronReq(cronState, "cron.update", {
         id: patchJobId,
         patch: {
-          schedule: { at: new Date(atMs).toISOString() },
+          schedule: { kind: "at", at: new Date(atMs).toISOString() },
           payload: { kind: "systemEvent", text: "updated" },
         },
       });
@@ -716,6 +700,7 @@ describe("gateway server cron", () => {
         id: mergeJobId,
         patch: {
           payload: {
+            kind: "agentTurn",
             model: "anthropic/claude-sonnet-4-6",
           },
         },
@@ -780,7 +765,7 @@ describe("gateway server cron", () => {
       const jobIdUpdateRes = await directCronReq(cronState, "cron.update", {
         jobId,
         patch: {
-          schedule: { at: new Date(Date.now() + 2_000).toISOString() },
+          schedule: { kind: "at", at: new Date(Date.now() + 2_000).toISOString() },
           payload: { kind: "systemEvent", text: "updated" },
         },
       });

@@ -268,6 +268,7 @@ export const fa: TranslationMap = {
       openFilesTab: "باز کردن زبانه فایل‌ها",
       primaryModel: "مدل اصلی",
       runtime: "زمان اجرا",
+      thinkingDefault: "سطح تفکر پیش‌فرض",
       identityName: "نام هویت",
       identityAvatar: "آواتار هویت",
       skillsFilter: "فیلتر Skills",

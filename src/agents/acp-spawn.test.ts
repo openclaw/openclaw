@@ -929,6 +929,129 @@ describe("spawnAcpDirect", () => {
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
   });
 
+  it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            model: "openai/gpt-5.4",
+          },
+          models: {
+            "openai/gpt-5.4": {
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "openai/gpt-5.4",
+        thinking: "high",
+      },
+    });
+  });
+
+  it("uses configured runtime=acp agent defaults before launching the external ACP agent", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            runtime: {
+              type: "acp",
+              acp: { agent: "codex" },
+            },
+            subagents: {
+              model: "openai/gpt-5.5",
+              thinking: "low",
+            },
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex-acp",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "openai/gpt-5.5",
+        thinking: "low",
+      },
+    });
+  });
+
+  it("does not treat a configured runtime=acp agent primary model as an ACP startup model", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            runtime: {
+              type: "acp",
+              acp: { agent: "codex" },
+            },
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex-acp",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toBeUndefined();
+  });
+
   it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
     const result = await spawnAcpDirect(
       {

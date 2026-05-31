@@ -543,6 +543,7 @@ export type ChannelMessagingAdapter = {
     to?: string;
     conversationId?: string;
     threadId?: string | number;
+    threadParentId?: string | number;
     isGroup: boolean;
   }) => {
     conversationId?: string;

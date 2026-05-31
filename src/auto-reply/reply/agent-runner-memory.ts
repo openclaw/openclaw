@@ -1177,6 +1177,7 @@ export async function runMemoryFlushIfNeeded(params: {
   if (params.sessionKey) {
     memoryDeps.registerAgentRunContext(flushRunId, {
       sessionKey: params.sessionKey,
+      ...(activeSessionEntry?.sessionId ? { sessionId: activeSessionEntry.sessionId } : {}),
       verboseLevel: params.resolvedVerboseLevel,
     });
   }

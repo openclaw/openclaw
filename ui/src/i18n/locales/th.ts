@@ -265,6 +265,7 @@ export const th: TranslationMap = {
       openFilesTab: "Open Files tab",
       primaryModel: "Primary Model",
       runtime: "รันไทม์",
+      thinkingDefault: "ระดับการคิดเริ่มต้น",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
       skillsFilter: "Skills Filter",

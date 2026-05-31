@@ -541,6 +541,7 @@ describe("scripts/changed-lanes", () => {
       "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
       "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
       "CI=1",
+      "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
       "corepack",
       "pnpm",
       "check:changed",

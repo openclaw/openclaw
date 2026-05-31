@@ -470,6 +470,14 @@ export async function createModelSelectionState(params: {
       configuredModels?.[canonicalKey]?.params?.thinking ??
       (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
     if (
+      configuredModelThinkingDefault === false ||
+      configuredModelThinkingDefault === "disabled" ||
+      configuredModelThinkingDefault === "none"
+    ) {
+      defaultThinkingLevel = "off";
+      return defaultThinkingLevel;
+    }
+    if (
       configuredModelThinkingDefault === "off" ||
       configuredModelThinkingDefault === "minimal" ||
       configuredModelThinkingDefault === "low" ||

@@ -180,6 +180,12 @@ export const doctorHealthConversionRules = [
     rule: "Detect explicit live tool-result cap overrides that are stale or ineffective; preserve deep-mode effective cap output as finding metadata.",
   },
   {
+    contributionId: "doctor:provider-catalog-projection",
+    conversion: "detect-only",
+    target: ["core/doctor/provider-catalog-projection"],
+    rule: "Validate provider catalog hooks against unified text catalog projection and report malformed plugin catalog rows during doctor.",
+  },
+  {
     contributionId: "doctor:runtime-tool-schemas",
     conversion: "detect-only",
     target: ["core/doctor/runtime-tool-schemas"],

@@ -331,7 +331,6 @@ export function buildMediaGenerationStartedToolResult(params: {
         : {}),
       ...params.detailExtras,
     },
-    terminate: true,
   };
 }
 

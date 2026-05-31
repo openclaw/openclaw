@@ -125,7 +125,7 @@ type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAt
 type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
 type AcpPolicyRuntime = typeof import("../acp/policy.js");
 type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
-type AcpSessionIdentifiersRuntime = typeof import("../acp/runtime/session-identifiers.js");
+type AcpSessionIdentifiersRuntime = typeof import("@openclaw/acp-core/runtime/session-identifiers");
 type DeliveryRuntime = typeof import("./command/delivery.runtime.js");
 type SessionStoreRuntime = typeof import("./command/session-store.runtime.js");
 type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
@@ -150,7 +150,7 @@ const acpRuntimeErrorsRuntimeLoader = createLazyImportLoader<AcpRuntimeErrorsRun
   () => import("../acp/runtime/errors.js"),
 );
 const acpSessionIdentifiersRuntimeLoader = createLazyImportLoader<AcpSessionIdentifiersRuntime>(
-  () => import("../acp/runtime/session-identifiers.js"),
+  () => import("@openclaw/acp-core/runtime/session-identifiers"),
 );
 const deliveryRuntimeLoader = createLazyImportLoader<DeliveryRuntime>(
   () => import("./command/delivery.runtime.js"),
@@ -803,6 +803,7 @@ async function agentCommandInternal(
           ? { isControlUiVisible: false }
           : {
               sessionKey,
+              sessionId,
             },
       );
       attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt });
@@ -980,7 +981,7 @@ async function agentCommandInternal(
 
     if (sessionKey || suppressVisibleSessionEffects) {
       registerAgentRunContext(runId, {
-        ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey } : {}),
+        ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey, sessionId } : {}),
         verboseLevel: resolvedVerboseLevel,
         isControlUiVisible: !suppressVisibleSessionEffects,
       });

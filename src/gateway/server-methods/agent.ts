@@ -415,6 +415,7 @@ async function resolveBareSessionResetResult(params: {
     cfg: params.cfg,
     agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
   });
+  // Main/global resets default to best-effort delivery because no caller session may remain.
   const bestEffortDeliver =
     typeof params.request.bestEffortDeliver === "boolean"
       ? params.request.bestEffortDeliver
@@ -505,6 +506,7 @@ function resolveTrustedGroupMetadata(params: {
   inherited?: TrustedGroupMetadata;
 }): TrustedGroupMetadata {
   return {
+    // Group trust can be inherited from the parent run or recovered from conversation-shaped keys.
     groupId:
       params.stored.groupId ??
       params.inherited?.groupId ??
@@ -521,6 +523,7 @@ function requestGroupMatchesTrusted(params: {
 }): boolean {
   const requestGroupId = params.requestGroupId?.trim();
   if (!requestGroupId) {
+    // Missing group metadata is accepted so non-group channels keep the same send path.
     return true;
   }
   return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
@@ -545,6 +548,7 @@ function emitSessionsChanged(
           : undefined,
       )
     : null;
+  // Unscoped global updates must not leak one agent's goal into another agent's UI row.
   const omitUnscopedGlobalGoal = payload.sessionKey === "global" && !payload.agentId;
   context.broadcastToConnIds(
     "sessions.changed",

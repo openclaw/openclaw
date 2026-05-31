@@ -218,6 +218,7 @@ function stripBundledProviderRuntimeDefaults(params: {
 
   let nextProviders: Record<string, unknown> | undefined;
   for (const [providerId, provider] of Object.entries(models.providers)) {
+    // Runtime overlays can materialize empty defaults that should not become persisted config.
     if (!isBuiltInModelProviderOverlayId(providerId) || !isRecord(provider)) {
       continue;
     }
@@ -277,6 +278,7 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
+  // Validate against runtime shape, but write the source-shaped config the operator submitted.
   const projectedValidationCandidate = snapshot.valid
     ? applyMergePatch(
         projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config),
@@ -387,6 +389,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
     configSchemaResponseCache = null;
   }
 
+  // Plugin schema loading is process-local; short caching avoids repeated UI lookups per render.
   const response = loadGatewayRuntimeConfigSchema();
   const expiresAtMs = resolveExpiresAtMsFromDurationMs(CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS);
   if (expiresAtMs !== undefined) {
@@ -525,6 +528,7 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
+      // Arrays with stable ids behave like maps for partial control-plane edits.
       mergeObjectArraysById: true,
     });
     const schemaPatch = loadSchemaWithPlugins();

@@ -862,6 +862,16 @@ function resolveThinkingTargetModel(state: AppViewState): {
   };
 }
 
+function sessionModelMatchesDefaults(
+  row: SessionsListResult["sessions"][number] | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!row?.modelProvider || row.modelProvider === defaults?.modelProvider) &&
+    (!row?.model || row.model === defaults?.model)
+  );
+}
+
 function buildThinkingOptions(
   levels: readonly GatewayThinkingLevelOption[],
   currentOverride: string,
@@ -944,17 +954,22 @@ export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkin
     typeof persisted === "string" && persisted.trim()
       ? (normalizeThinkLevel(persisted) ?? persisted.trim())
       : "";
+  const defaults = state.sessionsResult?.defaults;
   const { provider, model } = resolveThinkingTargetModel(state);
   const levels = resolveThinkingLevelOptions(
     activeRow,
-    state.sessionsResult?.defaults,
+    defaults,
     provider,
     model,
     state.chatModelCatalog ?? [],
   );
+  const defaultFromSessionDefaults =
+    (!activeRow || sessionModelMatchesDefaults(activeRow, defaults)) && defaults?.thinkingDefault
+      ? defaults.thinkingDefault
+      : undefined;
   const defaultLevel =
     activeRow?.thinkingDefault ??
-    state.sessionsResult?.defaults?.thinkingDefault ??
+    defaultFromSessionDefaults ??
     (provider && model
       ? resolveThinkingDefaultForModel({
           provider,

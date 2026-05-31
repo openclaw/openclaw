@@ -35,6 +35,7 @@ function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
 }
 
+/** Convert user-facing timeout seconds into a positive, timer-safe millisecond delay. */
 export function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
@@ -241,6 +242,7 @@ function getShellEnv(
   };
 }
 
+/** Node-backed execution environment for agent harness filesystem and shell operations. */
 export class NodeExecutionEnv implements ExecutionEnv {
   cwd: string;
   private shellPath?: string;

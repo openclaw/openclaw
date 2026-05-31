@@ -98,10 +98,7 @@ vi.mock("../../agents/acp-spawn.js", () => ({
     params.cfg?.agents?.defaults?.sandbox?.mode === "all"
       ? 'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.'
       : undefined,
-  resolveRuntimeCwdForAcpSpawn: async (params: {
-    explicitCwd?: string;
-    resolvedCwd?: string;
-  }) => {
+  resolveRuntimeCwdForAcpSpawn: async (params: { explicitCwd?: string; resolvedCwd?: string }) => {
     if (params.explicitCwd) {
       return params.resolvedCwd;
     }

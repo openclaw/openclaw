@@ -80,6 +80,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectRuntimeToolSchemaFindings() {
       return [];
     },
+    async collectProviderCatalogProjectionFindings() {
+      return [];
+    },
     ...overrides,
   };
 }
@@ -661,6 +664,43 @@ describe("registerCoreHealthChecks", () => {
         checkId: "core/doctor/runtime-tool-schemas",
         severity: "error",
         target: "dofbot_move_angles",
+      }),
+    );
+  });
+
+  it("reports active provider catalog projection findings", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectProviderCatalogProjectionFindings(): Promise<readonly HealthFinding[]> {
+            return [
+              {
+                checkId: "core/doctor/provider-catalog-projection",
+                severity: "error",
+                message:
+                  "Provider catalog mockplugin cannot be projected into the unified text model catalog.",
+                path: "plugins.entries.mockplugin",
+                target: "mockplugin",
+                requirement: "mockplugin provider catalog entry read failed",
+              },
+            ];
+          },
+        }),
+      ),
+      "core/doctor/provider-catalog-projection",
+    );
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: {},
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        target: "mockplugin",
       }),
     );
   });

@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -20,10 +19,6 @@ import type { CronJobInsert, CronJobRow } from "./schema.js";
 import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import type { LoadedCronStore } from "./types.js";
-
-export function cronStoreKey(storePath: string): string {
-  return path.resolve(storePath);
-}
 
 function bindScheduleColumns(
   schedule: CronSchedule,
@@ -157,16 +152,15 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
 }
 
 function rowToCronJob(row: CronJobRow): CronJob | null {
-  const base = parseJsonObject<Partial<CronJob>>(row.job_json, {});
-  const schedule = scheduleFromRow(row) ?? base.schedule;
-  const payload = payloadFromRow(row, base.payload) ?? base.payload;
-  const delivery = deliveryFromRow(row, base.delivery);
+  const schedule = scheduleFromRow(row);
+  const payload = payloadFromRow(row);
+  const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
   if (!schedule || !payload) {
     return null;
   }
+  const createdAtMs = normalizeNumber(row.created_at_ms) ?? Date.now();
   return {
-    ...base,
     id: row.job_id,
     name: row.name,
     ...(row.description ? { description: row.description } : {}),
@@ -174,12 +168,9 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     ...(row.delete_after_run != null
       ? { deleteAfterRun: integerToBoolean(row.delete_after_run) }
       : {}),
-    createdAtMs: normalizeNumber(row.created_at_ms) ?? base.createdAtMs ?? Date.now(),
+    createdAtMs,
     updatedAtMs:
-      normalizeNumber(row.runtime_updated_at_ms) ??
-      normalizeNumber(row.updated_at) ??
-      base.updatedAtMs ??
-      Date.now(),
+      normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at) ?? createdAtMs,
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
     ...(row.session_key ? { sessionKey: row.session_key } : {}),
     schedule,

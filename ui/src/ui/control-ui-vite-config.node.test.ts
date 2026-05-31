@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  controlUiBrowserOnlySharedModuleAliases,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
@@ -49,5 +50,23 @@ describe("Control UI Vite config", () => {
     expect(broadOpenClawWildcardIndex).toBeGreaterThanOrEqual(0);
     expect(netPolicyIpIndex).toBeLessThan(netPolicyPackageIndex);
     expect(netPolicyWildcardIndex).toBeLessThan(broadOpenClawWildcardIndex);
+  });
+
+  it("uses a browser-safe redactor for shared tool display imports", async () => {
+    const plugin = controlUiBrowserOnlySharedModuleAliases();
+    const resolveIdHook = plugin.resolveId;
+    const resolveId = typeof resolveIdHook === "function" ? resolveIdHook : resolveIdHook?.handler;
+    if (typeof resolveId !== "function") {
+      throw new Error("Expected browser-only shared module alias plugin to expose resolveId");
+    }
+
+    const resolved = await resolveId.call(
+      {} as never,
+      "../logging/redact.js",
+      path.join(repoRoot, "src/agents/tool-display-common.ts"),
+      { attributes: {}, custom: {}, isEntry: false, ssr: false },
+    );
+
+    expect(resolved).toBe(path.join(repoRoot, "ui/src/ui/browser-redact.ts"));
   });
 });

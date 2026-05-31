@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
+import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
@@ -48,6 +48,22 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
 
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
+
+  it("caps concurrent metadata render workers while preserving result order", async () => {
+    let active = 0;
+    let peakActive = 0;
+
+    const result = await __testing.mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return `rendered-${value}`;
+    });
+
+    expect(result).toEqual(["rendered-1", "rendered-2", "rendered-3", "rendered-4", "rendered-5"]);
+    expect(peakActive).toBe(2);
+  });
 
   it("writes startup metadata with populated root help text when dist falls back to source rendering", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-");

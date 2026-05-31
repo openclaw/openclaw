@@ -75,6 +75,8 @@ function addWaiter(runId: string, waiter: () => void): () => void {
   return () => removeWaiter(normalizedRunId, waiter);
 }
 
+// Waiters are keyed only by run id so chat and agent dedupe entries can wake
+// the same `agent.wait` request regardless of which path finishes first.
 function notifyWaiters(runId: string): void {
   const normalizedRunId = runId.trim();
   if (!normalizedRunId) {
@@ -204,6 +206,8 @@ export function readTerminalSnapshotFromGatewayDedupe(params: {
   runId: string;
   ignoreAgentTerminalSnapshot?: boolean;
 }): AgentWaitTerminalSnapshot | null {
+  // Agent and chat handlers both cache terminal state. Project them into one
+  // wait result while preserving stronger terminal outcomes such as hard timeout.
   if (params.ignoreAgentTerminalSnapshot) {
     const chatEntry = params.dedupe.get(`chat:${params.runId}`);
     if (!chatEntry) {
@@ -255,6 +259,8 @@ export async function waitForTerminalGatewayDedupe(params: {
   return await new Promise((resolve) => {
     let settled = false;
 
+    // Always re-read from the dedupe map on wake; waiters are notifications,
+    // not carriers of terminal data, so stale callbacks cannot resolve a run.
     const finish = (snapshot: AgentWaitTerminalSnapshot | null) => {
       if (settled) {
         return;
@@ -299,6 +305,8 @@ export function setGatewayDedupeEntry(params: {
   key: string;
   entry: DedupeEntry;
 }) {
+  // Preserve sticky terminal outcomes before publishing the new entry. This
+  // protects waiters from late accepted/in-flight rewrites for the same run id.
   const existing = params.dedupe.get(params.key);
   const existingSnapshot = existing ? readTerminalSnapshotFromDedupeEntry(existing) : null;
   const incomingSnapshot = readTerminalSnapshotFromDedupeEntry(params.entry);

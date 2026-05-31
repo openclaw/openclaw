@@ -92,6 +92,7 @@ export type GatewayPostReadySidecarHandle = {
   stop: () => Awaitable<void>;
 };
 
+/** Stop sidecars immediately when shutdown has already started before they are reported. */
 export function stopPostReadySidecarsAfterCloseStarted(params: {
   postReadySidecars: readonly GatewayPostReadySidecarHandle[];
   closeStarted: boolean;
@@ -104,6 +105,7 @@ export function stopPostReadySidecarsAfterCloseStarted(params: {
   }
 }
 
+/** Measure a post-attach startup step when tracing is active. */
 async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
   name: string,
@@ -112,6 +114,7 @@ async function measureStartup<T>(
   return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
+/** Measure provider-auth warming without letting event-loop stalls hide in wall time. */
 async function measureProviderAuthWarm(run: () => Promise<void>): Promise<{
   elapsedMs: number;
   eventLoopMaxMs: number;
@@ -261,6 +264,8 @@ function scheduleProviderAuthStatePrewarm(params: {
       }
     };
     const scheduleAuthMapRewarm = (reason: string) => {
+      // Collapse repeated auth-profile failures into one rewarm turn while a
+      // previous rewarm is queued or running.
       if (isStopped()) {
         return;
       }
@@ -404,6 +409,8 @@ function schedulePostReadySidecarTask(params: {
   handle.unref?.();
   return {
     stop: async () => {
+      // Sidecars get both a synchronous stopped predicate and an AbortSignal so
+      // lazy imports and long-running watchers can cooperate with shutdown.
       stopped = true;
       abortController.abort();
       clearImmediate(handle);
@@ -722,6 +729,7 @@ function schedulePrimaryModelPrewarm(
   });
 }
 
+/** Start post-ready sidecars such as channels, hooks, plugin services, and cleanup tasks. */
 export async function startGatewaySidecars(params: {
   cfg: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
@@ -823,6 +831,8 @@ export async function startGatewaySidecars(params: {
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
   if (shouldDispatchGatewayStartupInternalHook) {
+    // Run startup hooks after sidecar startup has yielded once so gateway bind
+    // and channel startup are not delayed by hook handlers.
     setTimeout(() => {
       void loadInternalHooksModule().then(({ createInternalHookEvent, triggerInternalHook }) => {
         const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
@@ -848,7 +858,7 @@ export async function startGatewaySidecars(params: {
         const [{ getAcpSessionManager }, { ACP_SESSION_IDENTITY_RENDERER_VERSION }] =
           await Promise.all([
             import("../acp/control-plane/manager.js"),
-            import("../acp/runtime/session-identifiers.js"),
+            import("@openclaw/acp-core/runtime/session-identifiers"),
           ]);
         const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
           cfg: params.cfg,
@@ -1075,6 +1085,8 @@ function createDeferredGatewayUpdateCheck(params: {
       return;
     }
     started = true;
+    // Update checks are intentionally post-attach so startup logging, sidecars,
+    // and Tailscale exposure are not serialized behind network I/O.
     setImmediate(() => {
       if (stopped) {
         return;
@@ -1109,6 +1121,7 @@ function createDeferredGatewayUpdateCheck(params: {
   return { start, stop };
 }
 
+/** Start work that depends on the HTTP server being attached and visible. */
 export async function startGatewayPostAttachRuntime(
   params: {
     minimalTestGateway: boolean;
@@ -1264,6 +1277,8 @@ export async function startGatewayPostAttachRuntime(
   const waitForSidecarStartTurn = () =>
     new Promise<void>((resolve) => {
       if (params.deferSidecars === true) {
+        // Give startup logging and bind observers a deterministic head start
+        // when tests or callers request deferred sidecar startup.
         const timer = setTimeout(resolve, DEFERRED_SIDECAR_START_DELAY_MS);
         timer.unref?.();
         return;

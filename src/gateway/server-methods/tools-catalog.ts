@@ -68,6 +68,8 @@ function resolveAgentIdOrRespondError(
 }
 
 function buildCoreGroups(): ToolCatalogGroup[] {
+  // Core catalog rows come from static tool sections so profile chips remain
+  // stable even before any runtime agent session exists.
   return listCoreToolSections().map((section) => ({
     id: section.id,
     label: section.label,
@@ -100,6 +102,8 @@ function buildPluginGroups(params: {
     toolAllowlist: ["group:plugins"],
     allowGatewaySubagentBinding: true,
   });
+  // Resolve tools through the same plugin registry path used at runtime so the
+  // catalog respects conflicts, optional tools, and subagent binding rules.
   const pluginTools = resolvePluginTools({
     context: toolContext,
     existingToolNames: params.existingToolNames,
@@ -165,6 +169,8 @@ function buildPluginGroups(params: {
         continue;
       }
       const groupId = `plugin:${entry.pluginId}`;
+      // Declared-but-unresolved plugin tools still appear so operators can see
+      // optional capabilities that may need config before they bind at runtime.
       const existing =
         groups.get(groupId) ??
         ({

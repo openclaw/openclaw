@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -20,6 +19,7 @@ import {
   readCronRunLogRows,
   readCronRunLogRowsPage,
 } from "./run-log/sqlite-store.js";
+import { cronStoreKey } from "./store/key.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
 
 export type { CronRunLogEntry } from "./run-log-types.js";
@@ -124,10 +124,6 @@ async function drainPendingWrite(storePath: string, jobId?: string): Promise<voi
     .filter(([key]) => key.startsWith(storePrefix))
     .map(([, write]) => write.catch(() => undefined));
   await Promise.all(pending);
-}
-
-function cronStoreKey(storePath: string): string {
-  return path.resolve(storePath);
 }
 
 export async function appendCronRunLog(params: {

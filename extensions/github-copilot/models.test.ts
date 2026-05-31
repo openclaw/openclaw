@@ -59,6 +59,10 @@ describe("github-copilot model defaults", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.6");
     });
 
+    it("includes claude-opus-4.8", () => {
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.8");
+    });
+
     it("includes claude-sonnet-4.6", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
     });

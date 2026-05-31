@@ -281,6 +281,7 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   return path || "root";
 }
 
+/** Finds the target tool and validates/coerces a model-emitted tool call. */
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
   const tool = tools.find((t) => t.name === toolCall.name);
   if (!tool) {
@@ -289,6 +290,7 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
   return validateToolArguments(tool, toolCall);
 }
 
+/** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
   Value.Convert(tool.parameters, args);

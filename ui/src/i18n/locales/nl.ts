@@ -269,6 +269,7 @@ export const nl: TranslationMap = {
       openFilesTab: "Tabblad Bestanden openen",
       primaryModel: "Primair model",
       runtime: "Runtime",
+      thinkingDefault: "Standaard denkniveau",
       identityName: "Identiteitsnaam",
       identityAvatar: "Identiteitsavatar",
       skillsFilter: "Skills-filter",

@@ -60,6 +60,7 @@ type TelegramQaScenarioId =
   | "telegram-other-bot-command-gating"
   | "telegram-context-command"
   | "telegram-current-session-status-tool"
+  | "telegram-tool-only-usage-footer"
   | "telegram-stream-final-single-message"
   | "telegram-long-final-three-chunks"
   | "telegram-long-final-reuses-preview"
@@ -394,6 +395,37 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         expectedTextIncludes: ["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"],
         replyToLatestSutMessage: true,
       }),
+  },
+  {
+    id: "telegram-tool-only-usage-footer",
+    title: "Telegram tool-only reply includes usage footer",
+    defaultEnabled: false,
+    rationale:
+      "Opt-in real Telegram proof that /usage tokens decorates message-tool-only visible replies.",
+    regressionRefs: ["openclaw/openclaw#87392"],
+    timeoutMs: 90_000,
+    buildRun: (sutUsername) => {
+      const marker = `QA-TELEGRAM-USAGE-FOOTER-${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        steps: [
+          {
+            expectReply: true,
+            input: `/usage@${sutUsername} tokens`,
+            expectedTextIncludes: ["Usage", "tokens"],
+          },
+          {
+            allowAnySutReply: true,
+            expectReply: true,
+            input: `@${sutUsername} Telegram usage footer QA. Reply exactly: ${marker}`,
+            expectedTextIncludes: [marker, "Usage:"],
+            expectedJoinedSutTextIncludes: [marker, "Usage:"],
+            expectedSutMessageCount: 2,
+            replyToLatestSutMessage: true,
+            settleMs: 4_000,
+          },
+        ],
+      };
+    },
   },
   {
     id: "telegram-mentioned-message-reply",

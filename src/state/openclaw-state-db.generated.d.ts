@@ -208,6 +208,8 @@ export interface CronJobs {
   delivery_account_id: string | null;
   delivery_best_effort: number | null;
   delivery_channel: string | null;
+  delivery_completion_mode: string | null;
+  delivery_completion_to: string | null;
   delivery_mode: string | null;
   delivery_thread_id: string | null;
   delivery_to: string | null;

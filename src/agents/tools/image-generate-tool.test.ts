@@ -758,7 +758,7 @@ describe("createImageGenerateTool", () => {
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect(details.taskId).toBe("task-image-123");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         taskKind: "image_generation",

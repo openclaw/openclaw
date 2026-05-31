@@ -64,9 +64,11 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       return jsonResponse({ id: "app-1" });
     });
 
-    await expect(fetchDiscordApplicationId("unparseable.token", 1_000, fetcher)).resolves.toBe(
-      "app-1",
-    );
+    vi.useFakeTimers();
+    const lookup = fetchDiscordApplicationId("unparseable.token", 1_000, fetcher);
+    await vi.runAllTimersAsync();
+
+    await expect(lookup).resolves.toBe("app-1");
     expect(calls).toBe(2);
   });
 

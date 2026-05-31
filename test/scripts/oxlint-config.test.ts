@@ -179,6 +179,12 @@ describe("oxlint config", () => {
           "eslint/no-unsafe-optional-chaining": "off",
         },
       },
+      {
+        files: ["src/agents/embedded-agent-runner/run/attempt.ts"],
+        rules: {
+          "eslint/no-shadow": "error",
+        },
+      },
     ]);
   });
 

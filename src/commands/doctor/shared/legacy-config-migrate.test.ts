@@ -760,6 +760,73 @@ describe("legacy diagnostics memory pressure snapshot migrate", () => {
   });
 });
 
+describe("legacy WebChat channel config migrate", () => {
+  it("moves WebChat textChunkLimit to the gateway history cap and removes channels.webchat", () => {
+    const raw = {
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+          chunkMode: "newline",
+        },
+        discord: {
+          textChunkLimit: 2000,
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["channels.webchat"]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.gateway?.webchat?.chatHistoryMaxChars).toBe(16000);
+    expect(res.config?.channels).toEqual({
+      discord: {
+        textChunkLimit: 2000,
+      },
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved channels.webchat.textChunkLimit → gateway.webchat.chatHistoryMaxChars.",
+      "Removed retired channels.webchat config.",
+    ]);
+  });
+
+  it("removes channels.webchat without overwriting an existing gateway history cap", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 8000,
+        },
+      },
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+        },
+      },
+    });
+
+    expect(res.config?.gateway?.webchat?.chatHistoryMaxChars).toBe(8000);
+    expect(res.config).not.toHaveProperty("channels");
+    expect(res.changes).toStrictEqual(["Removed retired channels.webchat config."]);
+  });
+
+  it("drops invalid WebChat textChunkLimit values instead of creating invalid gateway config", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        webchat: {
+          textChunkLimit: 600000,
+        },
+      },
+    });
+
+    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.config).not.toHaveProperty("channels");
+    expect(res.changes).toStrictEqual([
+      "Removed channels.webchat.textChunkLimit (not a valid gateway.webchat.chatHistoryMaxChars value).",
+      "Removed retired channels.webchat config.",
+    ]);
+  });
+});
+
 describe("legacy thread binding spawn migrate", () => {
   it("moves matching split spawn flags to unified spawnSessions", () => {
     const res = migrateLegacyConfigForTest({

@@ -268,6 +268,7 @@ export const uk: TranslationMap = {
       openFilesTab: "Open Files tab",
       primaryModel: "Primary Model",
       runtime: "Середовище виконання",
+      thinkingDefault: "Типовий рівень мислення",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
       skillsFilter: "Skills Filter",

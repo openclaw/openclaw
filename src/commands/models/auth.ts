@@ -30,6 +30,7 @@ import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
@@ -411,6 +412,7 @@ async function pickProviderTokenMethod(params: {
 async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
   profiles?: ProviderAuthResult["profiles"];
+  config: OpenClawConfig;
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
@@ -420,8 +422,15 @@ async function persistProviderAuthResult(params: {
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
     : undefined;
   const profiles = params.profiles ?? params.result.profiles;
+  const shouldUpdateConfig = Boolean(
+    params.result.configPatch || (params.setDefault && defaultModel),
+  );
 
   for (const profile of profiles) {
+    const configuredSelection = resolveConfiguredAuthSelectionForProvider(
+      params.config,
+      profile.credential.provider,
+    );
     await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
@@ -431,49 +440,49 @@ async function persistProviderAuthResult(params: {
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
+      createIfMissing: configuredSelection.createIfMissing,
+      ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
     });
   }
 
-  const updated = await updateConfig((cfg) => {
-    const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
-    let next = cfg;
-    if (params.result.configPatch) {
-      next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
-        replaceDefaultModels: params.result.replaceDefaultModels,
+  // Auth login owns the credential store. Keep openclaw.json untouched unless
+  // the provider explicitly returns a config patch or the user opts into a
+  // default-model write.
+  if (shouldUpdateConfig) {
+    const updated = await updateConfig((cfg) => {
+      const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
+      let next = cfg;
+      if (params.result.configPatch) {
+        next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
+          replaceDefaultModels: params.result.replaceDefaultModels,
+        });
+      }
+      next = restorePriorAgentsDefaultsModelUnlessOptIn({
+        cfg: next,
+        priorAgentsDefaultsModel,
+        setDefault: params.setDefault,
       });
-    }
-    for (const profile of profiles) {
-      next = applyAuthProfileConfig(next, {
-        profileId: profile.profileId,
-        provider: profile.credential.provider,
-        mode: credentialMode(profile.credential),
+      if (params.setDefault && defaultModel) {
+        next = applyDefaultModel(next, defaultModel);
+      }
+      return next;
+    });
+    if (defaultModel) {
+      const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+        cfg: updated,
+        model: defaultModel,
       });
+      const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
+        cfg: updated,
+        model: defaultModel,
+      });
+      for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+        params.runtime.error?.(warning);
+      }
     }
-    next = restorePriorAgentsDefaultsModelUnlessOptIn({
-      cfg: next,
-      priorAgentsDefaultsModel,
-      setDefault: params.setDefault,
-    });
-    if (params.setDefault && defaultModel) {
-      next = applyDefaultModel(next, defaultModel);
-    }
-    return next;
-  });
-  if (defaultModel) {
-    const repaired = await repairCodexRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: defaultModel,
-    });
-    const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: defaultModel,
-    });
-    for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
-      params.runtime.error?.(warning);
-    }
+    logConfigUpdated(params.runtime);
   }
 
-  logConfigUpdated(params.runtime);
   for (const profile of profiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
@@ -489,6 +498,30 @@ async function persistProviderAuthResult(params: {
   if (params.result.notes && params.result.notes.length > 0) {
     await params.prompter.note(params.result.notes.join("\n"), "Provider notes");
   }
+}
+
+function resolveConfiguredAuthSelectionForProvider(
+  cfg: OpenClawConfig,
+  provider: string,
+): { createIfMissing: boolean; order?: string[] } {
+  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
+  for (const [orderProvider, profileIds] of Object.entries(cfg.auth?.order ?? {})) {
+    if (
+      profileIds.length > 0 &&
+      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey
+    ) {
+      return { createIfMissing: true, order: profileIds };
+    }
+  }
+  const profileIds = Object.entries(cfg.auth?.profiles ?? {})
+    .filter(
+      ([, profile]) =>
+        resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+    )
+    .map(([profileId]) => profileId);
+  return profileIds.length > 0
+    ? { createIfMissing: true, order: profileIds }
+    : { createIfMissing: false };
 }
 
 async function runProviderAuthMethod(params: {
@@ -539,6 +572,7 @@ async function runProviderAuthMethod(params: {
   await persistProviderAuthResult({
     result,
     profiles,
+    config: params.config,
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,

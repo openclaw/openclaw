@@ -234,6 +234,12 @@ function resolveGatewayServerShardName(file) {
   ) {
     return "agentic-control-plane-startup-runtime";
   }
+  if (name.includes("cron")) {
+    return "agentic-control-plane-runtime-cron";
+  }
+  if (name.includes("network")) {
+    return "agentic-control-plane-runtime-network";
+  }
   if (
     name.includes("plugin") ||
     name.includes("hooks") ||
@@ -241,6 +247,12 @@ function resolveGatewayServerShardName(file) {
     name.includes("ws-connection")
   ) {
     return "agentic-control-plane-http-plugin-ws";
+  }
+  if (name.startsWith("server-")) {
+    return "agentic-control-plane-runtime-server";
+  }
+  if (name.startsWith("server.") || name.startsWith("server/")) {
+    return "agentic-control-plane-runtime-state";
   }
   return "agentic-control-plane-runtime";
 }
@@ -257,6 +269,10 @@ function createGatewayServerSplitShards() {
     "agentic-control-plane-http-models",
     "agentic-control-plane-http-plugin-ws",
     "agentic-control-plane-runtime",
+    "agentic-control-plane-runtime-cron",
+    "agentic-control-plane-runtime-network",
+    "agentic-control-plane-runtime-server",
+    "agentic-control-plane-runtime-state",
     "agentic-control-plane-startup-runtime",
   ]
     .map((shardName) => ({

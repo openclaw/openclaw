@@ -22,6 +22,7 @@ import type {
 import {
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
+  isModelScopedCooldownReason,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 export {
@@ -660,23 +661,25 @@ function computeNextProfileUsageStats(params: {
       ) {
         updatedStats.cooldownModel = undefined;
       } else if (
-        params.reason === "rate_limit" &&
+        isModelScopedCooldownReason(params.reason) &&
         !params.modelId &&
         params.existing.cooldownModel
       ) {
         // Unknown originating model during an active model-scoped cooldown:
         // widen scope conservatively so no model can bypass on stale metadata.
         updatedStats.cooldownModel = undefined;
-      } else if (params.reason !== "rate_limit") {
-        // Non-rate-limit failures are profile-wide — clear model scope even
-        // when the same model fails, so that no model can bypass.
+      } else if (!isModelScopedCooldownReason(params.reason)) {
+        // Profile-wide failures (auth, billing, format, server_error, ...) —
+        // clear model scope so that no model can bypass.
         updatedStats.cooldownModel = undefined;
       } else {
         updatedStats.cooldownModel = params.existing.cooldownModel;
       }
     } else {
       updatedStats.cooldownReason = params.reason;
-      updatedStats.cooldownModel = params.reason === "rate_limit" ? params.modelId : undefined;
+      updatedStats.cooldownModel = isModelScopedCooldownReason(params.reason)
+        ? params.modelId
+        : undefined;
     }
   }
 

@@ -20,6 +20,7 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
   if (isPassThroughRemoteMediaSource(mediaUrl)) {
     return true;
   }
+  // Local audio is preserved only after the producer marks it as already trust-scoped.
   return payload.trustedLocalMedia === true;
 }
 
@@ -48,6 +49,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
   const normalized: ReplyPayload[] = [];
   for (const payload of params.payloads) {
     if (payload.sensitiveMedia === true) {
+      // Suppressed media must not be copied into managed outbound storage for display.
       normalized.push(payload);
       continue;
     }

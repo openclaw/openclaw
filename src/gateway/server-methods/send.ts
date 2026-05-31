@@ -82,6 +82,7 @@ function resolveGatewayInflightMap(params: { context: GatewayRequestContext; ded
       kind: "ready";
       inflightMap: Map<string, Promise<InflightResult>>;
     } {
+  // Persistent dedupe wins before process-local in-flight joins for idempotent retries.
   const cached = params.context.dedupe.get(params.dedupeKey);
   if (cached) {
     return { kind: "cached", cached };
@@ -234,6 +235,7 @@ function resolveMessageActionRuntimeConfig(params: {
     runtimeConfig,
     runtimeSourceConfig,
   });
+  // Message actions must use the hot runtime snapshot when it matches the caller's source config.
   if (selected === runtimeConfig && selected !== params.cfg) {
     return resolveGatewayPluginConfig({ config: selected });
   }
@@ -349,6 +351,7 @@ const sourceReplyTranscriptMirrorQueues = new Map<string, Promise<void>>();
 function resolveSourceReplyTranscriptMirrorQueueKey(
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
 ): string {
+  // Missing session keys are serialized together so global mirrors preserve delivery order.
   return mirror.sessionKey?.trim() || "__global__";
 }
 
@@ -642,6 +645,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
             normalizeOptionalLowercaseString(providedSessionBaseKey) &&
           normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
+        // Slack replies can refine an existing base session into a thread session after target lookup.
         const outboundRoute = derivedRoute
           ? providedSessionKey
             ? shouldUseDerivedThreadSessionKey
@@ -765,6 +769,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         typeof request.durationSeconds === "number" &&
         outbound?.supportsPollDurationSeconds !== true
       ) {
+        // Duration support is channel-specific; reject before normalizing to avoid silent truncation.
         return {
           ok: false,
           error: errorShape(

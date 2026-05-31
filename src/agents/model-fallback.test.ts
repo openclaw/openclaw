@@ -1716,6 +1716,36 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("normalizes prefixed Anthropic fallback candidates independently", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["anthropic/claude-haiku-4-5", "anthropic/claude-opus-4-7"],
+          },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "anthropic/claude-haiku-4-5": {},
+            "anthropic/claude-opus-4-7": {},
+          },
+        },
+      },
+    });
+
+    const candidates = testing.resolveFallbackCandidates({
+      cfg,
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(candidates).toEqual([
+      { provider: "anthropic", model: "claude-sonnet-4-6" },
+      { provider: "anthropic", model: "claude-haiku-4-5" },
+      { provider: "anthropic", model: "claude-opus-4-7" },
+    ]);
+  });
+
   it("tries configured fallbacks before primary for override credential validation errors", async () => {
     const cfg = makeCfg();
     const run = createOverrideFailureRun({

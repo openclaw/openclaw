@@ -558,6 +558,7 @@ function applyConfiguredProviderOverrides(params: {
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
   preferDiscoveredModelMetadata?: boolean;
+  preferDiscoveredTransport?: boolean;
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
@@ -659,15 +660,22 @@ function applyConfiguredProviderOverrides(params: {
     input: metadataOverrideModel?.input,
     fallbackInput: discoveredModel.input,
   });
+  const providerDefaultApi = resolveConfiguredProviderDefaultApi(providerConfig);
+  const resolvedTransportApi =
+    metadataOverrideModel?.api ??
+    (params.preferDiscoveredTransport
+      ? (discoveredModel.api ?? providerConfig.api ?? providerDefaultApi)
+      : (providerConfig.api ?? discoveredModel.api ?? providerDefaultApi));
+  const resolvedTransportBaseUrl =
+    metadataOverrideModel?.baseUrl ??
+    (params.preferDiscoveredTransport
+      ? (discoveredModel.baseUrl ?? providerConfig.baseUrl)
+      : (providerConfig.baseUrl ?? discoveredModel.baseUrl));
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
-    api:
-      metadataOverrideModel?.api ??
-      providerConfig.api ??
-      discoveredModel.api ??
-      resolveConfiguredProviderDefaultApi(providerConfig),
-    baseUrl: metadataOverrideModel?.baseUrl ?? providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    api: resolvedTransportApi,
+    baseUrl: resolvedTransportBaseUrl,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
@@ -1239,6 +1247,7 @@ export function resolveModelWithRegistry(params: {
   authProfileId?: string;
   preferredProfile?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  skipConfiguredFallback?: boolean;
 }): Model | undefined {
   const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
   const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
@@ -1280,7 +1289,7 @@ export function resolveModelWithRegistry(params: {
     return pluginDynamicModel;
   }
 
-  return resolveConfiguredFallbackModel(scopedParams);
+  return params.skipConfiguredFallback ? undefined : resolveConfiguredFallbackModel(scopedParams);
 }
 
 export function resolveModel(
@@ -1355,6 +1364,7 @@ export async function resolveModelAsync(
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
     allowBundledStaticCatalogFallback?: boolean;
+    preferBundledStaticCatalogTransport?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
@@ -1422,6 +1432,48 @@ export async function resolveModelAsync(
     authProfileId: options?.authProfileId,
     preferredProfile: options?.preferredProfile,
   });
+  let staticCatalogLookupComplete = false;
+  let staticCatalogModel: ReturnType<typeof resolveBundledStaticCatalogModel> | undefined;
+  const resolveStaticCatalogModel = () => {
+    if (!options?.allowBundledStaticCatalogFallback) {
+      return undefined;
+    }
+    if (!staticCatalogLookupComplete) {
+      staticCatalogLookupComplete = true;
+      staticCatalogModel = resolveBundledStaticCatalogModel({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        cfg,
+        workspaceDir,
+      });
+    }
+    return staticCatalogModel;
+  };
+  const resolveStaticCatalogFallbackModel = () => {
+    const catalogModel = resolveStaticCatalogModel();
+    if (!catalogModel) {
+      return undefined;
+    }
+    const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
+      provider: normalizedRef.provider,
+      discoveredModel: catalogModel,
+      providerConfig,
+      modelId: normalizedRef.model,
+      cfg,
+      runtimeHooks,
+      workspaceDir,
+      preferDiscoveredModelMetadata: true,
+      preferDiscoveredTransport: options?.preferBundledStaticCatalogTransport,
+    });
+    return normalizeResolvedModel({
+      provider: normalizedRef.provider,
+      cfg,
+      agentDir: resolvedAgentDir,
+      workspaceDir,
+      model: overriddenStaticCatalogModel,
+      runtimeHooks,
+    });
+  };
   const resolveDynamicAttempt = async () => {
     await runtimeHooks.prepareProviderDynamicModel({
       provider: normalizedRef.provider,
@@ -1448,20 +1500,22 @@ export async function resolveModelAsync(
       authProfileId: options?.authProfileId,
       preferredProfile: options?.preferredProfile,
       runtimeHooks,
+      ...(options?.allowBundledStaticCatalogFallback ? { skipConfiguredFallback: true } : {}),
     });
   };
+  const providerRuntimeMetadataShouldWin = shouldCompareProviderRuntimeResolvedModel({
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
+    cfg,
+    agentDir: resolvedAgentDir,
+    workspaceDir,
+    runtimeHooks,
+  });
   let model =
-    explicitModel?.kind === "resolved" &&
-    !shouldCompareProviderRuntimeResolvedModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      agentDir: resolvedAgentDir,
-      workspaceDir,
-      runtimeHooks,
-    })
+    explicitModel?.kind === "resolved" && !providerRuntimeMetadataShouldWin
       ? explicitModel.model
-      : await resolveDynamicAttempt();
+      : undefined;
+  model ??= await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
     // gateway boot. Retry once before surfacing a user-visible "Unknown model"
@@ -1469,41 +1523,20 @@ export async function resolveModelAsync(
     model = await resolveDynamicAttempt();
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
-    const staticCatalogModel = resolveBundledStaticCatalogModel({
+    model = resolveStaticCatalogFallbackModel();
+  }
+  if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
+    model = resolveConfiguredFallbackModel({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       cfg,
+      agentDir: resolvedAgentDir,
       workspaceDir,
+      runtimeHooks,
     });
-    if (staticCatalogModel) {
-      const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
-        provider: normalizedRef.provider,
-        discoveredModel: staticCatalogModel,
-        providerConfig,
-        modelId: normalizedRef.model,
-        cfg,
-        runtimeHooks,
-        workspaceDir,
-        preferDiscoveredModelMetadata: true,
-      });
-      model = normalizeResolvedModel({
-        provider: normalizedRef.provider,
-        cfg,
-        agentDir: resolvedAgentDir,
-        workspaceDir,
-        model: overriddenStaticCatalogModel,
-        runtimeHooks,
-      });
-    }
   }
   if (model && options?.allowBundledStaticCatalogFallback) {
-    const staticCatalogModel = resolveBundledStaticCatalogModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      workspaceDir,
-    });
-    const staticMediaInput = staticCatalogModel?.mediaInput;
+    const staticMediaInput = resolveStaticCatalogModel()?.mediaInput;
     const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
     const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
     if (mediaInput) {

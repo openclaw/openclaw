@@ -34,4 +34,16 @@ describe("provider model id policy normalization", () => {
       ),
     ).toBe("openrouter/google/gemini-3.1-pro-preview");
   });
+
+  it("normalizes native Anthropic catalog refs without retaining the provider prefix", () => {
+    expect(
+      normalizeStaticProviderModelIdWithPolicies(
+        "anthropic",
+        "anthropic/claude-haiku-4-5",
+      ),
+    ).toBe("claude-haiku-4-5");
+    expect(
+      normalizeConfiguredProviderCatalogModelId("anthropic", "anthropic/claude-haiku-4-5"),
+    ).toBe("claude-haiku-4-5");
+  });
 });

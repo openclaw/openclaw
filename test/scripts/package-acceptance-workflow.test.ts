@@ -937,9 +937,9 @@ describe("package artifact reuse", () => {
       (step) => step.name === "Run Testbox",
     );
 
-    expect(workflow).toContain('PNPM_CONFIG_MODULES_DIR: "/tmp/openclaw-pnpm-node-modules"');
     expect(workflow).toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
-    expect(workflow).toContain('PNPM_CONFIG_VIRTUAL_STORE_DIR: "/tmp/openclaw-pnpm-virtual-store"');
+    expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
+    expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
     expect(runTestboxStep?.uses).toContain("useblacksmith/run-testbox@");
     expect(runTestboxStep?.["continue-on-error"]).toBeUndefined();
   });

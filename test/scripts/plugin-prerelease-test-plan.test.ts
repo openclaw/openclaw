@@ -160,7 +160,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       "X-ClawHub-Artifact-Sha256",
     );
-    expect(script).toContain("docker_e2e_docker_cmd stats --no-stream");
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });
 
@@ -182,7 +183,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       weight: 3,
     });
     expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
-    expect(script).toContain("docker_e2e_docker_cmd stats --no-stream");
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
     expect(script).toContain("node scripts/e2e/kitchen-sink-rpc-walk.mjs");
     expect(script).not.toContain("--import tsx");
     expect(walkScript).toContain("commands.list");

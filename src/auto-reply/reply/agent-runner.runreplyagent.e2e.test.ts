@@ -270,6 +270,16 @@ describe("runReplyAgent heartbeat followup guard", () => {
       runOverrides: { sessionId: "stale-session" },
       sessionStore,
     });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 1, output: 1 },
+        },
+      },
+    });
 
     const pending = run();
     await new Promise<void>((resolve) => setTimeout(resolve, 0));

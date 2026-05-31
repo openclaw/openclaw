@@ -1343,6 +1343,17 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(runner).not.toContain("docker run --rm");
   });
 
+  it("prints plugins Docker E2E logs on successful runs", () => {
+    const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
+    const runner = readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8");
+
+    expect(helper).toContain("docker_e2e_run_logged_print_with_harness()");
+    expect(helper).toContain("run_logged_print_heartbeat \\");
+    expect(helper).toContain("OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS");
+    expect(runner).toContain("docker_e2e_run_logged_print_with_harness \\");
+    expect(runner).not.toContain("docker_e2e_run_logged_with_harness plugins-run");
+  });
+
   it("includes procps in the shared Docker E2E image for process watchdogs", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 

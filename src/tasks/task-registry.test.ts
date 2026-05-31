@@ -191,8 +191,8 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       return next;
     },
     isRuntimeAuthoritative: () => true,
-    resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-    loadCronStoreSync: () => ({ version: 1, jobs: [] }),
+    resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
+    loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
     readCronRunLogEntriesSync: () => [],
   });
 }
@@ -2657,8 +2657,8 @@ describe("task-registry", () => {
         resolveTaskForLookupToken: () => undefined,
         setTaskCleanupAfterById: () => null,
         isRuntimeAuthoritative: () => true,
-        resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-        loadCronStoreSync: () => ({ version: 1, jobs: [] }),
+        resolveCronJobsStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
+        loadCronJobsStoreSync: () => ({ version: 1, jobs: [] }),
         readCronRunLogEntriesSync: () => [],
       });
 

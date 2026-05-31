@@ -217,8 +217,8 @@ const NOTIFY_POLL_OPTIONS = {
   timeout: NOTIFY_EVENT_TIMEOUT_MS,
   interval: POLL_INTERVAL_MS,
 };
-const SHELL_ENV_KEYS = ["SHELL"] as const;
-const PATH_SHELL_ENV_KEYS = ["PATH", "SHELL"] as const;
+const SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "SHELL"] as const;
+const PATH_SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL"] as const;
 const PROCESS_STATUS_RUNNING = "running";
 const PROCESS_STATUS_COMPLETED = "completed";
 const PROCESS_STATUS_FAILED = "failed";
@@ -348,6 +348,7 @@ async function pollProcessSession(params: {
   };
 }
 function applyDefaultShellEnv() {
+  process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
   if (!isWin && defaultShell) {
     process.env.SHELL = defaultShell;
   }
@@ -771,6 +772,8 @@ describe("exec exit codes", () => {
 });
 
 describe("exec notifyOnExit", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
   beforeEach(() => {
     resetHeartbeatWakeStateForTests();
   });

@@ -39,6 +39,7 @@ function cachedLifecycleDiffersFromRuntime(params: {
   return false;
 }
 
+/** Checks whether cached channel health is stale against the live runtime snapshot. */
 function cachedHealthDiffersFromRuntime(
   cached: HealthSummary,
   runtime: ChannelRuntimeSnapshot,
@@ -84,6 +85,7 @@ function cachedHealthDiffersFromRuntime(
   return false;
 }
 
+/** Merges cheap live runtime facts into a cached health summary before responding. */
 function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
@@ -114,6 +116,7 @@ function mergeCachedHealthRuntimeState(params: {
   };
 }
 
+/** Gateway handlers for health snapshots and status summaries. */
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
@@ -148,6 +151,8 @@ export const healthHandlers: GatewayRequestHandlers = {
         undefined,
         { cached: true },
       );
+      // Serve the fresh-enough cache immediately but still refresh in the
+      // background so the next caller sees updated expensive probe data.
       void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),
       );

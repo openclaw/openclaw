@@ -36,6 +36,7 @@ import type {
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
+  TuiSessionMutationResult,
 } from "./tui-backend.js";
 
 export type GatewayConnectionOptions = {
@@ -242,8 +243,12 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
-  async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
-    return await this.client.request("sessions.reset", {
+  async resetSession(
+    key: string,
+    reason?: "new" | "reset",
+    opts?: { agentId?: string },
+  ): Promise<TuiSessionMutationResult> {
+    return await this.client.request<TuiSessionMutationResult>("sessions.reset", {
       key,
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       ...(reason ? { reason } : {}),
