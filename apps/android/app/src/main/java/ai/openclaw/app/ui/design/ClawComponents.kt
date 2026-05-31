@@ -267,6 +267,7 @@ internal fun <T> ClawListPanel(
   }
 }
 
+/** Column helper that inserts standard dividers between rendered rows. */
 @Composable
 internal fun <T> ClawSeparatedColumn(
   items: List<T>,
@@ -283,6 +284,7 @@ internal fun <T> ClawSeparatedColumn(
   }
 }
 
+/** Two-line settings/detail row with caller-provided leading and trailing slots. */
 @Composable
 internal fun ClawDetailRow(
   title: String,
@@ -309,6 +311,7 @@ internal fun ClawDetailRow(
   }
 }
 
+/** Circular text badge used for compact numeric or initials-style row marks. */
 @Composable
 internal fun ClawTextBadge(
   text: String,
@@ -327,6 +330,7 @@ internal fun ClawTextBadge(
   }
 }
 
+/** Circular icon badge used as a neutral leading marker in list rows. */
 @Composable
 internal fun ClawIconBadge(
   icon: ImageVector,
@@ -345,6 +349,7 @@ internal fun ClawIconBadge(
   }
 }
 
+/** Reusable one-line list row with optional subtitle, metadata, slots, and click handling. */
 @Composable
 internal fun ClawListItem(
   title: String,
@@ -398,6 +403,7 @@ internal fun ClawListItem(
   }
 }
 
+/** Equal-width segmented control for small mode/filter sets. */
 @Composable
 internal fun ClawSegmentedControl(
   options: List<String>,
@@ -437,6 +443,7 @@ internal fun ClawSegmentedControl(
   }
 }
 
+/** Token-styled text field used by settings and prototype screens. */
 @Composable
 internal fun ClawTextField(
   value: String,
@@ -469,6 +476,7 @@ internal fun ClawTextField(
   )
 }
 
+/** Local design-system preview surface for visual smoke checks. */
 @Composable
 internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
   var selected by rememberSaveable { mutableStateOf("Chat") }
