@@ -1,7 +1,10 @@
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
-import { findTaskByRunId, listTaskRecords } from "../../../tasks/task-registry.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import {
+  findTaskByRunIdForStatus,
+  listTaskRecordsForStatus,
+} from "../../../tasks/task-status-access.js";
 
 export type AsyncStartedToolMeta = {
   toolName?: string;
@@ -98,7 +101,7 @@ function collectAsyncTaskRunIds(
   if (!normalizedSessionKey) {
     return runIds;
   }
-  for (const task of listTaskRecords()) {
+  for (const task of listTaskRecordsForStatus()) {
     if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
       continue;
     }
@@ -123,7 +126,7 @@ function findTerminalTasks(runIds: readonly string[]): {
   const pendingRunIds: string[] = [];
   const terminalTasks: TaskRecord[] = [];
   for (const runId of runIds) {
-    const task = findTaskByRunId(runId);
+    const task = findTaskByRunIdForStatus(runId);
     if (task && isTerminalTaskStatus(task.status)) {
       terminalTasks.push(task);
       continue;
@@ -148,7 +151,7 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   ) {
     return true;
   }
-  return listTaskRecords().some(
+  return listTaskRecordsForStatus().some(
     (task) =>
       COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "") &&
       !isTerminalTaskStatus(task.status) &&
