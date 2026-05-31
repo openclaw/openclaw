@@ -2247,6 +2247,55 @@ describe("applySessionsChangedEvent", () => {
     expect(state.chatStream).toBeNull();
   });
 
+  it("preserves first-load chat history scope for selected global agent rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:work:global",
+      sessionsResult: null,
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResultAgentId).toBe("work");
+
+    const crossAgentApplied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      session: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 3,
+      },
+    });
+
+    expect(crossAgentApplied).toEqual({ applied: true, change: "inserted" });
+    expect(state.sessionsResult?.sessions.map((row) => row.key)).toEqual(["global"]);
+  });
+
+  it("preserves first-load chat history scope for canonical agent rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:work:main",
+      sessionsResult: null,
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:work:main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResultAgentId).toBe("work");
+  });
+
   it("merges canonical chat history rows into visible legacy alias rows", () => {
     const state = createState(async () => undefined, {
       sessionKey: "main",

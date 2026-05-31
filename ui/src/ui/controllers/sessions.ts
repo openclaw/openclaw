@@ -160,6 +160,17 @@ function resolveSelectedGlobalAgentId(state: SessionsState): string {
   return normalizeAgentId(assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId ?? "main");
 }
 
+function resolveChatHistorySessionResultAgentId(
+  state: SessionsState,
+  row: GatewaySessionRow,
+): string | null {
+  const parsed = parseAgentSessionKey(row.key);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  return isGlobalSessionKey(row.key) ? resolveSelectedGlobalAgentId(state) : null;
+}
+
 function resolveDefaultGlobalAgentId(state: SessionsState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: { defaultAgentId?: string } }
@@ -820,6 +831,7 @@ export function applyChatHistorySessionInfo(
       },
       sessions,
     };
+    state.sessionsResultAgentId = resolveChatHistorySessionResultAgentId(state, session);
     upsertCachedChatAgentSessionRow(state, session);
     if (hasCurrentChatSession(state)) {
       const reconciled = reconcileChatRunFromSessionRow(state, session, { publishRunStatus: true });
