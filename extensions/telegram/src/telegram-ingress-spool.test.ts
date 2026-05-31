@@ -256,20 +256,19 @@ describe("Telegram ingress spool", () => {
       if (!claimed) {
         throw new Error("Expected a claimed update");
       }
-      const now = Date.now();
-      const oldClaimTime = new Date(now - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1);
-      await fs.utimes(claimed.path, oldClaimTime, oldClaimTime);
-
-      // Simulate TOCTOU race: remove the .processing file after readdir but
-      // before the recovery function tries to rename it.
-      await fs.unlink(claimed.path);
-
+      let shouldRecoverCalls = 0;
       const recovered = await recoverStaleTelegramSpooledUpdateClaims({
         spoolDir,
-        now,
+        staleMs: 0,
+        shouldRecover: async () => {
+          shouldRecoverCalls += 1;
+          await fs.unlink(claimed.path);
+          return true;
+        },
       });
 
       expect(recovered).toBe(0);
+      expect(shouldRecoverCalls).toBe(1);
       expect(await fs.readdir(spoolDir)).toEqual([]);
     });
   });
