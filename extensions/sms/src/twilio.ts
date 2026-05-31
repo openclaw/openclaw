@@ -11,6 +11,17 @@ const TWILIO_API_TIMEOUT_MS = 30_000;
 const WEBHOOK_BODY_LIMIT_BYTES = 32 * 1024;
 const WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
+type ParsedTwilioApiError = {
+  code?: number;
+  message?: string;
+};
+
+type TwilioApiResponse = {
+  ok: boolean;
+  status: number;
+  text: string;
+};
+
 function firstString(value: unknown): string {
   if (Array.isArray(value)) {
     return firstString(value[0]);
@@ -20,6 +31,59 @@ function firstString(value: unknown): string {
 
 function firstTrimmedString(value: unknown): string {
   return firstString(value).trim();
+}
+
+function parseTwilioApiError(text: string): ParsedTwilioApiError {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const record = parsed as Record<string, unknown>;
+    return {
+      code: typeof record.code === "number" ? record.code : undefined,
+      message: typeof record.message === "string" ? record.message : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function parseTwilioSuccessPayload(text: string): { sid?: string } {
+  if (!text.trim()) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("Twilio SMS send returned malformed JSON.");
+    }
+    const record = parsed as Record<string, unknown>;
+    return {
+      sid: typeof record.sid === "string" ? record.sid : undefined,
+    };
+  } catch (err) {
+    if (err instanceof Error && err.message === "Twilio SMS send returned malformed JSON.") {
+      throw err;
+    }
+    throw new Error("Twilio SMS send returned malformed JSON.");
+  }
+}
+
+export class TwilioSmsApiError extends Error {
+  readonly httpStatus: number;
+  readonly responseText: string;
+  readonly twilioCode?: number;
+
+  constructor(httpStatus: number, responseText: string) {
+    const parsed = parseTwilioApiError(responseText);
+    const detail = parsed.message ?? (responseText || "unknown");
+    super(`Twilio SMS send failed (${httpStatus}): ${detail}`);
+    this.name = "TwilioSmsApiError";
+    this.httpStatus = httpStatus;
+    this.responseText = responseText;
+    this.twilioCode = parsed.code;
+  }
 }
 
 export function parseTwilioFormBody(body: string): Record<string, string> {
@@ -99,6 +163,39 @@ export function respondTwiml(res: ServerResponse, statusCode: number, body = "")
   res.end(body || "<Response></Response>");
 }
 
+async function postTwilioMessages(params: {
+  url: string;
+  init: RequestInit;
+  fetchImpl?: typeof fetch;
+}): Promise<TwilioApiResponse> {
+  if (params.fetchImpl) {
+    const response = await params.fetchImpl(params.url, params.init);
+    return {
+      ok: response.ok,
+      status: response.status,
+      text: await response.text(),
+    };
+  }
+
+  const guarded = await fetchWithSsrFGuard({
+    url: params.url,
+    init: params.init,
+    auditContext: "sms-twilio-api",
+    policy: { allowedHostnames: [TWILIO_API_HOSTNAME] },
+    requireHttps: true,
+    timeoutMs: TWILIO_API_TIMEOUT_MS,
+  });
+  try {
+    return {
+      ok: guarded.response.ok,
+      status: guarded.response.status,
+      text: await guarded.response.text(),
+    };
+  } finally {
+    await guarded.release();
+  }
+}
+
 export async function sendSmsViaTwilio(params: {
   account: ResolvedSmsAccount;
   to: string;
@@ -129,33 +226,11 @@ export async function sendSmsViaTwilio(params: {
     },
     body,
   } satisfies RequestInit;
-  let response: Response;
-  if (params.fetchImpl) {
-    response = await params.fetchImpl(url, init);
-  } else {
-    const guarded = await fetchWithSsrFGuard({
-      url,
-      init,
-      auditContext: "sms-twilio-api",
-      policy: { allowedHostnames: [TWILIO_API_HOSTNAME] },
-      requireHttps: true,
-      timeoutMs: TWILIO_API_TIMEOUT_MS,
-    });
-    try {
-      const responseText = await guarded.response.text();
-      response = new Response(responseText, {
-        status: guarded.response.status,
-        statusText: guarded.response.statusText,
-        headers: guarded.response.headers,
-      });
-    } finally {
-      await guarded.release();
-    }
-  }
-  const payload = (await response.json().catch(() => ({}))) as { sid?: string; message?: string };
+  const response = await postTwilioMessages({ url, init, fetchImpl: params.fetchImpl });
   if (!response.ok) {
-    throw new Error(`Twilio SMS send failed (${response.status}): ${payload.message ?? "unknown"}`);
+    throw new TwilioSmsApiError(response.status, response.text);
   }
+  const payload = parseTwilioSuccessPayload(response.text);
   return {
     sid: payload.sid ?? `sms-${Date.now()}`,
     to: params.to,

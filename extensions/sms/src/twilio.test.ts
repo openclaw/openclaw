@@ -4,8 +4,28 @@ import {
   computeTwilioSignature,
   parseTwilioFormBody,
   sendSmsViaTwilio,
+  TwilioSmsApiError,
   verifyTwilioSignature,
 } from "./twilio.js";
+import type { ResolvedSmsAccount } from "./types.js";
+
+function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    accountSid: "AC123",
+    authToken: "secret",
+    fromNumber: "+15557654321",
+    messagingServiceSid: "",
+    webhookPath: "/webhooks/sms",
+    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+    dangerouslyDisableSignatureValidation: false,
+    dmPolicy: "pairing",
+    allowFrom: [],
+    textChunkLimit: 1500,
+    ...overrides,
+  };
+}
 
 describe("Twilio SMS helpers", () => {
   it("parses Twilio form bodies and inbound messages", () => {
@@ -195,5 +215,73 @@ describe("Twilio SMS helpers", () => {
     const body = new URLSearchParams(String(init?.body));
     expect(body.get("From")).toBe("+15557654321");
     expect(body.get("MessagingServiceSid")).toBeNull();
+  });
+
+  it("throws structured Twilio errors from JSON error bodies", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            code: 21610,
+            message: "The message From/To pair violates a blacklist rule.",
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      }),
+    ).rejects.toMatchObject({
+      name: "TwilioSmsApiError",
+      httpStatus: 400,
+      twilioCode: 21610,
+      responseText: JSON.stringify({
+        code: 21610,
+        message: "The message From/To pair violates a blacklist rule.",
+      }),
+    });
+  });
+
+  it("includes non-JSON Twilio error text in send failures", async () => {
+    const fetchImpl = vi.fn(async () => new Response("upstream unavailable", { status: 503 }));
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Twilio SMS send failed (503): upstream unavailable");
+  });
+
+  it("rejects malformed JSON from successful Twilio sends", async () => {
+    const fetchImpl = vi.fn(async () => new Response("not json", { status: 201 }));
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Twilio SMS send returned malformed JSON.");
+  });
+
+  it("exposes a typed Twilio SMS API error", () => {
+    const error = new TwilioSmsApiError(
+      429,
+      JSON.stringify({ code: 20429, message: "Too many requests" }),
+    );
+
+    expect(error).toBeInstanceOf(TwilioSmsApiError);
+    expect(error.message).toBe("Twilio SMS send failed (429): Too many requests");
+    expect(error.httpStatus).toBe(429);
+    expect(error.twilioCode).toBe(20429);
   });
 });
