@@ -680,6 +680,8 @@ export async function runCodexAppServerAttempt(
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+  let precomputedStaleBindingContinuityProjectionApplied = false;
+  let staleBindingContinuityForcedFreshStart = false;
   const applyFreshThreadContinuityProjection = () => {
     const projection = projectContextEngineAssemblyForCodex({
       assembledMessages: historyMessages,
@@ -851,9 +853,7 @@ export async function runCodexAppServerAttempt(
       return Number.isFinite(timestamp) && timestamp > bindingUpdatedAt;
     });
   };
-  const applyResumeStaleBindingContinuityProjection = (
-    binding: CodexAppServerThreadLifecycleBinding,
-  ) => {
+  const applyResumeStaleBindingContinuityProjection = (binding: CodexAppServerThreadBinding) => {
     const newerVisibleMessages = selectNewerVisibleHistoryAfterBinding(binding);
     if (newerVisibleMessages.length === 0) {
       return false;
@@ -867,6 +867,21 @@ export async function runCodexAppServerAttempt(
     prePromptMessageCount = projection.prePromptMessageCount;
     return true;
   };
+  const precomputeNoContextEngineStaleBindingProjection = (
+    binding: CodexAppServerThreadBinding | undefined,
+  ) => {
+    precomputedStaleBindingContinuityProjectionApplied = false;
+    staleBindingContinuityForcedFreshStart = false;
+    if (activeContextEngine || !binding?.threadId) {
+      return false;
+    }
+    const projected = applyResumeStaleBindingContinuityProjection({
+      ...binding,
+      lifecycle: { action: "resumed" },
+    });
+    precomputedStaleBindingContinuityProjectionApplied = projected;
+    return projected;
+  };
   const applyNoContextEngineContinuityProjection = (
     action: "started" | "resumed",
     binding?: CodexAppServerThreadBinding,
@@ -874,10 +889,14 @@ export async function runCodexAppServerAttempt(
     if (activeContextEngine || !historyMessages.some((message) => message.role === "user")) {
       return false;
     }
+    if (action === "resumed" && precomputedStaleBindingContinuityProjectionApplied) {
+      return true;
+    }
+    if (action === "started" && staleBindingContinuityForcedFreshStart) {
+      return true;
+    }
     if (action === "resumed" && binding) {
-      return applyResumeStaleBindingContinuityProjection(
-        binding as CodexAppServerThreadLifecycleBinding,
-      );
+      return applyResumeStaleBindingContinuityProjection(binding);
     }
     if (action === "started") {
       applyFreshThreadContinuityProjection();
@@ -885,6 +904,9 @@ export async function runCodexAppServerAttempt(
     }
     return false;
   };
+  if (precomputeNoContextEngineStaleBindingProjection(startupBinding)) {
+    await rebuildCodexPromptBuildFromCurrentProjection();
+  }
   const rotateStartupBindingForProjectedTurn = async () => {
     if (!startupBinding?.threadId) {
       return;
@@ -906,6 +928,7 @@ export async function runCodexAppServerAttempt(
     if (startupBinding?.threadId) {
       return;
     }
+    staleBindingContinuityForcedFreshStart = precomputedStaleBindingContinuityProjectionApplied;
     if (activeContextEngine) {
       contextEngineProjection = undefined;
       try {
