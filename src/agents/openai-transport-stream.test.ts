@@ -6885,6 +6885,76 @@ describe("openai transport stream", () => {
     ).toStrictEqual([]);
   });
 
+  it("promotes stop completions with structured tool calls to toolUse", async () => {
+    const model = {
+      id: "qwen3.6-27b-fp8",
+      name: "Qwen 3.6 27B FP8",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+    const stream = {
+      push: vi.fn(),
+    };
+    const mockChunks = [
+      {
+        id: "chatcmpl-tool-stop",
+        object: "chat.completion.chunk" as const,
+        created: 1,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: '{"query":"weather"}' },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-tool-stop",
+        object: "chat.completion.chunk" as const,
+        created: 1,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    await testing.processOpenAICompletionsStream(streamChunks(mockChunks), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toContainEqual({
+      type: "toolCall",
+      id: "call_1",
+      name: "lookup",
+      arguments: { query: "weather" },
+      partialArgs: '{"query":"weather"}',
+    });
+  });
+
   it("accumulates arguments for parallel tool calls with split indices", async () => {
     const model = {
       id: "kimi-for-coding",
