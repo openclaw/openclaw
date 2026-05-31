@@ -1877,7 +1877,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       let resolvedChannel = deliveryPlan.resolvedChannel;
       let deliveryTargetMode = deliveryPlan.deliveryTargetMode;
-      let resolvedAccountId = deliveryPlan.resolvedAccountId;
+      const resolvedAccountId = deliveryPlan.resolvedAccountId;
       let resolvedTo = deliveryPlan.resolvedTo;
       let effectivePlan = deliveryPlan;
       let deliveryDowngradeReason: string | null = null;

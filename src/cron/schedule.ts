@@ -93,11 +93,11 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   if (!cron) {
     return undefined;
   }
-  let next = cron.nextRun(new Date(nowMs));
+  const next = cron.nextRun(new Date(nowMs));
   if (!next) {
     return undefined;
   }
-  let nextMs = next.getTime();
+  const nextMs = next.getTime();
   if (!Number.isFinite(nextMs)) {
     return undefined;
   }

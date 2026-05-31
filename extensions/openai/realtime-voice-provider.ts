@@ -538,7 +538,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private async doConnect(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      let connectTimeout: ReturnType<typeof setTimeout>;
       let settled = false;
       const settleResolve = () => {
         if (settled) {
@@ -556,7 +555,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         clearTimeout(connectTimeout);
         reject(error);
       };
-      connectTimeout = setTimeout(() => {
+      const connectTimeout: ReturnType<typeof setTimeout> = setTimeout(() => {
         if (!this.sessionConfigured && !this.intentionallyClosed) {
           this.ws?.terminate();
           settleReject(new Error("OpenAI realtime connection timeout"));

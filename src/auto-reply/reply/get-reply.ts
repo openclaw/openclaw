@@ -474,7 +474,7 @@ export async function getReplyFromConfig(
           commandAuthorized,
         }),
       );
-  let {
+  const {
     sessionCtx,
     sessionEntry,
     previousSessionEntry,
@@ -484,7 +484,6 @@ export async function getReplyFromConfig(
     isNewSession,
     resetTriggered,
     systemSent,
-    abortedLastRun,
     storePath,
     sessionScope,
     groupResolution,
@@ -492,6 +491,7 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
@@ -754,21 +754,16 @@ export async function getReplyFromConfig(
     logResolverTiming("completed", "directive_reply");
     return directiveResult.reply;
   }
-
-  let {
+  const {
     commandSource,
     command,
     allowTextCommands,
     skillCommands,
-    directives,
-    cleanedBody,
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
-    resolvedThinkLevel,
     resolvedVerboseLevel,
-    resolvedReasoningLevel,
     resolvedElevatedLevel,
     execOverrides,
     blockStreamingEnabled,
@@ -783,6 +778,8 @@ export async function getReplyFromConfig(
     perMessageQueueMode,
     perMessageQueueOptions,
   } = directiveResult.result;
+  let { directives, cleanedBody, resolvedThinkLevel, resolvedReasoningLevel } =
+    directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
 

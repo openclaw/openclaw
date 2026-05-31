@@ -1646,7 +1646,8 @@ export async function runReplyAgent(params: {
       fallbackAttempts,
       directlySentBlockKeys,
     } = runOutcome;
-    let { didLogHeartbeatStrip, autoCompactionCount } = runOutcome;
+    const { autoCompactionCount } = runOutcome;
+    let { didLogHeartbeatStrip } = runOutcome;
 
     if (
       shouldInjectGroupIntro &&

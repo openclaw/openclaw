@@ -493,7 +493,7 @@ export async function runCli(argv: string[] = process.argv) {
     }
     return;
   }
-  let normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
+  const normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   startupTrace.mark("argv");

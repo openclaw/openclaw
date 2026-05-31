@@ -131,7 +131,7 @@ function firstGatewayStatusCall() {
 }
 
 describe("gateway register option collisions", () => {
-  let sharedProgram: Command = new Command();
+  const sharedProgram: Command = new Command();
 
   if (sharedProgram.commands.length === 0) {
     sharedProgram.exitOverride();

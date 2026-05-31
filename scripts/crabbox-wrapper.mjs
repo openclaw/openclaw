@@ -428,7 +428,8 @@ function crabboxOptionArgs(commandArgs) {
   return delimiter >= 0 ? commandArgs.slice(0, delimiter) : commandArgs;
 }
 
-function commandProvider(commandArgs) {
+function commandProvider(commandArgsInput) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
@@ -495,7 +496,8 @@ function enforceBrokeredAws(commandArgs, providerName) {
   process.exit(2);
 }
 
-function optionValue(commandArgs, name) {
+function optionValue(commandArgsInput, name) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
@@ -509,7 +511,8 @@ function optionValue(commandArgs, name) {
   return "";
 }
 
-function hasOption(commandArgs, name) {
+function hasOption(commandArgsInput, name) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   const shortName = name.replace(/^--/u, "-");
   for (const arg of commandArgs) {
@@ -716,7 +719,8 @@ function commandRuntimeEntrypoint(commandArgs) {
   return "";
 }
 
-function commandWordsRuntimeEntrypoint(words) {
+function commandWordsRuntimeEntrypoint(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
   if (jsRuntimeEntrypoints.has(first)) {
@@ -746,7 +750,8 @@ function commandNeedsAwsMacosPackageManager(commandArgs) {
   return commandWordsNeedAwsMacosPackageManager(normalizedCommandWords(commandArgs));
 }
 
-function commandWordsNeedAwsMacosPackageManager(words) {
+function commandWordsNeedAwsMacosPackageManager(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
   if (awsMacosCorepackEntrypoints.has(first)) {
@@ -768,7 +773,8 @@ function isChangedGateCommand(commandArgs) {
   return isChangedGateCommandWords(words);
 }
 
-function isChangedGateCommandWords(words) {
+function isChangedGateCommandWords(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   if (isChangedGateWords(words)) {
     return true;
@@ -780,7 +786,8 @@ function isChangedGateCommandWords(words) {
     : false;
 }
 
-function isChangedGateWords(words) {
+function isChangedGateWords(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   if (words[0] === "corepack") {
     words.shift();
@@ -848,7 +855,8 @@ function normalizeExecutableWords(words) {
   return normalizedCommandWords(stripShellExecutionPrefixes(words));
 }
 
-function stripShellExecutionPrefixes(words) {
+function stripShellExecutionPrefixes(wordsInput) {
+  let words = wordsInput;
   words = [...words];
   for (;;) {
     const first = shellWordBasename(words[0]);

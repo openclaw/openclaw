@@ -103,7 +103,7 @@ function isSecretRefWithProvider(
 // the Set, as their first lookup is done before the code knows it's
 // an array.
 function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
-  let result = new Set<string>();
+  const result = new Set<string>();
 
   for (const [path, hint] of Object.entries(hints)) {
     if (!hint.sensitive) {

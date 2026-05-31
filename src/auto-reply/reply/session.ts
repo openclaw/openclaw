@@ -292,7 +292,6 @@ export async function initSessionState(params: {
         `elapsedMs=${Date.now() - sessionStoreLoadStartMs} path=${storePath}`,
     );
   }
-  let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
   let sessionId: string | undefined;
@@ -391,7 +390,7 @@ export async function initSessionState(params: {
   // Canonicalize so the written key matches what all read paths produce.
   // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
   // agent may differ, causing key mismatch and orphaned sessions (#29683).
-  sessionKey = canonicalizeMainSessionAlias({
+  const sessionKey: string | undefined = canonicalizeMainSessionAlias({
     cfg,
     agentId,
     sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
