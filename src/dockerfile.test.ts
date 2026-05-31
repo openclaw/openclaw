@@ -74,7 +74,7 @@ describe("Dockerfile", () => {
     expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
     expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
     expect(dockerfile).toContain(
-      "ca-certificates curl git hostname lsof openssl procps python3 tini",
+      "ca-certificates curl git hostname lsof openssl procps python3 python3-pip python3-venv tini",
     );
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
   });

@@ -50,6 +50,10 @@ dist-runtime
 **/dist-runtime
 openclaw-path-alias-*
 
+# Local agent automation is mounted only by the opt-in sidecar overlay.
+.agent
+.agents
+
 # build artifacts
 dist
 **/dist
