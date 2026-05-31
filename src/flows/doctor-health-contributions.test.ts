@@ -350,10 +350,10 @@ describe("doctor health contributions", () => {
           checkId: "core/doctor/runtime-tool-schemas",
           severity: "error",
           message:
-            "Tool dofbot_move_angles from plugin dofbot has an unsupported input schema for runtime projection.",
-          path: "plugins.entries.dofbot",
-          target: "dofbot_move_angles",
-          requirement: 'dofbot_move_angles.parameters.type must be "object"',
+            "Tool fuzzplugin_move_angles from plugin fuzzplugin has an unsupported input schema for runtime projection.",
+          path: "plugins.entries.fuzzplugin",
+          target: "fuzzplugin_move_angles",
+          requirement: 'fuzzplugin_move_angles.parameters.type must be "object"',
           fixHint:
             "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
         },
@@ -375,11 +375,11 @@ describe("doctor health contributions", () => {
 
     expect(ctx.healthOk).toBe(false);
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Tool dofbot_move_angles from plugin dofbot"),
+      expect.stringContaining("Tool fuzzplugin_move_angles from plugin fuzzplugin"),
       "Doctor warnings",
     );
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining('issue: dofbot_move_angles.parameters.type must be "object"'),
+      expect.stringContaining('issue: fuzzplugin_move_angles.parameters.type must be "object"'),
       "Doctor warnings",
     );
   });

@@ -29,15 +29,15 @@ describe("runtime tool input schema projection", () => {
     expect(
       inspectRuntimeToolInputSchemas([
         {
-          name: "dofbot_move_angles",
+          name: "fuzzplugin_move_angles",
           parameters: { type: "array", items: { type: "number" } },
         },
       ] as never),
     ).toEqual([
       {
-        toolName: "dofbot_move_angles",
+        toolName: "fuzzplugin_move_angles",
         toolIndex: 0,
-        violations: ['dofbot_move_angles.parameters.type must be "object"'],
+        violations: ['fuzzplugin_move_angles.parameters.type must be "object"'],
       },
     ]);
   });
@@ -86,7 +86,7 @@ describe("runtime tool input schema projection", () => {
       parameters: { type: "object", properties: {} },
     };
     const broken = {
-      name: "dofbot_move_angles",
+      name: "fuzzplugin_move_angles",
       parameters: { type: "array", items: { type: "number" } },
     };
 
@@ -94,9 +94,9 @@ describe("runtime tool input schema projection", () => {
       tools: [healthy],
       diagnostics: [
         {
-          toolName: "dofbot_move_angles",
+          toolName: "fuzzplugin_move_angles",
           toolIndex: 1,
-          violations: ['dofbot_move_angles.parameters.type must be "object"'],
+          violations: ['fuzzplugin_move_angles.parameters.type must be "object"'],
         },
       ],
     });
