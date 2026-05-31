@@ -852,7 +852,7 @@ export async function runEmbeddedAttempt(
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
-  let sessionCleanupOwnsEmbeddedResources = false;
+  const sessionCleanupOwnsEmbeddedResources = false;
   let abortActiveSessionForExternalSignal: (() => Promise<void>) | undefined;
   let abortRunForExternalSignal: ((isTimeout?: boolean, reason?: unknown) => void) | undefined;
   let isCompactionPendingForExternalSignal: (() => boolean) | undefined;
@@ -2659,8 +2659,6 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn,
       );
 
-      let idleTimeoutTrigger: ((error: Error) => void) | undefined;
-
       // Wrap stream with idle timeout detection.
       //
       // Prefer the caller's explicit `runTimeoutOverrideMs` when provided —
@@ -2922,7 +2920,6 @@ export async function runEmbeddedAttempt(
           }
         }
       };
-      let queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined;
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -2954,7 +2951,7 @@ export async function runEmbeddedAttempt(
         }
       };
       abortRunForExternalSignal = abortRun;
-      idleTimeoutTrigger = (error) => {
+      const idleTimeoutTrigger: ((error: Error) => void) | undefined = (error) => {
         idleTimedOut = true;
         abortRun(true, error);
       };
@@ -3131,7 +3128,7 @@ export async function runEmbeddedAttempt(
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
-      queueHandleForAbandonment = queueHandle;
+      const queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined = queueHandle;
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey, params.sessionFile);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
@@ -3844,7 +3841,7 @@ export async function runEmbeddedAttempt(
                   prompt: promptForModel,
                   historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
                   imagesCount: imageResult.images.length,
-                  tools: tools,
+                  tools,
                 },
                 {
                   runId: params.runId,

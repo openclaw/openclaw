@@ -142,12 +142,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (!normalized) {
     return { ok: true };
   }
-  let externalPayload: ReplyPayload = {
+  const externalPayload: ReplyPayload = {
     ...normalized,
     text: formatBtwTextForExternalDelivery(normalized),
   };
 
-  let text = externalPayload.text ?? "";
+  const text = externalPayload.text ?? "";
   let mediaUrls: string[] = [];
   for (const url of externalPayload.mediaUrls ?? []) {
     if (url) {
@@ -157,8 +157,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
     mediaUrls = [externalPayload.mediaUrl];
   }
-  let replyToId = externalPayload.replyToId;
-  let hasChannelData = messaging?.hasStructuredReplyPayload?.({
+  const replyToId = externalPayload.replyToId;
+  const hasChannelData = messaging?.hasStructuredReplyPayload?.({
     payload: externalPayload,
   });
 

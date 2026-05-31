@@ -637,7 +637,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }
         }
 
-        let content = event.content as RoomMessageEventContent;
+        const content = event.content as RoomMessageEventContent;
 
         if (
           eventType === EventType.RoomMessage &&

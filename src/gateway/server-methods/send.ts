@@ -800,7 +800,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error };
         }
         const resolvedTarget = resolveGatewayOutboundTarget({
-          channel: channel,
+          channel,
           to: request.to.trim(),
           cfg,
           accountId,

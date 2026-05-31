@@ -304,7 +304,7 @@ function withPipedStdin(input: string) {
   });
   Object.defineProperty(stdin, Symbol.asyncIterator, {
     configurable: true,
-    value: async function* () {
+    async *value() {
       yield input;
     },
   });

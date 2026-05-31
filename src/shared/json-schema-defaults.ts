@@ -1125,12 +1125,13 @@ function applyObjectPropertyAndDependencyDefaults(
 
 function applySchemaDefaults(
   schema: JsonSchemaValue,
-  value: unknown,
+  valueInput: unknown,
   root = schema,
   resolvingRefs = new Set<string>(),
   resourceRoot = root,
   resourceBaseId?: string,
 ): unknown {
+  let value = valueInput;
   if (value === undefined) {
     const defaultValue = getDefault(schema);
     if (defaultValue !== undefined) {

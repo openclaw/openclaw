@@ -1231,8 +1231,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
-    let bridge: ReturnType<typeof provider.createBridge>;
-    bridge = provider.createBridge({
+    const bridge: ReturnType<typeof provider.createBridge> = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
       onAudio,
       onClearAudio,

@@ -76,7 +76,7 @@ const {
           on: vi.fn(),
           off: vi.fn(),
           destroy: vi.fn(),
-          [Symbol.asyncIterator]: async function* () {},
+          async *[Symbol.asyncIterator]() {},
         })),
       },
       state: {
@@ -2088,12 +2088,11 @@ describe("DiscordVoiceManager", () => {
     const firstConnection = createConnectionMock();
     const secondConnection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
-    let manager!: InstanceType<typeof managerModule.DiscordVoiceManager>;
     entersStateMock.mockImplementationOnce(async () => {
       await manager.destroy();
       throw new Error("The operation was aborted");
     });
-    manager = createManager();
+    const manager: InstanceType<typeof managerModule.DiscordVoiceManager> = createManager();
 
     const result = await manager.join({ guildId: "g1", channelId: "1001" });
 

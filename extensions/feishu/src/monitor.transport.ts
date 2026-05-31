@@ -187,7 +187,6 @@ function waitForFeishuWsCycleEnd(params: {
 
   return new Promise((resolve) => {
     let settled = false;
-    let handleAbort: (() => void) | undefined;
 
     const finish = (result: "abort" | Error) => {
       if (settled) {
@@ -200,7 +199,7 @@ function waitForFeishuWsCycleEnd(params: {
       resolve(result);
     };
 
-    handleAbort = () => finish("abort");
+    const handleAbort: (() => void) | undefined = () => finish("abort");
     params.abortSignal?.addEventListener("abort", handleAbort, { once: true });
     if (params.abortSignal?.aborted) {
       finish("abort");

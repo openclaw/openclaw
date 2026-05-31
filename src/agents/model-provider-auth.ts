@@ -585,8 +585,6 @@ function runProviderAuthWarmWorker(params: {
   currentProviderAuthWarmWorker = handle;
   return new Promise<ProviderAuthWarmSnapshot>((resolve, reject) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let cancelTimer: ReturnType<typeof setInterval> | undefined;
     const finish = (complete: () => void) => {
       if (settled) {
         return;
@@ -608,13 +606,13 @@ function runProviderAuthWarmWorker(params: {
       void worker.terminate();
       finish(() => resolve({ agents: [] }));
     };
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       handle.cancelled = true;
       void worker.terminate();
       finish(() => reject(new Error("provider auth warm worker timed out")));
     }, params.timeoutMs);
     timer.unref?.();
-    cancelTimer = setInterval(() => {
+    const cancelTimer: ReturnType<typeof setInterval> | undefined = setInterval(() => {
       if (params.isCancelled()) {
         cancelWorker();
       }

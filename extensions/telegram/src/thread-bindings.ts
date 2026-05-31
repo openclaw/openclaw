@@ -729,7 +729,7 @@ export function createTelegramThreadBindingManager(params: {
       if (placement === "child") {
         const rawConversationId = input.conversation.conversationId?.trim() ?? "";
         const rawParent = input.conversation.parentConversationId?.trim() ?? "";
-        let chatId = rawParent || rawConversationId;
+        const chatId = rawParent || rawConversationId;
         if (!chatId) {
           logVerbose(
             `telegram: child bind failed: could not resolve group chat ID from conversationId=${rawConversationId}`,
