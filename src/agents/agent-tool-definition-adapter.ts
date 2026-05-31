@@ -10,6 +10,7 @@ import {
   recordAdjustedParamsForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { stripXmlArgValueSuffixFromToolParams } from "./agent-tools.params.js";
 import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
@@ -328,11 +329,18 @@ export function toToolDefinitions(
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
-        let executeParams = params;
+        const normalizedParams = stripXmlArgValueSuffixFromToolParams(name, params);
+        let executeParams = normalizedParams;
         try {
           if (!beforeHookWrapped) {
-            const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
-            const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
+            const hookParams = normalizeCodeModeExecBeforeHookParams({
+              tool,
+              params: normalizedParams,
+            });
+            const hookMetadata = getCodeModeExecBeforeHookMetadata({
+              tool,
+              params: normalizedParams,
+            });
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
               params: hookParams,
@@ -349,11 +357,15 @@ export function toToolDefinitions(
               }
               throw new Error(hookOutcome.reason);
             }
+            const normalizedHookOutcomeParams = stripXmlArgValueSuffixFromToolParams(
+              name,
+              hookOutcome.params,
+            );
             executeParams = reconcileCodeModeExecBeforeHookParams({
               tool,
-              originalParams: params,
+              originalParams: normalizedParams,
               hookParams,
-              adjustedParams: hookOutcome.params,
+              adjustedParams: normalizedHookOutcomeParams,
             });
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }

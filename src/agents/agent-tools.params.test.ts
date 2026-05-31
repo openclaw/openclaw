@@ -3,6 +3,10 @@ import {
   assertRequiredParams,
   REQUIRED_PARAM_GROUPS,
   getToolParamsRecord,
+  stripXmlArgValueSuffix,
+  stripXmlArgValueSuffixFromParams,
+  stripXmlArgValueSuffixFromToolParams,
+  XML_ARG_VALUE_SUFFIX_PARAM_KEYS,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 
@@ -166,5 +170,54 @@ describe("assertRequiredParams", () => {
         "write",
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("stripXmlArgValueSuffix", () => {
+  it("strips leaked arg_value suffixes from command and path values", () => {
+    expect(stripXmlArgValueSuffix('echo "test</arg_value>>')).toBe('echo "test');
+    expect(stripXmlArgValueSuffix("src/index.ts</arg_value>>>>>")).toBe("src/index.ts");
+  });
+
+  it("leaves embedded XML-like text unchanged", () => {
+    expect(stripXmlArgValueSuffix("before </arg_value>> after")).toBe("before </arg_value>> after");
+    expect(stripXmlArgValueSuffix("before </arg_value>")).toBe("before </arg_value>");
+  });
+
+  it("normalizes only selected fields", () => {
+    const params = {
+      path: "src/index.ts</arg_value>>",
+      content: "keep this literal </arg_value>>",
+    };
+
+    expect(stripXmlArgValueSuffixFromParams(params, XML_ARG_VALUE_SUFFIX_PARAM_KEYS.path)).toEqual({
+      path: "src/index.ts",
+      content: "keep this literal </arg_value>>",
+    });
+    expect(params.path).toBe("src/index.ts</arg_value>>");
+  });
+
+  it("normalizes only tool-owned argument fields", () => {
+    const params = {
+      path: "notes.txt</arg_value>>",
+      content: "literal content </arg_value>>",
+    };
+
+    expect(stripXmlArgValueSuffixFromToolParams("write", params)).toEqual({
+      path: "notes.txt",
+      content: "literal content </arg_value>>",
+    });
+    expect(stripXmlArgValueSuffixFromToolParams("message", params)).toBe(params);
+    expect(
+      stripXmlArgValueSuffixFromToolParams("exec", {
+        code: "return 1;</arg_value>>",
+        command: "echo ok</arg_value>>",
+        content: "literal content </arg_value>>",
+      }),
+    ).toEqual({
+      code: "return 1;",
+      command: "echo ok",
+      content: "literal content </arg_value>>",
+    });
   });
 });

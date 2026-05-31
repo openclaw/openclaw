@@ -8,6 +8,12 @@ export type RequiredParamGroup = {
 };
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
+const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>+$/u;
+
+export const XML_ARG_VALUE_SUFFIX_PARAM_KEYS = {
+  path: ["path"],
+  exec: ["ask", "code", "command", "host", "node", "security", "workdir"],
+} as const;
 
 function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
@@ -92,6 +98,55 @@ export const REQUIRED_PARAM_GROUPS = {
 
 export function getToolParamsRecord(params: unknown): Record<string, unknown> | undefined {
   return params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+}
+
+export function stripXmlArgValueSuffix(value: string): string {
+  if (!value.includes("</arg_value>")) {
+    return value;
+  }
+  return value.replace(XML_ARG_VALUE_SUFFIX_RE, "");
+}
+
+export function stripXmlArgValueSuffixFromParams(
+  params: unknown,
+  keys: readonly string[],
+): unknown {
+  const record = getToolParamsRecord(params);
+  if (!record) {
+    return params;
+  }
+  let normalized: Record<string, unknown> | undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const stripped = stripXmlArgValueSuffix(value);
+    if (stripped === value) {
+      continue;
+    }
+    normalized ??= { ...record };
+    normalized[key] = stripped;
+  }
+  return normalized ?? params;
+}
+
+export function stripXmlArgValueSuffixFromToolParams(
+  toolName: string | undefined,
+  params: unknown,
+): unknown {
+  switch (toolName?.trim().toLowerCase()) {
+    case "bash":
+    case "code_mode_exec":
+    case "exec":
+      return stripXmlArgValueSuffixFromParams(params, XML_ARG_VALUE_SUFFIX_PARAM_KEYS.exec);
+    case "edit":
+    case "read":
+    case "write":
+      return stripXmlArgValueSuffixFromParams(params, XML_ARG_VALUE_SUFFIX_PARAM_KEYS.path);
+    default:
+      return params;
+  }
 }
 
 export function assertRequiredParams(

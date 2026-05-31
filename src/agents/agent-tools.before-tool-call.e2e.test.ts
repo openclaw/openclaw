@@ -77,6 +77,35 @@ describe("before_tool_call loop detection behavior", () => {
     );
   }
 
+  it("normalizes leaked arg_value suffixes before hooks and execution", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = createWrappedTool("exec", execute, disabledLoopDetectionContext);
+
+    await tool.execute("tool-call-arg-value", {
+      command: "echo ok</arg_value>>",
+      env: { KEEP: "</arg_value>>" },
+    });
+
+    const event = hookRunner.runBeforeToolCall.mock.calls[0]?.[0] as
+      | { params?: Record<string, unknown> }
+      | undefined;
+    expect(event?.params).toMatchObject({
+      command: "echo ok",
+      env: { KEEP: "</arg_value>>" },
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "tool-call-arg-value",
+      {
+        command: "echo ok",
+        env: { KEEP: "</arg_value>>" },
+      },
+      undefined,
+      undefined,
+    );
+  });
+
   async function withToolLoopEvents(
     run: (emitted: DiagnosticToolLoopEvent[]) => Promise<void>,
     filter: (evt: DiagnosticToolLoopEvent) => boolean = () => true,
@@ -981,6 +1010,58 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Blocked by security plugin");
     expect(mockCallGateway).not.toHaveBeenCalled();
+  });
+
+  it("normalizes leaked arg_value suffixes for direct hook callers", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const execResult = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: {
+        command: "echo ok</arg_value>>",
+        env: { KEEP: "</arg_value>>" },
+      },
+      toolCallId: "call-direct-exec",
+    });
+    const codeModeResult = await runBeforeToolCallHook({
+      toolName: "code_mode_exec",
+      params: {
+        code: "return 1;</arg_value>>",
+        content: "literal </arg_value>>",
+      },
+      toolCallId: "call-direct-code-mode",
+    });
+
+    expect(execResult).toEqual({
+      blocked: false,
+      params: {
+        command: "echo ok",
+        env: { KEEP: "</arg_value>>" },
+      },
+    });
+    expect(codeModeResult).toEqual({
+      blocked: false,
+      params: {
+        code: "return 1;",
+        content: "literal </arg_value>>",
+      },
+    });
+    expectRecordFields(requireHookCall(0)[0], {
+      toolName: "exec",
+      toolCallId: "call-direct-exec",
+      params: {
+        command: "echo ok",
+        env: { KEEP: "</arg_value>>" },
+      },
+    });
+    expectRecordFields(requireHookCall(1)[0], {
+      toolName: "code_mode_exec",
+      toolCallId: "call-direct-code-mode",
+      params: {
+        code: "return 1;",
+        content: "literal </arg_value>>",
+      },
+    });
   });
 
   it("blocks when before_tool_call hook execution throws", async () => {

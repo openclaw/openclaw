@@ -23,6 +23,7 @@ import {
   type ProcessSession,
 } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
@@ -688,6 +689,20 @@ beforeEach(() => {
 
 describe("exec tool backgrounding", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it("strips leaked arg_value suffixes from command values before execution", async () => {
+    const wrappedExecTool = wrapToolWithBeforeToolCallHook(execTool, {
+      loopDetection: { enabled: false },
+    }) as ExecToolInstance;
+    const result = await executeExecCommand(
+      wrappedExecTool,
+      `${shellEcho("xml-suffix-ok")}</arg_value>>`,
+    );
+    const output = readTextContent(result.content) ?? "";
+
+    expect(output).toContain("xml-suffix-ok");
+    expect(output).not.toContain("arg_value");
+  });
 
   it(
     "backgrounds after yield and can be polled",
