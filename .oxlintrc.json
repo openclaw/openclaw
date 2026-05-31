@@ -190,6 +190,7 @@
     "src/auto-reply/reply/export-html/template.js",
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "vendor/",
+    "**/*.bundle.js",
     "**/.cache/**",
     "**/.openclaw-runtime-deps-copy-*/**",
     "**/build/**",
