@@ -6,12 +6,16 @@
   min-height: 100%;
 }
 
+.content > .skill-workshop {
+  margin-top: 8px;
+}
+
 /* ── Lifecycle tabs (underline style) ───────────────────────────────── */
 .sw-lifecycle-tabs {
   display: flex;
   gap: 2px;
   border-bottom: 1px solid var(--border);
-  margin: 14px 0 0;
+  margin: 0;
 }
 
 .sw-lifecycle-tab {
