@@ -4,6 +4,10 @@ type ErrorPattern = RegExp | string;
 
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
+// Z.ai: "您已达到每周/每月使用上限" (You have reached your weekly/monthly usage limit)
+const ZAI_PERIODIC_USAGE_LIMIT_ZH_RE = /每[周月].*使用上限|使用上限.*每[周月]/;
+// Codex: "You have hit your ChatGPT usage limit [...]" (openai-codex-responses.ts error 1310)
+const CODEX_USAGE_LIMIT_RE = /\byou\s+have\s+hit\s+your\b.*\busage\s+limit\b/i;
 
 const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
@@ -268,7 +272,11 @@ export function isTimeoutErrorMessage(raw: string): boolean {
 }
 
 export function isPeriodicUsageLimitErrorMessage(raw: string): boolean {
-  return PERIODIC_USAGE_LIMIT_RE.test(raw);
+  return (
+    PERIODIC_USAGE_LIMIT_RE.test(raw) ||
+    ZAI_PERIODIC_USAGE_LIMIT_ZH_RE.test(raw) ||
+    CODEX_USAGE_LIMIT_RE.test(raw)
+  );
 }
 
 export function isBillingErrorMessage(raw: string): boolean {
