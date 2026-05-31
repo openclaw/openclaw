@@ -996,6 +996,37 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.thinkingLevel).toBe("medium");
   });
 
+  it("uses top-level chat history thinking level when session info inherits it", async () => {
+    const listSessions = vi.fn();
+    const loadHistory = vi.fn().mockResolvedValue({
+      messages: [],
+      thinkingLevel: "medium",
+      sessionInfo: {
+        key: "agent:main:main",
+        sessionId: "session-main",
+        modelProvider: "openai",
+        model: "gpt-5",
+        contextTokens: 120_000,
+        thinkingDefault: "medium",
+        updatedAt: 200,
+      },
+    });
+    const state = createBaseState();
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+    });
+
+    await runLoadHistory();
+
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(state.sessionInfo.thinkingLevel).toBe("medium");
+  });
+
   it("loads selected-agent global history with the selected agent id", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-work-global",

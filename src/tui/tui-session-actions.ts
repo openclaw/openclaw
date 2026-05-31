@@ -416,6 +416,10 @@ export function createSessionActions(context: SessionActionContext) {
         state.currentSessionKey = sessionInfo.key;
         updateHeader();
       }
+      const historySessionInfo =
+        sessionInfo && sessionInfo.thinkingLevel === undefined && record.thinkingLevel !== undefined
+          ? { ...sessionInfo, thinkingLevel: record.thinkingLevel }
+          : sessionInfo;
       state.currentSessionId =
         typeof sessionInfo?.sessionId === "string"
           ? sessionInfo.sessionId
@@ -423,7 +427,7 @@ export function createSessionActions(context: SessionActionContext) {
             ? record.sessionId
             : null;
       applySessionInfo({
-        entry: sessionInfo ?? {
+        entry: historySessionInfo ?? {
           sessionId: record.sessionId,
           thinkingLevel: record.thinkingLevel,
           fastMode: record.fastMode,
