@@ -159,7 +159,13 @@ describe("native hook relay CLI", () => {
     );
 
     expect(exitCode).toBe(0);
-    expect(stdout.text()).toBe("");
+    expect(JSON.parse(stdout.text())).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
     expect(stderr.text()).toContain("native hook relay unavailable");
     expect(stderr.text()).toContain("generation must be non-empty string");
     expect(callGateway).toHaveBeenCalledWith(
@@ -173,7 +179,13 @@ describe("native hook relay CLI", () => {
   it.each([
     {
       event: "pre_tool_use",
-      stdout: null,
+      stdout: {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "Native hook relay unavailable",
+        },
+      },
     },
     {
       event: "permission_request",
@@ -265,7 +277,7 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("keeps PreToolUse unavailable handling observational when there is no before-tool policy", async () => {
+  it("fails closed for PreToolUse when the gateway relay is unavailable", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("gateway closed");
     });
@@ -274,6 +286,40 @@ describe("native hook relay CLI", () => {
 
     const exitCode = await runNativeHookRelayCli(
       { provider: "codex", relayId: "relay-1", generation: "generation-1", event: "pre_tool_use" },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
+    expect(stderr.text()).toContain("native hook relay unavailable");
+  });
+
+  it("keeps PreToolUse unavailable handling observational only with an explicit no-policy marker", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        preToolUseUnavailable: "noop",
+      },
       {
         stdin: createReadableTextStream("{}"),
         stdout,
