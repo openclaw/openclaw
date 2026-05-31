@@ -1061,7 +1061,7 @@ describe("switchChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    switchChatSession(state, "agent:main:test-b");
+    void switchChatSession(state, "agent:main:test-b");
     await Promise.resolve();
 
     expect(state.chatQueue).toStrictEqual([]);
@@ -1133,10 +1133,10 @@ describe("switchChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    switchChatSession(state, "agent:main:other");
+    void switchChatSession(state, "agent:main:other");
     expect(state.chatQueue).toStrictEqual([]);
 
-    switchChatSession(state, "main");
+    void switchChatSession(state, "main");
 
     expect(state.chatQueue).toEqual([{ id: "queued-1", text: "message B", createdAt: 1 }]);
   });
@@ -1180,7 +1180,7 @@ describe("switchChatSession", () => {
     loadChatHistoryMock.mockResolvedValue(undefined);
     loadSessionsMock.mockResolvedValue(undefined);
 
-    switchChatSession(state, "main");
+    void switchChatSession(state, "main");
     await Promise.resolve();
 
     expect(

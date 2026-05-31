@@ -106,7 +106,10 @@ vi.mock("../tool-display.ts", () => ({
     icon: "zap",
     detail:
       args && typeof args === "object" && ("detail" in args || "action" in args)
-        ? String((args as { detail?: unknown; action?: unknown }).detail ?? args.action)
+        ? String(
+            (args as { detail?: unknown; action?: unknown }).detail ??
+              (args as { action?: unknown }).action,
+          )
         : undefined,
   }),
 }));

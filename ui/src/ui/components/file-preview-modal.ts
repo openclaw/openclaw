@@ -467,13 +467,13 @@ export class OpenClawFilePreviewModal extends LitElement {
   }
 
   private filterFiles(): FilePreviewModalFile[] {
-    const query = this.query.trim().toLowerCase();
-    if (!query) {
+    const normalizedQuery = this.query.trim().toLowerCase();
+    if (!normalizedQuery) {
       return this.files;
     }
     return this.files.filter((file) => {
       const haystack = `${file.path}\n${file.contents}`.toLowerCase();
-      return haystack.includes(query);
+      return haystack.includes(normalizedQuery);
     });
   }
 
@@ -492,12 +492,12 @@ export class OpenClawFilePreviewModal extends LitElement {
   }
 
   private handleQueryInput = (event: Event) => {
-    const query = (event.target as HTMLInputElement).value ?? "";
+    const nextQuery = (event.target as HTMLInputElement).value ?? "";
     this.dispatchEvent(
       new CustomEvent<string>("file-preview-query-change", {
         bubbles: true,
         composed: true,
-        detail: query,
+        detail: nextQuery,
       }),
     );
   };
@@ -518,9 +518,7 @@ export class OpenClawFilePreviewModal extends LitElement {
         return;
       case "ArrowUp":
         this.moveSelection(-1, event);
-        return;
       default:
-        return;
     }
   };
 

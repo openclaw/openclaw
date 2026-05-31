@@ -566,6 +566,11 @@ function resolveBoardEmptyState(props: SkillWorkshopProps): {
         body: "Skill Workshop proposals will appear here when your agent drafts them.",
       };
   }
+  return {
+    icon: "search",
+    title: "No proposals here",
+    body: "Skill Workshop proposals will appear here when your agent drafts them.",
+  };
 }
 
 function renderEmptyStateIcon(icon: SkillWorkshopEmptyIcon) {
@@ -614,6 +619,7 @@ function renderEmptyStateIcon(icon: SkillWorkshopEmptyIcon) {
         </svg>
       `;
   }
+  return nothing;
 }
 
 function renderWorkshopEmptyState(props: SkillWorkshopProps) {

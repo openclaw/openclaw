@@ -214,7 +214,7 @@ let pendingUpdate: (() => void) | undefined;
 
 const notifyLazyViewChanged = () => pendingUpdate?.();
 
-function runUiTask<Args extends unknown[]>(
+function runUiTask<Args extends readonly unknown[]>(
   task: (...args: Args) => Promise<unknown>,
 ): (...args: Args) => void {
   return (...args) => {
@@ -423,7 +423,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
         }
         event.preventDefault();
         if (row.key !== state.sessionKey) {
-          switchChatSession(state, row.key);
+          void switchChatSession(state, row.key);
         }
         state.setTab("chat" as import("./navigation.ts").Tab);
       }}
@@ -793,9 +793,9 @@ function applySkillWorkshopReviewState<T extends SkillWorkshopReviewableProposal
   }));
 }
 
-function rememberSkillWorkshopProposalReviewed<T extends SkillWorkshopReviewableProposal>(
+function rememberSkillWorkshopProposalReviewed(
   reviewedKeys: string[],
-  proposal: T,
+  proposal: SkillWorkshopReviewableProposal,
 ): string[] {
   const key = skillWorkshopReviewKey(proposal);
   if (reviewedKeys.includes(key)) {
@@ -2423,12 +2423,17 @@ export function renderApp(state: AppViewState) {
                       <div class="nav-section__items">
                         ${group.tabs
                           .filter((tab) => !isChildTab(tab))
-                          .flatMap((tab) => [
-                            renderTab(state, tab, { collapsed: navCollapsed }),
-                            ...childTabsOf(tab).map((child) =>
-                              renderTab(state, child, { collapsed: navCollapsed, child: true }),
-                            ),
-                          ])}
+                          .flatMap((tab) => {
+                            const renderedTabs = [
+                              renderTab(state, tab, { collapsed: navCollapsed }),
+                            ];
+                            for (const child of childTabsOf(tab)) {
+                              renderedTabs.push(
+                                renderTab(state, child, { collapsed: navCollapsed, child: true }),
+                              );
+                            }
+                            return renderedTabs;
+                          })}
                       </div>
                     </section>
                   `;
@@ -2594,7 +2599,7 @@ export function renderApp(state: AppViewState) {
               onSettingsChange: (next) => state.applySettings(next),
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
-                switchChatSession(state, next);
+                void switchChatSession(state, next);
               },
               onToggleGatewayTokenVisibility: () => {
                 state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
@@ -2803,7 +2808,7 @@ export function renderApp(state: AppViewState) {
                   }
                 }),
                 onNavigateToChat: (sessionKey) => {
-                  switchChatSession(state, sessionKey);
+                  void switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
                 onAddToWorkboard:
@@ -2827,7 +2832,7 @@ export function renderApp(state: AppViewState) {
                     checkpointId,
                   );
                   if (nextKey) {
-                    switchChatSession(state, nextKey);
+                    void switchChatSession(state, nextKey);
                     state.setTab("chat" as import("./navigation.ts").Tab);
                   }
                 }),
@@ -2852,7 +2857,7 @@ export function renderApp(state: AppViewState) {
                 agentsList: state.agentsList,
                 sessions: state.sessionsResult?.sessions ?? [],
                 onOpenSession: (sessionKey) => {
-                  switchChatSession(state, sessionKey);
+                  void switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
                 onRequestUpdate: requestHostUpdate,
@@ -2986,7 +2991,7 @@ export function renderApp(state: AppViewState) {
                   await loadCronRuns(state, state.cronRunsJobId);
                 }),
                 onNavigateToChat: (sessionKey) => {
-                  switchChatSession(state, sessionKey);
+                  void switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
               }),
@@ -3384,8 +3389,10 @@ export function renderApp(state: AppViewState) {
               );
               const currentIndex = visibleProposals.findIndex((p) => p.key === selectedKey);
               const goto = (offset: number) => {
-                if (visibleProposals.length === 0) return;
-                const idx = currentIndex < 0 ? 0 : currentIndex;
+                if (visibleProposals.length === 0) {
+                  return;
+                }
+                const idx = Math.max(0, currentIndex);
                 const next = (idx + offset + visibleProposals.length) % visibleProposals.length;
                 const proposal = visibleProposals[next];
                 selectSkillWorkshopProposal(state, proposal.key);
@@ -3583,7 +3590,7 @@ export function renderApp(state: AppViewState) {
                 renderChat({
                   sessionKey: state.sessionKey,
                   onSessionKeyChange: (next) => {
-                    switchChatSession(state, next);
+                    void switchChatSession(state, next);
                   },
                   thinkingLevel: state.chatThinkingLevel,
                   showThinking,
@@ -3698,14 +3705,14 @@ export function renderApp(state: AppViewState) {
                   currentAgentId: resolvedAgentId ?? "main",
                   fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
                   onAgentChange: (agentId: string) => {
-                    switchChatSession(state, buildAgentMainSessionKey({ agentId }));
+                    void switchChatSession(state, buildAgentMainSessionKey({ agentId }));
                   },
                   onNavigateToAgent: () => {
                     state.agentsSelectedId = resolvedAgentId;
                     state.setTab("agents" as import("./navigation.ts").Tab);
                   },
                   onSessionSelect: (key: string) => {
-                    switchChatSession(state, key);
+                    void switchChatSession(state, key);
                   },
                   showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                   onScrollToBottom: () => state.scrollToBottom(),
@@ -3821,7 +3828,7 @@ export function renderApp(state: AppViewState) {
               onRefresh: refreshDreaming,
               onSelectAgent: (agentId: string) => {
                 state.selectedAgentId = agentId;
-                switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
+                void switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
                 void loadDreamingStatus(state);
                 void loadDreamDiary(state);
               },

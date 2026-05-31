@@ -282,7 +282,13 @@ function renderCronFilterIcon(hiddenCount: number) {
 }
 
 export function renderChatSessionSelect(state: AppViewState) {
-  return renderChatSessionSelectBase(state, switchChatSession, { surface: "desktop" });
+  return renderChatSessionSelectBase(
+    state,
+    (targetState, nextSessionKey) => {
+      void switchChatSession(targetState, nextSessionKey);
+    },
+    { surface: "desktop" },
+  );
 }
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -586,7 +592,13 @@ export function renderChatMobileToggle(state: AppViewState) {
         }}
       >
         <div class="chat-controls">
-          ${renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
+          ${renderChatSessionSelectBase(
+            state,
+            (targetState, nextSessionKey) => {
+              void switchChatSession(targetState, nextSessionKey);
+            },
+            { surface: "mobile" },
+          )}
           <div class="chat-controls__thinking">
             ${renderChatAutoScrollToggle(state)}
             <button
@@ -771,7 +783,7 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
 
   const preservedDraft = state.chatMessage;
   const preservedAttachments = state.chatAttachments;
-  switchChatSession(state, nextSessionKey);
+  void switchChatSession(state, nextSessionKey);
   state.chatMessage = preservedDraft;
   state.chatAttachments = preservedAttachments;
   return true;
