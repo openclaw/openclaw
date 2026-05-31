@@ -216,10 +216,18 @@ describe("ci workflow guards", () => {
   it("keeps network CodeQL off unrelated source-only refactors", () => {
     const workflow = readCriticalQualityWorkflow();
     const networkSelector = workflow.slice(
-      workflow.indexOf("src/**/*.test.ts|src/**/*.test.tsx"),
+      workflow.indexOf(".github/codeql/codeql-network-runtime-boundary-critical-quality.yml"),
       workflow.indexOf("network-runtime-boundary:"),
     );
+    const broadCodeqlSelector = workflow.slice(
+      workflow.indexOf(".github/codeql/*|.github/workflows/codeql-critical-quality.yml"),
+      workflow.indexOf("src/**/*.test.ts|src/**/*.test.tsx"),
+    );
 
+    expect(broadCodeqlSelector).not.toContain("network_runtime=true");
+    expect(networkSelector).toContain(
+      ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
+    );
     expect(networkSelector).not.toContain("src/*.ts|src/**/*.ts");
     expect(networkSelector).not.toContain("extensions/*.ts|extensions/**/*.ts");
     expect(networkSelector).toContain("src/infra/net/*");

@@ -210,6 +210,9 @@ jobs:
           else
             while IFS= read -r file; do
               case "${file}" in
+                .github/codeql/codeql-network-runtime-boundary-critical-quality.yml|.github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql|.github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql)
+                  network_runtime=true
+                  ;;
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
                   agent=true
                   channel=true
@@ -222,7 +225,6 @@ jobs:
                   plugin_sdk_package=true
                   plugin_sdk_reply=true
                   provider=true
-                  network_runtime=true
                   session_diagnostics=true
                   ;;
                 src/agents/sessions/tools/*)
