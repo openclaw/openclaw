@@ -75,6 +75,7 @@ type MemoryIndexEntry = {
   size: number;
   hash: string;
   kind?: "markdown" | "multimodal";
+  content?: string;
   contentText?: string;
   lineMap?: number[];
 };
@@ -769,7 +770,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       };
     }
 
-    const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+    const content = options.content ?? entry.content ?? (await fs.readFile(entry.absPath, "utf-8"));
     const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
     const chunks = this.provider
       ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)
@@ -788,7 +789,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return;
     }
     const batchEmbed = this.providerRuntime?.batchEmbed;
-    if (!this.provider || !this.batch.enabled || !batchEmbed || options.source !== "memory") {
+    if (!this.provider || !this.batch.enabled || !batchEmbed) {
       for (const entry of entries) {
         await this.indexFile(entry, options);
       }

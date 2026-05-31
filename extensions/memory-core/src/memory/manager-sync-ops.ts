@@ -1302,60 +1302,124 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const yieldAfterSessionFile = createSessionSyncYield(files.length);
-    const tasks = files.map((absPath) => async () => {
-      try {
-        if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
-          }
-          return;
-        }
-        const entry = await buildSessionEntry(absPath);
-        if (!entry) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
-          }
-          return;
-        }
-        const existingHash = resolveMemorySourceExistingHash({
-          db: this.db,
-          source: "sessions",
-          path: entry.path,
-          existingHashes,
-        });
-        if (!params.needsFullReindex && existingHash === entry.hash) {
-          if (params.progress) {
-            params.progress.completed += 1;
-            params.progress.report({
-              completed: params.progress.completed,
-              total: params.progress.total,
-            });
-          }
-          this.resetSessionDelta(absPath, entry.size);
-          return;
-        }
-        await this.indexFile(entry, { source: "sessions", content: entry.content });
-        this.resetSessionDelta(absPath, entry.size);
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-      } finally {
-        await yieldAfterSessionFile();
+    if (this.batch.enabled) {
+      const dirtyEntries = (
+        await runWithConcurrency(
+          files.map((absPath) => async (): Promise<MemoryIndexEntry | null> => {
+            try {
+              if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+                if (params.progress) {
+                  params.progress.completed += 1;
+                  params.progress.report({
+                    completed: params.progress.completed,
+                    total: params.progress.total,
+                  });
+                }
+                return null;
+              }
+              const entry = await buildSessionEntry(absPath);
+              if (!entry) {
+                if (params.progress) {
+                  params.progress.completed += 1;
+                  params.progress.report({
+                    completed: params.progress.completed,
+                    total: params.progress.total,
+                  });
+                }
+                return null;
+              }
+              const existingHash = resolveMemorySourceExistingHash({
+                db: this.db,
+                source: "sessions",
+                path: entry.path,
+                existingHashes,
+              });
+              if (!params.needsFullReindex && existingHash === entry.hash) {
+                if (params.progress) {
+                  params.progress.completed += 1;
+                  params.progress.report({
+                    completed: params.progress.completed,
+                    total: params.progress.total,
+                  });
+                }
+                this.resetSessionDelta(absPath, entry.size);
+                return null;
+              }
+              return entry;
+            } finally {
+              await yieldAfterSessionFile();
+            }
+          }),
+          this.getIndexConcurrency(),
+        )
+      ).filter((entry): entry is MemoryIndexEntry => entry !== null);
+      await this.indexFiles(dirtyEntries, { source: "sessions" });
+      for (const entry of dirtyEntries) {
+        this.resetSessionDelta(entry.absPath, entry.size);
       }
-    });
-    await runWithConcurrency(tasks, this.getIndexConcurrency());
+      if (params.progress && dirtyEntries.length > 0) {
+        params.progress.completed += dirtyEntries.length;
+        params.progress.report({
+          completed: params.progress.completed,
+          total: params.progress.total,
+        });
+      }
+    } else {
+      const tasks = files.map((absPath) => async () => {
+        try {
+          if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+            if (params.progress) {
+              params.progress.completed += 1;
+              params.progress.report({
+                completed: params.progress.completed,
+                total: params.progress.total,
+              });
+            }
+            return;
+          }
+          const entry = await buildSessionEntry(absPath);
+          if (!entry) {
+            if (params.progress) {
+              params.progress.completed += 1;
+              params.progress.report({
+                completed: params.progress.completed,
+                total: params.progress.total,
+              });
+            }
+            return;
+          }
+          const existingHash = resolveMemorySourceExistingHash({
+            db: this.db,
+            source: "sessions",
+            path: entry.path,
+            existingHashes,
+          });
+          if (!params.needsFullReindex && existingHash === entry.hash) {
+            if (params.progress) {
+              params.progress.completed += 1;
+              params.progress.report({
+                completed: params.progress.completed,
+                total: params.progress.total,
+              });
+            }
+            this.resetSessionDelta(absPath, entry.size);
+            return;
+          }
+          await this.indexFile(entry, { source: "sessions", content: entry.content });
+          this.resetSessionDelta(absPath, entry.size);
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+        } finally {
+          await yieldAfterSessionFile();
+        }
+      });
+      await runWithConcurrency(tasks, this.getIndexConcurrency());
+    }
 
     if (activePaths === null) {
       // Targeted syncs only refresh the requested transcripts and should not

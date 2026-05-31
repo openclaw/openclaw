@@ -433,6 +433,71 @@ describe("memory index", () => {
     }
   });
 
+  it("batches forced memory and session indexing across files", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionsDir, "session-alpha.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          id: "session-alpha",
+          timestamp: "2026-04-07T15:24:04.113Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: [{ type: "text", text: "Session alpha memory line." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "session-beta.jsonl"),
+      [
+        JSON.stringify({
+          type: "session",
+          id: "session-beta",
+          timestamp: "2026-04-07T15:24:04.113Z",
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: [{ type: "text", text: "Session beta memory line." }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const cfg = createCfg({
+      provider: "batch-test",
+      batchEnabled: true,
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      storePath: path.join(workspaceDir, "index-force-cross-source-batch.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "cli", force: true });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(providerRuntimeBatchCalls[0]).toEqual([
+        "# Log\nAlpha memory line.\nZebra memory line.",
+        "# Log\nBeta memory line.",
+      ]);
+      expect(providerRuntimeBatchCalls[1]?.join("\n")).toContain("Session alpha memory line.");
+      expect(providerRuntimeBatchCalls[1]?.join("\n")).toContain("Session beta memory line.");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("closes embedding providers when memory index managers close", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
