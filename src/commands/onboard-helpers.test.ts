@@ -85,6 +85,7 @@ describe("handleReset", () => {
     const profileCredentialsDir = path.join(profileStateDir, "credentials");
     const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
     const workspaceDir = path.join(profileStateDir, "workspace");
+    const workspaceAttestationPath = `${workspaceDir}.attested`;
     const defaultCredentialsDir = path.join(defaultStateDir, "credentials");
 
     fs.mkdirSync(profileCredentialsDir, { recursive: true });
@@ -92,6 +93,7 @@ describe("handleReset", () => {
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.mkdirSync(defaultCredentialsDir, { recursive: true });
     fs.writeFileSync(profileConfigPath, "{}\n");
+    fs.writeFileSync(workspaceAttestationPath, new Date().toISOString());
 
     vi.stubEnv("HOME", homeDir);
     vi.stubEnv("OPENCLAW_HOME", homeDir);
@@ -105,6 +107,7 @@ describe("handleReset", () => {
       profileCredentialsDir,
       profileSessionsDir,
       workspaceDir,
+      workspaceAttestationPath,
     ].map(expectedTrashSourcePath);
     const expectedDefaultCredentialsDir = expectedTrashSourcePath(defaultCredentialsDir);
 

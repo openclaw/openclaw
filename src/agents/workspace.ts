@@ -32,6 +32,8 @@ export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
+const WORKSPACE_ATTESTATION_SUFFIX = ".attested";
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -196,6 +198,25 @@ const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
   DEFAULT_HEARTBEAT_FILENAME,
 ]);
 
+export const WORKSPACE_VANISHED_ERROR_CODE = "WORKSPACE_VANISHED";
+
+export class WorkspaceVanishedError extends Error {
+  readonly code = WORKSPACE_VANISHED_ERROR_CODE;
+  readonly workspaceDir: string;
+  readonly attestationPath: string;
+
+  constructor(params: { workspaceDir: string; attestationPath: string }) {
+    super(
+      `OpenClaw workspace appears to have disappeared after a recent initialization: ${params.workspaceDir}. ` +
+        `Refusing to reseed BOOTSTRAP.md over a recently attested workspace. ` +
+        `Restore the workspace or remove ${params.attestationPath} if this reset was intentional.`,
+    );
+    this.name = "WorkspaceVanishedError";
+    this.workspaceDir = params.workspaceDir;
+    this.attestationPath = params.attestationPath;
+  }
+}
+
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
     await fs.writeFile(filePath, content, {
@@ -324,6 +345,63 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
 
 function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
+}
+
+export function resolveWorkspaceAttestationPath(dir: string): string {
+  return `${dir}${WORKSPACE_ATTESTATION_SUFFIX}`;
+}
+
+async function hasRecentWorkspaceAttestation(attestationPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(attestationPath);
+    if (!stat.isFile()) {
+      return false;
+    }
+    return Date.now() - stat.mtimeMs <= WORKSPACE_ATTESTATION_RECENT_MS;
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+    return false;
+  }
+}
+
+async function writeWorkspaceAttestation(attestationPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(attestationPath), { recursive: true });
+  try {
+    const stat = await fs.lstat(attestationPath);
+    if (!stat.isFile()) {
+      return;
+    }
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  const noFollowFlag =
+    typeof syncFs.constants.O_NOFOLLOW === "number" ? syncFs.constants.O_NOFOLLOW : 0;
+  const handle = await fs.open(
+    attestationPath,
+    syncFs.constants.O_WRONLY | syncFs.constants.O_CREAT | syncFs.constants.O_TRUNC | noFollowFlag,
+    0o600,
+  );
+  try {
+    await handle.writeFile(`${new Date().toISOString()}\n`, "utf-8");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function maybeWriteWorkspaceAttestation(attestationPath: string): Promise<void> {
+  try {
+    await writeWorkspaceAttestation(attestationPath);
+  } catch {
+    // The marker is a lifecycle guard; setup should not fail solely because it
+    // could not refresh auxiliary disappearance evidence.
+  }
 }
 
 function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
@@ -499,6 +577,16 @@ export async function ensureAgentWorkspace(params?: {
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
+  const attestationPath = resolveWorkspaceAttestationPath(dir);
+
+  if (
+    params?.ensureBootstrapFiles &&
+    !(await pathExists(dir)) &&
+    (await hasRecentWorkspaceAttestation(attestationPath))
+  ) {
+    throw new WorkspaceVanishedError({ workspaceDir: dir, attestationPath });
+  }
+
   await fs.mkdir(dir, { recursive: true });
 
   if (!params?.ensureBootstrapFiles) {
@@ -531,6 +619,10 @@ export async function ensureAgentWorkspace(params?: {
     const hasCanonicalRootMemory = await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
     return existing.every((v) => !v) && !hasCanonicalRootMemory;
   })();
+
+  if (isBrandNewWorkspace && (await hasRecentWorkspaceAttestation(attestationPath))) {
+    throw new WorkspaceVanishedError({ workspaceDir: dir, attestationPath });
+  }
 
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
   const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
@@ -616,6 +708,7 @@ export async function ensureAgentWorkspace(params?: {
     await writeWorkspaceSetupState(statePath, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
+  await maybeWriteWorkspaceAttestation(attestationPath);
 
   return {
     dir,
