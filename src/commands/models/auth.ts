@@ -1015,10 +1015,13 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     // etc.) where `auth login` would otherwise short-circuit on the cached
     // profile.
     try {
-      await removeProviderAuthProfilesWithLock({
+      const clearedStore = await removeProviderAuthProfilesWithLock({
         provider: selectedProvider.id,
         agentDir,
       });
+      if (!clearedStore) {
+        throw new Error("profile store update failed");
+      }
       runtime.log(
         `Removed cached auth profiles for provider "${selectedProvider.id}" (--force). Running fresh auth flow.`,
       );

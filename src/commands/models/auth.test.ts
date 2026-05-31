@@ -365,7 +365,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.upsertAuthProfileWithLock.mockResolvedValue({ version: 1, profiles: {} });
     mocks.promoteAuthProfileInOrder.mockReset();
     mocks.removeProviderAuthProfilesWithLock.mockReset();
-    mocks.removeProviderAuthProfilesWithLock.mockResolvedValue(null);
+    mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -1212,6 +1212,20 @@ describe("modelsAuthLoginCommand", () => {
     await expect(
       modelsAuthLoginCommand({ provider: "openai", force: true }, runtime),
     ).rejects.toThrow('Could not clear cached profiles for "openai" before re-login: disk full');
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runProviderAuth).not.toHaveBeenCalled();
+  });
+
+  it("--force fails before login when purge cannot update the profile store", async () => {
+    const runtime = createRuntime();
+    mocks.removeProviderAuthProfilesWithLock.mockResolvedValueOnce(null);
+
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai", force: true }, runtime),
+    ).rejects.toThrow(
+      'Could not clear cached profiles for "openai" before re-login: profile store update failed',
+    );
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runProviderAuth).not.toHaveBeenCalled();
