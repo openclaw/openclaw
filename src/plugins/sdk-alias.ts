@@ -34,6 +34,14 @@ type PluginSdkPackageJson = {
   version?: string;
 };
 
+type WorkspacePackageAliasEntry = {
+  packageName: string;
+  packageDir: string;
+  subpath: string;
+  srcFile: string;
+  distFile: string;
+};
+
 const STARTUP_ARGV1 = process.argv[1];
 const pluginSdkPackageJsonByRoot = new Map<string, PluginSdkPackageJson | null>();
 
@@ -508,7 +516,7 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
 // workspace package import reachable from plugin SDK barrels needs an explicit
 // source/dist alias here to keep source checkouts and packaged builds aligned.
-const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
+const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/gateway-client",
     packageDir: "gateway-client",
@@ -746,104 +754,6 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     subpath: "read-response-with-limit",
     srcFile: "read-response-with-limit.ts",
     distFile: "read-response-with-limit.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "meta",
-    srcFile: "meta.ts",
-    distFile: "meta.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "normalize-text",
-    srcFile: "normalize-text.ts",
-    distFile: "normalize-text.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "numeric-options",
-    srcFile: "numeric-options.ts",
-    distFile: "numeric-options.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "record-shared",
-    srcFile: "record-shared.ts",
-    distFile: "record-shared.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "session",
-    srcFile: "session.ts",
-    distFile: "session.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "session-interaction-mode",
-    srcFile: "session-interaction-mode.ts",
-    distFile: "session-interaction-mode.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "session-lineage-meta",
-    srcFile: "session-lineage-meta.ts",
-    distFile: "session-lineage-meta.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "types",
-    srcFile: "types.ts",
-    distFile: "types.mjs",
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "runtime/error-text",
-    srcFile: path.join("runtime", "error-text.ts"),
-    distFile: path.join("runtime", "error-text.mjs"),
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "runtime/errors",
-    srcFile: path.join("runtime", "errors.ts"),
-    distFile: path.join("runtime", "errors.mjs"),
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "runtime/session-identifiers",
-    srcFile: path.join("runtime", "session-identifiers.ts"),
-    distFile: path.join("runtime", "session-identifiers.mjs"),
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "runtime/session-identity",
-    srcFile: path.join("runtime", "session-identity.ts"),
-    distFile: path.join("runtime", "session-identity.mjs"),
-  },
-  {
-    packageName: "@openclaw/acp-core",
-    packageDir: "acp-core",
-    subpath: "runtime/types",
-    srcFile: path.join("runtime", "types.ts"),
-    distFile: path.join("runtime", "types.mjs"),
   },
   {
     packageName: "@openclaw/normalization-core",
@@ -1105,6 +1015,75 @@ const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "terminal-core",
 ]);
 
+function normalizePackageExportSubpath(exportKey: string): string | null {
+  if (exportKey === ".") {
+    return "";
+  }
+  if (!exportKey.startsWith("./")) {
+    return null;
+  }
+  const subpath = exportKey.slice(2);
+  return subpath && !subpath.includes("..") ? subpath : null;
+}
+
+function resolvePackageExportImportPath(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.import === "string"
+    ? record.import
+    : typeof record.default === "string"
+      ? record.default
+      : null;
+}
+
+export function listWorkspacePackageExportAliasEntries(params: {
+  packageRoot: string;
+  packageName: string;
+  packageDir: string;
+}): WorkspacePackageAliasEntry[] {
+  const packageJsonPath = path.join(
+    params.packageRoot,
+    "packages",
+    params.packageDir,
+    "package.json",
+  );
+  const fallbackPackageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
+  const packageJson =
+    tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath) ??
+    (fallbackPackageRoot
+      ? tryReadJsonSync<PluginSdkPackageJson>(
+          path.join(fallbackPackageRoot, "packages", params.packageDir, "package.json"),
+        )
+      : null);
+  const exports = packageJson?.exports;
+  if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
+    return [];
+  }
+  const entries: WorkspacePackageAliasEntry[] = [];
+  for (const [exportKey, value] of Object.entries(exports)) {
+    const subpath = normalizePackageExportSubpath(exportKey);
+    const importPath = resolvePackageExportImportPath(value);
+    if (subpath === null || !importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+      continue;
+    }
+    const distFile = importPath.slice("./dist/".length);
+    const srcFile = distFile.replace(/\.mjs$/u, ".ts");
+    entries.push({
+      packageName: params.packageName,
+      packageDir: params.packageDir,
+      subpath,
+      srcFile,
+      distFile,
+    });
+  }
+  return entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath));
+}
+
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
   if (!fs.existsSync(candidate)) {
     return false;
@@ -1308,7 +1287,15 @@ function resolveWorkspacePackageAliasMap(params: {
     pluginSdkResolution: params.pluginSdkResolution,
   });
   const aliasMap: Record<string, string> = {};
-  for (const entry of WORKSPACE_PACKAGE_ALIAS_ENTRIES) {
+  const workspacePackageAliasEntries = [
+    ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
+    ...listWorkspacePackageExportAliasEntries({
+      packageRoot,
+      packageName: "@openclaw/acp-core",
+      packageDir: "acp-core",
+    }),
+  ];
+  for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
     for (const kind of orderedKinds) {
       const candidates =
