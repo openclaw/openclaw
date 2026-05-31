@@ -1,4 +1,6 @@
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -27,6 +29,22 @@ export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
 };
 
+type OpenAiCompatibleImageResponseParseOptions = {
+  defaultMimeType?: string;
+  fileNamePrefix?: string;
+  malformedResponseError?: string;
+  sniffMimeType?: boolean;
+  fetchFn?: typeof fetch;
+  timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
+  maxBytes?: number;
+  trustedOrigin?: string;
+  trustedOriginHeaders?: HeadersInit;
+  trustedOriginDispatcherPolicy?: PinnedDispatcherPolicy;
+};
+
 function throwMalformedImageResponse(message: string | undefined): never | undefined {
   if (message) {
     throw new Error(message);
@@ -52,10 +70,7 @@ export function imageFileExtensionForMimeType(
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || fallback : fallback;
 }
 
-export function sniffImageMimeType(
-  buffer: Buffer,
-  fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
-): ImageMimeTypeDetection {
+function sniffKnownImageMimeType(buffer: Buffer): ImageMimeTypeDetection | undefined {
   if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
     return { mimeType: "image/jpeg", extension: "jpg" };
   }
@@ -74,6 +89,17 @@ export function sniffImageMimeType(
     buffer.toString("ascii", 8, 12) === "WEBP"
   ) {
     return { mimeType: "image/webp", extension: "webp" };
+  }
+  return undefined;
+}
+
+export function sniffImageMimeType(
+  buffer: Buffer,
+  fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
+): ImageMimeTypeDetection {
+  const detected = sniffKnownImageMimeType(buffer);
+  if (detected) {
+    return detected;
   }
   return {
     mimeType: fallbackMimeType,
@@ -185,34 +211,64 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
   });
 }
 
+function normalizeImageHeaderMimeType(value: string | null): string | undefined {
+  const mimeType = normalizeOptionalString(value);
+  const normalized = normalizeOptionalLowercaseString(mimeType)?.split(";")[0]?.trim();
+  return normalized?.startsWith("image/") ? mimeType : undefined;
+}
+
+function resolveUrlOrigin(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasHeaders(headers: Headers): boolean {
+  return !headers.keys().next().done;
+}
+
+function resolveTrustedImageUrlRequest(
+  url: string,
+  options: OpenAiCompatibleImageResponseParseOptions,
+): { init: RequestInit; dispatcherPolicy?: PinnedDispatcherPolicy } {
+  if (resolveUrlOrigin(url) !== resolveUrlOrigin(options.trustedOrigin)) {
+    return { init: {} };
+  }
+  const headers = new Headers(options.trustedOriginHeaders);
+  headers.delete("Content-Type");
+  return {
+    init: hasHeaders(headers) ? { headers } : {},
+    ...(options.trustedOriginDispatcherPolicy
+      ? { dispatcherPolicy: options.trustedOriginDispatcherPolicy }
+      : {}),
+  };
+}
+
 async function generatedImageAssetFromOpenAiCompatibleUrlEntry(
   entry: OpenAiCompatibleImageResponseEntry,
   index: number,
-  options: {
-    defaultMimeType?: string;
-    fileNamePrefix?: string;
-    fetchFn?: typeof fetch;
-    timeoutMs?: number;
-    ssrfPolicy?: SsrFPolicy;
-    allowPrivateNetwork?: boolean;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-  } = {},
+  options: OpenAiCompatibleImageResponseParseOptions = {},
 ): Promise<GeneratedImageAsset | undefined> {
   const url = normalizeOptionalString(entry.url);
   if (!url) {
     return undefined;
   }
+  const trustedRequest = resolveTrustedImageUrlRequest(url, options);
   const { response, release } = await fetchWithTimeoutGuarded(
     url,
-    {},
+    trustedRequest.init,
     options.timeoutMs,
     options.fetchFn ?? fetch,
     {
-      ssrfPolicy: options.allowPrivateNetwork
-        ? { ...options.ssrfPolicy, allowPrivateNetwork: true }
-        : options.ssrfPolicy,
-      dispatcherPolicy: options.dispatcherPolicy,
+      ...(options.ssrfPolicy ? { ssrfPolicy: options.ssrfPolicy } : {}),
+      ...((trustedRequest.dispatcherPolicy ?? options.dispatcherPolicy)
+        ? { dispatcherPolicy: trustedRequest.dispatcherPolicy ?? options.dispatcherPolicy }
+        : {}),
       auditContext: options.auditContext ?? "image-generation.openai-compatible.url-download",
     },
   );
@@ -220,17 +276,27 @@ async function generatedImageAssetFromOpenAiCompatibleUrlEntry(
     if (!response.ok) {
       throw new Error(`OpenAI-compatible image URL download failed (${response.status})`);
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const headerMimeType = normalizeOptionalString(response.headers.get("content-type"));
+    const maxBytes = options.maxBytes ?? MAX_IMAGE_BYTES;
+    const buffer = await readResponseWithLimit(response, maxBytes, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`OpenAI-compatible image URL download exceeded maxBytes ${maxBytes}`),
+    });
+    if (buffer.length === 0) {
+      throw new Error("OpenAI-compatible image URL download returned an empty image");
+    }
+    const detected = sniffKnownImageMimeType(buffer);
+    const headerMimeType = normalizeImageHeaderMimeType(response.headers.get("content-type"));
+    if (!detected && !headerMimeType) {
+      throw new Error("OpenAI-compatible image URL download did not return an image");
+    }
     const defaultMimeType =
       normalizeOptionalString(options.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
-    const detected = sniffImageMimeType(buffer, headerMimeType ?? defaultMimeType);
-    const mimeType = headerMimeType ?? detected.mimeType;
+    const mimeType = detected?.mimeType ?? headerMimeType ?? defaultMimeType;
     const prefix = normalizeOptionalString(options.fileNamePrefix) ?? DEFAULT_IMAGE_FILE_PREFIX;
     const image: GeneratedImageAsset = {
       buffer,
       mimeType,
-      fileName: `${prefix}-${index + 1}.${detected.extension ?? imageFileExtensionForMimeType(mimeType)}`,
+      fileName: `${prefix}-${index + 1}.${detected?.extension ?? imageFileExtensionForMimeType(mimeType)}`,
     };
     const revisedPrompt = normalizeOptionalString(entry.revised_prompt);
     if (revisedPrompt) {
@@ -245,17 +311,7 @@ async function generatedImageAssetFromOpenAiCompatibleUrlEntry(
 async function generatedImageAssetFromOpenAiCompatibleEntryAsync(
   entry: OpenAiCompatibleImageResponseEntry,
   index: number,
-  options: {
-    defaultMimeType?: string;
-    fileNamePrefix?: string;
-    sniffMimeType?: boolean;
-    fetchFn?: typeof fetch;
-    timeoutMs?: number;
-    ssrfPolicy?: SsrFPolicy;
-    allowPrivateNetwork?: boolean;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-  } = {},
+  options: OpenAiCompatibleImageResponseParseOptions = {},
 ): Promise<GeneratedImageAsset | undefined> {
   return (
     generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options) ??
@@ -265,12 +321,7 @@ async function generatedImageAssetFromOpenAiCompatibleEntryAsync(
 
 export function parseOpenAiCompatibleImageResponse(
   payload: unknown,
-  options: {
-    defaultMimeType?: string;
-    fileNamePrefix?: string;
-    malformedResponseError?: string;
-    sniffMimeType?: boolean;
-  } = {},
+  options: OpenAiCompatibleImageResponseParseOptions = {},
 ): GeneratedImageAsset[] {
   if (!isRecord(payload)) {
     throwMalformedImageResponse(options.malformedResponseError);
@@ -302,19 +353,8 @@ export function parseOpenAiCompatibleImageResponse(
 }
 
 export async function parseOpenAiCompatibleImageResponseAsync(
-  payload: OpenAiCompatibleImageResponsePayload,
-  options: {
-    defaultMimeType?: string;
-    fileNamePrefix?: string;
-    sniffMimeType?: boolean;
-    fetchFn?: typeof fetch;
-    timeoutMs?: number;
-    ssrfPolicy?: SsrFPolicy;
-    allowPrivateNetwork?: boolean;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-    malformedResponseError?: string;
-  } = {},
+  payload: unknown,
+  options: OpenAiCompatibleImageResponseParseOptions = {},
 ): Promise<GeneratedImageAsset[]> {
   if (!isRecord(payload)) {
     throwMalformedImageResponse(options.malformedResponseError);

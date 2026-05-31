@@ -11,6 +11,7 @@ vi.mock("../media-understanding/shared.js", async () => {
     fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   };
 });
+
 import {
   generatedImageAssetFromDataUrl,
   imageFileExtensionForMimeType,
@@ -26,6 +27,7 @@ describe("image asset helpers", () => {
   beforeEach(() => {
     fetchWithTimeoutGuardedMock.mockReset();
   });
+
   it("converts buffers to image data URLs and parses them back", () => {
     const buffer = Buffer.from("png-bytes");
     const dataUrl = toImageDataUrl({ buffer, mimeType: "image/png" });
@@ -97,20 +99,26 @@ describe("image asset helpers", () => {
     ]);
   });
 
-  it("parses OpenAI-compatible URL image responses", async () => {
-    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(pngBytes, {
-          headers: { "content-type": "image/png" },
-        }),
-    );
+  it("skips malformed OpenAI-compatible base64 image responses", () => {
+    expect(
+      parseOpenAiCompatibleImageResponse(
+        {
+          data: [{ b64_json: "not-base64!" }],
+        },
+        { defaultMimeType: "image/png" },
+      ),
+    ).toEqual([]);
+  });
 
+  it("parses OpenAI-compatible URL image responses through guarded provider HTTP", async () => {
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+    const release = vi.fn(async () => {});
+    const fetchMock = vi.fn();
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
       response: new Response(pngBytes, {
         headers: { "content-type": "image/png" },
       }),
-      release: vi.fn(),
+      release,
     });
 
     const images = await parseOpenAiCompatibleImageResponseAsync(
@@ -143,6 +151,7 @@ describe("image asset helpers", () => {
         auditContext: "image-generation.openai-compatible.url-download",
       },
     );
+    expect(release).toHaveBeenCalledOnce();
     expect(images).toEqual([
       {
         buffer: pngBytes,
@@ -155,8 +164,6 @@ describe("image asset helpers", () => {
 
   it("prefers OpenAI-compatible base64 image data over URL fallbacks", async () => {
     const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
-    const fetchMock = vi.fn();
-
     const images = await parseOpenAiCompatibleImageResponseAsync(
       {
         data: [
@@ -166,23 +173,105 @@ describe("image asset helpers", () => {
           },
         ],
       },
-      { fetchFn: fetchMock, sniffMimeType: true },
+      { sniffMimeType: true },
     );
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
     expect(images[0]?.mimeType).toBe("image/jpeg");
     expect(images[0]?.buffer).toEqual(jpegBytes);
   });
 
-  it("skips malformed OpenAI-compatible base64 image responses", () => {
-    expect(
-      parseOpenAiCompatibleImageResponse(
+  it("does not forward trusted-origin transport settings to off-origin image URLs", async () => {
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response(pngBytes, {
+        headers: { "content-type": "image/png" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await parseOpenAiCompatibleImageResponseAsync(
+      {
+        data: [{ url: "https://cdn.example.test/generated.png" }],
+      },
+      {
+        trustedOrigin: "https://provider.example.test/v1",
+        trustedOriginHeaders: { Authorization: "Bearer secret" },
+        trustedOriginDispatcherPolicy: { mode: "direct" },
+      },
+    );
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
+      "https://cdn.example.test/generated.png",
+      {},
+      undefined,
+      fetch,
+      {
+        auditContext: "image-generation.openai-compatible.url-download",
+      },
+    );
+  });
+
+  it("releases guarded image URL downloads after response failures", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response("missing", { status: 404 }),
+      release,
+    });
+
+    await expect(
+      parseOpenAiCompatibleImageResponseAsync({
+        data: [{ url: "https://example.test/missing.png" }],
+      }),
+    ).rejects.toThrow("OpenAI-compatible image URL download failed (404)");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("caps OpenAI-compatible URL image response bodies", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response("too-large"),
+      release,
+    });
+
+    await expect(
+      parseOpenAiCompatibleImageResponseAsync(
         {
-          data: [{ b64_json: "not-base64!" }],
+          data: [{ url: "https://example.test/large.png" }],
         },
-        { defaultMimeType: "image/png" },
+        { maxBytes: 4 },
       ),
-    ).toEqual([]);
+    ).rejects.toThrow("OpenAI-compatible image URL download exceeded maxBytes 4");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects empty and non-image OpenAI-compatible URL downloads", async () => {
+    const emptyRelease = vi.fn(async () => {});
+    const htmlRelease = vi.fn(async () => {});
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.alloc(0), { headers: { "content-type": "image/png" } }),
+        release: emptyRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response("<html>no image</html>", {
+          headers: { "content-type": "text/html" },
+        }),
+        release: htmlRelease,
+      });
+
+    await expect(
+      parseOpenAiCompatibleImageResponseAsync({
+        data: [{ url: "https://example.test/empty.png" }],
+      }),
+    ).rejects.toThrow("OpenAI-compatible image URL download returned an empty image");
+    await expect(
+      parseOpenAiCompatibleImageResponseAsync({
+        data: [{ url: "https://example.test/not-image.png" }],
+      }),
+    ).rejects.toThrow("OpenAI-compatible image URL download did not return an image");
+    expect(emptyRelease).toHaveBeenCalledOnce();
+    expect(htmlRelease).toHaveBeenCalledOnce();
   });
 
   it("rejects malformed OpenAI-compatible image responses in strict mode", () => {

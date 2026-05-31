@@ -14,6 +14,7 @@ const {
   resolveProviderHttpRequestConfigMock,
   resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequestMock,
+  fetchWithTimeoutGuardedMock,
 } = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => ({
@@ -40,6 +41,7 @@ const {
     (params: Record<string, unknown>) => params.defaultTimeoutMs,
   ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
+  fetchWithTimeoutGuardedMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -59,6 +61,16 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
+
+vi.mock("../media-understanding/shared.js", async () => {
+  const actual = await vi.importActual<typeof import("../media-understanding/shared.js")>(
+    "../media-understanding/shared.js",
+  );
+  return {
+    ...actual,
+    fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
+  };
+});
 
 function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
   const [call] = mock.mock.calls;
@@ -154,6 +166,7 @@ describe("OpenAI-compatible image provider helper", () => {
     resolveProviderHttpRequestConfigMock.mockClear();
     resolveProviderOperationTimeoutMsMock.mockClear();
     sanitizeConfiguredModelProviderRequestMock.mockClear();
+    fetchWithTimeoutGuardedMock.mockReset();
   });
 
   it("builds provider metadata and delegates configuration checks", () => {
@@ -223,6 +236,99 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(result.images[0]?.fileName).toBe("image-1.png");
     expect(result.images[0]?.revisedPrompt).toBe("revised");
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("scopes returned image URL downloads to the provider origin", async () => {
+    const requestRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+    postJsonRequestMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          data: [{ url: "http://127.0.0.1:8082/v1/files/generated.png" }],
+        }),
+      },
+      release: requestRelease,
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response(pngBytes, { headers: { "content-type": "image/png" } }),
+      release: downloadRelease,
+    });
+    const provider = createProvider();
+
+    const result = await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "draw a square",
+      ssrfPolicy: {
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+        allowPrivateNetwork: true,
+        allowedHostnames: ["internal.example"],
+      },
+      cfg: {
+        models: {
+          providers: {
+            sample: {
+              baseUrl: "http://127.0.0.1:8082/v1",
+              request: { allowPrivateNetwork: true },
+            },
+          },
+        },
+      },
+    } as never);
+
+    const downloadCall = fetchWithTimeoutGuardedMock.mock.calls[0];
+    expect(downloadCall?.[0]).toBe("http://127.0.0.1:8082/v1/files/generated.png");
+    const downloadInit = downloadCall?.[1] as RequestInit | undefined;
+    const downloadHeaders = new Headers(downloadInit?.headers);
+    expect(downloadHeaders.get("Authorization")).toBe("Bearer provider-key");
+    expect(downloadHeaders.has("Content-Type")).toBe(false);
+    expect(downloadCall?.[2]).toBeUndefined();
+    expect(downloadCall?.[3]).toBe(fetch);
+    expect(downloadCall?.[4]).toEqual({
+      ssrfPolicy: {
+        allowedOrigins: ["http://127.0.0.1:8082"],
+      },
+      dispatcherPolicy: { request: { allowPrivateNetwork: true } },
+      auditContext: "sample.image-url-download",
+    });
+    expect(result.images[0]?.buffer).toEqual(pngBytes);
+    expect(requestRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
+  });
+
+  it("honors the configured generated-media cap for returned image URL downloads", async () => {
+    const requestRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+    postJsonRequestMock.mockResolvedValueOnce({
+      response: {
+        json: async () => ({
+          data: [{ url: "https://sample.example/v1/files/generated.png" }],
+        }),
+      },
+      release: requestRelease,
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response(pngBytes, { headers: { "content-type": "image/png" } }),
+      release: downloadRelease,
+    });
+    const provider = createProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "sample",
+        model: "sample-image",
+        prompt: "draw a square",
+        cfg: {
+          agents: { defaults: { mediaMaxMb: 0.000001 } },
+        },
+      } as never),
+    ).rejects.toThrow("OpenAI-compatible image URL download exceeded maxBytes 1");
+
+    expect(requestRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
   });
 
   it("posts multipart edit requests without forwarding a content-type header", async () => {
