@@ -1435,8 +1435,8 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
-- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
-- Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
+- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution. `providerDiscoveryEntry` is the legacy spelling and still works for existing plugins.
+- Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`). Slot values may be plugin id strings or `{ owner: "<plugin-id>" }` records; plugin authors should read the normalized owner instead of assuming a raw string.
 - Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
 - Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).

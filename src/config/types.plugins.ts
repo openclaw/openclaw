@@ -38,11 +38,19 @@ export type PluginEntryConfig = {
   config?: Record<string, unknown>;
 };
 
+export type PluginSlotOwnerRecord = {
+  /** Plugin id that owns the slot. Extra fields may carry provenance metadata. */
+  owner: string;
+  [key: string]: unknown;
+};
+
+export type PluginSlotValue = string | PluginSlotOwnerRecord;
+
 export type PluginSlotsConfig = {
   /** Select which plugin owns the memory slot ("none" disables memory plugins). */
-  memory?: string;
+  memory?: PluginSlotValue;
   /** Select which plugin owns the context-engine slot. */
-  contextEngine?: string;
+  contextEngine?: PluginSlotValue;
 };
 
 export type PluginsLoadConfig = {

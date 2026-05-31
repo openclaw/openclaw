@@ -1,6 +1,14 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyDefaultModel, applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
+  return {
+    ...actual,
+    resolvePluginMetadataSnapshot: vi.fn((params) => actual.loadPluginMetadataSnapshot(params)),
+  };
+});
 
 describe("applyProviderAuthConfigPatch", () => {
   beforeAll(() => {

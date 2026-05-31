@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginSlotsConfig } from "../config/types.plugins.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export type PluginSlotKey = keyof PluginSlotsConfig;
@@ -56,6 +60,21 @@ export function defaultSlotIdForKey(slotKey: PluginSlotKey): string {
   return DEFAULT_SLOT_BY_KEY[slotKey];
 }
 
+export function resolvePluginSlotOwner(value: unknown): string | null | undefined {
+  const rawOwner =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as { owner?: unknown }).owner
+      : value;
+  const trimmed = normalizeOptionalString(rawOwner);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (normalizeOptionalLowercaseString(trimmed) === "none") {
+    return null;
+  }
+  return trimmed;
+}
+
 export type SlotSelectionResult = {
   config: OpenClawConfig;
   warnings: string[];
@@ -81,9 +100,13 @@ export function applyExclusiveSlotSelection(params: {
 
   for (const slotKey of slotKeys) {
     const prevSlot = slots[slotKey];
-    slots[slotKey] = params.selectedId;
+    const prevOwner = resolvePluginSlotOwner(prevSlot);
+    if (prevOwner !== params.selectedId) {
+      slots[slotKey] = params.selectedId;
+    }
 
-    const inferredPrevSlot = prevSlot ?? defaultSlotIdForKey(slotKey);
+    const inferredPrevSlot =
+      prevOwner === undefined ? defaultSlotIdForKey(slotKey) : (prevOwner ?? "none");
     if (inferredPrevSlot && inferredPrevSlot !== params.selectedId) {
       warnings.push(
         `Exclusive slot "${slotKey}" switched from "${inferredPrevSlot}" to "${params.selectedId}".`,
@@ -106,7 +129,11 @@ export function applyExclusiveSlotSelection(params: {
         const stillOwnsOtherSlot = (Object.keys(SLOT_BY_KIND) as PluginKind[])
           .map((k) => SLOT_BY_KIND[k])
           .filter((sk) => sk !== slotKey)
-          .some((sk) => (slots[sk] ?? defaultSlotIdForKey(sk)) === plugin.id);
+          .some((sk) => {
+            const owner = resolvePluginSlotOwner(slots[sk]);
+            const effectiveOwner = owner === undefined ? defaultSlotIdForKey(sk) : owner;
+            return effectiveOwner === plugin.id;
+          });
         if (stillOwnsOtherSlot) {
           continue;
         }
@@ -124,7 +151,7 @@ export function applyExclusiveSlotSelection(params: {
       );
     }
 
-    if (prevSlot !== params.selectedId || disabledIds.length > 0) {
+    if (prevOwner !== params.selectedId || disabledIds.length > 0) {
       anyChanged = true;
     }
   }

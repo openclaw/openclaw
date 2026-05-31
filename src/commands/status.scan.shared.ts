@@ -14,7 +14,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
-import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { defaultSlotIdForKey, resolvePluginSlotOwner } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
@@ -187,11 +187,11 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
   if (!pluginsEnabled) {
     return { enabled: false, slot: null, reason: "plugins disabled" };
   }
-  const raw = normalizeOptionalString(cfg.plugins?.slots?.memory) ?? "";
-  if (normalizeOptionalLowercaseString(raw) === "none") {
+  const raw = resolvePluginSlotOwner(cfg.plugins?.slots?.memory);
+  if (raw === null) {
     return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
   }
-  return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
+  return { enabled: true, slot: raw ?? defaultSlotIdForKey("memory") };
 }
 
 export async function resolveGatewayProbeSnapshot(params: {

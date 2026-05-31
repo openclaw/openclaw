@@ -23,7 +23,7 @@ import {
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
-import { hasKind } from "../plugins/slots.js";
+import { hasKind, resolvePluginSlotOwner } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
@@ -802,7 +802,8 @@ function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences
     }
   }
   if (isRecord(plugins.slots)) {
-    for (const [slotId, pluginId] of Object.entries(plugins.slots)) {
+    for (const [slotId, slotValue] of Object.entries(plugins.slots)) {
+      const pluginId = resolvePluginSlotOwner(slotValue);
       if (typeof pluginId !== "string") {
         continue;
       }

@@ -72,8 +72,8 @@ function requireCompactRuntimeParams(callIndex: number): Record<string, unknown>
 // ---------------------------------------------------------------------------
 
 /** Build a config object with a contextEngine slot for testing. */
-function configWithSlot(engineId: string): OpenClawConfig {
-  return { plugins: { slots: { contextEngine: engineId } } };
+function configWithSlot(engineId: unknown): OpenClawConfig {
+  return { plugins: { slots: { contextEngine: engineId } } } as OpenClawConfig;
 }
 
 function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): AgentMessage {
@@ -758,6 +758,13 @@ describe("Default engine selection", () => {
 
   it("resolveContextEngine() with config contextEngine='test-engine' returns the custom engine", async () => {
     const engine = await resolveContextEngine(configWithSlot("test-engine"));
+    expect(engine.info.id).toBe("test-engine");
+  });
+
+  it("resolveContextEngine() accepts object-form slot owners", async () => {
+    const engine = await resolveContextEngine(
+      configWithSlot({ owner: "test-engine", claimed_by_version: "0.9.10" }),
+    );
     expect(engine.info.id).toBe("test-engine");
   });
 });

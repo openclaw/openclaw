@@ -604,6 +604,37 @@ describe("provider env vars dynamic manifest metadata", () => {
     ).toEqual(["WHISPERX_API_KEY"]);
   });
 
+  it("keeps selected workspace context engine env vars with object-form slot owners", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-engine",
+          origin: "workspace",
+          kind: "context-engine",
+          providerAuthEnvVars: {
+            whisperx: ["WHISPERX_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(
+      mod.getProviderEnvVars("whisperx", {
+        config: {
+          plugins: {
+            slots: {
+              contextEngine: { owner: "workspace-engine", claimed_by_version: "0.9.10" },
+            },
+          },
+        },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual(["WHISPERX_API_KEY"]);
+  });
+
   it("only loads plugin metadata snapshot once when resolving env var candidates, avoiding duplicate snapshot loads", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [

@@ -298,6 +298,25 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("reports missing plugin refs selected through object-form slot owners", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        slots: {
+          memory: {
+            owner: "missing-slot",
+            claimed_at: "2026-04-23T21:14:00Z",
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
+    }
+  });
+
   it("warns instead of failing for stale plugins.deny entries", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },

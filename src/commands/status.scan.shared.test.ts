@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveGatewayProbeSnapshot,
+  resolveMemoryPluginStatus,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
@@ -427,6 +428,21 @@ describe("resolveGatewayProbeSnapshot", () => {
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {
+  it("normalizes object-form memory slot owners for status", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            memory: {
+              owner: "memory-lancedb-pro",
+              claimed_at: "2026-04-23T21:14:00Z",
+            },
+          },
+        },
+      }),
+    ).toEqual({ enabled: true, slot: "memory-lancedb-pro" });
+  });
+
   it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
     const manager = {
       probeVectorStoreAvailability: vi.fn(async () => true),

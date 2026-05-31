@@ -47,9 +47,15 @@ describe("normalizePluginsConfig", () => {
   it.each([
     [{}, "memory-core"],
     [{ slots: { memory: "custom-memory" } }, "custom-memory"],
+    [
+      { slots: { memory: { owner: "custom-memory", claimed_at: "2026-04-23T21:14:00Z" } } },
+      "custom-memory",
+    ],
     [{ slots: { memory: "none" } }, null],
+    [{ slots: { memory: { owner: "none" } } }, null],
     [{ slots: { memory: "None" } }, null],
     [{ slots: { memory: "  custom-memory  " } }, "custom-memory"],
+    [{ slots: { memory: { owner: "  custom-memory  " } } }, "custom-memory"],
     [{ slots: { memory: "" } }, "memory-core"],
     [{ slots: { memory: "   " } }, "memory-core"],
   ] as const)("normalizes memory slot for %o", (config, expected) => {
@@ -59,8 +65,14 @@ describe("normalizePluginsConfig", () => {
   it.each([
     [{}, undefined],
     [{ slots: { contextEngine: "lossless-claw" } }, "lossless-claw"],
+    [
+      { slots: { contextEngine: { owner: "lossless-claw", claimed_by_version: "1.2.3" } } },
+      "lossless-claw",
+    ],
     [{ slots: { contextEngine: "none" } }, null],
+    [{ slots: { contextEngine: { owner: "none" } } }, null],
     [{ slots: { contextEngine: "  cortex  " } }, "cortex"],
+    [{ slots: { contextEngine: { owner: "  cortex  " } } }, "cortex"],
     [{ slots: { contextEngine: "" } }, undefined],
   ] as const)("preserves contextEngine slot for %o (#64170)", (config, expected) => {
     expect(normalizePluginsConfig(config).slots.contextEngine).toBe(expected);

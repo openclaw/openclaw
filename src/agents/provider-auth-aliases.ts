@@ -11,6 +11,7 @@ import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { resolvePluginSlotOwner } from "../plugins/slots.js";
 
 export type ProviderAuthAliasLookupParams = {
   config?: OpenClawConfig;
@@ -73,7 +74,8 @@ function isWorkspacePluginTrustedForAuthAliases(
   return isWorkspacePluginAllowedByConfig({
     config,
     isImplicitlyAllowed: (pluginId) =>
-      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+      normalizePluginConfigId(resolvePluginSlotOwner(config?.plugins?.slots?.contextEngine)) ===
+      pluginId,
     plugin,
   });
 }

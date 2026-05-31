@@ -355,8 +355,8 @@ restart after changing native plugin config.
   - `memory.qmd.*`
   - `plugins.entries.memory-core.config.dreaming`
 - Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
-- `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
-- `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
+- `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins. The value may be a string id or an object with `owner`.
+- `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine. The value may be a string id or an object with `owner`.
 
 See [Plugins](/tools/plugin).
 

@@ -35,6 +35,7 @@ import {
   normalizePluginsConfigWithRegistry,
 } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { resolvePluginSlotOwner } from "./slots.js";
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
@@ -102,8 +103,8 @@ function resolveMemorySlotStartupPluginId(params: {
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourceConfig.plugins?.slots?.memory?.trim();
-  if (configuredSlot?.toLowerCase() === "none") {
+  const configuredSlot = resolvePluginSlotOwner(activationSourceConfig.plugins?.slots?.memory);
+  if (configuredSlot === null) {
     return undefined;
   }
   if (!configuredSlot) {
@@ -128,7 +129,9 @@ function resolveContextEngineSlotStartupPluginId(params: {
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourceConfig.plugins?.slots?.contextEngine?.trim();
+  const configuredSlot = resolvePluginSlotOwner(
+    activationSourceConfig.plugins?.slots?.contextEngine,
+  );
   if (!configuredSlot) {
     return undefined;
   }

@@ -1791,6 +1791,56 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("clears object-form slot owner references when disabling failed updates", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "security scan blocked install",
+    });
+    const config = {
+      plugins: {
+        slots: {
+          memory: {
+            owner: "demo",
+            claimed_at: "2026-05-26T00:00:00.000Z",
+            claimed_by_version: "2026.5.26",
+          },
+          contextEngine: {
+            owner: "demo",
+            claimed_at: "2026-05-26T00:00:00.000Z",
+          },
+        },
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath: "/tmp/demo",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+    });
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
+  });
+
   it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockImplementation(
@@ -2766,6 +2816,44 @@ describe("updateNpmInstalledPlugins", () => {
       version: "0.0.2",
     });
     expect(result.config.plugins?.installs?.["context-engine"]).toBeUndefined();
+  });
+
+  it("preserves object-form slot metadata when a plugin id changes during update", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "@openclaw/context-engine",
+      targetDir: "/tmp/openclaw-context-engine",
+      version: "0.0.2",
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          slots: {
+            contextEngine: {
+              owner: "context-engine",
+              claimed_at: "2026-04-23T21:14:00Z",
+              claimed_by_version: "0.0.1",
+            },
+          },
+          installs: {
+            "context-engine": {
+              source: "npm",
+              spec: "@openclaw/context-engine",
+              installPath: "/tmp/context-engine",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginIds: ["context-engine"],
+    });
+
+    expect(result.config.plugins?.slots?.contextEngine).toEqual({
+      owner: "@openclaw/context-engine",
+      claimed_at: "2026-04-23T21:14:00Z",
+      claimed_by_version: "0.0.1",
+    });
   });
 
   it("checks marketplace installs during dry-run updates", async () => {
