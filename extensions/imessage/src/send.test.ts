@@ -176,6 +176,19 @@ describe("sendMessageIMessage receipts", () => {
         ],
       ],
     ]);
+    expect(
+      findLatestIMessageEntryForChat({
+        accountId: "default",
+        chatGuid: "any;+;group-guid",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        messageId: "p:0/media-guid",
+        chatGuid: "any;+;group-guid",
+        chatId: 42,
+        isFromMe: true,
+      }),
+    );
   });
 
   it("falls back to the existing rpc send path when send-attachment is unavailable", async () => {
