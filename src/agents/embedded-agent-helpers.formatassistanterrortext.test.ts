@@ -469,6 +469,19 @@ describe("formatAssistantErrorText", () => {
     expect(friendly).not.toBe(authInvalidTokenCopy);
   });
 
+  it("does not rewrite provider-less missing-scope 401 payloads as invalid-token errors", () => {
+    const raw =
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}';
+    const missingScope = makeAssistantMessageFixture({
+      provider: undefined,
+      errorMessage: raw,
+      content: [{ type: "text", text: raw }],
+    });
+    const friendly = formatAssistantErrorText(missingScope);
+    expect(friendly).not.toBe(authInvalidTokenCopy);
+    expect(friendly).toContain("permission_error");
+  });
+
   it("returns a proxy-specific message for proxy misroutes", () => {
     const msg = makeAssistantError("407 Proxy Authentication Required");
     expect(formatAssistantErrorText(msg)).toBe(

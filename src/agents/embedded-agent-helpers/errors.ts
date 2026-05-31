@@ -349,6 +349,8 @@ const TIMEOUT_ERROR_CODES = new Set([
 const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
 const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
+const AUTH_INVALID_TOKEN_HINT_RE =
+  /\bunauthorized\b|\binvalid[_\s-]?api[_\s-]?key\b|\b(?:invalid|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|expired|stale)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const PROXY_ERROR_RE =
@@ -1119,10 +1121,16 @@ export function classifyProviderRuntimeFailureKind(
   const messageMentions403 = /\b403\b/.test(message);
   const has401Evidence =
     status === 401 || (status === undefined && messageMentions401 && !messageMentions403);
+  const hasPermissionScopeSignal =
+    /\bpermission_error\b/i.test(message) ||
+    AUTH_SCOPE_HINT_RE.test(message) ||
+    AUTH_SCOPE_NAME_RE.test(message);
   if (
     failoverClassification?.kind === "reason" &&
     failoverClassification.reason === "auth" &&
-    has401Evidence
+    has401Evidence &&
+    AUTH_INVALID_TOKEN_HINT_RE.test(message) &&
+    !hasPermissionScopeSignal
   ) {
     return "auth_invalid_token";
   }
