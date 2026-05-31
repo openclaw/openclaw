@@ -21,6 +21,7 @@ import {
   getDeliveryAttemptCount,
   getDeliveryLastAttemptAt,
   getDeliveryLastError,
+  getDeliveryLastHandoffPending,
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
 import {
@@ -34,6 +35,7 @@ import {
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
   reconcileOrphanedRestoredRuns,
@@ -617,25 +619,26 @@ function resumeSubagentRun(runId: string) {
   if (entry.pauseReason === "sessions_yield") {
     return;
   }
-  // Skip entries that have exhausted their retry budget or expired (#18264).
-  if (getDeliveryAttemptCount(entry) >= MAX_ANNOUNCE_RETRY_COUNT) {
-    void finalizeResumedAnnounceGiveUp({
-      runId,
-      entry,
-      reason: "retry-limit",
-    });
+  // Pending completion handoffs (parent busy) are bounded by the hard-expiry, not
+  // the retry cap — mirrors resolveDeferredCleanupDecision (#18264, #88383).
+  const completionPendingRetry =
+    entry.expectsCompletionMessage === true && getDeliveryLastHandoffPending(entry);
+  const endedAgo = typeof entry.endedAt === "number" ? Date.now() - entry.endedAt : 0;
+  if (completionPendingRetry && endedAgo > ANNOUNCE_COMPLETION_HARD_EXPIRY_MS) {
+    void finalizeResumedAnnounceGiveUp({ runId, entry, reason: "expiry" });
+    return;
+  }
+  if (!completionPendingRetry && getDeliveryAttemptCount(entry) >= MAX_ANNOUNCE_RETRY_COUNT) {
+    void finalizeResumedAnnounceGiveUp({ runId, entry, reason: "retry-limit" });
     return;
   }
   if (
+    !completionPendingRetry &&
     entry.expectsCompletionMessage !== true &&
     typeof entry.endedAt === "number" &&
-    Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
+    endedAgo > ANNOUNCE_EXPIRY_MS
   ) {
-    void finalizeResumedAnnounceGiveUp({
-      runId,
-      entry,
-      reason: "expiry",
-    });
+    void finalizeResumedAnnounceGiveUp({ runId, entry, reason: "expiry" });
     return;
   }
 
@@ -1260,6 +1263,9 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 export const testing = {
   async sweepOnceForTests() {
     await sweepSubagentRuns();
+  },
+  resumeSubagentRunForTest(runId: string) {
+    resumeSubagentRun(runId);
   },
   setDepsForTest(overrides?: Partial<SubagentRegistryDeps>) {
     subagentRegistryDeps = overrides

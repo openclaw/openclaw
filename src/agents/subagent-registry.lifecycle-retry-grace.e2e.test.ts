@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import * as mod from "./subagent-registry.js";
 
 const noop = () => {};
@@ -572,6 +573,81 @@ describe("subagent registry lifecycle error grace", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(1);
+  });
+
+  function seedResumeEntry(
+    runId: string,
+    overrides: { lastHandoffPending?: boolean; attemptCount?: number; endedAtAgoMs?: number },
+  ) {
+    const now = Date.now();
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: `agent:main:subagent:${runId}`,
+      requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+      requesterDisplayKey: MAIN_REQUESTER_DISPLAY_KEY,
+      task: "resume guard test",
+      cleanup: "keep",
+      createdAt: now - (overrides.endedAtAgoMs ?? 124_000) - 1,
+      endedAt: now - (overrides.endedAtAgoMs ?? 124_000),
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      cleanupHandled: false,
+      delivery: {
+        status: "pending",
+        attemptCount: overrides.attemptCount ?? 5,
+        lastAttemptAt: now,
+        lastHandoffPending: overrides.lastHandoffPending,
+      },
+    });
+  }
+
+  function readRun(runId: string) {
+    return mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === runId);
+  }
+
+  it("resume keeps a busy completion handoff past the retry cap instead of dropping it (#88383)", async () => {
+    // Regression: the resume preflight must mirror the cleanup-decision exemption.
+    // With the cap still applied here, attemptCount >= MAX would give up at retry-limit.
+    seedResumeEntry("run-resume-pending", { lastHandoffPending: true, attemptCount: 5 });
+
+    mod.testing.resumeSubagentRunForTest("run-resume-pending");
+    await flushAsync();
+
+    const run = readRun("run-resume-pending");
+    expect(run?.delivery?.status).toBe("pending");
+    expect(run?.delivery?.suspendedReason).toBeUndefined();
+  });
+
+  it("resume still gives up at the retry cap when the last completion failure was not pending", async () => {
+    seedResumeEntry("run-resume-failed", { lastHandoffPending: false, attemptCount: 5 });
+
+    mod.testing.resumeSubagentRunForTest("run-resume-failed");
+    await flushAsync();
+
+    const run = readRun("run-resume-failed");
+    expect(["suspended", "failed"]).toContain(run?.delivery?.status);
+  });
+
+  it("clears a stale pending flag so a thrown announce does not bypass the retry cap (#88383)", async () => {
+    // A prior completion_handoff_pending attempt set the flag; the next announce
+    // throws before any delivery result. The per-attempt reset must clear the flag
+    // so this genuine no-result failure is NOT exempted from the retry-count cap.
+    registerCompletionRun("run-stale-pending", "stale-pending", "stale pending reset test");
+    setAssistantOutput("agent:main:subagent:stale-pending", "Final answer");
+    const seeded = readRun("run-stale-pending");
+    if (seeded) {
+      seeded.delivery = { status: "pending", lastHandoffPending: true };
+    }
+    agentCallPlan = ["throw"];
+
+    emitLifecycleEvent("run-stale-pending", { phase: "end", endedAt: Date.now() });
+    await waitForAgentCallCount(1);
+    await flushAsync();
+
+    expect(readRun("run-stale-pending")?.delivery?.lastHandoffPending ?? false).toBe(false);
   });
 
   it("keeps parallel child completion results frozen even when late traffic arrives", async () => {

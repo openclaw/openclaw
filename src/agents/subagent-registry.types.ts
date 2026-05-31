@@ -69,6 +69,8 @@ export type SubagentCompletionDeliveryState = {
     lastError?: string | null;
   };
   lastDropReason?: "queue_cap" | "parent_run_ended" | "sink_unavailable" | "dedupe";
+  /** Last announce was `completion_handoff_pending` (parent busy); exempt from the retry cap. */
+  lastHandoffPending?: boolean;
 };
 
 export type SubagentRunRecord = {

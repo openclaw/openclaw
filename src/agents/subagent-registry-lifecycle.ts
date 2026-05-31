@@ -1012,6 +1012,10 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
 
+    // Reset per attempt: only THIS attempt's completion_handoff_pending result may
+    // exempt it from the retry cap. A later attempt that throws before
+    // onDeliveryResult must not inherit a stale pending flag (#88383).
+    ensureDeliveryState(entry).lastHandoffPending = false;
     void params
       .runSubagentAnnounceFlow({
         childSessionKey: pendingPayload.childSessionKey,
@@ -1040,9 +1044,13 @@ export function createSubagentRegistryLifecycleController(params: {
               deliveryState.lastError = undefined;
               params.persist();
             }
+            deliveryState.lastHandoffPending = false;
             latestDeliveryError = undefined;
             return;
           }
+          // Persisted so the resume preflight (not just this decision) can read it.
+          ensureDeliveryState(entry).lastHandoffPending =
+            delivery.reason === "completion_handoff_pending";
           if (delivery.path === "none") {
             ensureDeliveryState(entry).lastDropReason = "sink_unavailable";
           }

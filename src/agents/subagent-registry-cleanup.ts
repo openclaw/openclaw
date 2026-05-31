@@ -1,4 +1,7 @@
-import { getDeliveryAttemptCount } from "./subagent-delivery-state.js";
+import {
+  getDeliveryAttemptCount,
+  getDeliveryLastHandoffPending,
+} from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
@@ -56,10 +59,15 @@ export function resolveDeferredCleanupDecision(params: {
   const expiryExceeded = isCompletionMessageFlow
     ? completionHardExpiryExceeded
     : endedAgo > params.announceExpiryMs;
-  if (retryCount >= params.maxAnnounceRetryCount || expiryExceeded) {
+  // Pending completion handoffs (parent busy, no turn spent) retry to the
+  // hard-expiry, not the retry cap; the resumeSubagentRun preflight mirrors this.
+  const exemptFromRetryLimit =
+    isCompletionMessageFlow && getDeliveryLastHandoffPending(params.entry);
+  const retryLimitExceeded = !exemptFromRetryLimit && retryCount >= params.maxAnnounceRetryCount;
+  if (retryLimitExceeded || expiryExceeded) {
     return {
       kind: "give-up",
-      reason: retryCount >= params.maxAnnounceRetryCount ? "retry-limit" : "expiry",
+      reason: retryLimitExceeded ? "retry-limit" : "expiry",
       retryCount,
     };
   }

@@ -122,6 +122,7 @@ function mergeDeliveryState(
     discardReason: current.discardReason ?? restored.discardReason,
     discardedPayloadSummary: current.discardedPayloadSummary ?? restored.discardedPayloadSummary,
     lastDropReason: current.lastDropReason ?? restored.lastDropReason,
+    lastHandoffPending: current.lastHandoffPending ?? restored.lastHandoffPending,
   };
 }
 
@@ -246,6 +247,10 @@ export function isDeliverySuspended(entry: SubagentRunRecord): boolean {
 
 export function getDeliveryAttemptCount(entry: SubagentRunRecord): number {
   return entry.delivery?.attemptCount ?? 0;
+}
+
+export function getDeliveryLastHandoffPending(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.lastHandoffPending === true;
 }
 
 export function getDeliveryLastAttemptAt(entry: SubagentRunRecord): number | undefined {

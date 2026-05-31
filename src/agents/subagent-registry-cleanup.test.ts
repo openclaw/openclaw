@@ -91,4 +91,54 @@ describe("resolveDeferredCleanupDecision", () => {
 
     expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
   });
+
+  it("keeps retrying completion handoffs past the retry-count cap while the parent stays busy", () => {
+    const decision = resolveDeferredCleanupDecision({
+      now,
+      announceExpiryMs: 5 * 60_000,
+      announceCompletionHardExpiryMs: 30 * 60_000,
+      maxAnnounceRetryCount: 3,
+      deferDescendantDelayMs: 1_000,
+      resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        endedAt: now - 124_000,
+        delivery: { status: "pending", attemptCount: 5, lastHandoffPending: true },
+      }),
+      activeDescendantRuns: 0,
+    });
+
+    expect(decision).toEqual({ kind: "retry", retryCount: 6, resumeDelayMs: 6_000 });
+  });
+
+  it("still gives up at the retry-count cap when a completion announce fails for a non-pending reason", () => {
+    const decision = resolveDecision({
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        delivery: { status: "pending", attemptCount: 2 },
+      }),
+      activeDescendantRuns: 0,
+    });
+
+    expect(decision).toEqual({ kind: "give-up", reason: "retry-limit", retryCount: 3 });
+  });
+
+  it("gives up a busy completion handoff once the hard-expiry window is exceeded", () => {
+    const decision = resolveDeferredCleanupDecision({
+      now,
+      announceExpiryMs: 5 * 60_000,
+      announceCompletionHardExpiryMs: 30 * 60_000,
+      maxAnnounceRetryCount: 3,
+      deferDescendantDelayMs: 1_000,
+      resolveAnnounceRetryDelayMs: () => 8_000,
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        endedAt: now - (30 * 60_000 + 1),
+        delivery: { status: "pending", attemptCount: 5, lastHandoffPending: true },
+      }),
+      activeDescendantRuns: 0,
+    });
+
+    expect(decision).toEqual({ kind: "give-up", reason: "expiry", retryCount: 6 });
+  });
 });
