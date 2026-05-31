@@ -14,6 +14,26 @@ interface Options {
   skipTelegram: boolean;
 }
 
+export type RunOptions = {
+  capture?: boolean;
+  timeoutMs?: number;
+};
+
+export type WorkflowRunInfo = {
+  conclusion: string | null;
+  html_url: string;
+  status: string;
+  updated_at: string;
+};
+
+export type PollRunOptions = {
+  pollIntervalMs?: number;
+  readRun?: (repo: string, runId: string) => WorkflowRunInfo;
+  sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+  now?: () => number;
+};
+
 function usage(): string {
   return `Usage: pnpm release:beta-smoke -- --beta beta4 [options]
 
@@ -30,6 +50,7 @@ Options:
 }
 
 export function parseArgs(argv: string[]): Options {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: Options = {
     beta: "beta",
     model: "openai/gpt-5.4",
@@ -39,25 +60,25 @@ export function parseArgs(argv: string[]): Options {
     skipParallels: false,
     skipTelegram: false,
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--beta":
-        options.beta = requireValue(argv, ++i, arg);
+        options.beta = requireValue(args, ++i, arg);
         break;
       case "--model":
-        options.model = requireValue(argv, ++i, arg);
+        options.model = requireValue(args, ++i, arg);
         break;
       case "--provider-mode":
-        options.providerMode = requireValue(argv, ++i, arg);
+        options.providerMode = requireValue(args, ++i, arg);
         break;
       case "--ref":
-        options.ref = requireValue(argv, ++i, arg);
+        options.ref = requireValue(args, ++i, arg);
         break;
       case "--repo":
-        options.repo = requireValue(argv, ++i, arg);
+        options.repo = requireValue(args, ++i, arg);
         break;
       case "--skip-parallels":
         options.skipParallels = true;
@@ -79,6 +100,10 @@ export function parseArgs(argv: string[]): Options {
   return options;
 }
 
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
 function requireValue(argv: string[], index: number, flag: string): string {
   const value = argv[index];
   if (!value || value.startsWith("-")) {
@@ -88,15 +113,43 @@ function requireValue(argv: string[], index: number, flag: string): string {
 }
 
 const CAPTURE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const DEFAULT_COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS,
+  10 * 60_000,
+);
+const TELEGRAM_POLL_INTERVAL_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS,
+  30_000,
+);
+const TELEGRAM_POLL_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS,
+  4 * 60 * 60_000,
+);
 
-function run(command: string, args: string[], input?: { capture?: boolean }): string {
+function readPositiveInt(raw: string | undefined, fallback: number): number {
+  const text = (raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function run(command: string, args: string[], input?: RunOptions): string {
+  const timeoutMs = input?.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
   const result = spawnSync(command, args, {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     maxBuffer: CAPTURE_MAX_BUFFER_BYTES,
     stdio: input?.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+    timeout: timeoutMs,
   });
-  if (result.status !== 0) {
-    const reason = result.status ?? result.signal ?? result.error?.message ?? "unknown";
+  if (result.error || result.status !== 0) {
+    const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
+    const reason =
+      errorCode === "ETIMEDOUT"
+        ? `timed out after ${timeoutMs}ms`
+        : (result.status ?? result.signal ?? result.error?.message ?? "unknown");
     const stderr = result.stderr ? `\n${result.stderr}` : "";
     throw new Error(`${command} ${args.join(" ")} failed with ${reason}${stderr}`);
   }
@@ -161,11 +214,36 @@ function runParallels(beta: string, model: string): void {
     "150m",
     ...forwarded.map(shellQuote),
   ].join(" ");
-  run("bash", ["-lc", command]);
+  run("bash", ["-lc", command], { timeoutMs: 155 * 60_000 });
 }
 
 function ghJson(repo: string, pathSuffix: string): unknown {
-  return JSON.parse(run("gh", ["api", `repos/${repo}/${pathSuffix}`], { capture: true }));
+  const url = `https://api.github.com/repos/${repo}/${pathSuffix}`;
+  const result = spawnSync(
+    "bash",
+    [
+      "-lc",
+      [
+        "set -euo pipefail",
+        'token="$(gh auth token)"',
+        'curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${OPENCLAW_GITHUB_REST_URL}"',
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, OPENCLAW_GITHUB_REST_URL: url },
+      killSignal: "SIGKILL",
+      maxBuffer: CAPTURE_MAX_BUFFER_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: DEFAULT_COMMAND_TIMEOUT_MS,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    const reason = result.status ?? result.signal ?? result.error?.message ?? "unknown";
+    const stderr = result.stderr ? `\n${result.stderr}` : "";
+    throw new Error(`GitHub REST request failed for ${pathSuffix} with ${reason}${stderr}`);
+  }
+  return JSON.parse(result.stdout ?? "");
 }
 
 export function parseWorkflowRunIdFromOutput(output: string): string | undefined {
@@ -268,14 +346,22 @@ async function dispatchTelegram(options: Options, packageSpec: string): Promise<
   });
 }
 
-async function pollRun(repo: string, runId: string): Promise<void> {
+export async function pollRun(
+  repo: string,
+  runId: string,
+  options: PollRunOptions = {},
+): Promise<void> {
+  const started = (options.now ?? Date.now)();
+  const timeoutMs = Math.max(1, options.timeoutMs ?? TELEGRAM_POLL_TIMEOUT_MS);
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? TELEGRAM_POLL_INTERVAL_MS);
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const readRun =
+    options.readRun ??
+    ((currentRepo: string, currentRunId: string) =>
+      ghJson(currentRepo, `actions/runs/${currentRunId}`) as WorkflowRunInfo);
   for (;;) {
-    const info = ghJson(repo, `actions/runs/${runId}`) as {
-      conclusion: string | null;
-      html_url: string;
-      status: string;
-      updated_at: string;
-    };
+    const info = readRun(repo, runId);
     console.log(
       `Telegram workflow ${runId}: ${info.status}${info.conclusion ? `/${info.conclusion}` : ""} updated=${info.updated_at}`,
     );
@@ -288,7 +374,11 @@ async function pollRun(repo: string, runId: string): Promise<void> {
       console.log(info.html_url);
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 30_000));
+    const elapsedMs = (options.now ?? Date.now)() - started;
+    if (elapsedMs >= timeoutMs) {
+      throw new Error(`Telegram workflow ${runId} did not complete within ${timeoutMs}ms`);
+    }
+    await sleep(Math.min(pollIntervalMs, timeoutMs - elapsedMs));
   }
 }
 

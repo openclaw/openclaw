@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -720,6 +721,48 @@ describe("buildExecExitOutcome", () => {
 });
 
 describe("runExecProcess POSIX command wrapper", () => {
+  it("normalizes non-finite and oversized exec timeouts before spawning", async () => {
+    supervisorMock.spawn.mockResolvedValue({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    const baseParams = {
+      command: "echo test",
+      workdir: "/tmp",
+      env: { PATH: "/usr/bin" },
+      pathPrepend: [],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+    };
+
+    await runExecProcess({
+      ...baseParams,
+      timeoutSec: Number.POSITIVE_INFINITY,
+    });
+    await runExecProcess({
+      ...baseParams,
+      timeoutSec: 3_000_000,
+    });
+
+    expect(supervisorMock.spawn.mock.calls[0]?.[0].timeoutMs).toBeUndefined();
+    expect(supervisorMock.spawn.mock.calls[1]?.[0].timeoutMs).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
   it("wraps command with PATH export if OPENCLAW_PREPEND_PATH is present", async () => {
     if (process.platform === "win32") {
       return;
@@ -741,7 +784,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "/tmp",
       env: { PATH: "/usr/bin" },
@@ -753,6 +796,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];
@@ -784,7 +828,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "C:\\tmp",
       env: { Path: "C:\\Windows\\System32" },
@@ -796,6 +840,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];

@@ -140,15 +140,25 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
   };
 });
 
-vi.mock("./runtime.js", () => ({
-  getOptionalWhatsAppRuntime: () => undefined,
-  getWhatsAppRuntime: () => ({
-    state: {
-      openKeyedStore: () => createInMemoryKeyedStore(),
-    },
-  }),
-  setWhatsAppRuntime: vi.fn(),
-}));
+vi.mock("./runtime.js", async () => {
+  const { createChannelIngressQueue } = await vi.importActual<
+    typeof import("../../../src/channels/message/ingress-queue.js")
+  >("../../../src/channels/message/ingress-queue.js");
+  const stateDir = `/tmp/openclaw-whatsapp-inbound-media-${Date.now()}-${Math.random()}`;
+  return {
+    getOptionalWhatsAppRuntime: () => undefined,
+    getWhatsAppRuntime: () => ({
+      state: {
+        resolveStateDir: () => stateDir,
+        openKeyedStore: () => createInMemoryKeyedStore(),
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => createChannelIngressQueue({ ...(options ?? {}), channelId: "whatsapp" }),
+      },
+    }),
+    setWhatsAppRuntime: vi.fn(),
+  };
+});
 
 const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
 const ORIGINAL_HOME = process.env.HOME;

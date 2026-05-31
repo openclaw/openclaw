@@ -1,9 +1,10 @@
-import { asPositiveSafeInteger } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type SessionTranscriptUpdate = {
   sessionFile: string;
   sessionKey?: string;
+  agentId?: string;
   message?: unknown;
   messageId?: string;
   messageSeq?: number;
@@ -27,6 +28,7 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
       : {
           sessionFile: update.sessionFile,
           sessionKey: update.sessionKey,
+          agentId: update.agentId,
           message: update.message,
           messageId: update.messageId,
           messageSeq: update.messageSeq,
@@ -40,6 +42,9 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
     sessionFile: trimmed,
     ...(normalizeOptionalString(normalized.sessionKey)
       ? { sessionKey: normalizeOptionalString(normalized.sessionKey) }
+      : {}),
+    ...(normalizeOptionalString(normalized.agentId)
+      ? { agentId: normalizeOptionalString(normalized.agentId) }
       : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
     ...(normalizeOptionalString(normalized.messageId)

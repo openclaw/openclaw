@@ -149,10 +149,10 @@ const mocks = vi.hoisted(() => ({
       options?: { providerId?: string },
     ) => {
       const providerId = options?.providerId ?? config.tools?.web?.search?.provider ?? "tavily";
-      const path = `plugins.entries.${providerId}.config.webSearch.apiKey`;
+      const pathValue = `plugins.entries.${providerId}.config.webSearch.apiKey`;
       return {
-        targetIds: new Set([path]),
-        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+        targetIds: new Set([pathValue]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([pathValue]) } : {}),
       };
     },
   ),
@@ -161,13 +161,13 @@ const mocks = vi.hoisted(() => ({
       _config: { tools?: { web?: { fetch?: { provider?: string } } } },
       options?: { providerId?: string },
     ) => {
-      const path =
+      const pathLocal =
         options?.providerId === "firecrawl"
           ? "plugins.entries.firecrawl.config.webSearch.apiKey"
           : "plugins.entries.firecrawl.config.webFetch.apiKey";
       return {
-        targetIds: new Set([path]),
-        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+        targetIds: new Set([pathLocal]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([pathLocal]) } : {}),
       };
     },
   ),
@@ -787,17 +787,17 @@ describe("capability cli", () => {
     expect(inputs[0]?.mimeType).toBe("image/png");
   });
 
-  it("adds minimal instructions only for openai-codex local model probes", async () => {
+  it("adds minimal instructions only for openai local model probes", async () => {
     mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
       selection: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
         agentDir: "/tmp/agent",
       },
       model: {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         maxTokens: 128,
       },
       auth: {
@@ -814,7 +814,7 @@ describe("capability cli", () => {
         "model",
         "run",
         "--model",
-        "openai-codex/gpt-5.5",
+        "openai/gpt-5.5",
         "--prompt",
         "hello",
         "--json",
@@ -976,7 +976,7 @@ describe("capability cli", () => {
       model: {
         provider: "codex",
         id: "gpt-5.4",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
       },
       auth: {
         apiKey: "codex-app-server",
@@ -2012,7 +2012,7 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
         "models.providers.*.apiKey",
       ),
     ).toBe(true);
@@ -2225,7 +2225,7 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
         "models.providers.*.apiKey",
       ),
     ).toBe(true);

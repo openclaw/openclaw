@@ -141,6 +141,12 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   exports, and plugin SDK API baseline. `pnpm release:check` re-runs those
   guards in check mode and reports every generated drift failure it finds in one
   pass before running package release checks.
+- Plugin version sync updates official plugin package versions and existing
+  `openclaw.compat.pluginApi` floors to the OpenClaw release version by
+  default. Treat that field as the plugin SDK/runtime API floor, not just a copy
+  of the package version: for plugin-only releases that intentionally remain
+  compatible with older OpenClaw hosts, keep the floor at the oldest supported
+  host API and document that choice in the plugin release proof.
 - Run the manual `Full Release Validation` workflow before release approval to
   kick off all pre-release test boxes from one entrypoint. It accepts a branch,
   tag, or full commit SHA, dispatches manual `CI`, and dispatches
@@ -679,10 +685,12 @@ gh workflow run openclaw-release-publish.yml \
 ```
 
 Use the lower-level `Plugin NPM Release` and `Plugin ClawHub Release` workflows
-only for focused repair or republish work. For a selected plugin repair, pass
-`plugin_publish_scope=selected` and `plugins=@openclaw/name` to
-`OpenClaw Release Publish`, or dispatch the child workflow directly when the
-OpenClaw package must not be published.
+only for focused repair or republish work. `OpenClaw Release Publish` rejects
+`plugin_publish_scope=selected` when `publish_openclaw_npm=true` so the core
+package cannot ship without every publishable official plugin, including
+`@openclaw/diffs-language-pack`. For a selected plugin repair, set
+`publish_openclaw_npm=false` with `plugin_publish_scope=selected` and
+`plugins=@openclaw/name`, or dispatch the child workflow directly.
 
 ## NPM workflow inputs
 
@@ -704,7 +712,7 @@ OpenClaw package must not be published.
   required when `publish_openclaw_npm=true`
 - `npm_dist_tag`: npm target tag for the OpenClaw package
 - `plugin_publish_scope`: defaults to `all-publishable`; use `selected` only
-  for focused repair work
+  for focused plugin-only repair work with `publish_openclaw_npm=false`
 - `plugins`: comma-separated `@openclaw/*` package names when
   `plugin_publish_scope=selected`
 - `publish_openclaw_npm`: defaults to `true`; set `false` only when using the

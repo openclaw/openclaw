@@ -1,5 +1,6 @@
+import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
-import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
@@ -19,31 +20,30 @@ import {
   appendUserTurnTranscriptMessage,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
+import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
+import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
-import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
+import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
-import { resolveOpenAIRuntimeProvider } from "../openai-codex-routing.js";
+import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
-import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
-import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -59,7 +59,7 @@ function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
   if (readErrorName(err) === "AbortError") {
     return true;
   }
-  return err instanceof FailoverError && err.reason !== "session_expired";
+  return err instanceof FailoverError;
 }
 
 function resolveClearedCliSessionReason(err: unknown): string {
@@ -291,7 +291,11 @@ async function persistTextTurnTranscript(
     await lock.release();
   }
 
-  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
+  emitSessionTranscriptUpdate({
+    sessionFile,
+    sessionKey: params.sessionKey,
+    agentId: params.sessionAgentId,
+  });
   return sessionEntry;
 }
 
@@ -456,7 +460,7 @@ export function runAgentAttempt(params: {
         authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
-    ? ({ runtime: "openclaw" } as const)
+    ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
     : resolveAvailableAgentHarnessPolicy({
         provider: params.providerOverride,
         modelId: params.modelOverride,
@@ -499,16 +503,28 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
-    (agentHarnessPolicy.runtime === "openclaw" && embeddedAgentProvider !== params.providerOverride
+    (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
+    const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
+    const mutableCliSessionStore =
+      params.sessionKey && params.sessionStore && params.storePath
+        ? {
+            sessionKey: params.sessionKey,
+            sessionStore: params.sessionStore,
+            storePath: params.storePath,
+          }
+        : undefined;
     const resolveReusableCliSessionBinding = async () => {
       if (
         !isClaudeCliProvider(cliExecutionProvider) ||
         !cliSessionBinding?.sessionId ||
-        (await claudeCliSessionTranscriptHasContent({ sessionId: cliSessionBinding.sessionId }))
+        (await claudeCliSessionTranscriptHasContent({
+          sessionId: cliSessionBinding.sessionId,
+          workspaceDir: cliProcessCwd,
+        }))
       ) {
         return cliSessionBinding;
       }
@@ -517,13 +533,11 @@ export function runAgentAttempt(params: {
         `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
       );
 
-      if (params.sessionKey && params.sessionStore && params.storePath) {
+      if (mutableCliSessionStore) {
         params.sessionEntry =
           (await clearCliSessionInStore({
             provider: cliExecutionProvider,
-            sessionKey: params.sessionKey,
-            sessionStore: params.sessionStore,
-            storePath: params.storePath,
+            ...mutableCliSessionStore,
           })) ?? params.sessionEntry;
       }
 
@@ -570,77 +584,45 @@ export function runAgentAttempt(params: {
         toolsAllow: params.opts.toolsAllow,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
+        ...(mutableCliSessionStore
+          ? {
+              onBeforeFreshCliSessionRetry: async (retry) => {
+                if (retry.sessionId !== activeCliSessionBinding?.sessionId) {
+                  return false;
+                }
+
+                log.warn(
+                  `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
+                );
+
+                params.sessionEntry =
+                  (await clearCliSessionInStore({
+                    provider: cliExecutionProvider,
+                    ...mutableCliSessionStore,
+                  })) ?? params.sessionEntry;
+                return true;
+              },
+            }
+          : {}),
       });
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
         if (
-          err instanceof FailoverError &&
-          err.reason === "session_expired" &&
-          activeCliSessionBinding?.sessionId &&
-          params.sessionKey &&
-          params.sessionStore &&
-          params.storePath
-        ) {
-          log.warn(
-            `CLI session expired, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
-          );
-
-          params.sessionEntry =
-            (await clearCliSessionInStore({
-              provider: cliExecutionProvider,
-              sessionKey: params.sessionKey,
-              sessionStore: params.sessionStore,
-              storePath: params.storePath,
-            })) ?? params.sessionEntry;
-
-          return await runCliWithSession(undefined).then(async (result) => {
-            if (
-              result.meta.agentMeta?.cliSessionBinding?.sessionId &&
-              params.sessionKey &&
-              params.sessionStore &&
-              params.storePath
-            ) {
-              const entry = params.sessionStore[params.sessionKey];
-              if (entry) {
-                const updatedEntry = { ...entry };
-                setCliSessionBinding(
-                  updatedEntry,
-                  cliExecutionProvider,
-                  result.meta.agentMeta.cliSessionBinding,
-                );
-                updatedEntry.updatedAt = Date.now();
-
-                await persistSessionEntry({
-                  sessionStore: params.sessionStore,
-                  sessionKey: params.sessionKey,
-                  storePath: params.storePath,
-                  entry: updatedEntry,
-                });
-              }
-            }
-            return result;
-          });
-        }
-        if (
           isClaudeCliProvider(cliExecutionProvider) &&
           shouldClearReusedCliSessionAfterError(err) &&
           activeCliSessionBinding?.sessionId &&
-          params.sessionKey &&
-          params.sessionStore &&
-          params.storePath
+          mutableCliSessionStore
         ) {
           log.warn(
-            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
           );
 
           params.sessionEntry =
             (await clearCliSessionInStore({
               provider: cliExecutionProvider,
-              sessionKey: params.sessionKey,
-              sessionStore: params.sessionStore,
-              storePath: params.storePath,
+              ...mutableCliSessionStore,
             })) ?? params.sessionEntry;
         }
         throw err;

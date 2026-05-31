@@ -158,7 +158,7 @@ describe("lookupContextTokens", () => {
     mockContextModuleDeps(() => ({
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
           },
         },
@@ -271,7 +271,10 @@ describe("lookupContextTokens", () => {
     expect(
       path.normalize(discoverAgentDir).endsWith(path.join(".openclaw", "agents", "main", "agent")),
     ).toBe(true);
-    expect(discoverCall[2]).toEqual({ normalizeModels: false });
+    expect(discoverCall[2]).toEqual({
+      normalizeModels: false,
+      workspaceDir: expect.any(String),
+    });
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
   });
 

@@ -1,12 +1,12 @@
 import path from "node:path";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { isAudioFileName } from "@openclaw/media-core/mime";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../infra/local-file-access.js";
-import { estimateBase64DecodedBytes } from "../../media/base64.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
-import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 
@@ -87,6 +87,7 @@ async function readLocalAudioContentBlockForEmbedding(
   options: WebchatAudioEmbeddingOptions | undefined,
 ): Promise<LocalAudioContentBlock | null> {
   if (payload.trustedLocalMedia !== true) {
+    // WebChat may embed local audio only after an upstream path normalizer grants trust.
     return null;
   }
   const resolved = resolveLocalMediaPathForEmbedding(raw);
@@ -181,6 +182,7 @@ function resolveEmbeddableImageUrl(url: string): string | null {
   if (!ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES.has(mediaType)) {
     return null;
   }
+  // Size-check the decoded image, not just the data URL string length.
   if (estimateBase64DecodedBytes(base64Data) > MAX_WEBCHAT_IMAGE_DATA_BYTES) {
     return null;
   }
@@ -281,6 +283,7 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
       payloadMediaBlocks.length > 0 &&
       (!text || replyDirectivePrefix) &&
       transcriptTextParts.length === 0;
+    // Media-only replies need stable transcript text so later context is readable.
     const syntheticText = needsSyntheticText
       ? payloadHasAudio && payloadHasImage
         ? "Media reply"

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { type FSWatcher } from "chokidar";
+import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -353,8 +353,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
-    void Promise.resolve(degradedProvider.close?.()).catch((err: unknown) => {
-      log.debug(`memory embeddings: failed to close degraded local provider: ${String(err)}`);
+    void Promise.resolve(degradedProvider.close?.()).catch((errLocal: unknown) => {
+      log.debug(`memory embeddings: failed to close degraded local provider: ${String(errLocal)}`);
     });
     log.warn("memory embeddings: local provider degraded after worker failure", {
       error: message,
@@ -540,7 +540,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     let queryVec: number[];
     try {
-      queryVec = await this.embedQueryWithTimeout(cleaned);
+      queryVec = await this.embedQueryWithRetry(cleaned);
     } catch (err) {
       const message = formatErrorMessage(err);
       const activatedFallback = this.shouldFallbackOnError(err)
@@ -554,7 +554,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       if (activatedFallback) {
         await this.runSafeReindex({ reason: "fallback", force: true });
         keywordResults = await loadKeywordResults();
-        queryVec = await this.embedQueryWithTimeout(cleaned);
+        queryVec = await this.embedQueryWithRetry(cleaned);
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
         log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
         return this.selectScoredResults(keywordResults, maxResults, minScore, 0);

@@ -140,15 +140,32 @@ setInterval(() => {}, 1000);
         timeoutMs: 25,
         init: { method: "POST" },
         fetchImpl: async () =>
-          ({
-            ok: true,
+          new Response(new ReadableStream<Uint8Array>({ start() {} }), {
             status: 200,
-            json: () => new Promise<unknown>(() => {}),
-          }) as Response,
+          }),
       }),
     ).rejects.toMatchObject({
       code: "ETIMEDOUT",
       message: "credential broker payload-chunk timed out after 25ms",
+    });
+  });
+
+  it("bounds broker JSON response bodies", async () => {
+    await expect(
+      fetchJsonWithTimeout({
+        url: "https://qa.example.invalid/qa-credentials/v1/acquire",
+        label: "credential broker acquire",
+        timeoutMs: 1000,
+        maxBodyBytes: 16,
+        init: { method: "POST" },
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ status: "ok", padding: "x".repeat(64) }), {
+            status: 200,
+          }),
+      }),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "credential broker acquire response body exceeded 16 bytes",
     });
   });
 });

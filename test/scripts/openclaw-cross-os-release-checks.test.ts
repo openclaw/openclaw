@@ -537,7 +537,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       display_name: "macOS",
       lane: "fresh",
       os_id: "macos",
-      runner: "blacksmith-6vcpu-macos-latest",
+      runner: "blacksmith-6vcpu-macos-15",
       suite: "packaged-fresh",
       suite_label: "packaged fresh",
     });

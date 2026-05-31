@@ -1,13 +1,13 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
@@ -194,6 +194,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
   abortSignal?: AbortSignal;
+  runId?: string;
 }): AcpDispatchDeliveryCoordinator {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
@@ -423,6 +424,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         threadId,
         cfg: params.cfg,
         mirror: false,
+        replyKind: kind,
+        runId: params.runId,
       });
       if (!result.ok) {
         if (tracksVisibleText) {
@@ -432,6 +435,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
         );
         return false;
+      }
+      if (result.suppressed) {
+        if (kind === "final") {
+          state.deliveredFinalReply = true;
+        }
+        if (tracksVisibleText) {
+          state.deliveredVisibleText = true;
+        }
+        return true;
       }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {

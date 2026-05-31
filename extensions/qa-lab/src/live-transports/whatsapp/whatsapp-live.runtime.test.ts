@@ -156,9 +156,88 @@ describe("WhatsApp QA live runtime", () => {
     expect(scenarios.map(({ id }) => id)).toEqual(["whatsapp-canary", "whatsapp-pairing-block"]);
   });
 
+  it("reports standard WhatsApp live transport scenario coverage", () => {
+    expect(testing.WHATSAPP_QA_STANDARD_SCENARIO_IDS).toEqual([
+      "canary",
+      "allowlist-block",
+      "mention-gating",
+    ]);
+  });
+
+  it("keeps native approval scenarios out of default WhatsApp selection", () => {
+    const expectedDefaultIds = [
+      "whatsapp-canary",
+      "whatsapp-pairing-block",
+      "whatsapp-mention-gating",
+    ];
+
+    expect(testing.findScenarios().map(({ id }) => id)).toEqual(expectedDefaultIds);
+    expect(testing.findScenarios([]).map(({ id }) => id)).toEqual(expectedDefaultIds);
+  });
+
+  it("selects native approval scenarios by id without changing standard coverage", () => {
+    const scenarios = testing.findScenarios([
+      "whatsapp-approval-exec-native",
+      "whatsapp-approval-plugin-native",
+    ]);
+
+    expect(scenarios.map(({ id }) => id)).toEqual([
+      "whatsapp-approval-exec-native",
+      "whatsapp-approval-plugin-native",
+    ]);
+    expect(testing.WHATSAPP_QA_STANDARD_SCENARIO_IDS).not.toContain(
+      "whatsapp-approval-exec-native",
+    );
+    expect(scenarios.map((scenario) => scenario.buildRun().kind)).toEqual(["approval", "approval"]);
+  });
+
+  it("enables WhatsApp native exec and plugin approval delivery for approval scenarios", () => {
+    const cfg = testing.buildWhatsAppQaConfig(
+      {},
+      {
+        allowFrom: ["+15550000001"],
+        authDir: "/tmp/openclaw-whatsapp-qa-auth",
+        dmPolicy: "allowlist",
+        overrides: {
+          approvals: {
+            exec: true,
+            plugin: true,
+          },
+        },
+        sutAccountId: "sut",
+      },
+    );
+
+    expect(cfg.approvals?.exec).toEqual({ enabled: true, mode: "session" });
+    expect(cfg.approvals?.plugin).toEqual({ enabled: true, mode: "session" });
+    const account = cfg.channels?.whatsapp?.accounts?.sut;
+    expect(account?.allowFrom).toEqual(["+15550000001"]);
+    expect(account).not.toHaveProperty("execApprovals");
+  });
+
+  it("matches native approval resolved text emitted by the WhatsApp approval handler", () => {
+    expect(
+      testing.matchesWhatsAppApprovalResolvedText({
+        approvalId: "whatsapp-qa-exec-123",
+        approvalKind: "exec",
+        text: "✅ Exec approval allow-once. ID: whatsapp-qa-exec-123",
+      }),
+    ).toBe(true);
+    expect(
+      testing.matchesWhatsAppApprovalResolvedText({
+        approvalId: "whatsapp-qa-plugin-123",
+        approvalKind: "plugin",
+        text: "✅ Plugin approval allowed once. ID: whatsapp-qa-plugin-123",
+      }),
+    ).toBe(true);
+  });
+
   it("uses automatic visible replies for WhatsApp group mention gating", () => {
     const [scenario] = testing.findScenarios(["whatsapp-mention-gating"]);
     const scenarioRun = scenario.buildRun();
+    if (scenarioRun.kind === "approval") {
+      throw new Error("whatsapp-mention-gating unexpectedly built an approval scenario run");
+    }
     expect(scenarioRun.input).toContain("openclawqa reply with only this exact marker");
     expect(scenarioRun.input).not.toContain("visible reply tool check");
 

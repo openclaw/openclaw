@@ -2,10 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
@@ -21,6 +21,11 @@ import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandb
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
@@ -210,10 +215,10 @@ vi.mock("../model-auth.js", () => ({
 }));
 
 vi.mock("../openclaw-tools.js", async () => {
-  const { createImageTool } = await import("./image-tool.js");
+  const { createImageTool: createImageToolLocal } = await import("./image-tool.js");
   return {
     createOpenClawTools: vi.fn((options?: MockOpenClawToolsOptions) => {
-      const imageTool = createImageTool({
+      const imageTool = createImageToolLocal({
         config: options?.config,
         agentDir: options?.agentDir,
         workspaceDir: options?.workspaceDir,
@@ -795,17 +800,17 @@ async function withMinimaxImageToolFromTempAgentDir(
   });
 }
 
-function findSchemaUnionKeywords(schema: unknown, path = "root"): string[] {
+function findSchemaUnionKeywords(schema: unknown, pathLocal = "root"): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
   if (Array.isArray(schema)) {
-    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${path}[${index}]`));
+    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${pathLocal}[${index}]`));
   }
   const record = schema as Record<string, unknown>;
   const out: string[] = [];
   for (const [key, value] of Object.entries(record)) {
-    const nextPath = `${path}.${key}`;
+    const nextPath = `${pathLocal}.${key}`;
     if (key === "anyOf" || key === "oneOf" || key === "allOf") {
       out.push(nextPath);
     }
@@ -1685,7 +1690,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("keeps an Anthropic-safe image schema snapshot", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
-      expect(JSON.parse(JSON.stringify(tool.parameters))).toEqual({
+      expect(jsonRoundTrip(tool.parameters)).toEqual({
         type: "object",
         properties: {
           prompt: { type: "string" },
@@ -1696,8 +1701,8 @@ describe("image tool implicit imageModel config", () => {
             items: { type: "string" },
           },
           model: { type: "string" },
-          maxBytesMb: { type: "number" },
-          maxImages: { type: "number" },
+          maxBytesMb: { type: "number", exclusiveMinimum: 0 },
+          maxImages: { type: "integer", minimum: 1 },
         },
       });
     });
@@ -2100,11 +2105,16 @@ describe("image tool data URL support", () => {
 
   it("applies model image maxBytes to data URLs", async () => {
     await withTempAgentDir(async (agentDir) => {
-      installImageUnderstandingProviderStubs();
       const model = {
         ...makeModelDefinition("tiny-vision", ["text", "image"]),
         mediaInput: { image: { maxBytes: 1 } },
       } satisfies ModelDefinitionConfig;
+      installImageUnderstandingProviderDeps([], {
+        resolveImageCompressionPolicy: async () => ({
+          imageCount: 1,
+          models: [model.mediaInput.image],
+        }),
+      });
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -2135,21 +2145,31 @@ describe("image tool data URL support", () => {
   it("downscales data URL images to the resolved model side limit", async () => {
     await withTempAgentDir(async (agentDir) => {
       let observedDimensions: { width: number; height: number } | undefined;
-      installImageUnderstandingProviderStubs({
-        id: "openai",
-        capabilities: ["image"],
-        describeImage: async (params) => {
-          observedDimensions =
-            params.mime === "image/png"
-              ? readPngDimensions(params.buffer)
-              : readJpegDimensions(params.buffer);
-          return { text: "ok", model: params.model };
-        },
-      });
       const model = {
         ...makeModelDefinition("tiny-vision", ["text", "image"]),
         mediaInput: { image: { maxSidePx: 512, preferredSidePx: 512 } },
       } satisfies ModelDefinitionConfig;
+      installImageUnderstandingProviderDeps(
+        [
+          {
+            id: "openai",
+            capabilities: ["image"],
+            describeImage: async (params) => {
+              observedDimensions =
+                params.mime === "image/png"
+                  ? readPngDimensions(params.buffer)
+                  : readJpegDimensions(params.buffer);
+              return { text: "ok", model: params.model };
+            },
+          },
+        ],
+        {
+          resolveImageCompressionPolicy: async () => ({
+            imageCount: 1,
+            models: [model.mediaInput.image],
+          }),
+        },
+      );
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -2341,6 +2361,40 @@ describe("image tool MiniMax VLM routing", () => {
     expect(tooManyDetails?.error).toBe("too_many_images");
     expect(tooManyDetails?.count).toBe(2);
     expect(tooManyDetails?.max).toBe(1);
+  });
+
+  it("rejects invalid image cap values before loading images", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await expect(
+      tool.execute("t1", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxImages: 1.5,
+      }),
+    ).rejects.toThrow("maxImages must be a positive integer");
+
+    await expect(
+      tool.execute("t2", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxBytesMb: 0,
+      }),
+    ).rejects.toThrow("maxBytesMb must be greater than 0");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts string image caps through shared numeric readers", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await tool.execute("t1", {
+      prompt: "Describe this image.",
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      maxImages: "1",
+      maxBytesMb: "1",
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {

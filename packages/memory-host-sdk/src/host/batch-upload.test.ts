@@ -15,6 +15,7 @@ function textResponse(body: string, status: number): Response {
 function streamingTextResponse(params: {
   body: string;
   status: number;
+  headers?: HeadersInit;
   onCancel: () => void;
 }): Response {
   const encoded = new TextEncoder().encode(params.body);
@@ -26,7 +27,7 @@ function streamingTextResponse(params: {
       params.onCancel();
     },
   });
-  return new Response(stream, { status: params.status });
+  return new Response(stream, { status: params.status, headers: params.headers });
 }
 
 describe("uploadBatchJsonlFile", () => {
@@ -75,6 +76,35 @@ describe("uploadBatchJsonlFile", () => {
         errorPrefix: "file upload failed",
       }),
     ).rejects.toThrow(`file upload failed: 413 ${"x".repeat(1_000)}... [truncated]`);
+    expect(canceled).toBe(true);
+  });
+
+  it("rejects oversized successful file-upload JSON before parsing", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: '{"id":"file_123"}',
+          status: 200,
+          headers: { "content-length": "64" },
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      uploadBatchJsonlFile({
+        client: {
+          baseUrl: "https://memory.example/v1",
+          headers: { Authorization: "Bearer test" },
+        },
+        requests: [{ input: "one" }],
+        errorPrefix: "file upload failed",
+        maxResponseBytes: 8,
+      }),
+    ).rejects.toThrow("file upload failed: response body too large: 64 bytes (limit: 8 bytes)");
     expect(canceled).toBe(true);
   });
 });

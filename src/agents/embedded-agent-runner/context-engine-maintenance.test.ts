@@ -267,7 +267,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
         ],
       });
-      expect(rewritePromise?.then).toBeTypeOf("function");
+      expect(rewritePromise?.["then"]).toBeTypeOf("function");
 
       await flushAsyncWork();
       expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
@@ -939,7 +939,7 @@ describe("runContextEngineMaintenance", () => {
       }
       releaseFirstMaintenance();
       await waitForRealAssertion(() => expect(events).toContain("maintain:second"));
-      expect(secondEngine.dispose).not.toHaveBeenCalled();
+      expect(secondEngine["dispose"]).not.toHaveBeenCalled();
 
       if (!releaseSecondMaintenance) {
         throw new Error("Expected second maintenance release callback to be initialized");
@@ -947,8 +947,8 @@ describe("runContextEngineMaintenance", () => {
       releaseSecondMaintenance();
       await deferredPromises[1];
 
-      expect(firstEngine.dispose).toHaveBeenCalledTimes(1);
-      expect(secondEngine.dispose).toHaveBeenCalledTimes(1);
+      expect(firstEngine["dispose"]).toHaveBeenCalledTimes(1);
+      expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1);
       expect(events).toEqual([
         "maintain:first",
         "dispose:first",

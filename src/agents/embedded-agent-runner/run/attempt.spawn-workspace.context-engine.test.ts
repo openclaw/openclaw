@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
@@ -28,6 +28,7 @@ import {
   createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
+  preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 import {
@@ -41,6 +42,10 @@ const embeddedSessionId = "embedded-session";
 const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
+
+beforeAll(async () => {
+  await preloadRunEmbeddedAttemptForTests();
+});
 type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
 type ToolResultGuardInstallParams = {
@@ -64,6 +69,32 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
   expect(value, label).toBeInstanceOf(Array);
   return value as Array<Record<string, unknown>>;
+}
+
+function sumToolResultTextChars(messages: AgentMessage[]): number {
+  return messages.reduce((sum, message) => {
+    if (message.role !== "toolResult") {
+      return sum;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      return sum;
+    }
+    return (
+      sum +
+      content.reduce((blockSum, block) => {
+        if (
+          block &&
+          typeof block === "object" &&
+          (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string"
+        ) {
+          return blockSum + (block as { text: string }).text.length;
+        }
+        return blockSum;
+      }, 0)
+    );
+  }, 0);
 }
 
 function findRecord(
@@ -198,6 +229,43 @@ async function finalizeTurn(
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
+  let toolSearchControlsCase: Record<string, unknown>;
+
+  beforeAll(async () => {
+    resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
+    hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+    hoisted.detectAndLoadPromptImagesMock.mockClear();
+    const setupTempPaths: string[] = [];
+    try {
+      await createContextEngineAttemptRunner({
+        contextEngine: {
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+        },
+        sessionKey,
+        tempPaths: setupTempPaths,
+        attemptOverrides: {
+          disableTools: false,
+          config: {
+            tools: {
+              toolSearch: true,
+            },
+          } as OpenClawConfig,
+        },
+      });
+
+      toolSearchControlsCase = mockParams(
+        hoisted.createOpenClawCodingToolsMock,
+        0,
+        "createOpenClawCodingTools options",
+      );
+    } finally {
+      await cleanupTempPaths(setupTempPaths);
+      clearMemoryPluginState();
+      vi.restoreAllMocks();
+    }
+  });
+
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
@@ -212,30 +280,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
-    await createContextEngineAttemptRunner({
-      contextEngine: {
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
-      },
-      sessionKey,
-      tempPaths,
-      attemptOverrides: {
-        disableTools: false,
-        config: {
-          tools: {
-            toolSearch: true,
-          },
-        } as OpenClawConfig,
-      },
-    });
-
-    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
-    const options = mockParams(
-      hoisted.createOpenClawCodingToolsMock,
-      0,
-      "createOpenClawCodingTools options",
-    );
-    expect(options.includeToolSearchControls).toBe(true);
-    expect(options.toolSearchCatalogRef).toEqual({});
+    expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
+    expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
   it("quarantines unsupported tool schemas before creating the model session", async () => {
@@ -294,6 +340,22 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(activeToolNames).toEqual([["healthy_lookup"]]);
   });
 
+  it("keeps the embedded system prompt after active tool selection", async () => {
+    let seenSystemPrompt: string | undefined;
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [seedMessage],
+      sessionPrompt: async (activeSession) => {
+        seenSystemPrompt = activeSession.agent.state.systemPrompt;
+      },
+    });
+
+    expect(seenSystemPrompt).toBe("system prompt");
+  });
+
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {
     const observedOptions: Array<Record<string, unknown>> = [];
     const payloads: Array<Record<string, unknown>> = [];
@@ -314,7 +376,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           },
         } as OpenClawConfig,
         model: {
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           provider: "gateway",
           id: "gpt-5.5",
           contextWindow: 8192,
@@ -1001,7 +1063,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.messages)).not.toContain("bootstrapMaxChars");
   });
 
-  it("preserves bootstrap system context when system prompt override is configured", async () => {
+  it("preserves bootstrap system context in the assembled system prompt", async () => {
     const seen: { prompt?: string; messages?: unknown[] } = {};
     hoisted.isWorkspaceBootstrapPendingMock.mockResolvedValueOnce(true);
     hoisted.createOpenClawCodingToolsMock.mockImplementationOnce(() => [
@@ -1011,14 +1073,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       bootstrapFiles: [
         {
           name: "BOOTSTRAP.md",
-          path: "/tmp/openclaw-override-workspace/BOOTSTRAP.md",
+          path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
           content: "Ask who I am.",
           missing: false,
         },
       ],
       contextFiles: [
         {
-          path: "/tmp/openclaw-override-workspace/BOOTSTRAP.md",
+          path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
           content: "Ask who I am.",
         },
       ],
@@ -1029,13 +1091,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              systemPromptOverride: "Custom override prompt.",
-            },
-          },
-        } as OpenClawConfig,
         disableTools: false,
         prompt: "visible ask",
         transcriptPrompt: "visible ask",
@@ -1053,15 +1108,18 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seen.prompt).toBe("visible ask");
     expect(JSON.stringify(seen.messages)).not.toContain("Ask who I am.");
-    const systemPrompt =
-      hoisted.systemPromptOverrideTexts.find((text) => text.includes("Custom override prompt.")) ??
-      "";
+    const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+      bootstrapMode?: string;
+      contextFiles?: Array<{ path: string; content: string }>;
+    };
 
-    expect(systemPrompt).toContain("Custom override prompt.");
-    expect(systemPrompt).toContain("## Bootstrap Pending");
-    expect(systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
-    expect(systemPrompt).toContain("## /tmp/openclaw-override-workspace/BOOTSTRAP.md");
-    expect(systemPrompt).toContain("Ask who I am.");
+    expect(promptInput.bootstrapMode).toBe("full");
+    expect(promptInput.contextFiles).toEqual([
+      {
+        path: "/tmp/openclaw-bootstrap-workspace/BOOTSTRAP.md",
+        content: "Ask who I am.",
+      },
+    ]);
   });
 
   it("includes hook-adjusted bootstrap files preloaded before routing", async () => {
@@ -1080,13 +1138,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
-        config: {
-          agents: {
-            defaults: {
-              systemPromptOverride: "Custom override prompt.",
-            },
-          },
-        } as OpenClawConfig,
         prompt: "visible ask",
         transcriptPrompt: "visible ask",
         trigger: "user",
@@ -1102,14 +1153,18 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(hoisted.resolveBootstrapFilesForRunMock).toHaveBeenCalledOnce();
     expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
-    const systemPrompt =
-      hoisted.systemPromptOverrideTexts.find((text) => text.includes("Custom override prompt.")) ??
-      "";
+    const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+      bootstrapMode?: string;
+      contextFiles?: Array<{ path: string; content: string }>;
+    };
 
-    expect(systemPrompt).toContain("## Bootstrap Pending");
-    expect(systemPrompt).toContain("BOOTSTRAP.md is included below in Project Context");
-    expect(systemPrompt).toContain(`## ${workspaceDir}/BOOTSTRAP.md`);
-    expect(systemPrompt).toContain("Ask who I am before continuing.");
+    expect(promptInput.bootstrapMode).toBe("full");
+    expect(promptInput.contextFiles).toEqual([
+      {
+        path: `${workspaceDir}/BOOTSTRAP.md`,
+        content: "Ask who I am before continuing.",
+      },
+    ]);
   });
 
   it("skips bootstrap preload on completed continuation-skip turns", async () => {
@@ -2006,6 +2061,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(params.sessionKey).toBe(sessionKey);
   });
 
+  it("forwards the normalized message channel to the embedded subscription", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        messageChannel: "TELEGRAM",
+      },
+    });
+
+    const subscriptionParams = requireRecord(
+      hoisted.subscribeEmbeddedAgentSessionMock.mock.calls[0]?.[0],
+      "subscription params",
+    );
+    expect(subscriptionParams.messageChannel).toBe("telegram");
+  });
+
   it("skips maintenance when afterTurn fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async () => {
@@ -2375,5 +2447,85 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       mockParams(hoisted.installToolResultContextGuardMock, 0, "tool-result guard params")
         .contextWindowTokens,
     ).toBe(1_000_000);
+  });
+
+  it("bounds aggregate tool-result prompt history without rewriting append results", async () => {
+    const toolText = "process output ".repeat(70);
+    const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
+    for (let index = 0; index < 8; index += 1) {
+      const toolCallId = `call_${index}`;
+      sessionMessages.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: toolCallId, name: "process", input: {} }],
+        timestamp: 2 + index * 2,
+      } as unknown as AgentMessage);
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId,
+        toolName: "process",
+        content: [{ type: "text", text: `${index}: ${toolText}` }],
+        isError: false,
+        timestamp: 3 + index * 2,
+      } as AgentMessage);
+    }
+    let submittedMessages: AgentMessage[] = [];
+    let promptHandlerMessages: AgentMessage[] = [];
+    let afterTurnMessages: AgentMessage[] = [];
+    const afterTurn = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => {
+      afterTurnMessages = messages;
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        afterTurn,
+      },
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 128_000,
+        config: {
+          agents: {
+            defaults: {
+              contextLimits: {
+                toolResultMaxChars: 1_000,
+              },
+            },
+            list: [{ id: "main" }],
+          },
+        } as OpenClawConfig,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });
+        session.agent.streamFn = async (_model, context) => {
+          const providerMessages = (context as { messages?: AgentMessage[] } | undefined)?.messages;
+          submittedMessages = providerMessages ?? [];
+          return {
+            async result() {
+              return doneMessage;
+            },
+            [Symbol.asyncIterator]() {
+              return (async function* () {})();
+            },
+          };
+        };
+        session.prompt = async (_prompt, options) => {
+          promptHandlerMessages = session.messages.map((message) => message as AgentMessage);
+          options?.preflightResult?.(true);
+          await session.agent.streamFn?.({} as never, { messages: session.messages } as never, {});
+          session.messages = [...session.messages, doneMessage];
+        };
+        return session;
+      },
+    });
+
+    expect(sumToolResultTextChars(sessionMessages)).toBeGreaterThan(4_000);
+    expect(sumToolResultTextChars(promptHandlerMessages)).toBeGreaterThan(4_000);
+    expect(sumToolResultTextChars(submittedMessages)).toBeLessThanOrEqual(4_000);
+    expect(JSON.stringify(submittedMessages)).toContain("truncated");
+    expect(afterTurn).toHaveBeenCalledTimes(1);
+    expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
+    expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");
   });
 });

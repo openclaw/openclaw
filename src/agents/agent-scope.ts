@@ -3,6 +3,12 @@ import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -15,12 +21,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import {
-  lowercasePreservingWhitespace,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import { resolveUserPath } from "../utils.js";
 import {
   listAgentIds,
@@ -28,7 +29,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope-config.js";
-import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 export {
   listAgentEntries,
   listAgentIds,
@@ -43,8 +43,7 @@ export {
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\0/g, "");
+  return s.split("\0").join("");
 }
 
 const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;
@@ -299,6 +298,7 @@ export function resolveSessionAgentIds(params: {
 export function resolveSessionAgentId(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
+  agentId?: string;
 }): string {
   return resolveSessionAgentIds(params).sessionAgentId;
 }

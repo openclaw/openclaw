@@ -41,7 +41,7 @@ function createDeps(): MSTeamsMessageHandlerDeps {
     cfg: {} as OpenClawConfig,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
     appId: "test-app",
-    adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+    app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
       getAccessToken: vi.fn(async () => "token"),
     },
@@ -77,11 +77,9 @@ function createActivityHandler() {
       await handler(context, async () => {});
     }
   });
-
-  let handler: MSTeamsActivityHandler & {
+  const handler: MSTeamsActivityHandler & {
     run: NonNullable<MSTeamsActivityHandler["run"]>;
-  };
-  handler = {
+  } = {
     onMessage: (nextHandler) => {
       messageHandlers.push(nextHandler);
       return handler;

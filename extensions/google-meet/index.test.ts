@@ -817,6 +817,18 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it.each(["0x10", "1e3"])("ignores non-decimal env numeric fallbacks: %s", (expiresAt) => {
+    const config = resolveGoogleMeetConfigWithEnv(
+      {},
+      {
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
+      },
+    );
+
+    expect(config.oauth).toEqual({ accessToken: "access-token" });
+  });
+
   it("requires explicit Meet URLs", () => {
     expect(normalizeMeetUrl("https://meet.google.com/abc-defg-hij")).toBe(
       "https://meet.google.com/abc-defg-hij",
@@ -1619,11 +1631,29 @@ describe("google-meet plugin", () => {
       accessToken: "token",
       expiresAt: Date.now() + 120_000,
       conferenceRecord: "rec-1",
-      pageSize: 3,
+      pageSize: "3",
     });
 
     expect(result.details.attendance).toHaveLength(1);
     expect(result.details.attendance?.[0]?.displayName).toBe("Alice");
+  });
+
+  it("rejects fractional attendance page sizes", async () => {
+    stubMeetArtifactsApi();
+    const { tools } = setup();
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { error?: string } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "attendance",
+      accessToken: "token",
+      expiresAt: Date.now() + 120_000,
+      conferenceRecord: "rec-1",
+      pageSize: "3.5",
+    });
+
+    expect(result.details.error).toBe("pageSize must be a positive integer");
   });
 
   it("writes export bundles through the tool", async () => {
@@ -1967,7 +1997,9 @@ describe("google-meet plugin", () => {
         "Chrome observe-only mode does not require a realtime audio bridge",
       );
       expect(
-        result.details.checks?.filter((check) => check.id === "chrome-local-audio-device"),
+        result.details.checks?.filter(
+          (checkLocal) => checkLocal.id === "chrome-local-audio-device",
+        ),
       ).toStrictEqual([]);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
     } finally {
@@ -2242,7 +2274,7 @@ describe("google-meet plugin", () => {
       expectRespondedOk(respond);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
       const openCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => requireRecord(request, "browser request").path === "/tabs/open",
+        (call) => requireRecord(call[2], "browser request").path === "/tabs/open",
       );
       if (!openCall) {
         throw new Error("Expected browser /tabs/open request");
@@ -2257,7 +2289,7 @@ describe("google-meet plugin", () => {
       expect(openCall[3]).toEqual({ progress: false });
       expect(
         callGatewayFromCli.mock.calls.some(
-          ([, , request]) => (request as { path?: string }).path === "/permissions/grant",
+          (call) => (call[2] as { path?: string }).path === "/permissions/grant",
         ),
       ).toBe(false);
       const payload = requireRespondPayload(respond, "join response payload");
@@ -2275,7 +2307,7 @@ describe("google-meet plugin", () => {
       expect(transcriptLine.speaker).toBe("Alice");
       expect(transcriptLine.text).toBe("Can everyone hear the agent?");
       const actCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => (request as { path?: string }).path === "/act",
+        (call) => (call[2] as { path?: string }).path === "/act",
       );
       expect(String((actCall?.[2] as { body?: { fn?: string } } | undefined)?.body?.fn)).toContain(
         "const allowMicrophone = false",
@@ -2321,7 +2353,7 @@ describe("google-meet plugin", () => {
 
       expectRespondedOk(respond);
       const grantCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => requireRecord(request, "browser request").path === "/permissions/grant",
+        (call) => requireRecord(call[2], "browser request").path === "/permissions/grant",
       );
       if (!grantCall) {
         throw new Error("Expected browser /permissions/grant request");
@@ -2613,7 +2645,7 @@ describe("google-meet plugin", () => {
     expect(status.session?.chrome?.health?.transcriptLines).toBe(1);
     expect(status.session?.chrome?.health?.lastCaptionText).toBe("Please capture this.");
     const focusCall = callGatewayFromCli.mock.calls.find(
-      ([, , request]) => requireRecord(request, "browser request").path === "/tabs/focus",
+      (call) => requireRecord(call[2], "browser request").path === "/tabs/focus",
     );
     if (!focusCall) {
       throw new Error("Expected browser /tabs/focus request");
@@ -3417,7 +3449,7 @@ describe("google-meet plugin", () => {
     expect(browser.manualActionRequired).toBe(true);
     expect(browser.manualActionReason).toBe("meet-admission-required");
     const focusCall = callGatewayFromCli.mock.calls.find(
-      ([, , request]) => requireRecord(request, "browser request").path === "/tabs/focus",
+      (call) => requireRecord(call[2], "browser request").path === "/tabs/focus",
     );
     if (!focusCall) {
       throw new Error("Expected browser /tabs/focus request");
@@ -3599,7 +3631,7 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", {
       action: "test_listen",
       url: "https://meet.google.com/abc-defg-hij",
-      timeoutMs: 100,
+      timeoutMs: "100",
     });
 
     const startCall = nodesInvoke.mock.calls.find(([rawCall]) => {
@@ -3617,6 +3649,17 @@ describe("google-meet plugin", () => {
     expect(startParams.mode).toBe("transcribe");
     expect(result.details.listenVerified).toBe(true);
     expect(result.details.transcriptLines).toBe(1);
+  });
+
+  it("rejects fractional test-listen gateway timeouts", async () => {
+    const { methods } = setup({ defaultTransport: "chrome-node" });
+
+    await expect(
+      invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.testListen", {
+        url: "https://meet.google.com/abc-defg-hij",
+        timeoutMs: "100.5",
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
   });
 
   it("does not start a second realtime response for test speech", async () => {

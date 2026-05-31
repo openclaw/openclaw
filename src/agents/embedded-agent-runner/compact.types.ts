@@ -3,14 +3,16 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
-import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
+import type { SkillSnapshot } from "../../skills/types.js";
+import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
-import type { SkillSnapshot } from "../skills.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
   runId?: string;
   sessionKey?: string;
+  /** Caller-resolved owner agent for global session aliases. */
+  agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
   messageChannel?: string;
@@ -59,10 +61,17 @@ export type CompactEmbeddedAgentSessionParams = {
   runtimePlan?: AgentRuntimePlan;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
+  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
   tokenBudget?: number;
   force?: boolean;
+  /** Force compaction because the caller already determined this turn must compact before prompt submission. */
+  forcePreflight?: boolean;
+  /** Alias for forcePreflight used by preflight budget gates. */
+  preflightRequired?: boolean;
+  /** Diagnostic trigger that made preflight compaction mandatory. */
+  preflightCompactionTrigger?: "tokens" | "transcript_bytes";
   trigger?: "budget" | "overflow" | "manual";
   /**
    * Preflight callers can allow native/current-session harness compaction but

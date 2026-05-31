@@ -408,8 +408,8 @@ describe("cdp.helpers internal", () => {
       await expect(
         withCdpSocket(server.url, async (send) => {
           await send("Test.ok");
-          // biome-ignore lint/style/useThrowOnlyError: exercising the non-Error guard on purpose.
-          throw "raw-string-from-callback";
+          const rejectRawString = () => Promise.reject("raw-string-from-callback");
+          return rejectRawString();
         }),
       ).rejects.toThrow(/raw-string-from-callback/);
     });

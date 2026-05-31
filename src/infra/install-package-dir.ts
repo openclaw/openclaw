@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { tryReadJson, writeJson } from "./json-files.js";
@@ -211,9 +211,9 @@ export async function installPackageDir(params: {
     }
     return { ok: false as const, error };
   };
-  const failWithCode = async (params: { error: string; code?: string }, cause?: unknown) => {
-    const failed = await fail(params.error, cause);
-    return params.code ? { ...failed, code: params.code } : failed;
+  const failWithCode = async (paramsLocal: { error: string; code?: string }, cause?: unknown) => {
+    const failed = await fail(paramsLocal.error, cause);
+    return paramsLocal.code ? { ...failed, code: paramsLocal.code } : failed;
   };
   const restoreBackup = async () => {
     if (!backupDir) {

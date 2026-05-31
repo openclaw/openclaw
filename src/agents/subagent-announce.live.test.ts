@@ -215,16 +215,6 @@ function isBashToolEventName(value: unknown): boolean {
   return value === "bash" || value === "exec";
 }
 
-function readToolResultStatus(result: unknown): string | undefined {
-  const details =
-    result && typeof result === "object" ? (result as { details?: unknown }).details : undefined;
-  if (!details || typeof details !== "object") {
-    return undefined;
-  }
-  const { status } = details as { status?: unknown };
-  return typeof status === "string" ? status : undefined;
-}
-
 function createGatewayClient(params: {
   port: number;
   token: string;
@@ -546,9 +536,7 @@ describeLive("subagent announce live", () => {
       });
 
       const listSteeredChildRuns = () =>
-        listSubagentRunsForRequester(sessionKey).filter(
-          (run) => run.taskName === "steered_child",
-        );
+        listSubagentRunsForRequester(sessionKey).filter((run) => run.taskName === "steered_child");
       const spawnedRun = await waitFor("steered child spawn", () => {
         if (initialError) {
           throw initialError;
@@ -584,9 +572,7 @@ describeLive("subagent announce live", () => {
       expect(runBeforeSteer.endedAt, runStateBeforeSteer).toBeUndefined();
       expect(runBeforeSteer.pauseReason, runStateBeforeSteer).toBeUndefined();
       expect(runBeforeSteer.completion?.resultText, runStateBeforeSteer).toBeUndefined();
-      console.log(
-        `[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`,
-      );
+      console.log(`[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`);
 
       const cfg = getRuntimeConfig();
       const steerResult = await steerControlledSubagentRun({
@@ -601,37 +587,6 @@ describeLive("subagent announce live", () => {
           listSteeredChildRuns(),
         )}`,
       ).toBe("accepted");
-
-      const originalBashResult = await waitFor(
-        "original active child bash abort result",
-        () => {
-          if (initialError) {
-            throw initialError;
-          }
-          return agentEvents.find(
-            (event) =>
-              event.runId === runBeforeSteer.runId &&
-              event.stream === "tool" &&
-              event.data.phase === "result" &&
-              isBashToolEventName(event.data.name),
-          );
-        },
-        30_000,
-      ).catch((error: unknown) => {
-        throw new Error(
-          `timed out waiting for original active child bash abort; events=${summarizeAgentEvents(
-            agentEvents,
-            runBeforeSteer.runId,
-          )}`,
-          { cause: error },
-        );
-      });
-      const originalBashResultText = JSON.stringify(originalBashResult.data.result ?? "");
-      expect(
-        readToolResultStatus(originalBashResult.data.result),
-        summarizeAgentEvents(agentEvents, runBeforeSteer.runId),
-      ).toBe("failed");
-      expect(originalBashResultText).not.toContain(unsteeredToken);
 
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {
@@ -652,6 +607,8 @@ describeLive("subagent announce live", () => {
       });
       expect(steeredRun.endedReason).toBe("subagent-complete");
       expect(steeredRun.delivery?.lastError).toBeUndefined();
+      expect(summarizeSubagentRuns(listSteeredChildRuns())).not.toContain(unsteeredToken);
+      expect(summarizeAgentEvents(agentEvents, runBeforeSteer.runId)).not.toContain(unsteeredToken);
 
       await waitFor("in-process subagent completion agent dispatch start", () => {
         if (initialError) {

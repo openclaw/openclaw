@@ -237,6 +237,30 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("keeps derived model search for colon model ids", () => {
+    const now = Date.now();
+    const cfg = createModelDefaultsConfig({
+      primary: "ollama/qwen3:0.6b",
+    });
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:inherited-local-model": {
+          sessionId: "sess-inherited-local-model",
+          updatedAt: now,
+          label: "Inherited local model",
+        } as SessionEntry,
+      },
+      opts: { search: "qwen3:0.6b" },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:inherited-local-model",
+    ]);
+    expect(result.totalCount).toBe(1);
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -414,7 +438,7 @@ describe("listSessionsFromStore search", () => {
       agents: { list: [{ id: "main", default: true }] },
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             models: [
               {
                 id: "gpt-5.3-codex-spark",
@@ -434,7 +458,7 @@ describe("listSessionsFromStore search", () => {
         "agent:main:main": {
           sessionId: "sess-main",
           updatedAt: Date.now(),
-          modelProvider: "openai-codex",
+          modelProvider: "openai",
           model: "gpt-5.3-codex-spark",
           inputTokens: 5_107,
           outputTokens: 1_827,
@@ -452,7 +476,7 @@ describe("listSessionsFromStore search", () => {
     withTranscriptStoreFixture({
       prefix: "openclaw-session-utils-zero-cost-",
       transcriptId: "sess-main",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.3-codex-spark",
       input: 5_107,
       output: 1_827,
@@ -466,7 +490,7 @@ describe("listSessionsFromStore search", () => {
           entry: {
             sessionId: "sess-main",
             updatedAt: now,
-            modelProvider: "openai-codex",
+            modelProvider: "openai",
             model: "gpt-5.3-codex-spark",
             totalTokens: 0,
             totalTokensFresh: false,

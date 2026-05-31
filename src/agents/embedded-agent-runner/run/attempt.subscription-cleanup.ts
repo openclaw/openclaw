@@ -1,13 +1,6 @@
 import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { log } from "../logger.js";
-
-function resolveEmbeddedAbortSettleTimeoutMs(): number {
-  const override = Number(process.env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS);
-  if (Number.isFinite(override) && override > 0) {
-    return override;
-  }
-  return process.env.OPENCLAW_TEST_FAST === "1" ? 250 : 2_000;
-}
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
 export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
 
@@ -77,6 +70,7 @@ export async function cleanupEmbeddedAttemptResources(params: {
   runId?: string;
   sessionId?: string;
 }): Promise<void> {
+  let sessionLockReleaseError: unknown;
   try {
     try {
       params.removeToolResultContextGuard?.();
@@ -104,22 +98,31 @@ export async function cleanupEmbeddedAttemptResources(params: {
         /* best-effort */
       }
     }
-    try {
-      params.session?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleMcpRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleLspRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
   } finally {
-    await params.sessionLock.release();
+    try {
+      await params.sessionLock.release();
+    } catch (err) {
+      sessionLockReleaseError = err;
+    }
+  }
+
+  try {
+    params.session?.dispose();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await params.bundleMcpRuntime?.dispose();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await params.bundleLspRuntime?.dispose();
+  } catch {
+    /* best-effort */
+  }
+
+  if (sessionLockReleaseError) {
+    throw sessionLockReleaseError;
   }
 }

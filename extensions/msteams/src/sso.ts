@@ -48,10 +48,7 @@ type BotFrameworkUserTokenResponse = {
   expiration?: string;
 };
 
-export type MSTeamsSsoFetch = (
-  input: string,
-  init?: RequestInit,
-) => Promise<Response>;
+export type MSTeamsSsoFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 export type MSTeamsSsoDeps = {
   tokenProvider: MSTeamsAccessTokenProvider;

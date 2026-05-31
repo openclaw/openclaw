@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
+import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
@@ -38,8 +38,8 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
       "export const pluginCommandGroups = 'plugins';\n",
     ],
     ["src/cli/secrets-cli.ts", "export const secretsHelp = 'secrets';\n"],
-    ["src/terminal/links.ts", "export const links = 'links';\n"],
-    ["src/terminal/theme.ts", "export const theme = 'theme';\n"],
+    ["packages/terminal-core/src/links.ts", "export const links = 'links';\n"],
+    ["packages/terminal-core/src/theme.ts", "export const theme = 'theme';\n"],
   ]);
   for (const [relativePath, contents] of fixtures) {
     writeFixtureFile(rootDir, relativePath, contents);
@@ -48,6 +48,22 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
 
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
+
+  it("caps concurrent metadata render workers while preserving result order", async () => {
+    let active = 0;
+    let peakActive = 0;
+
+    const result = await __testing.mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return `rendered-${value}`;
+    });
+
+    expect(result).toEqual(["rendered-1", "rendered-2", "rendered-3", "rendered-4", "rendered-5"]);
+    expect(peakActive).toBe(2);
+  });
 
   it("writes startup metadata with populated root help text when dist falls back to source rendering", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-");
@@ -93,6 +109,7 @@ describe("write-cli-startup-metadata", () => {
     const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
       browserHelpText: string;
       channelOptions: string[];
+      generatorSignature: string;
       nodesHelpText: string;
       rootHelpText: string;
       secretsHelpText: string;
@@ -104,6 +121,7 @@ describe("write-cli-startup-metadata", () => {
       };
     };
     expect(written.channelOptions).toContain("matrix");
+    expect(written.generatorSignature).toMatch(/^[a-f0-9]{40}$/u);
     expect(written.browserHelpText).toContain("Usage:");
     expect(written.browserHelpText).toContain("openclaw browser");
     expect(written.secretsHelpText).toContain("Usage:");
@@ -154,6 +172,16 @@ describe("write-cli-startup-metadata", () => {
     await writeMetadata();
     expect(nodesRenderCount).toBe(1);
 
+    const staleGeneratorMetadata = JSON.parse(readFileSync(outputPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    staleGeneratorMetadata.generatorSignature = "stale-generator";
+    writeFileSync(outputPath, `${JSON.stringify(staleGeneratorMetadata, null, 2)}\n`, "utf8");
+
+    await writeMetadata();
+    expect(nodesRenderCount).toBe(2);
+
     writeFixtureFile(
       tempRoot,
       "extensions/canvas/src/cli.ts",
@@ -165,7 +193,7 @@ describe("write-cli-startup-metadata", () => {
     const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
       nodesHelpText: string;
     };
-    expect(nodesRenderCount).toBe(2);
-    expect(written.nodesHelpText).toContain("openclaw nodes 2");
+    expect(nodesRenderCount).toBe(3);
+    expect(written.nodesHelpText).toContain("openclaw nodes 3");
   });
 });

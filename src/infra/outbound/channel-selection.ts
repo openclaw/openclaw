@@ -67,7 +67,7 @@ function resolveAvailableKnownChannel(params: {
     : undefined;
 }
 
-function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
+export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
   const channels = cfg.channels;
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
     return false;

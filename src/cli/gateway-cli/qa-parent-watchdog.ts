@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 
 export const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 export const QA_TEMP_ROOT_ENV = "OPENCLAW_QA_TEMP_ROOT";
@@ -40,7 +40,7 @@ function resolveQaParentPid(env: NodeJS.ProcessEnv, ownPid: number): number | nu
   if (!raw) {
     return null;
   }
-  const parentPid = Number(raw);
+  const parentPid = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
   if (!Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === ownPid) {
     return null;
   }
@@ -108,7 +108,6 @@ export function installQaParentWatchdog(
     ((callback: () => void, ms: number) => setInterval(callback, ms) as QaParentWatchdogTimer);
   let stopped = false;
   let exiting = false;
-  let timer: QaParentWatchdogTimer;
 
   const stop = () => {
     if (stopped) {
@@ -118,7 +117,7 @@ export function installQaParentWatchdog(
     clearIntervalFn(timer);
   };
 
-  timer = setIntervalFn(() => {
+  const timer: QaParentWatchdogTimer = setIntervalFn(() => {
     if (stopped || exiting) {
       return;
     }

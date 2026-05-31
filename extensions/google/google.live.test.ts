@@ -145,7 +145,7 @@ describeLive("google plugin live", () => {
 
     expect(result?.provider).toBe("gemini");
     expect(typeof result?.content).toBe("string");
-    expect((result?.content as string).length).toBeGreaterThan(20);
+    expect((result!.content as string).length).toBeGreaterThan(20);
     expect(Array.isArray(result?.citations)).toBe(true);
   }, 120_000);
 
@@ -171,9 +171,9 @@ describeLive("google plugin live", () => {
       expect(process.env.GOOGLE_API_KEY).toBeUndefined();
       expect(result?.provider).toBe("gemini");
       expect(typeof result?.content).toBe("string");
-      expect((result?.content as string).length).toBeGreaterThan(20);
+      expect((result!.content as string).length).toBeGreaterThan(20);
       expect(Array.isArray(result?.citations)).toBe(true);
-      expect((result?.citations as unknown[]).length).toBeGreaterThan(0);
+      expect((result!.citations as unknown[]).length).toBeGreaterThan(0);
     });
   }, 120_000);
 });

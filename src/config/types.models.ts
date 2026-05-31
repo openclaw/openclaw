@@ -2,6 +2,7 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
+  ThinkingLevelMap,
 } from "../llm/types.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
@@ -10,7 +11,7 @@ import type { SecretInput } from "./types.secrets.js";
 export const MODEL_APIS = [
   "openai-completions",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "anthropic-messages",
   "google-generative-ai",
   "google-vertex",
@@ -152,6 +153,8 @@ export type ModelDefinitionConfig = {
    */
   contextTokens?: number;
   maxTokens: number;
+  /** Maps OpenClaw thinking levels to provider/model-specific values. */
+  thinkingLevelMap?: ThinkingLevelMap;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
   /** Optional agent execution runtime override for this provider/model pair. */

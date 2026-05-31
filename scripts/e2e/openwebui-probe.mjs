@@ -1,4 +1,5 @@
 import { Agent, setGlobalDispatcher } from "undici";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response-text.mjs";
 
 const baseUrl = process.env.OPENWEBUI_BASE_URL ?? "";
 const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
@@ -13,6 +14,7 @@ const controlTimeoutMs = readPositiveInt(
   Math.min(fetchTimeoutMs, 30000),
 );
 const chatTimeoutMs = readPositiveInt("OPENWEBUI_CHAT_TIMEOUT_MS", fetchTimeoutMs);
+const responseBodyMaxBytes = readPositiveInt("OPENWEBUI_RESPONSE_BODY_MAX_BYTES", 1024 * 1024);
 const smokeMode =
   process.env.OPENWEBUI_SMOKE_MODE ?? process.env.OPENCLAW_OPENWEBUI_SMOKE_MODE ?? "chat";
 
@@ -87,6 +89,20 @@ async function withRequestTimeout(label, timeoutMs, run) {
   }
 }
 
+async function readBoundedResponseText(response, label, byteLimit = responseBodyMaxBytes) {
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
+}
+
+async function readBoundedResponseJson(response, label) {
+  const body = await readBoundedResponseText(response, label);
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label} returned invalid JSON: ${message}`, { cause: error });
+  }
+}
+
 function getCookieHeader(res) {
   const raw = res.headers.get("set-cookie");
   if (!raw) {
@@ -125,12 +141,12 @@ async function fetchSignin() {
       signal,
     });
     if (!response.ok) {
-      const body = await response.text();
+      const body = await readBoundedResponseText(response, "Open WebUI signin");
       throw new Error(`signin failed: HTTP ${response.status} ${body}`);
     }
     return {
       cookie: getCookieHeader(response),
-      json: await response.json(),
+      json: await readBoundedResponseJson(response, "Open WebUI signin"),
     };
   });
 }
@@ -145,11 +161,11 @@ async function fetchModels(authHeaders, attempt) {
         return {
           ok: false,
           status: response.status,
-          text: await response.text(),
+          text: await readBoundedResponseText(response, `Open WebUI models attempt ${attempt}`),
         };
       }
       return {
-        json: await response.json(),
+        json: await readBoundedResponseJson(response, `Open WebUI models attempt ${attempt}`),
         ok: true,
       };
     },
@@ -171,11 +187,10 @@ async function fetchChatCompletion(authHeaders, targetModel) {
       signal,
     });
     if (!response.ok) {
-      throw new Error(
-        `/api/chat/completions failed: HTTP ${response.status} ${await response.text()}`,
-      );
+      const body = await readBoundedResponseText(response, "Open WebUI chat completion");
+      throw new Error(`/api/chat/completions failed: HTTP ${response.status} ${body}`);
     }
-    return await response.json();
+    return await readBoundedResponseJson(response, "Open WebUI chat completion");
   });
 }
 

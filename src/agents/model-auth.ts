@@ -1,9 +1,15 @@
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -15,11 +21,6 @@ import {
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
@@ -28,6 +29,7 @@ import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
@@ -46,7 +48,7 @@ import {
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
-import { type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export {
@@ -56,6 +58,8 @@ export {
 } from "./auth-profiles.js";
 export {
   formatMissingAuthError,
+  isProviderAuthError,
+  ProviderAuthError,
   requireApiKey,
   resolveAwsSdkEnvVarName,
 } from "./model-auth-runtime-shared.js";
@@ -63,12 +67,51 @@ export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 export type RuntimeProviderAuthLookup = {
-  envApiKey: Pick<EnvApiKeyLookupOptions, "aliasMap" | "candidateMap" | "authEvidenceMap">;
+  envApiKey: Pick<
+    EnvApiKeyLookupOptions,
+    "aliasMap" | "candidateMap" | "authEvidenceMap" | "skipSetupProviderFallback"
+  >;
+  setupProviderFallbackRefs?: readonly string[];
   syntheticAuthProviderRefs?: readonly string[];
   syntheticAuthProviderRefsComplete?: boolean;
 };
 
 const log = createSubsystemLogger("model-auth");
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+
+function directOpenAIPlatformModelRequiresApiKey(params: {
+  provider: string;
+  modelApi?: string;
+}): boolean {
+  return (
+    normalizeProviderId(params.provider) === OPENAI_PROVIDER_ID &&
+    params.modelApi !== undefined &&
+    normalizeLowercaseStringOrEmpty(params.modelApi) !== OPENAI_CODEX_RESPONSES_API
+  );
+}
+
+function isAuthModeAllowedForModel(params: {
+  provider: string;
+  modelApi?: string;
+  mode: ResolvedProviderAuth["mode"];
+}): boolean {
+  return !directOpenAIPlatformModelRequiresApiKey(params) || params.mode === "api-key";
+}
+
+function assertAuthModeAllowedForModel(params: {
+  provider: string;
+  modelApi?: string;
+  profileId: string;
+  mode: ResolvedProviderAuth["mode"];
+}): void {
+  if (isAuthModeAllowedForModel(params)) {
+    return;
+  }
+  throw new Error(
+    `Auth profile "${params.profileId}" uses ${params.mode} auth, but ${params.provider}/${params.modelApi} requires an OpenAI API key profile.`,
+  );
+}
 
 function resolveConfigAwareEnvApiKey(
   cfg: OpenClawConfig | undefined,
@@ -122,11 +165,49 @@ export function createRuntimeProviderAuthLookup(params: {
       aliasMap: authLookupMaps.aliasMap,
       candidateMap: authLookupMaps.envCandidateMap,
       authEvidenceMap: authLookupMaps.authEvidenceMap,
+      skipSetupProviderFallback: true,
     },
+    setupProviderFallbackRefs: authLookupMaps.setupProviderFallbackRefs,
     syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
       ? syntheticAuthProviderRefs.refs
       : undefined,
     syntheticAuthProviderRefsComplete: syntheticAuthProviderRefs?.complete,
+  };
+}
+
+function runtimeLookupAllowsSetupProviderFallback(params: {
+  provider: string;
+  runtimeLookup?: RuntimeProviderAuthLookup;
+}): boolean {
+  const refs = params.runtimeLookup?.setupProviderFallbackRefs;
+  if (!refs?.length) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const aliasTarget = params.runtimeLookup?.envApiKey.aliasMap?.[normalizedProvider];
+  return refs.includes(normalizedProvider) || (aliasTarget ? refs.includes(aliasTarget) : false);
+}
+
+function resolveRuntimeEnvApiKeyLookupOptions(params: {
+  provider: string;
+  runtimeLookup?: RuntimeProviderAuthLookup;
+}):
+  | Pick<
+      EnvApiKeyLookupOptions,
+      "aliasMap" | "candidateMap" | "authEvidenceMap" | "skipSetupProviderFallback"
+    >
+  | undefined {
+  const envApiKey = params.runtimeLookup?.envApiKey;
+  if (!envApiKey) {
+    return undefined;
+  }
+  const skipSetupProviderFallback =
+    envApiKey.skipSetupProviderFallback === true
+      ? !runtimeLookupAllowsSetupProviderFallback(params)
+      : envApiKey.skipSetupProviderFallback;
+  return {
+    ...envApiKey,
+    ...(skipSetupProviderFallback !== undefined ? { skipSetupProviderFallback } : {}),
   };
 }
 
@@ -301,6 +382,189 @@ function profileTypeToAuthMode(type: AuthProfileCredential["type"]): ResolvedPro
   return type === "oauth" ? "oauth" : type === "token" ? "token" : "api-key";
 }
 
+type ProviderEntryApiKeyProfileReference =
+  | { kind: "none" }
+  | { kind: "literal"; apiKey: string; source: string }
+  | {
+      kind: "profile";
+      profileId: string;
+      credential: AuthProfileCredential;
+      mode: ResolvedProviderAuth["mode"];
+    }
+  | {
+      kind: "profile-incompatible";
+      profileId: string;
+      credentialProvider: string;
+      credentialType: AuthProfileCredential["type"];
+      reason: "credential-class" | "provider-binding";
+    }
+  | { kind: "marker" };
+
+export type ProviderEntryApiKeyBindingResolution =
+  | { kind: "none" }
+  | { kind: "literal"; apiKey: string; source: string }
+  | { kind: "profile-resolved"; auth: ResolvedProviderAuth }
+  | {
+      kind: "profile-incompatible";
+      profileId: string;
+      credentialProvider: string;
+      credentialType: AuthProfileCredential["type"];
+      reason: "credential-class" | "provider-binding";
+    }
+  | { kind: "profile-unresolved"; profileId: string; error?: unknown };
+
+function normalizeProviderEntryBaseUrlForBinding(baseUrl: string | undefined): string | undefined {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return trimmed.toLowerCase().replace(/\/+$/, "");
+  }
+}
+
+function providerEntriesShareBaseUrl(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  credentialProvider: string;
+}): boolean {
+  const providerBaseUrl = normalizeProviderEntryBaseUrlForBinding(
+    resolveProviderConfig(params.cfg, params.provider)?.baseUrl,
+  );
+  const credentialProviderBaseUrl = normalizeProviderEntryBaseUrlForBinding(
+    resolveProviderConfig(params.cfg, params.credentialProvider)?.baseUrl,
+  );
+  return Boolean(
+    providerBaseUrl && credentialProviderBaseUrl && providerBaseUrl === credentialProviderBaseUrl,
+  );
+}
+
+function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
+  return credential.type === "api_key" || credential.type === "token";
+}
+
+export function canUseProfileAsProviderEntryApiKey(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  credential: AuthProfileCredential;
+}): boolean {
+  if (!isBearerProfileCredential(params.credential)) {
+    return false;
+  }
+  if (
+    isStoredCredentialCompatibleWithAuthProvider({
+      cfg: params.cfg,
+      provider: params.provider,
+      credential: params.credential,
+    })
+  ) {
+    return true;
+  }
+  // Split-provider entries may intentionally point at the same upstream endpoint
+  // with different profile ids. Require a matching configured base URL before
+  // allowing a bearer profile to cross provider ids.
+  return providerEntriesShareBaseUrl({
+    cfg: params.cfg,
+    provider: params.provider,
+    credentialProvider: params.credential.provider,
+  });
+}
+
+export function resolveProviderEntryApiKeyProfileReference(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  store: AuthProfileStore;
+}): ProviderEntryApiKeyProfileReference {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (coerceSecretRef(providerConfig?.apiKey)) {
+    return { kind: "none" };
+  }
+  const perEntryRawKey = normalizeOptionalSecretInput(providerConfig?.apiKey);
+  if (!perEntryRawKey) {
+    return { kind: "none" };
+  }
+  if (isNonSecretApiKeyMarker(perEntryRawKey)) {
+    return { kind: "marker" };
+  }
+  const credential = params.store.profiles[perEntryRawKey];
+  if (!credential) {
+    return { kind: "literal", apiKey: perEntryRawKey, source: "models.json" };
+  }
+  if (!isBearerProfileCredential(credential)) {
+    return {
+      kind: "profile-incompatible",
+      profileId: perEntryRawKey,
+      credentialProvider: credential.provider,
+      credentialType: credential.type,
+      reason: "credential-class",
+    };
+  }
+  if (
+    !canUseProfileAsProviderEntryApiKey({ cfg: params.cfg, provider: params.provider, credential })
+  ) {
+    return {
+      kind: "profile-incompatible",
+      profileId: perEntryRawKey,
+      credentialProvider: credential.provider,
+      credentialType: credential.type,
+      reason: "provider-binding",
+    };
+  }
+  return {
+    kind: "profile",
+    profileId: perEntryRawKey,
+    credential,
+    mode: profileTypeToAuthMode(credential.type),
+  };
+}
+
+export async function resolveProviderEntryApiKeyBinding(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  store: AuthProfileStore;
+  agentDir?: string;
+}): Promise<ProviderEntryApiKeyBindingResolution> {
+  const reference = resolveProviderEntryApiKeyProfileReference(params);
+  if (reference.kind === "none" || reference.kind === "marker") {
+    return { kind: "none" };
+  }
+  if (reference.kind === "literal") {
+    return reference;
+  }
+  if (reference.kind === "profile-incompatible") {
+    return reference;
+  }
+  try {
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.cfg,
+      store: params.store,
+      profileId: reference.profileId,
+      agentDir: params.agentDir,
+    });
+    if (!resolved) {
+      return { kind: "profile-unresolved", profileId: reference.profileId };
+    }
+    const resolvedProfileId = resolved.profileId ?? reference.profileId;
+    return {
+      kind: "profile-resolved",
+      auth: {
+        apiKey: resolved.apiKey,
+        profileId: resolvedProfileId,
+        source: `profile:${resolvedProfileId}`,
+        mode: resolved.profileType ? profileTypeToAuthMode(resolved.profileType) : reference.mode,
+      },
+    };
+  } catch (err) {
+    return { kind: "profile-unresolved", profileId: reference.profileId, error: err };
+  }
+}
+
 function resolveConfiguredAwsSdkProfileAuth(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -446,17 +710,27 @@ export function hasRuntimeAvailableProviderAuth(params: {
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
+  modelApi?: string;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
   }
+  const envAuth = resolveEnvApiKey(provider, params.env, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    ...resolveRuntimeEnvApiKeyLookupOptions({
+      provider,
+      runtimeLookup: params.runtimeLookup,
+    }),
+  });
   if (
-    resolveEnvApiKey(provider, params.env, {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      ...params.runtimeLookup?.envApiKey,
+    envAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     })
   ) {
     return true;
@@ -694,6 +968,12 @@ export async function resolveApiKeyForProvider(params: {
       source: `profile:${resolvedProfileId}`,
       mode: mode ? profileTypeToAuthMode(mode) : "api-key",
     };
+    assertAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      profileId: resolvedProfileId,
+      mode: result.mode,
+    });
     // When the resolved key is a provider-owned synthetic profile marker and
     // the caller has not locked this profile, fall through to env/config
     // resolution so provider-owned real credentials take precedence. The auth
@@ -708,7 +988,12 @@ export async function resolveApiKeyForProvider(params: {
         modelApi: params.modelApi,
       })
     ) {
-      return resolveApiKeyForProvider({ ...params, profileId: undefined, lockedProfile: true }) //
+      return resolveApiKeyForProvider({
+        ...params,
+        store,
+        profileId: undefined,
+        lockedProfile: true,
+      }) //
         .catch(() => result);
     }
     return result;
@@ -746,6 +1031,76 @@ export async function resolveApiKeyForProvider(params: {
   if (shouldUseImplicitAwsSdkAuth({ cfg, provider, modelApi: params.modelApi })) {
     return resolveAwsSdkAuthInfo();
   }
+
+  if (params.credentialPrecedence === "env-first") {
+    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+    if (envResolved) {
+      const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
+        ? "oauth"
+        : "api-key";
+      if (
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: resolvedMode,
+        })
+      ) {
+        return resolveApiKeyForProvider({ ...params, credentialPrecedence: "profile-first" });
+      }
+      return {
+        apiKey: envResolved.apiKey,
+        source: envResolved.source,
+        mode: resolvedMode,
+      };
+    }
+  }
+
+  // Resolve stored profile-id references before literal apiKey fallbacks.
+  // Matched profile references are terminal so bad bindings cannot silently
+  // fall through to a different credential or to the profile id as bearer text.
+  scopedStore ??= resolveScopedAuthProfileStore({
+    agentDir,
+    cfg,
+    provider,
+    preferredProfile,
+  });
+  const providerEntryBinding = await resolveProviderEntryApiKeyBinding({
+    cfg,
+    provider,
+    store: scopedStore,
+    agentDir,
+  });
+  if (providerEntryBinding.kind === "profile-resolved") {
+    assertAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      profileId: providerEntryBinding.auth.profileId ?? provider,
+      mode: providerEntryBinding.auth.mode,
+    });
+    return providerEntryBinding.auth;
+  }
+  if (providerEntryBinding.kind === "profile-incompatible") {
+    const reason =
+      providerEntryBinding.reason === "credential-class"
+        ? "which is not a bearer-style auth class"
+        : "which is not compatible with this provider entry's auth binding";
+    const action =
+      providerEntryBinding.reason === "credential-class"
+        ? "Use an api-key or token profile, or set apiKey to a literal bearer token."
+        : "Use a compatible provider auth alias, configure the referenced provider entry with the same baseUrl, or set apiKey to a literal bearer token.";
+    throw new Error(
+      `Per-entry apiKey "${providerEntryBinding.profileId}" for provider "${provider}" references a "${providerEntryBinding.credentialType}" credential for provider "${providerEntryBinding.credentialProvider}", ${reason}. ${action}`,
+    );
+  }
+  if (providerEntryBinding.kind === "profile-unresolved") {
+    const cause = providerEntryBinding.error
+      ? formatErrorMessage(providerEntryBinding.error)
+      : "credential resolution returned no key";
+    throw new Error(
+      `Per-entry apiKey "${providerEntryBinding.profileId}" for provider "${provider}" matched a stored profile but failed to resolve: ${cause}. Fix the referenced profile or set apiKey to a literal bearer token.`,
+    );
+  }
+
   if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
     const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
     if (customKey) {
@@ -756,20 +1111,6 @@ export async function resolveApiKeyForProvider(params: {
       };
     }
   }
-  if (params.credentialPrecedence === "env-first") {
-    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
-    if (envResolved) {
-      const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
-        ? "oauth"
-        : "api-key";
-      return {
-        apiKey: envResolved.apiKey,
-        source: envResolved.source,
-        mode: resolvedMode,
-      };
-    }
-  }
-
   const providerConfig = resolveProviderConfig(cfg, provider);
   const configuredLocalKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (configuredLocalKey && isNonSecretApiKeyMarker(configuredLocalKey.apiKey)) {
@@ -832,6 +1173,15 @@ export async function resolveApiKeyForProvider(params: {
           mode: resolvedMode,
         };
         if (
+          !isAuthModeAllowedForModel({
+            provider,
+            modelApi: params.modelApi,
+            mode: result.mode,
+          })
+        ) {
+          continue;
+        }
+        if (
           shouldDeferSyntheticProfileAuth({
             cfg,
             provider,
@@ -854,12 +1204,20 @@ export async function resolveApiKeyForProvider(params: {
     const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
       ? "oauth"
       : "api-key";
-    const result: ResolvedProviderAuth = {
-      apiKey: envResolved.apiKey,
-      source: envResolved.source,
-      mode: resolvedMode,
-    };
-    return result;
+    if (
+      isAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        mode: resolvedMode,
+      })
+    ) {
+      const result: ResolvedProviderAuth = {
+        apiKey: envResolved.apiKey,
+        source: envResolved.source,
+        mode: resolvedMode,
+      };
+      return result;
+    }
   }
 
   const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
@@ -908,7 +1266,9 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
-  throw new Error(
+  throw new ProviderAuthError(
+    "missing-provider-auth",
+    provider,
     [
       `No API key found for provider "${provider}".`,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
@@ -994,6 +1354,7 @@ export async function hasAvailableAuthForProvider(params: {
   store?: AuthProfileStore;
   agentDir?: string;
   workspaceDir?: string;
+  modelApi?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
 
@@ -1001,7 +1362,15 @@ export async function hasAvailableAuthForProvider(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
-  if (resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir)) {
+  const envAuth = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+  if (
+    envAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+    })
+  ) {
     return true;
   }
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
@@ -1035,7 +1404,15 @@ export async function hasAvailableAuthForProvider(params: {
         profileId: candidate,
         agentDir: params.agentDir,
       });
-      if (resolved) {
+      const mode = resolved?.profileType ?? store.profiles[candidate]?.type;
+      if (
+        resolved &&
+        isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: mode ? profileTypeToAuthMode(mode) : "api-key",
+        })
+      ) {
         return true;
       }
     } catch (err) {

@@ -106,12 +106,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefined {
+  if (!isRecord(chunk)) {
+    return utf8JsonByteLength(chunk);
+  }
+  if (!("partial" in chunk)) {
+    return utf8JsonByteLength(chunk);
+  }
+  // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
+  // count the new stream event shape, not the answer-so-far replay.
+  const { partial: _partial, ...snapshotlessChunk } = chunk;
+  return utf8JsonByteLength(snapshotlessChunk);
+}
+
+function responseStreamChunkByteLength(chunk: unknown): number | undefined {
+  try {
+    return responseStreamChunkByteLengthUnchecked(chunk);
+  } catch {
+    return undefined;
+  }
+}
+
 function cloneDiagnosticContentValue(value: unknown): unknown {
   try {
     return structuredClone(value);
   } catch {
     try {
-      return JSON.parse(JSON.stringify(value)) as unknown;
+      const serialized = JSON.stringify(value);
+      return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
     } catch {
       return String(value);
     }
@@ -157,7 +179,7 @@ function observeResponseChunk(
 ): void {
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
   observeOutputMessageContent(state, chunk);
-  const bytes = utf8JsonByteLength(chunk);
+  const bytes = responseStreamChunkByteLength(chunk);
   if (bytes !== undefined) {
     state.responseStreamBytes += bytes;
   }

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -8,7 +9,6 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -30,6 +30,12 @@ type MockCompactionResult =
     }
   | {
       ok: false;
+      compacted: false;
+      reason: string;
+      result?: undefined;
+    }
+  | {
+      ok: true;
       compacted: false;
       reason: string;
       result?: undefined;
@@ -248,7 +254,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     id: "codex",
     label: "Codex",
     supports: (ctx) =>
-      ctx.provider === "codex" || ctx.provider === "openai-codex" || ctx.provider === "openai"
+      ctx.provider === "codex" || ctx.provider === "openai" || ctx.provider === "openai"
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
@@ -520,6 +526,43 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
           : undefined,
     ),
   }));
+
+  vi.doMock("../cli-backends.js", async () => {
+    const actual = await vi.importActual<typeof import("../cli-backends.js")>("../cli-backends.js");
+    type ResolveBindingParams = Parameters<typeof actual.resolveCliRuntimeModelBackendBinding>[0];
+    type ProviderCheckParams = Parameters<typeof actual.isCliRuntimeModelBackendForProvider>[0];
+    const claudeBinding = {
+      provider: "anthropic",
+      runtime: "claude-cli",
+      pluginId: "anthropic",
+    };
+    return {
+      ...actual,
+      listCliRuntimeModelBackendBindings: vi.fn((params?: unknown) => [
+        claudeBinding,
+        ...actual
+          .listCliRuntimeModelBackendBindings(
+            params as Parameters<typeof actual.listCliRuntimeModelBackendBindings>[0],
+          )
+          .filter(
+            (binding) =>
+              binding.provider !== claudeBinding.provider ||
+              binding.runtime !== claudeBinding.runtime,
+          ),
+      ]),
+      listCliRuntimeProviderIds: vi.fn(() => ["claude-cli"]),
+      resolveCliRuntimeModelBackendBinding: vi.fn((params: ResolveBindingParams) =>
+        params.provider === claudeBinding.provider && params.runtime === claudeBinding.runtime
+          ? claudeBinding
+          : actual.resolveCliRuntimeModelBackendBinding(params),
+      ),
+      isCliRuntimeModelBackendForProvider: vi.fn((params: ProviderCheckParams) =>
+        params.provider === claudeBinding.provider && params.runtime === claudeBinding.runtime
+          ? true
+          : actual.isCliRuntimeModelBackendForProvider(params),
+      ),
+    };
+  });
 
   vi.doMock("../workspace-run.js", () => ({
     resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string }) => ({

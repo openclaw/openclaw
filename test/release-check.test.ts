@@ -333,20 +333,6 @@ describe("collectBundledExtensionManifestErrors", () => {
 });
 
 describe("bundled plugin package dependency checks", () => {
-  function makeBundledSpecs() {
-    return new Map([
-      ["@larksuiteoapi/node-sdk", { conflicts: [], pluginIds: ["feishu"], spec: "^1.60.0" }],
-      [
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        { conflicts: [], pluginIds: ["matrix"], spec: "^0.4.0" },
-      ],
-      [
-        "@matrix-org/matrix-sdk-crypto-wasm",
-        { conflicts: [], pluginIds: ["matrix"], spec: "18.0.0" },
-      ],
-    ]);
-  }
-
   it("maps package names from import specifiers", () => {
     expect(packageNameFromSpecifier("@larksuiteoapi/node-sdk/subpath")).toBe(
       "@larksuiteoapi/node-sdk",
@@ -655,6 +641,7 @@ describe("collectMissingPackPaths", () => {
       "scripts/lib/official-external-provider-catalog.json",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
+      "dist/agents/compaction-planning.worker.js",
       "dist/agents/model-provider-auth.worker.js",
       "dist/task-registry-control.runtime.js",
       "dist/telegram-ingress-worker.runtime.js",
@@ -688,6 +675,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
+        "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
         "dist/task-registry-control.runtime.js",
         "dist/telegram-ingress-worker.runtime.js",

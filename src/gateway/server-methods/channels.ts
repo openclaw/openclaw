@@ -1,3 +1,13 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateChannelsStartParams,
+  validateChannelsStopParams,
+  validateChannelsLogoutParams,
+  validateChannelsStatusParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -14,22 +24,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../channel-health-policy.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateChannelsStartParams,
-  validateChannelsStopParams,
-  validateChannelsLogoutParams,
-  validateChannelsStatusParams,
-} from "../protocol/index.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
@@ -106,6 +106,8 @@ async function runChannelStatusHook(params: {
   run: () => Promise<unknown>;
 }): Promise<unknown> {
   const timeoutMs = Math.max(1, params.timeoutMs);
+  // Channel probes come from plugin code and external services. Convert slow or
+  // failing hooks into partial status data so one channel cannot block the UI.
   const result = await raceWithTimeout({
     timeoutMs,
     run: params.run,
@@ -193,6 +195,8 @@ function resolveChannelGatewayAccountId(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string {
+  // Runtime operations use the same account precedence as channel setup:
+  // explicit request, plugin default, first configured account, then fallback.
   return (
     normalizeOptionalString(params.accountId) ||
     params.plugin.config.defaultAccountId?.(params.cfg) ||
@@ -210,6 +214,8 @@ export async function logoutChannelAccount(params: {
 }): Promise<ChannelLogoutPayload> {
   const resolvedAccountId = resolveChannelGatewayAccountId(params);
   const account = params.plugin.config.resolveAccount(params.cfg, resolvedAccountId);
+  // Stop the runtime before clearing channel-owned auth so no active watcher can
+  // immediately reconnect with credentials the user is trying to remove.
   await params.context.stopChannel(params.channelId, resolvedAccountId);
   const result = await params.plugin.gateway?.logoutAccount?.({
     cfg: params.cfg,
@@ -329,9 +335,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
       defaultAccountId: string,
     ): ChannelAccountSnapshot | undefined => {
       const accounts = runtime.channelAccounts[channelId];
-      const defaultRuntime = runtime.channels[channelId];
+      const defaultRuntimeLocal = runtime.channels[channelId];
       const raw =
-        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
+        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntimeLocal : undefined);
       if (!raw) {
         return undefined;
       }
@@ -356,6 +362,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
       let probeResult: unknown;
       let lastProbeAt: number | null = null;
       if (probe && enabled && plugin.status?.probeAccount) {
+        // Skip expensive probes for accounts that are not configured; the
+        // snapshot builder still reports the config state below.
         let configured = true;
         if (plugin.config.isConfigured) {
           configured = await plugin.config.isConfigured(account, cfg);
@@ -436,7 +444,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       if (!health.healthy) {
         snapshot.healthState = health.reason;
       }
-      return { accountId: accountId, account, snapshot };
+      return { accountId, account, snapshot };
     };
 
     const buildChannelAccounts = async (channelId: ChannelId) => {

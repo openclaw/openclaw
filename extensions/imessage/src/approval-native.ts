@@ -1,4 +1,3 @@
-import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-client-runtime";
 import {
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
@@ -8,8 +7,8 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/ap
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
-  doesApprovalRequestMatchChannelAccount,
-  resolveApprovalRequestSessionTarget,
+  createNativeApprovalChannelRouteGates,
+  createNativeApprovalForwardingFallbackSuppressor,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
@@ -28,7 +27,6 @@ import type {
   ChannelApprovalCapability,
   ChannelOutboundPayloadHint,
 } from "openclaw/plugin-sdk/channel-contract";
-import { channelRouteTargetsMatchExact } from "openclaw/plugin-sdk/channel-route";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -48,7 +46,6 @@ import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { inferIMessageTargetChatType } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalKind = "exec" | "plugin";
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
 type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
 type ChannelApprovalForwardTarget = Parameters<
@@ -76,77 +73,6 @@ function isIMessageApprovalTransportEnabled(params: {
   return resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
-function resolveApprovalKind(request: ApprovalRequest, approvalKind?: ApprovalKind): ApprovalKind {
-  if (approvalKind) {
-    return approvalKind;
-  }
-  return "command" in request.request ? "exec" : "plugin";
-}
-
-function resolveApprovalForwardingConfig(params: {
-  cfg: OpenClawConfig;
-  approvalKind: ApprovalKind;
-}): ApprovalForwardingConfig | undefined {
-  return params.approvalKind === "plugin"
-    ? params.cfg.approvals?.plugin
-    : params.cfg.approvals?.exec;
-}
-
-function normalizeApprovalForwardingMode(
-  mode: ApprovalForwardingConfig["mode"] | undefined,
-): ApprovalForwardingMode {
-  return mode ?? DEFAULT_APPROVAL_FORWARDING_MODE;
-}
-
-function approvalModeIncludesSession(mode: ApprovalForwardingMode): boolean {
-  return mode === "session" || mode === "both";
-}
-
-function approvalModeIncludesTargets(mode: ApprovalForwardingMode): boolean {
-  return mode === "targets" || mode === "both";
-}
-
-function matchesForwardingFilters(params: {
-  config: ApprovalForwardingConfig;
-  request: ApprovalRequest;
-}): boolean {
-  return matchesApprovalRequestFilters({
-    request: params.request.request,
-    agentFilter: params.config.agentFilter,
-    sessionFilter: params.config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
-  });
-}
-
-function targetAccountMatchesIMessageAccount(params: {
-  cfg: OpenClawConfig;
-  targetAccountId?: string | null;
-  accountId?: string | null;
-}): boolean {
-  const targetAccountId = normalizeOptionalString(params.targetAccountId);
-  const accountId = normalizeOptionalString(params.accountId);
-  if (targetAccountId) {
-    return !accountId || normalizeAccountId(targetAccountId) === normalizeAccountId(accountId);
-  }
-  if (!accountId) {
-    return true;
-  }
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const defaultAccountId = normalizeAccountId(resolveDefaultIMessageAccountId(params.cfg));
-  if (normalizedAccountId === defaultAccountId) {
-    return true;
-  }
-  const enabledAccountIds = listIMessageAccountIds(params.cfg)
-    .filter((candidateAccountId) =>
-      isIMessageApprovalTransportEnabled({
-        cfg: params.cfg,
-        accountId: candidateAccountId,
-      }),
-    )
-    .map((candidateAccountId) => normalizeAccountId(candidateAccountId));
-  return enabledAccountIds.length === 1 && enabledAccountIds[0] === normalizedAccountId;
-}
-
 function normalizeIMessageForwardTarget(
   target: Pick<ChannelApprovalForwardTarget, "channel" | "to" | "accountId" | "threadId">,
 ): IMessageApprovalTarget | null {
@@ -162,190 +88,6 @@ function normalizeIMessageForwardTarget(
     accountId: normalizeOptionalString(target.accountId),
     threadId: target.threadId ?? null,
   };
-}
-
-function nativeApprovalTargetsMatch(params: {
-  left: IMessageApprovalTarget;
-  right: IMessageApprovalTarget;
-}): boolean {
-  return channelRouteTargetsMatchExact({
-    left: {
-      channel: "imessage",
-      to: params.left.to,
-      accountId: params.left.accountId,
-      threadId: params.left.threadId,
-    },
-    right: {
-      channel: "imessage",
-      to: params.right.to,
-      accountId: params.right.accountId,
-      threadId: params.right.threadId,
-    },
-  });
-}
-
-function hasMatchingIMessageTarget(params: {
-  cfg: OpenClawConfig;
-  config: ApprovalForwardingConfig;
-  accountId?: string | null;
-  target?: ChannelApprovalForwardTarget;
-}): boolean {
-  const candidateTarget = params.target ? normalizeIMessageForwardTarget(params.target) : null;
-  return (params.config.targets ?? []).some((target) => {
-    const configuredTarget = normalizeIMessageForwardTarget(target);
-    if (!configuredTarget) {
-      return false;
-    }
-    if (
-      !targetAccountMatchesIMessageAccount({
-        cfg: params.cfg,
-        targetAccountId: configuredTarget.accountId,
-        accountId: params.accountId,
-      })
-    ) {
-      return false;
-    }
-    if (!candidateTarget) {
-      return true;
-    }
-    return nativeApprovalTargetsMatch({ left: configuredTarget, right: candidateTarget });
-  });
-}
-
-function hasIMessageOriginOrSessionTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  request: ApprovalRequest;
-}): boolean {
-  if (resolveTurnSourceIMessageOriginTarget(params.request)) {
-    return true;
-  }
-
-  const sessionTarget = resolveApprovalRequestSessionTarget({
-    cfg: params.cfg,
-    request: params.request,
-  });
-  return (
-    normalizeLowercaseStringOrEmpty(sessionTarget?.channel) === "imessage" &&
-    targetAccountMatchesIMessageAccount({
-      cfg: params.cfg,
-      targetAccountId: sessionTarget?.accountId,
-      accountId: params.accountId,
-    })
-  );
-}
-
-function canApprovalPotentiallyRouteToIMessage(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind: ApprovalKind;
-  nativeSessionOnly?: boolean;
-}): boolean {
-  if (!isIMessageApprovalTransportEnabled(params)) {
-    return false;
-  }
-  const config = resolveApprovalForwardingConfig(params);
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (approvalModeIncludesSession(mode)) {
-    return true;
-  }
-  if (params.nativeSessionOnly) {
-    return false;
-  }
-  return (
-    approvalModeIncludesTargets(mode) &&
-    hasMatchingIMessageTarget({
-      cfg: params.cfg,
-      config,
-      accountId: params.accountId,
-    })
-  );
-}
-
-function canAnyApprovalPotentiallyRouteToIMessage(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  nativeSessionOnly?: boolean;
-}): boolean {
-  return (
-    canApprovalPotentiallyRouteToIMessage({
-      ...params,
-      approvalKind: "exec",
-    }) ||
-    canApprovalPotentiallyRouteToIMessage({
-      ...params,
-      approvalKind: "plugin",
-    })
-  );
-}
-
-function isIMessageSessionApprovalEligible(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind: ApprovalKind;
-  request: ApprovalRequest;
-}): boolean {
-  if (!isIMessageApprovalTransportEnabled(params)) {
-    return false;
-  }
-  const config = resolveApprovalForwardingConfig(params);
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (!approvalModeIncludesSession(mode)) {
-    return false;
-  }
-  if (!matchesForwardingFilters({ config, request: params.request })) {
-    return false;
-  }
-  if (
-    !doesApprovalRequestMatchChannelAccount({
-      cfg: params.cfg,
-      request: params.request,
-      channel: "imessage",
-      accountId: params.accountId,
-    })
-  ) {
-    return false;
-  }
-  return hasIMessageOriginOrSessionTarget({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    request: params.request,
-  });
-}
-
-function isIMessageExplicitTargetEligible(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind: ApprovalKind;
-  request: ApprovalRequest;
-  target: ChannelApprovalForwardTarget;
-}): boolean {
-  if (!isIMessageApprovalTransportEnabled(params)) {
-    return false;
-  }
-  const config = resolveApprovalForwardingConfig(params);
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (!approvalModeIncludesTargets(mode)) {
-    return false;
-  }
-  if (!matchesForwardingFilters({ config, request: params.request })) {
-    return false;
-  }
-  return hasMatchingIMessageTarget({
-    cfg: params.cfg,
-    config,
-    accountId: params.accountId,
-    target: params.target,
-  });
 }
 
 function resolveTurnSourceIMessageOriginTarget(
@@ -372,6 +114,24 @@ function resolveSessionIMessageOriginTarget(sessionTarget: {
   const to = normalizeIMessageMessagingTarget(sessionTarget.to);
   return to ? { to, accountId: normalizeOptionalString(sessionTarget.accountId) } : null;
 }
+
+const imessageApprovalRouteGates = createNativeApprovalChannelRouteGates({
+  channel: "imessage",
+  defaultForwardingMode: DEFAULT_APPROVAL_FORWARDING_MODE,
+  isTransportEnabled: isIMessageApprovalTransportEnabled,
+  listAccountIds: listIMessageAccountIds,
+  resolveDefaultAccountId: resolveDefaultIMessageAccountId,
+  normalizeForwardTarget: normalizeIMessageForwardTarget,
+  resolveTurnSourceTarget: resolveTurnSourceIMessageOriginTarget,
+});
+
+const {
+  canApprovalPotentiallyRouteToChannel: canApprovalPotentiallyRouteToIMessage,
+  canAnyApprovalPotentiallyRouteToChannel: canAnyApprovalPotentiallyRouteToIMessage,
+  isSessionApprovalEligible: isIMessageSessionApprovalEligible,
+  isExplicitTargetEligible: isIMessageExplicitTargetEligible,
+  shouldHandleApprovalRequest: shouldHandleIMessageApprovalRequest,
+} = imessageApprovalRouteGates;
 
 function resolveIMessageSessionTargetFromSessionKey(
   sessionKey?: string | null,
@@ -469,18 +229,6 @@ export function shouldSuppressLocalIMessageExecApprovalPrompt(params: {
   });
 }
 
-function shouldHandleIMessageApprovalRequest(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind?: ApprovalKind;
-  request: ApprovalRequest;
-}): boolean {
-  return isIMessageSessionApprovalEligible({
-    ...params,
-    approvalKind: resolveApprovalKind(params.request, params.approvalKind),
-  });
-}
-
 const resolveIMessageOriginTargetBase = createChannelNativeOriginTargetResolver({
   channel: "imessage",
   shouldHandleRequest: shouldHandleIMessageApprovalRequest,
@@ -527,6 +275,22 @@ const resolveIMessageApproverDmTargets = createChannelApproverDmTargetResolver({
     };
   },
 });
+
+const shouldSuppressIMessageForwardingFallback =
+  createNativeApprovalForwardingFallbackSuppressor<IMessageApprovalTarget>({
+    channel: "imessage",
+    normalizeForwardTarget: normalizeIMessageForwardTarget,
+    resolveAccountId: ({ forwardingTarget, request }) =>
+      forwardingTarget.accountId ?? normalizeOptionalString(request.request.turnSourceAccountId),
+    resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
+      ...forwardingTarget,
+      accountId,
+    }),
+    isSessionRouteEligible: isIMessageSessionApprovalEligible,
+    isExplicitTargetEligible: isIMessageExplicitTargetEligible,
+    resolveOriginTarget: resolveIMessageOriginTarget,
+    resolveApproverDmTargets: resolveIMessageApproverDmTargets,
+  });
 
 function appendIMessageReactionHint(params: {
   text?: string;
@@ -625,58 +389,7 @@ export const imessageApprovalCapability: ChannelApprovalCapability =
           }
           return getIMessageApprovalApprovers({ cfg, accountId }).length > 0;
         }),
-      shouldSuppressForwardingFallback: ({ cfg, approvalKind, target, request }) => {
-        const forwardingTarget = normalizeIMessageForwardTarget(target);
-        if (!forwardingTarget) {
-          return false;
-        }
-        const accountId =
-          forwardingTarget.accountId ??
-          normalizeOptionalString(request.request.turnSourceAccountId);
-        const forwardingTargetForMatch = {
-          ...forwardingTarget,
-          accountId,
-        };
-        const kind = resolveApprovalKind(request, approvalKind);
-        const eligible =
-          target.source === "target"
-            ? isIMessageExplicitTargetEligible({
-                cfg,
-                accountId,
-                approvalKind: kind,
-                request,
-                target,
-              })
-            : isIMessageSessionApprovalEligible({
-                cfg,
-                accountId,
-                approvalKind: kind,
-                request,
-              });
-        if (!eligible) {
-          return false;
-        }
-        const originTarget = resolveIMessageOriginTarget({
-          cfg,
-          accountId,
-          approvalKind: kind,
-          request,
-        });
-        if (
-          originTarget &&
-          nativeApprovalTargetsMatch({ left: forwardingTargetForMatch, right: originTarget })
-        ) {
-          return true;
-        }
-        return resolveIMessageApproverDmTargets({
-          cfg,
-          accountId,
-          approvalKind: kind,
-          request,
-        }).some((approverTarget) =>
-          nativeApprovalTargetsMatch({ left: forwardingTargetForMatch, right: approverTarget }),
-        );
-      },
+      shouldSuppressForwardingFallback: shouldSuppressIMessageForwardingFallback,
     },
     render: {
       exec: {

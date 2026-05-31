@@ -73,6 +73,36 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("normalizes signed decimal room type strings through the shared parser", async () => {
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: "+01",
+            },
+          },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account: {
+          accountId: "acct-direct-string",
+          baseUrl: "https://nc.example.com",
+          config: {
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        } as never,
+        roomToken: "room-direct-string",
+      }),
+    ).resolves.toBe("direct");
+  });
+
   it("does not coerce partial room type strings", async () => {
     fetchWithSsrFGuard.mockResolvedValue({
       response: {
@@ -99,6 +129,36 @@ describe("nextcloud talk room info", () => {
           },
         } as never,
         roomToken: "room-partial",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not classify negative room types as group rooms", async () => {
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: -1,
+            },
+          },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account: {
+          accountId: "acct-negative",
+          baseUrl: "https://nc.example.com",
+          config: {
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        } as never,
+        roomToken: "room-negative",
       }),
     ).resolves.toBeUndefined();
   });

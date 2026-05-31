@@ -966,7 +966,13 @@ async function waitForSlackNoReply(params: {
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < params.timeoutMs) {
+  const observedKeys = new Set(
+    params.observedMessages
+      .map((message) => `${message.channelId ?? params.channelId}:${message.ts ?? ""}`)
+      .filter((key) => !key.endsWith(":")),
+  );
+  let elapsedMs = Date.now() - startedAt;
+  while (elapsedMs < params.timeoutMs) {
     const messages = await listSlackMessages({
       channelId: params.channelId,
       client: params.client,
@@ -982,24 +988,33 @@ async function waitForSlackNoReply(params: {
         continue;
       }
       const matchedScenario = text.includes(params.matchText);
-      params.observedMessages.push({
-        actionValues: collectSlackActionValues(message.blocks),
-        blockText: collectSlackBlockText(message.blocks),
-        botId: message.bot_id,
-        channelId: params.channelId,
-        matchedScenario,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        text,
-        threadTs: message.thread_ts,
-        ts: message.ts,
-        userId: message.user,
-      });
+      const observedKey = `${params.channelId}:${message.ts}`;
+      if (!observedKeys.has(observedKey)) {
+        observedKeys.add(observedKey);
+        params.observedMessages.push({
+          actionValues: collectSlackActionValues(message.blocks),
+          blockText: collectSlackBlockText(message.blocks),
+          botId: message.bot_id,
+          channelId: params.channelId,
+          matchedScenario,
+          scenarioId: params.observationScenarioId,
+          scenarioTitle: params.observationScenarioTitle,
+          text,
+          threadTs: message.thread_ts,
+          ts: message.ts,
+          userId: message.user,
+        });
+      }
       if (matchedScenario) {
         throw new Error("unexpected Slack SUT reply observed");
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    elapsedMs = Date.now() - startedAt;
+    const remainingMs = params.timeoutMs - elapsedMs;
+    if (remainingMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, remainingMs)));
+    }
+    elapsedMs = Date.now() - startedAt;
   }
 }
 

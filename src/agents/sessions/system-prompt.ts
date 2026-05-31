@@ -2,8 +2,8 @@
  * System prompt construction and project context loading
  */
 
+import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
-import { formatSkillsForPrompt, type Skill } from "./skills.js";
 
 export interface BuildSystemPromptOptions {
   /** Custom system prompt (replaces default). */
@@ -88,7 +88,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
   // Build tools list based on selected tools.
   // A tool appears in Available tools only when the caller provides a one-line snippet.
   const tools = selectedTools || ["read", "bash", "edit", "write"];
-  const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
+  const visibleTools = tools.filter((name) => Boolean(toolSnippets?.[name]));
   const toolsList =
     visibleTools.length > 0
       ? visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n")

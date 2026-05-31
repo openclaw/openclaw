@@ -6,8 +6,34 @@ import {
   extractProviderErrorInfo,
   extractProviderRequestId,
   ProviderHttpError,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "./provider-http-errors.js";
+
+function createStreamingBinaryResponse(params: {
+  chunkCount: number;
+  chunkSize: number;
+  byte: number;
+}): { response: Response; getReadCount: () => number } {
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "audio/mpeg" },
+    }),
+    getReadCount: () => reads,
+  };
+}
 
 describe("provider error utils", () => {
   it("formats nested provider error details with request ids", async () => {
@@ -48,10 +74,11 @@ describe("provider error utils", () => {
       { status: 400 },
     );
 
-    await expect(assertOkOrThrowProviderError(response, "OAuth token exchange failed")).rejects
-      .toThrow(
-        "OAuth token exchange failed (400): AADSTS7000215: Invalid client secret provided. [code=invalid_request]",
-      );
+    await expect(
+      assertOkOrThrowProviderError(response, "OAuth token exchange failed"),
+    ).rejects.toThrow(
+      "OAuth token exchange failed (400): AADSTS7000215: Invalid client secret provided. [code=invalid_request]",
+    );
   });
 
   it("keeps HTTP status metadata when error body reads fail", async () => {
@@ -69,13 +96,14 @@ describe("provider error utils", () => {
       },
     } as unknown as Response;
 
-    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects
-      .toMatchObject({
-        name: "ProviderHttpError",
-        status: 503,
-        statusCode: 503,
-        message: "Provider API error (503)",
-      } satisfies Partial<ProviderHttpError>);
+    await expect(
+      assertOkOrThrowProviderError(response, "Provider API error"),
+    ).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 503,
+      statusCode: 503,
+      message: "Provider API error (503)",
+    } satisfies Partial<ProviderHttpError>);
   });
 
   it("attaches structured provider error metadata", async () => {
@@ -144,5 +172,21 @@ describe("provider error utils", () => {
     await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
       "Provider catalog failed: malformed JSON response",
     );
+  });
+
+  it("caps successful binary responses instead of buffering oversized bodies", async () => {
+    const streamed = createStreamingBinaryResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+      byte: 121,
+    });
+
+    await expect(
+      readProviderBinaryResponse(streamed.response, "Provider TTS failed", "audio", {
+        maxBytes: 2048,
+      }),
+    ).rejects.toThrow("Provider TTS failed: audio response exceeds 2048 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 });

@@ -82,10 +82,9 @@ async function connectGatewayClient(params: {
     deviceIdentity,
     timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
     requestTimeoutMs: 60_000,
+    tickWatchTimeoutMs: AGENT_REQUEST_TIMEOUT_MS + 120_000,
     clientDisplayName: "trajectory-live",
   });
-  (client as unknown as { tickIntervalMs?: number }).tickIntervalMs =
-    AGENT_REQUEST_TIMEOUT_MS + 120_000;
   return client;
 }
 
@@ -166,7 +165,7 @@ async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
 }
 
 describeLive("gateway live trajectory export", () => {
-  let cleanup: Array<() => Promise<void>> = [];
+  const cleanup: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
     for (const step of cleanup.splice(0).toReversed()) {

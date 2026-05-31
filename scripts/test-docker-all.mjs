@@ -627,11 +627,7 @@ function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTime
   });
 }
 
-export function appendBoundedShellCapture(
-  current,
-  chunk,
-  maxChars = SHELL_CAPTURE_MAX_CHARS,
-) {
+export function appendBoundedShellCapture(current, chunk, maxChars = SHELL_CAPTURE_MAX_CHARS) {
   const combined = `${current}${String(chunk)}`;
   if (combined.length <= maxChars) {
     return { text: combined, truncated: false };
@@ -1017,8 +1013,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
     await waitForLaneStartSlot();
     reserve(poolLane);
     activeLanes.set(poolLane.name, { name: poolLane.name, startedAt: Date.now() });
-    let promise;
-    promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
+    const promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
       .then((result) => ({ lane: poolLane, promise, result }))
       .finally(() => {
         activeLanes.delete(poolLane.name);

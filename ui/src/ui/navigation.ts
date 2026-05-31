@@ -6,7 +6,7 @@ export const TAB_GROUPS = [
   { label: "chat", tabs: ["chat"] },
   {
     label: "control",
-    tabs: ["overview", "activity", "instances", "sessions", "usage", "cron"],
+    tabs: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
   },
   { label: "agent", tabs: ["agents", "skills", "nodes", "dreams"] },
   {
@@ -19,6 +19,7 @@ export type Tab =
   | "agents"
   | "activity"
   | "overview"
+  | "workboard"
   | "channels"
   | "instances"
   | "sessions"
@@ -31,6 +32,7 @@ export type Tab =
   | "communications"
   | "appearance"
   | "automation"
+  | "mcp"
   | "infrastructure"
   | "aiAgents"
   | "debug"
@@ -43,6 +45,7 @@ export const SETTINGS_TABS = [
   "communications",
   "appearance",
   "automation",
+  "mcp",
   "infrastructure",
   "aiAgents",
   "debug",
@@ -53,6 +56,7 @@ const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
   activity: "/activity",
   overview: "/overview",
+  workboard: "/workboard",
   channels: "/channels",
   instances: "/instances",
   sessions: "/sessions",
@@ -65,6 +69,7 @@ const TAB_PATHS: Record<Tab, string> = {
   communications: "/communications",
   appearance: "/appearance",
   automation: "/automation",
+  mcp: "/mcp",
   infrastructure: "/infrastructure",
   aiAgents: "/ai-agents",
   debug: "/debug",
@@ -181,6 +186,8 @@ export function iconForTab(tab: Tab): IconName {
       return "barChart";
     case "activity":
       return "activity";
+    case "workboard":
+      return "folder";
     case "channels":
       return "link";
     case "instances":
@@ -203,6 +210,8 @@ export function iconForTab(tab: Tab): IconName {
       return "spark";
     case "automation":
       return "terminal";
+    case "mcp":
+      return "wrench";
     case "infrastructure":
       return "globe";
     case "aiAgents":

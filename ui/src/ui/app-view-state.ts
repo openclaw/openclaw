@@ -74,6 +74,7 @@ export type AppViewState = {
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
+  chatError: string | null;
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
@@ -133,6 +134,8 @@ export type AppViewState = {
   chatSessionPickerLoading: boolean;
   chatSessionPickerError: string | null;
   chatSessionPickerResult: SessionsListResult | null;
+  sessionsResultAgentId?: string | null;
+  chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
   chatQueueBySession: Record<string, ChatQueueItem[]>;
@@ -202,6 +205,7 @@ export type AppViewState = {
   configUiHints: ConfigUiHints;
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
+  selectedAgentId: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
@@ -322,6 +326,7 @@ export type AppViewState = {
   usageStartDate: string;
   usageEndDate: string;
   usageScope: "instance" | "family";
+  usageAgentId: string | null;
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageSelectedHours: number[];
@@ -358,6 +363,8 @@ export type AppViewState = {
   | "cronQuickCreateStep"
   | "cronQuickCreateDraft"
   | "cronJobsLoadingMore"
+  | "cronJobsReloadPending"
+  | "cronJobsReloadPendingTableFilters"
   | "cronJobs"
   | "cronJobsTotal"
   | "cronJobsHasMore"
@@ -457,7 +464,7 @@ export type AppViewState = {
     overviewLogLines: string[];
     overviewLogCursor: number;
     client: GatewayBrowserClient | null;
-    refreshSessionsAfterChat: Set<string>;
+    refreshSessionsAfterChat: Map<string, import("./ui-types.js").ChatSessionRefreshTarget>;
     connect: () => void;
     setTab: (tab: Tab) => void;
     setChatMobileControlsOpen: (
@@ -527,6 +534,7 @@ export type AppViewState = {
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: (opts?: ChatAbortOptions) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
+    retryQueuedChatMessage: (id: string) => Promise<void>;
     handleChatScroll: (event: Event) => void;
     resetToolStream: () => void;
     resetChatScroll: () => void;

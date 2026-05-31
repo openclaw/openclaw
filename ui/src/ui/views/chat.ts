@@ -51,9 +51,10 @@ import {
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
+import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { SessionsListResult } from "../types.ts";
+import type { SessionGoal, SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -154,6 +155,7 @@ export type ChatProps = {
   onDismissError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
@@ -163,6 +165,7 @@ export type ChatProps = {
     defaultId?: string;
   } | null;
   currentAgentId: string;
+  fullMessageAgentId?: string;
   onAgentChange: (agentId: string) => void;
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
@@ -500,8 +503,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     return;
   }
   const imageItems: DataTransferItem[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+  for (const item of Array.from(items)) {
     if (item.type.startsWith("image/")) {
       imageItems.push(item);
     }
@@ -630,6 +632,23 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
           </div>
         `,
       )}
+    </div>
+  `;
+}
+
+function renderChatGoal(goal: SessionGoal | undefined): TemplateResult | typeof nothing {
+  if (!goal) {
+    return nothing;
+  }
+  return html`
+    <div
+      class="agent-chat__goal agent-chat__goal--${goal.status}"
+      role="status"
+      title=${formatGoalDetail(goal)}
+      aria-label=${formatGoalDetail(goal)}
+    >
+      <span class="agent-chat__goal-label">${formatGoalSummary(goal)}</span>
+      <span class="agent-chat__goal-objective">${goal.objective}</span>
     </div>
   `;
 }
@@ -1230,6 +1249,7 @@ export function renderChat(props: ChatProps) {
               return renderStreamingGroup(
                 item.text,
                 item.startedAt,
+                item.isStreaming,
                 props.onOpenSidebar,
                 assistantIdentity,
                 props.basePath,
@@ -1242,6 +1262,8 @@ export function renderChat(props: ChatProps) {
               }
               return renderMessageGroup(item, {
                 onOpenSidebar: props.onOpenSidebar,
+                sessionKey: props.sessionKey,
+                agentId: props.fullMessageAgentId,
                 showReasoning,
                 showToolCalls: props.showToolCalls,
                 autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
@@ -1493,6 +1515,7 @@ export function renderChat(props: ChatProps) {
       ${renderChatQueue({
         queue: props.queue,
         canAbort: showAbortableUi,
+        onQueueRetry: props.onQueueRetry,
         onQueueSteer: props.onQueueSteer,
         onQueueRemove: props.onQueueRemove,
       })}
@@ -1504,6 +1527,7 @@ export function renderChat(props: ChatProps) {
         compactDisabled: !props.connected || isBusy || showAbortableUi,
         onCompact: props.onCompact,
       })}
+      ${renderChatGoal(activeSession?.goal)}
       ${props.showNewMessages
         ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>

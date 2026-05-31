@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 // Live prompt probe for Anthropic setup-token and Claude CLI prompt-path debugging.
 // Usage:
 // OPENCLAW_PROMPT_TRANSPORT=direct|gateway
-// OPENCLAW_PROMPT_MODE=extra|override
+// OPENCLAW_PROMPT_MODE=extra
 // OPENCLAW_PROMPT_TEXT='...'
 // OPENCLAW_PROMPT_CAPTURE=1
 // pnpm probe:anthropic:prompt
@@ -27,8 +27,7 @@ import {
 } from "./lib/dev-tooling-safety.ts";
 
 const TRANSPORT = process.env.OPENCLAW_PROMPT_TRANSPORT?.trim() === "direct" ? "direct" : "gateway";
-const GATEWAY_PROMPT_MODE =
-  process.env.OPENCLAW_PROMPT_MODE?.trim() === "override" ? "override" : "extra";
+const GATEWAY_PROMPT_MODE = "extra";
 const PROMPT_TEXT = process.env.OPENCLAW_PROMPT_TEXT?.trim() ?? "";
 const PROMPT_LIST_JSON = process.env.OPENCLAW_PROMPT_LIST_JSON?.trim() ?? "";
 const USER_PROMPT = process.env.OPENCLAW_USER_PROMPT?.trim() || "is clawd here?";
@@ -79,7 +78,7 @@ type PromptResult = {
   prompt: string;
   ok: boolean;
   transport: "direct" | "gateway";
-  promptMode?: "extra" | "override";
+  promptMode?: "extra";
   exitCode?: number | null;
   signal?: NodeJS.Signals | null;
   status?: string;
@@ -312,59 +311,61 @@ function extractProxyCapture(rawBody: string, req: http.IncomingMessage): ProxyC
 async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: string }) {
   let lastCapture: ProxyCapture | undefined;
   const sockets = new Set<import("node:net").Socket>();
-  const server = http.createServer(async (req, res) => {
-    try {
-      const method = req.method ?? "GET";
-      const requestBody = await readRequestBody(req);
-      const rawBody = requestBody.toString("utf8");
-      lastCapture = extractProxyCapture(rawBody, req);
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      try {
+        const method = req.method ?? "GET";
+        const requestBody = await readRequestBody(req);
+        const rawBody = requestBody.toString("utf8");
+        lastCapture = extractProxyCapture(rawBody, req);
 
-      const upstreamUrl = resolveAnthropicUpstreamUrl(req.url, params.upstreamBaseUrl);
-      const headers = new Headers();
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (value === undefined) {
-          continue;
+        const upstreamUrl = resolveAnthropicUpstreamUrl(req.url, params.upstreamBaseUrl);
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(req.headers)) {
+          if (value === undefined) {
+            continue;
+          }
+          const lower = key.toLowerCase();
+          if (lower === "host" || lower === "content-length") {
+            continue;
+          }
+          headers.set(key, Array.isArray(value) ? value.join(", ") : value);
         }
-        const lower = key.toLowerCase();
-        if (lower === "host" || lower === "content-length") {
-          continue;
+        const upstreamRes = await fetch(upstreamUrl, {
+          method,
+          headers,
+          body:
+            method === "GET" || method === "HEAD" || requestBody.byteLength === 0
+              ? undefined
+              : requestBody,
+          duplex: "half",
+        });
+        const responseHeaders: Record<string, string> = {};
+        for (const [key, value] of upstreamRes.headers.entries()) {
+          const lower = key.toLowerCase();
+          if (
+            lower === "content-length" ||
+            lower === "content-encoding" ||
+            lower === "transfer-encoding" ||
+            lower === "connection" ||
+            lower === "keep-alive"
+          ) {
+            continue;
+          }
+          responseHeaders[key] = value;
         }
-        headers.set(key, Array.isArray(value) ? value.join(", ") : value);
+        res.writeHead(upstreamRes.status, responseHeaders);
+        if (upstreamRes.body) {
+          for await (const chunk of upstreamRes.body) {
+            res.write(Buffer.from(chunk));
+          }
+        }
+        res.end();
+      } catch (error) {
+        res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+        res.end(redactForDevToolLog(`proxy error: ${String(error)}`));
       }
-      const upstreamRes = await fetch(upstreamUrl, {
-        method,
-        headers,
-        body:
-          method === "GET" || method === "HEAD" || requestBody.byteLength === 0
-            ? undefined
-            : requestBody,
-        duplex: "half",
-      });
-      const responseHeaders: Record<string, string> = {};
-      for (const [key, value] of upstreamRes.headers.entries()) {
-        const lower = key.toLowerCase();
-        if (
-          lower === "content-length" ||
-          lower === "content-encoding" ||
-          lower === "transfer-encoding" ||
-          lower === "connection" ||
-          lower === "keep-alive"
-        ) {
-          continue;
-        }
-        responseHeaders[key] = value;
-      }
-      res.writeHead(upstreamRes.status, responseHeaders);
-      if (upstreamRes.body) {
-        for await (const chunk of upstreamRes.body) {
-          res.write(Buffer.from(chunk));
-        }
-      }
-      res.end();
-    } catch (error) {
-      res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-      res.end(redactForDevToolLog(`proxy error: ${String(error)}`));
-    }
+    })();
   });
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -578,7 +579,6 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
             heartbeat: {
               includeSystemPromptSection: false,
             },
-            ...(GATEWAY_PROMPT_MODE === "override" ? { systemPromptOverride: prompt } : {}),
           },
         },
       },

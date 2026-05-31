@@ -14,6 +14,7 @@ const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MODEL_IDS = [
   "claude-opus-4.6",
   "claude-opus-4.7",
+  "claude-opus-4.8",
   "claude-sonnet-4.6",
   "gemini-2.5-pro",
   "gemini-3-flash",

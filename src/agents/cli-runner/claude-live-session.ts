@@ -24,10 +24,12 @@ import {
   parseCliOutput,
   type CliOutput,
   type CliStreamingDelta,
+  type CliToolResultDelta,
+  type CliToolUseStartDelta,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
-import { cliBackendLog } from "./log.js";
+import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type ProcessSupervisor = ReturnType<
@@ -374,7 +376,7 @@ function finishTurn(session: ClaudeLiveSession, output: CliOutput): void {
     return;
   }
   cliBackendLog.info(
-    `claude live session turn: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} rawLines=${turn.rawLines.length}`,
+    `claude live session turn: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} rawLines=${turn.rawLines.length} ${formatCliBackendOutputDigest(output.text)}`,
   );
   completeActiveClaudeLiveTools(turn);
   clearTurnTimers(turn);
@@ -454,12 +456,17 @@ function scheduleIdleClose(session: ClaudeLiveSession): void {
   }, CLAUDE_LIVE_IDLE_TIMEOUT_MS);
 }
 
-function createTimeoutError(session: ClaudeLiveSession, message: string): FailoverError {
+function createTimeoutError(
+  session: ClaudeLiveSession,
+  message: string,
+  code?: string,
+): FailoverError {
   return new FailoverError(message, {
     reason: "timeout",
     provider: session.providerId,
     model: session.modelId,
     status: resolveFailoverStatus("timeout"),
+    code,
   });
 }
 
@@ -1104,6 +1111,8 @@ function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
   session: ClaudeLiveSession;
   execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
@@ -1128,6 +1137,8 @@ function createTurn(params: {
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
       onAssistantDelta: params.onAssistantDelta,
+      onToolUseStart: params.onToolUseStart,
+      onToolResult: params.onToolResult,
     }),
     execPermission: params.execPermission,
     resolve: params.resolve,
@@ -1140,6 +1151,7 @@ function createTurn(params: {
       createTimeoutError(
         params.session,
         `CLI produced no output for ${Math.round(params.noOutputTimeoutMs / 1000)}s and was terminated.`,
+        "cli_no_output_timeout",
       ),
     );
   }, params.noOutputTimeoutMs);
@@ -1194,6 +1206,8 @@ export async function runClaudeLiveSessionTurn(params: {
   noOutputTimeoutMs: number;
   getProcessSupervisor: () => ProcessSupervisor;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
@@ -1307,6 +1321,8 @@ export async function runClaudeLiveSessionTurn(params: {
       context: params.context,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       onAssistantDelta: params.onAssistantDelta,
+      onToolUseStart: params.onToolUseStart,
+      onToolResult: params.onToolResult,
       session: liveSession,
       execPermission,
       resolve,

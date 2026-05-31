@@ -1,6 +1,7 @@
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
-import type { Model, Tool } from "../types.js";
+import type { Context, Model, Tool } from "../types.js";
+import { convertResponsesMessages } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
 type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
@@ -120,5 +121,121 @@ describe("convertResponsesTools", () => {
     expect(
       convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
     ).toEqual(["alpha", "zeta"]);
+  });
+});
+
+describe("convertResponsesMessages", () => {
+  const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+
+  it("omits phase-tagged assistant replay ids without reasoning", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "text",
+                text: "Working...",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_commentary",
+                  phase: "commentary",
+                }),
+              },
+            ],
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    );
+
+    expect(
+      input.find(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          "role" in item &&
+          item.role === "assistant" &&
+          "phase" in item &&
+          item.phase === "commentary",
+      ),
+    ).toMatchObject({
+      phase: "commentary",
+    });
+    expect(
+      input.find(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          "role" in item &&
+          item.role === "assistant" &&
+          "phase" in item &&
+          item.phase === "commentary",
+      ),
+    ).not.toHaveProperty("id");
+  });
+
+  it("omits raw signed assistant ids when the paired reasoning item is absent", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "text",
+                text: "Earlier answer",
+                textSignature: "msg_real_response_item_requiring_reasoning",
+              },
+            ],
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    );
+
+    expect(
+      input.find(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          "role" in item &&
+          item.role === "assistant" &&
+          "content" in item,
+      ),
+    ).not.toHaveProperty("id");
   });
 });

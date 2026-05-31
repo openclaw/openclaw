@@ -1,9 +1,13 @@
-/**
- * Agent loop that works with AgentMessage throughout.
- * Transforms to Message[] only at the LLM call boundary.
- */
-
-import { type AssistantMessage, type Context, EventStream, type ToolResultMessage } from "./llm.js";
+// Keep the runtime class on the package specifier so built agent-core shares
+// constructor identity with @openclaw/llm-core; source types keep SDK d.ts bundled.
+import { EventStream as LlmEventStream } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  Context,
+  EventStream,
+  ToolResultMessage,
+} from "../../llm-core/src/index.js";
+import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AgentContext,
@@ -17,6 +21,7 @@ import type {
 } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
+/** Callback used by synchronous loop runners to publish agent lifecycle events. */
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
 const EMPTY_USAGE = {
@@ -27,6 +32,8 @@ const EMPTY_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
 
 /**
  * Start an agent loop with a new prompt message.
@@ -52,11 +59,13 @@ export function agentLoop(
     signal,
     streamFn,
     runtime,
-  ).then((messages) => {
-    stream.end(messages);
-  }).catch((error) => {
-    pushLoopFailure(stream, config, error, signal?.aborted === true);
-  });
+  )
+    .then((messages) => {
+      stream.end(messages);
+    })
+    .catch((error) => {
+      pushLoopFailure(stream, config, error, signal?.aborted === true);
+    });
 
   return stream;
 }
@@ -95,15 +104,18 @@ export function agentLoopContinue(
     signal,
     streamFn,
     runtime,
-  ).then((messages) => {
-    stream.end(messages);
-  }).catch((error) => {
-    pushLoopFailure(stream, config, error, signal?.aborted === true);
-  });
+  )
+    .then((messages) => {
+      stream.end(messages);
+    })
+    .catch((error) => {
+      pushLoopFailure(stream, config, error, signal?.aborted === true);
+    });
 
   return stream;
 }
 
+/** Run a prompt-started loop and emit events through a caller-owned sink. */
 export async function runAgentLoop(
   prompts: AgentMessage[],
   context: AgentContext,
@@ -130,6 +142,7 @@ export async function runAgentLoop(
   return newMessages;
 }
 
+/** Continue an existing loop context and emit only newly produced messages. */
 export async function runAgentLoopContinue(
   context: AgentContext,
   config: AgentLoopConfig,
@@ -157,7 +170,7 @@ export async function runAgentLoopContinue(
 }
 
 function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
-  return new EventStream<AgentEvent, AgentMessage[]>(
+  return new EventStreamConstructor<AgentEvent, AgentMessage[]>(
     (event: AgentEvent) => event.type === "agent_end",
     (event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
   );
@@ -311,10 +324,10 @@ async function runLoop(
       pendingMessages = (await config.getSteeringMessages?.()) || [];
     }
 
-    // Agent would stop here. Check for follow-up messages.
     const followUpMessages = (await config.getFollowUpMessages?.()) || [];
     if (followUpMessages.length > 0) {
-      // Set as pending so inner loop processes them
+      // Follow-up messages arrive after a turn would otherwise end; route them through the
+      // same pending-message path so event ordering matches steering messages.
       pendingMessages = followUpMessages;
       continue;
     }

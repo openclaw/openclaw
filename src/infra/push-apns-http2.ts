@@ -1,4 +1,5 @@
 import http2 from "node:http2";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";
 import {
   getActiveManagedProxyUrl,
@@ -17,12 +18,15 @@ const APNS_AUTHORITIES = new Set([
 type ApnsAuthority = "https://api.push.apple.com" | "https://api.sandbox.push.apple.com";
 
 export const APNS_HTTP2_CANCEL_CODE = http2.constants.NGHTTP2_CANCEL;
+const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
 
+/** Parameters for opening an APNs HTTP/2 client session. */
 export type ConnectApnsHttp2SessionParams = {
   authority: string;
   timeoutMs: number;
 };
 
+/** Parameters for validating APNs reachability through an explicit proxy. */
 export type ProbeApnsHttp2ReachabilityViaProxyParams = {
   authority: string;
   proxyUrl: string;
@@ -30,6 +34,7 @@ export type ProbeApnsHttp2ReachabilityViaProxyParams = {
   timeoutMs: number;
 };
 
+/** APNs probe response used to prove a proxy tunneled to Apple. */
 export type ProbeApnsHttp2ReachabilityViaProxyResult = {
   status: number;
   body: string;
@@ -58,6 +63,8 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
   if (!APNS_AUTHORITIES.has(normalized)) {
     throw new Error(`Unsupported APNs authority: ${authority}`);
   }
+  // Return a normalized origin only. APNs paths are created by callers and
+  // should never be accepted from user/config authority input.
   return normalized as ApnsAuthority;
 }
 
@@ -76,15 +83,19 @@ async function openProxiedApnsHttp2Session(params: {
     timeoutMs: params.timeoutMs,
   });
 
+  // The CONNECT helper already completed the target TLS handshake; reuse that
+  // socket so the session cannot open a separate direct route.
   return http2.connect(params.authority, {
     createConnection: () => tlsSocket,
   });
 }
 
+/** Connects to APNs directly, or through the active managed proxy when present. */
 export async function connectApnsHttp2Session(
   params: ConnectApnsHttp2SessionParams,
 ): Promise<http2.ClientHttp2Session> {
   const authority = assertApnsAuthority(params.authority);
+  const timeoutMs = resolveApnsHttp2TimeoutMs(params.timeoutMs);
   const proxyUrl = getActiveManagedProxyUrl();
   if (!proxyUrl) {
     return http2.connect(authority);
@@ -94,19 +105,25 @@ export async function connectApnsHttp2Session(
     authority,
     proxyUrl,
     proxyTls: getActiveManagedProxyTlsOptions(),
-    timeoutMs: params.timeoutMs,
+    timeoutMs,
   });
 }
 
+function resolveApnsHttp2TimeoutMs(timeoutMs: number): number {
+  return resolveTimerTimeoutMs(timeoutMs, APNS_HTTP2_MIN_TIMEOUT_MS, APNS_HTTP2_MIN_TIMEOUT_MS);
+}
+
+/** Sends an intentionally invalid APNs push through a proxy to prove HTTP/2 reachability. */
 export async function probeApnsHttp2ReachabilityViaProxy(
   params: ProbeApnsHttp2ReachabilityViaProxyParams,
 ): Promise<ProbeApnsHttp2ReachabilityViaProxyResult> {
   const authority = assertApnsAuthority(params.authority);
+  const timeoutMs = resolveApnsHttp2TimeoutMs(params.timeoutMs);
   const session = await openProxiedApnsHttp2Session({
     authority,
     proxyUrl: new URL(params.proxyUrl),
     ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-    timeoutMs: params.timeoutMs,
+    timeoutMs,
   });
 
   try {
@@ -116,10 +133,8 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       let status: number | undefined;
       let responseHeaders: Record<string, string> = {};
       const timeout = setTimeout(() => {
-        fail(
-          new Error(`APNs reachability probe timed out after ${Math.trunc(params.timeoutMs)}ms`),
-        );
-      }, Math.trunc(params.timeoutMs));
+        fail(new Error(`APNs reachability probe timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       timeout.unref?.();
 
       const cleanup = () => {
@@ -140,6 +155,8 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       const request = session.request({
         ":method": "POST",
         ":path": `/3/device/${"0".repeat(64)}`,
+        // APNs should reject this token with InvalidProviderToken. That failure
+        // is the success signal that the proxy actually tunneled to Apple.
         authorization: "bearer intentionally.invalid.openclaw.proxy.validation",
         "apns-topic": "ai.openclaw.ios",
         "apns-push-type": "alert",

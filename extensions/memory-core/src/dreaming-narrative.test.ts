@@ -1038,6 +1038,83 @@ describe("generateAndAppendDreamNarrative", () => {
     expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
   });
 
+  it("reclaims an aged dreaming row whose transcript still exists (failed deleteSession)", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    // Orphan: a completed dreaming row whose deleteSession previously threw, so
+    // BOTH the store row and its transcript still exist (issue #88322).
+    const orphanTranscript = path.join(sessionsDir, "orphan-dreaming.jsonl");
+    // A second dreaming row whose transcript is fresh (a live/just-started run)
+    // must be preserved.
+    const liveTranscript = path.join(sessionsDir, "live-dreaming.jsonl");
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify({
+        "agent:main:dreaming-narrative-deep-orphan": {
+          sessionId: "orphan-dreaming",
+        },
+        "agent:main:dreaming-narrative-deep-live": {
+          sessionId: "live-dreaming",
+        },
+        "agent:main:kept-session": {
+          sessionId: "still-live",
+        },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(orphanTranscript, '{"runId":"dreaming-narrative-deep-orphan"}\n', "utf-8");
+    await fs.writeFile(liveTranscript, '{"runId":"dreaming-narrative-deep-live"}\n', "utf-8");
+    await fs.writeFile(path.join(sessionsDir, "still-live.jsonl"), "{}\n", "utf-8");
+    // Age the orphan transcript past the 5-minute orphan threshold; keep the
+    // live transcript fresh.
+    const aged = new Date(Date.now() - 600_000);
+    await fs.utimes(orphanTranscript, aged, aged);
+
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
+      session: {},
+    } as never);
+    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
+      _store: string | undefined,
+      { agentId }: { agentId: string },
+    ) => {
+      expect(agentId).toBe("main");
+      return storePath;
+    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
+    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+
+    const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["memory fragment"] },
+      logger,
+    });
+
+    const updatedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    // The aged orphan dreaming row is reclaimed even though its transcript existed.
+    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-deep-orphan");
+    // The fresh dreaming row and the non-dreaming row survive.
+    expect(updatedStore).toHaveProperty("agent:main:dreaming-narrative-deep-live");
+    expect(updatedStore).toHaveProperty("agent:main:kept-session");
+
+    const sessionFiles = await fs.readdir(sessionsDir);
+    // The orphan transcript is archived; the live transcript stays.
+    expect(
+      sessionFiles.filter((file) => file.startsWith("orphan-dreaming.jsonl.deleted.")),
+    ).not.toEqual([]);
+    expect(sessionFiles).not.toContain("orphan-dreaming.jsonl");
+    expect(sessionFiles).toContain("live-dreaming.jsonl");
+    expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
+  });
+
   it("isolates narrative sessions across workspaces even at the same timestamp", async () => {
     const firstWorkspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const secondWorkspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");

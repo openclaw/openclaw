@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { probeGateway } from "./probe.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 const tempRoots: string[] = [];
 
@@ -25,11 +25,10 @@ function rawWsDataToString(data: RawData): string {
 function activeClientSocketsToPort(port: number): Socket[] {
   // Node has no public active-handle API; this regression must prove the probe
   // promise does not resolve while the client-side socket handle is still live.
-  // oxlint-disable no-underscore-dangle
-  const handles =
-    (process as typeof process & { _getActiveHandles?: () => unknown[] })._getActiveHandles?.() ??
-    [];
-  // oxlint-enable no-underscore-dangle
+  const getActiveHandles = Reflect.get(process, "_getActiveHandles") as
+    | (() => unknown[])
+    | undefined;
+  const handles = getActiveHandles?.() ?? [];
   return handles.filter(
     (handle): handle is Socket => handle instanceof Socket && handle.remotePort === port,
   );

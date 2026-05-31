@@ -287,7 +287,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     }
 
     if (!isStopped() && !abortSignal.aborted) {
-      setImmediate(poll);
+      setImmediate(() => {
+        void poll();
+      });
     }
   };
 
@@ -451,7 +453,7 @@ async function authorizeZaloMessage(
       providerMissingFallbackApplied: senderAccess.providerMissingFallbackApplied,
       providerKey: "zalo",
       accountId: account.accountId,
-      log: (message) => logVerbose(core, runtime, message),
+      log: (messageValue) => logVerbose(core, runtime, messageValue),
     });
     if (!senderAccess.allowed) {
       if (senderAccess.reasonCode === "group_policy_disabled") {
@@ -486,12 +488,12 @@ async function authorizeZaloMessage(
         onCreated: () => {
           logVerbose(core, runtime, `zalo pairing request sender=${senderId}`);
         },
-        sendPairingReply: async (text) => {
+        sendPairingReply: async (textLocal) => {
           await sendMessage(
             token,
             {
               chat_id: chatId,
-              text,
+              text: textLocal,
             },
             fetcher,
           );
@@ -642,7 +644,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       },
       onStartError: (err: unknown) => {
         logTypingFailure({
-          log: (message) => logVerbose(core, runtime, message),
+          log: (messageLocal) => logVerbose(core, runtime, messageLocal),
           channel: "zalo",
           action: "start",
           target: chatId,

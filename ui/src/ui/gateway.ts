@@ -1,25 +1,25 @@
-import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
-} from "../../../src/gateway/protocol/client-info.js";
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ConnectErrorDetailCodes,
   formatConnectErrorMessage,
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
   readPairingConnectErrorDetails,
-} from "../../../src/gateway/protocol/connect-error-details.js";
+} from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   isRetryableGatewayStartupUnavailableError,
   resolveGatewayStartupRetryAfterMs,
-} from "../../../src/gateway/protocol/startup-unavailable.js";
+} from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-} from "../../../src/gateway/protocol/version.js";
+} from "../../../packages/gateway-protocol/src/version.js";
+import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -620,7 +620,7 @@ export class GatewayBrowserClient {
     // crypto.subtle is only available in secure contexts (HTTPS, localhost).
     // Over plain HTTP, we skip device identity and fall back to token-only auth.
     // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
-    const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
+    const isSecureContext = typeof crypto !== "undefined" && Boolean(crypto.subtle);
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let selectedAuth: SelectedConnectAuth = {
       authToken: explicitGatewayToken,
@@ -828,7 +828,6 @@ export class GatewayBrowserClient {
           }),
         );
       }
-      return;
     }
   }
 

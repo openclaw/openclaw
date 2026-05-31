@@ -357,7 +357,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      channel: "sms",
+      channel: "missing-channel",
       idempotencyKey: "idem-agent-bad-channel",
     });
     expect(res.ok).toBe(false);
@@ -365,11 +365,10 @@ describe("gateway server agent", () => {
   });
 
   test("agent errors when deliver=true and last channel is webchat", async () => {
-    testState.allowFrom = ["+1555"];
     await writeMainSessionEntry({
       sessionId: "sess-main-webchat",
       lastChannel: "webchat",
-      lastTo: "+1555",
+      lastTo: "webchat-room",
     });
     const res = await rpcReq(ws, "agent", {
       message: "hi",
@@ -463,7 +462,7 @@ describe("gateway server agent", () => {
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portValue }) => {
       await useTempSessionStorePath();
       const storePath = testState.sessionStorePath;
       if (!storePath) {
@@ -479,7 +478,7 @@ describe("gateway server agent", () => {
         },
       });
 
-      const writeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      const writeWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
       trackConnectChallengeNonce(writeWs);
       await new Promise<void>((resolve) => writeWs.once("open", resolve));
       await connectOk(writeWs, { scopes: ["operator.write"] });
@@ -578,13 +577,13 @@ describe("gateway server agent", () => {
   });
 
   test("agent dedupe survives reconnect", { timeout: 20_000 }, async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portLocal }) => {
       const dial = async () => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-        trackConnectChallengeNonce(ws);
-        await new Promise<void>((resolve) => ws.once("open", resolve));
-        await connectOk(ws);
-        return ws;
+        const wsLocal = new WebSocket(`ws://127.0.0.1:${portLocal}`);
+        trackConnectChallengeNonce(wsLocal);
+        await new Promise<void>((resolve) => wsLocal.once("open", resolve));
+        await connectOk(wsLocal);
+        return wsLocal;
       };
 
       const idem = "reconnect-agent";

@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -60,6 +60,26 @@ export function errorBackoffMs(
 ): number {
   const idx = Math.min(consecutiveErrors - 1, scheduleMs.length - 1);
   return scheduleMs[Math.max(0, idx)] ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS[0];
+}
+
+export function resolveJobErrorBackoffUntilMs(
+  job: CronJob,
+  scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+): number | undefined {
+  if (job.state.lastStatus !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
+    return undefined;
+  }
+  const consecutiveErrorsRaw = job.state.consecutiveErrors;
+  const consecutiveErrors =
+    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
+      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
+      : 1;
+  const lastDurationMs =
+    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
+      ? Math.max(0, Math.floor(job.state.lastDurationMs))
+      : 0;
+  const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
+  return lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs);
 }
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
@@ -154,26 +174,11 @@ function isPendingErrorBackoffSlot(params: {
   nowMs: number;
 }): boolean {
   const { state, job, nextRunAtMs, nowMs } = params;
-  if (job.state.lastStatus !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
-    return false;
-  }
-  const consecutiveErrorsRaw = job.state.consecutiveErrors;
-  const consecutiveErrors =
-    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
-      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
-      : 1;
-  const lastDurationMs =
-    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
-      ? Math.max(0, Math.floor(job.state.lastDurationMs))
-      : 0;
-  const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
-  const backoffFloor =
-    lastEndedAtMs +
-    errorBackoffMs(
-      consecutiveErrors,
-      state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-    );
-  return nowMs < backoffFloor && nextRunAtMs <= backoffFloor;
+  const backoffUntilMs = resolveJobErrorBackoffUntilMs(
+    job,
+    state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+  );
+  return backoffUntilMs !== undefined && nowMs < backoffUntilMs && nextRunAtMs <= backoffUntilMs;
 }
 
 function shouldRepairFutureCronNextRunAtMs(params: {
@@ -292,8 +297,11 @@ function assertMainSessionAgentId(
 }
 
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
-  // No delivery object or mode is "none" -- nothing to validate.
-  if (!job.delivery || job.delivery.mode === "none") {
+  if (!job.delivery) {
+    return;
+  }
+  // No primary delivery and no completion webhook -- nothing to validate.
+  if (job.delivery.mode === "none" && !job.delivery.completionDestination) {
     return;
   }
   // Webhook delivery is allowed for any session target
@@ -303,6 +311,25 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
       throw new Error("cron webhook delivery requires delivery.to to be a valid http(s) URL");
     }
     job.delivery.to = target;
+  }
+  if (job.delivery.completionDestination?.mode === "webhook") {
+    if (job.delivery.mode !== "announce") {
+      throw new Error(
+        'cron completion destination webhook is only supported with delivery.mode="announce"',
+      );
+    }
+    const target = normalizeHttpWebhookUrl(job.delivery.completionDestination.to);
+    if (!target) {
+      throw new Error(
+        "cron completion destination webhook requires delivery.completionDestination.to to be a valid http(s) URL",
+      );
+    }
+    job.delivery.completionDestination.to = target;
+  }
+  if (job.delivery.mode === "none") {
+    return;
+  }
+  if (job.delivery.mode === "webhook") {
     return;
   }
   const isIsolatedLike =
@@ -373,18 +400,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return isFiniteTimestamp(next) ? next : undefined;
   }
   if (job.schedule.kind === "at") {
-    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
-    // The store migration should convert atMs→at, but be defensive in case
-    // the migration hasn't run yet or was bypassed.
-    const schedule = job.schedule as { at?: string; atMs?: number | string };
-    const atMs =
-      typeof schedule.atMs === "number" && Number.isFinite(schedule.atMs) && schedule.atMs > 0
-        ? schedule.atMs
-        : typeof schedule.atMs === "string"
-          ? parseAbsoluteTimeMs(schedule.atMs)
-          : typeof schedule.at === "string"
-            ? parseAbsoluteTimeMs(schedule.at)
-            : null;
+    const atMs = parseAbsoluteTimeMs(job.schedule.at);
     // One-shot jobs stay due until they successfully finish, but if the
     // schedule was updated to a time after the last run, re-arm the job.
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
@@ -552,19 +568,12 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
       params.job.state.lastStatus === "error" &&
       isFiniteTimestamp(params.job.state.lastRunAtMs)
     ) {
-      const consecutiveErrorsRaw = params.job.state.consecutiveErrors;
-      const consecutiveErrors =
-        typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
-          ? Math.max(1, Math.floor(consecutiveErrorsRaw))
-          : 1;
-      const backoffFloor =
-        params.job.state.lastRunAtMs +
-        errorBackoffMs(
-          consecutiveErrors,
-          params.state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-        );
+      const backoffFloor = resolveJobErrorBackoffUntilMs(
+        params.job,
+        params.state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+      );
       if (newNext !== undefined) {
-        newNext = Math.max(newNext, backoffFloor);
+        newNext = backoffFloor !== undefined ? Math.max(newNext, backoffFloor) : newNext;
       }
     }
     if (params.job.state.nextRunAtMs !== newNext) {
@@ -634,11 +643,20 @@ export function recomputeNextRunsForMaintenance(
         now >= job.state.nextRunAtMs &&
         typeof job.state.runningAtMs !== "number"
       ) {
-        // Only advance when the expired slot was already executed.
-        // If not, preserve the past-due value so the job can still run.
+        // Only advance when the expired slot was already executed, or when
+        // old start-based retry state predates the active run-end backoff.
+        // Otherwise preserve the past-due value so the job can still run.
         const lastRun = job.state.lastRunAtMs;
         const alreadyExecutedSlot = isFiniteTimestamp(lastRun) && lastRun >= job.state.nextRunAtMs;
-        if (alreadyExecutedSlot) {
+        const backoffUntilMs = resolveJobErrorBackoffUntilMs(
+          job,
+          state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+        );
+        const isStaleBackoffSlot =
+          backoffUntilMs !== undefined &&
+          now < backoffUntilMs &&
+          job.state.nextRunAtMs < backoffUntilMs;
+        if (alreadyExecutedSlot || isStaleBackoffSlot) {
           if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
             changed = true;
           }
@@ -878,6 +896,7 @@ function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
 ): CronDelivery {
+  const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
     mode: existing?.mode ?? "none",
     channel: existing?.channel,
@@ -885,11 +904,24 @@ function mergeCronDelivery(
     threadId: existing?.threadId,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
+    completionDestination: existing?.completionDestination,
     failureDestination: existing?.failureDestination,
   };
 
   if (typeof patch.mode === "string") {
+    const previousMode = next.mode;
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
+    if (previousMode !== next.mode && (previousMode === "webhook" || next.mode === "webhook")) {
+      next.to = undefined;
+    }
+    if (next.mode === "webhook") {
+      next.channel = undefined;
+      next.threadId = undefined;
+      next.accountId = undefined;
+    }
+    if (!hasCompletionDestinationPatch && (next.mode === "none" || next.mode === "webhook")) {
+      next.completionDestination = undefined;
+    }
   }
   if ("channel" in patch) {
     next.channel = normalizeOptionalString(patch.channel);
@@ -905,6 +937,17 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if (hasCompletionDestinationPatch) {
+    if (patch.completionDestination == null) {
+      next.completionDestination = undefined;
+    } else {
+      const to = normalizeOptionalString(patch.completionDestination.to);
+      next.completionDestination = {
+        mode: "webhook",
+        ...(to ? { to } : {}),
+      };
+    }
   }
   if ("failureDestination" in patch) {
     if (patch.failureDestination === undefined) {

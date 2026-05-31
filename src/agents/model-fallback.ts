@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -15,18 +17,19 @@ import {
 } from "../plugins/runtime-state.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import {
   FailoverError,
+  buildFailoverRemediationHint,
+  buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
@@ -38,6 +41,11 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import {
+  getFallbackCandidateSkipReason,
+  isFallbackCandidateSkipped,
+  markFallbackCandidateSkipped,
+} from "./fallback-skip-cache.js";
 import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
@@ -561,8 +569,12 @@ function throwFallbackFailureSummary(params: {
 
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
+  const remediation = buildFailoverRemediationHint(params.lastError);
+  const message = remediation
+    ? `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}. ${remediation}`
+    : `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`;
   throw new FallbackSummaryError(
-    `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`,
+    message,
     params.attempts,
     params.soonestCooldownExpiry ?? null,
     params.lastError instanceof Error ? params.lastError : undefined,
@@ -689,13 +701,13 @@ export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefi
 }
 
 export const testing = {
-  resolveFallbackCandidates,
+  resolveFallbackCandidates: resolveModelCandidateChain,
   resolveImageFallbackCandidates,
   resolveCooldownDecision,
   resolveSessionSuspensionReason,
 } as const;
 
-function resolveFallbackCandidates(
+export function resolveModelCandidateChain(
   params: {
     cfg: OpenClawConfig | undefined;
     provider: string;
@@ -943,9 +955,31 @@ function markProbeAttempt(now: number, throttleKey: string): void {
   enforceProbeStateCap();
 }
 
+function hasActiveProviderRateLimitResetWindow(params: {
+  authStore: AuthProfileStore;
+  profileIds: string[];
+  now: number;
+  model: string;
+}): boolean {
+  return params.profileIds.some((profileId) => {
+    const stats = params.authStore.usageStats?.[profileId];
+    if (!stats) {
+      return false;
+    }
+    if (!isActiveUnusableWindow(stats.blockedUntil, params.now)) {
+      return false;
+    }
+    if (stats.blockedReason !== "subscription_limit" || !stats.blockedSource) {
+      return false;
+    }
+    return !stats.blockedModel || stats.blockedModel === params.model;
+  });
+}
+
 function shouldProbePrimaryDuringCooldown(params: {
   isPrimary: boolean;
   hasFallbackCandidates: boolean;
+  reason: FailoverReason | null | undefined;
   now: number;
   throttleKey: string;
   authRuntime: ModelFallbackAuthRuntime;
@@ -965,6 +999,20 @@ function shouldProbePrimaryDuringCooldown(params: {
     now: params.now,
     forModel: params.model,
   });
+  // Generic 429 backoff can become stale before its local cooldown expires.
+  // Provider-recorded reset windows still remain authoritative until near expiry.
+  if (
+    params.reason === "rate_limit" &&
+    !hasActiveProviderRateLimitResetWindow({
+      authStore: params.authStore,
+      profileIds: params.profileIds,
+      now: params.now,
+      model: params.model,
+    })
+  ) {
+    return true;
+  }
+
   if (soonest === null || !Number.isFinite(soonest)) {
     return true;
   }
@@ -1014,9 +1062,16 @@ function resolveCooldownDecision(params: {
   authStore: AuthProfileStore;
   profileIds: string[];
 }): CooldownDecision {
+  const inferredReason =
+    params.authRuntime.resolveProfilesUnavailableReason({
+      store: params.authStore,
+      profileIds: params.profileIds,
+      now: params.now,
+    }) ?? "unknown";
   const shouldProbe = shouldProbePrimaryDuringCooldown({
     isPrimary: params.isPrimary,
     hasFallbackCandidates: params.hasFallbackCandidates,
+    reason: inferredReason,
     now: params.now,
     throttleKey: params.probeThrottleKey,
     authRuntime: params.authRuntime,
@@ -1025,12 +1080,6 @@ function resolveCooldownDecision(params: {
     model: params.candidate.model,
   });
 
-  const inferredReason =
-    params.authRuntime.resolveProfilesUnavailableReason({
-      store: params.authStore,
-      profileIds: params.profileIds,
-      now: params.now,
-    }) ?? "unknown";
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";
   if (isPersistentAuthIssue) {
     return {
@@ -1104,7 +1153,7 @@ export async function runWithModelFallback<T>(
     abortSignal?: AbortSignal;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
-  const candidates = resolveFallbackCandidates({
+  const candidates = resolveModelCandidateChain({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
@@ -1165,6 +1214,58 @@ export async function runWithModelFallback<T>(
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
       : false;
+
+    // Skip-known-bad cache: when a previous turn in this session failed this
+    // candidate with `auth` / `auth_permanent` (e.g. missing or expired
+    // credentials), suppress repeat attempts for the cache TTL so we do not
+    // burn latency on the same broken candidate every turn. Primary is never
+    // skipped — if the user explicitly requested it we should still surface
+    // the auth error rather than silently jumping past it.
+    if (!isPrimary && params.sessionId) {
+      const skipped = isFallbackCandidateSkipped({
+        sessionId: params.sessionId,
+        provider: candidate.provider,
+        model: candidate.model,
+      });
+      if (skipped) {
+        const skipReason =
+          getFallbackCandidateSkipReason({
+            sessionId: params.sessionId,
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? "auth";
+        const reauthCommand = buildProviderReauthCommand(candidate.provider);
+        const reauthHint = reauthCommand
+          ? `run \`${reauthCommand}\` to re-authenticate`
+          : "re-authenticate that provider";
+        const error = `Skipping ${candidate.provider}/${candidate.model}: recent ${skipReason} failure in this session (${reauthHint})`;
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error,
+          reason: skipReason as FailoverReason,
+        });
+        await observeDecision({
+          decision: "skip_candidate",
+          runId: params.runId,
+          sessionId: params.sessionId,
+          lane: params.lane,
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          candidate,
+          attempt: i + 1,
+          total: candidates.length,
+          reason: skipReason as FailoverReason,
+          error,
+          nextCandidate: candidates[i + 1],
+          isPrimary,
+          requestedModelMatched: requestedModel,
+          fallbackConfigured: hasFallbackCandidates,
+        });
+        continue;
+      }
+    }
+
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
@@ -1458,6 +1559,23 @@ export async function runWithModelFallback<T>(
       const isKnownFailover = isFailoverError(normalized);
       if (!isKnownFailover && i === candidates.length - 1) {
         throw err;
+      }
+
+      // Record auth-class failures in the session-scoped skip cache so the
+      // next turn does not re-attempt the same broken candidate. Only mark
+      // for non-primary candidates — see the skip-check above for rationale.
+      if (
+        isKnownFailover &&
+        !isPrimary &&
+        params.sessionId &&
+        (normalized.reason === "auth" || normalized.reason === "auth_permanent")
+      ) {
+        markFallbackCandidateSkipped({
+          sessionId: params.sessionId,
+          provider: candidate.provider,
+          model: candidate.model,
+          reason: normalized.reason,
+        });
       }
 
       lastError = isKnownFailover ? normalized : err;

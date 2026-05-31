@@ -259,7 +259,7 @@ function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParit
     scenario.codexTokens > 0
       ? undefined
       : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
-  ].filter((entry): entry is string => !!entry);
+  ].filter((entry): entry is string => Boolean(entry));
   if (missing.length === 0) {
     return undefined;
   }
@@ -566,7 +566,7 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
   // Title is parametrized from the candidate / baseline labels so reports
   // for any candidate/baseline pair (not only gpt-5.5 vs opus 4.6) render
   // with an accurate header. The default CLI labels are still
-  // openai/gpt-5.5 vs anthropic/claude-opus-4-7, but the helper works for
+  // openai/gpt-5.5 vs anthropic/claude-opus-4-8, but the helper works for
   // any parity comparison a caller configures.
   const lines = [
     `# OpenClaw Agentic Parity Report — ${comparison.candidateLabel} vs ${comparison.baselineLabel}`,

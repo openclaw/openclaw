@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+import type { Command } from "commander";
 import { formatErrorMessage } from "./error-runtime.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
@@ -49,6 +50,164 @@ export function isQaRuntimeAvailable(): boolean {
   }
 }
 
+export type LiveTransportQaCommandOptions = {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: string;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  allowFailures?: boolean;
+  failFast?: boolean;
+  profile?: string;
+  scenarioIds?: string[];
+  listScenarios?: boolean;
+  sutAccountId?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+};
+
+type LiveTransportQaCommanderOptions = {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: string;
+  model?: string;
+  altModel?: string;
+  scenario?: string[];
+  listScenarios?: boolean;
+  fast?: boolean;
+  allowFailures?: boolean;
+  failFast?: boolean;
+  profile?: string;
+  sutAccount?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+};
+
+export type LiveTransportQaCliRegistration = {
+  commandName: string;
+  register(qa: Command): void;
+};
+
+export type LiveTransportQaCredentialCliOptions = {
+  sourceDescription?: string;
+  roleDescription?: string;
+};
+
+export type LiveTransportQaCliRegistrationOptions = {
+  commandName: string;
+  credentialOptions?: LiveTransportQaCredentialCliOptions;
+  defaultProviderMode: string;
+  description: string;
+  providerModeHelp: string;
+  listScenariosHelp?: string;
+  outputDirHelp: string;
+  profileHelp?: string;
+  failFastHelp?: string;
+  allowFailuresHelp?: string;
+  scenarioHelp: string;
+  sutAccountHelp: string;
+  run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
+};
+
+export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
+  let promise: Promise<T> | null = null;
+  return async () => {
+    promise ??= load();
+    return await promise;
+  };
+}
+
+function collectLiveTransportQaStringOption(value: string, previous: string[]) {
+  const trimmed = value.trim();
+  return trimmed ? [...previous, trimmed] : previous;
+}
+
+function mapLiveTransportQaCommanderOptions(
+  opts: LiveTransportQaCommanderOptions,
+): LiveTransportQaCommandOptions {
+  return {
+    repoRoot: opts.repoRoot,
+    outputDir: opts.outputDir,
+    providerMode: opts.providerMode,
+    primaryModel: opts.model,
+    alternateModel: opts.altModel,
+    fastMode: opts.fast,
+    allowFailures: opts.allowFailures,
+    failFast: opts.failFast,
+    profile: opts.profile,
+    scenarioIds: opts.scenario,
+    listScenarios: opts.listScenarios,
+    sutAccountId: opts.sutAccount,
+    credentialSource: opts.credentialSource,
+    credentialRole: opts.credentialRole,
+  };
+}
+
+function registerLiveTransportQaCli(
+  params: LiveTransportQaCliRegistrationOptions & {
+    qa: Command;
+  },
+) {
+  const command = params.qa
+    .command(params.commandName)
+    .description(params.description)
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", params.outputDirHelp)
+    .option("--provider-mode <mode>", params.providerModeHelp, params.defaultProviderMode)
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
+    .option("--fast", "Enable provider fast mode where supported", false);
+
+  if (params.allowFailuresHelp) {
+    command.option("--allow-failures", params.allowFailuresHelp, false);
+  }
+
+  command.option("--sut-account <id>", params.sutAccountHelp, "sut");
+
+  if (params.listScenariosHelp) {
+    command.option("--list-scenarios", params.listScenariosHelp, false);
+  }
+
+  if (params.profileHelp) {
+    command.option("--profile <profile>", params.profileHelp);
+  }
+
+  if (params.failFastHelp) {
+    command.option("--fail-fast", params.failFastHelp, false);
+  }
+
+  if (params.credentialOptions) {
+    command.option(
+      "--credential-source <source>",
+      params.credentialOptions.sourceDescription ??
+        "Credential source for live lanes: env or convex (default: env)",
+    );
+    if (params.credentialOptions.roleDescription) {
+      command.option("--credential-role <role>", params.credentialOptions.roleDescription);
+    }
+  }
+
+  command.action(async (opts: LiveTransportQaCommanderOptions) => {
+    await params.run(mapLiveTransportQaCommanderOptions(opts));
+  });
+}
+
+export function createLiveTransportQaCliRegistration(
+  params: LiveTransportQaCliRegistrationOptions,
+): LiveTransportQaCliRegistration {
+  return {
+    commandName: params.commandName,
+    register(qa: Command) {
+      registerLiveTransportQaCli({
+        ...params,
+        qa,
+      });
+    },
+  };
+}
+
 export type QaReportCheck = {
   name: string;
   status: "pass" | "fail" | "skip";
@@ -61,6 +220,15 @@ export type QaReportScenario = {
   details?: string;
   steps?: QaReportCheck[];
 };
+
+export {
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  collectLiveTransportStandardScenarioCoverage,
+  findMissingLiveTransportStandardScenarios,
+  selectLiveTransportScenarios,
+  type LiveTransportScenarioDefinition,
+  type LiveTransportStandardScenarioId,
+} from "./qa-live-transport-scenarios.js";
 
 export type QaDockerRunCommand = (
   command: string,

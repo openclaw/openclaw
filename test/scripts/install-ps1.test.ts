@@ -127,16 +127,12 @@ describe("install.ps1 failure handling", () => {
     expect(commandSafeBody).toContain("Pop-Location");
     expect(npmCommandBody).toContain("Invoke-CommandFromWindowsSafeDirectory");
     expect(corepackCommandBody).toContain("Invoke-CommandFromWindowsSafeDirectory");
-    expect(openClawPathBody).toContain(
-      'Invoke-NpmCommand -Arguments @("config", "get", "prefix")',
-    );
+    expect(openClawPathBody).toContain('Invoke-NpmCommand -Arguments @("config", "get", "prefix")');
     expect(ensurePnpmBody).toContain(
       'Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate")',
     );
     expect(ensurePnpmBody).toContain('Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)');
-    expect(mainBody).toContain(
-      'Invoke-NpmCommand -Arguments @("uninstall", "-g", "openclaw")',
-    );
+    expect(mainBody).toContain('Invoke-NpmCommand -Arguments @("uninstall", "-g", "openclaw")');
     expect(mainBody).toContain(
       'Invoke-NpmCommand -Arguments @("list", "-g", "--depth", "0", "--json")',
     );
@@ -261,7 +257,9 @@ describe("install.ps1 failure handling", () => {
     const mainBody = extractFunctionBody(source, "Main");
 
     expect(pnpmVersionBody).toContain("package.json");
-    expect(pnpmVersionBody).toContain("$packageJson.packageManager -match '^pnpm@(?<version>[^+]+)'");
+    expect(pnpmVersionBody).toContain(
+      "$packageJson.packageManager -match '^pnpm@(?<version>[^+]+)'",
+    );
     expect(pnpmVersionMatchBody).toContain("Push-Location -LiteralPath $RepoDir");
     expect(pnpmVersionMatchBody).toContain("$currentVersion.Trim() -eq $PnpmVersion");
     expect(pnpmVersionMatchBody).toContain("} catch {");
@@ -287,13 +285,9 @@ describe("install.ps1 failure handling", () => {
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );
     expect(mainBody).toContain("$gitInstallResults = @(Install-OpenClawFromGit");
-    expect(mainBody).toContain(
-      "Test-BooleanSuccessResult -Results $gitInstallResults",
-    );
+    expect(mainBody).toContain("Test-BooleanSuccessResult -Results $gitInstallResults");
     expect(mainBody).toContain("$npmInstallResults = @(Install-OpenClaw)");
-    expect(mainBody).toContain(
-      "Test-BooleanSuccessResult -Results $npmInstallResults",
-    );
+    expect(mainBody).toContain("Test-BooleanSuccessResult -Results $npmInstallResults");
     expect(gitInstallBody).toContain("Push-Location -LiteralPath $RepoDir");
     expect(gitInstallBody).toContain("$sourceInstallArgs = @(");
     expect(gitInstallBody).toContain('"--config.node-linker=hoisted"');
@@ -304,8 +298,12 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).not.toContain('"--filter"');
     expect(gitInstallBody).not.toContain('"--ignore-scripts=true"');
     expect(gitInstallBody).toContain('"--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY"');
-    expect(gitInstallBody).toContain('"--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY"');
-    expect(gitInstallBody).toContain('"--config.workspace-concurrency=$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY"');
+    expect(gitInstallBody).toContain(
+      '"--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY"',
+    );
+    expect(gitInstallBody).toContain(
+      '"--config.workspace-concurrency=$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY"',
+    );
     expect(gitInstallBody).toContain("& $pnpmCommand @sourceInstallArgs");
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_CHILD_CONCURRENCY = "1"');
     expect(gitInstallBody).toContain('$env:PNPM_CONFIG_NETWORK_CONCURRENCY = "4"');
@@ -315,9 +313,7 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).toContain("$installSucceeded = ($LASTEXITCODE -eq 0)");
     expect(gitInstallBody).toContain("clearing node_modules and retrying once");
     expect(gitInstallBody).toContain("Remove-Item -Recurse -Force node_modules");
-    expect(gitInstallBody).toContain(
-      'Write-Host "[!] pnpm install failed for the Git checkout"',
-    );
+    expect(gitInstallBody).toContain('Write-Host "[!] pnpm install failed for the Git checkout"');
     expect(gitInstallBody).not.toContain("$pnpmCommand rebuild --pending");
     expect(gitInstallBody).not.toContain("scripts/postinstall-bundled-plugins.mjs");
     expect(gitInstallBody).toContain(
@@ -334,14 +330,10 @@ describe("install.ps1 failure handling", () => {
       "$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency",
     );
     expect(gitInstallBody).toContain("Add-ToUserPath $binDir");
-    expect(gitInstallBody).toContain(
-      'Write-Host "[!] pnpm build failed for the Git checkout"',
-    );
+    expect(gitInstallBody).toContain('Write-Host "[!] pnpm build failed for the Git checkout"');
     expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');
     expect(gitInstallBody).toContain("Test-Path $entryPath");
-    expect(gitInstallBody).toContain(
-      'Write-Host "[!] OpenClaw build did not produce $entryPath"',
-    );
+    expect(gitInstallBody).toContain('Write-Host "[!] OpenClaw build did not produce $entryPath"');
     expect(gitInstallBody).toContain('node ""$entryPath"" %*');
     expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
     expect(gitInstallBody).not.toContain('node ""$RepoDir\\\\dist\\\\entry.js"" %*');
@@ -434,7 +426,12 @@ describe("install.ps1 failure handling", () => {
     );
     chmodSync(scriptPath, 0o755);
 
-    const result = runPowerShell(["-NoLogo", "-NoProfile", "-Command", `. ${toPowerShellSingleQuotedLiteral(scriptPath)}`]);
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-Command",
+      `. ${toPowerShellSingleQuotedLiteral(scriptPath)}`,
+    ]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
@@ -464,7 +461,12 @@ describe("install.ps1 failure handling", () => {
     );
     chmodSync(scriptPath, 0o755);
 
-    const result = runPowerShell(["-NoLogo", "-NoProfile", "-Command", `. ${toPowerShellSingleQuotedLiteral(scriptPath)}`]);
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-Command",
+      `. ${toPowerShellSingleQuotedLiteral(scriptPath)}`,
+    ]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");

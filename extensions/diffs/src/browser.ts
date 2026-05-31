@@ -176,15 +176,15 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
           await page.evaluate(() => {
             const html = document.documentElement;
             const body = document.body;
-            const frame = document.querySelector(".oc-frame");
+            const frameLocal = document.querySelector(".oc-frame");
 
             html.style.background = "transparent";
             body.style.margin = "0";
             body.style.padding = "0";
             body.style.background = "transparent";
             body.style.setProperty("-webkit-print-color-adjust", "exact");
-            if (frame instanceof HTMLElement) {
-              frame.style.margin = "0";
+            if (frameLocal instanceof HTMLElement) {
+              frameLocal.style.margin = "0";
             }
           });
 
