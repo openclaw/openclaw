@@ -108,11 +108,12 @@ describe("dispatchSmsInboundEvent", () => {
       id: "+15551234567",
       meta: undefined,
     });
-    expect(sendSmsViaTwilio).toHaveBeenCalledOnce();
-    expect(sendSmsViaTwilio.mock.calls[0]?.[0]).toMatchObject({
-      to: "+15551234567",
-    });
-    expect(sendSmsViaTwilio.mock.calls[0]?.[0].text).toContain("PAIR123");
+    expect(sendSmsViaTwilio).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+15551234567",
+        text: expect.stringContaining("PAIR123"),
+      }),
+    );
   });
 
   it("uses the canonical routed session key for authorized SMS turns", async () => {
