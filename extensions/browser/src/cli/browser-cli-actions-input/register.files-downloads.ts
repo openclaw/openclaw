@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
@@ -95,10 +96,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option("--ref <ref>", "Ref id from snapshot to click after arming")
     .option("--input-ref <ref>", "Ref id for <input type=file> to set directly")
     .option("--element <selector>", "CSS selector for <input type=file>")
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next file chooser (default: 120000)",
@@ -137,10 +135,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       "[path]",
       "Save path within openclaw temp downloads dir (default: /tmp/openclaw/downloads/...; fallback: os.tmpdir()/openclaw/downloads/...)",
     )
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next download (default: 120000)",
@@ -163,10 +158,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       "<path>",
       "Save path within openclaw temp downloads dir (e.g. report.pdf or /tmp/openclaw/downloads/report.pdf)",
     )
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the download to start (default: 120000)",
@@ -189,10 +181,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option("--dismiss", "Dismiss the dialog", false)
     .option("--prompt <text>", "Prompt response text")
     .option("--dialog-id <id>", "Pending dialog id from snapshot/browser state")
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next dialog (default: 120000)",

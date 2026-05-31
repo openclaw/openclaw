@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   parseBrowserNonNegativeIntegerOption,
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
@@ -39,10 +40,7 @@ export function registerBrowserFormWaitEvalCommands(
     .description("Fill a form with JSON field descriptors")
     .option("--fields <json>", "JSON array of field objects")
     .option("--fields-file <path>", "Read JSON array from a file")
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
@@ -83,10 +81,7 @@ export function registerBrowserFormWaitEvalCommands(
       "How long to wait for each condition (default: 20000)",
       (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (selector: string | undefined, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
@@ -136,10 +131,7 @@ export function registerBrowserFormWaitEvalCommands(
       "How long to allow the evaluate function to run (default: 20000)",
       (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       if (!opts.fn) {

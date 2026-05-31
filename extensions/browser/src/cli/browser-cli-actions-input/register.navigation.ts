@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { ACT_MAX_VIEWPORT_DIMENSION } from "../../browser/act-policy.js";
 import { runBrowserResizeWithOutput } from "../browser-cli-resize.js";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
@@ -33,10 +34,7 @@ export function registerBrowserNavigationCommands(
     .command("navigate")
     .description("Navigate the current tab to a URL")
     .argument("<url>", "URL to navigate to")
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (url: string, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
@@ -69,10 +67,7 @@ export function registerBrowserNavigationCommands(
     .description("Resize the viewport")
     .argument("<width>", "Viewport width")
     .argument("<height>", "Viewport height")
-    .option(
-      "--target-id <id>",
-      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
-    )
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (width: string, height: string, opts, cmd) => {
       const normalizedWidth = parsePositiveInteger(width, "width");
       const normalizedHeight = parsePositiveInteger(height, "height");
