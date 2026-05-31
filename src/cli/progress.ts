@@ -40,10 +40,17 @@ export type ProgressTotalsUpdate = {
 export function shouldUseInteractiveProgressSpinner(params: {
   fallback?: ProgressOptions["fallback"];
   streamIsTty?: boolean;
+  stdoutIsTty?: boolean;
   stdinIsRaw?: boolean;
 }): boolean {
   const spinnerRequested = params.fallback === undefined || params.fallback === "spinner";
-  return spinnerRequested && params.streamIsTty === true && params.stdinIsRaw !== true;
+  const stdoutIsTty = params.stdoutIsTty ?? true;
+  return (
+    spinnerRequested &&
+    params.streamIsTty === true &&
+    stdoutIsTty === true &&
+    params.stdinIsRaw !== true
+  );
 }
 
 const noopReporter: ProgressReporter = {
@@ -63,21 +70,27 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
 
   const stream = options.stream ?? process.stderr;
   const isTty = stream.isTTY;
+  const stdoutIsTty = process.stdout.isTTY === true;
   const allowLog = !isTty && options.fallback === "log";
   if (!isTty && !allowLog) {
     return noopReporter;
   }
 
   const delayMs = resolveTimerTimeoutMs(options.delayMs, DEFAULT_DELAY_MS, 0);
-  const canOsc = isTty && supportsOscProgress(process.env, isTty);
+  const canUseInteractiveOutput = isTty && stdoutIsTty;
+  const canOsc = canUseInteractiveOutput && supportsOscProgress(process.env, isTty);
   const stdinIsRaw = process.stdin.isRaw;
   const allowSpinner = shouldUseInteractiveProgressSpinner({
     fallback: options.fallback,
     streamIsTty: isTty,
+    stdoutIsTty,
     stdinIsRaw,
   });
-  const allowLine = isTty && options.fallback === "line";
+  const allowLine = canUseInteractiveOutput && options.fallback === "line";
   if (isTty && stdinIsRaw && (options.fallback === undefined || options.fallback === "spinner")) {
+    return noopReporter;
+  }
+  if (!canOsc && !allowSpinner && !allowLine && !allowLog) {
     return noopReporter;
   }
 
@@ -102,7 +115,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       })
     : null;
 
-  const spin = allowSpinner ? spinner() : null;
+  const spin = allowSpinner ? spinner({ output: stream }) : null;
   const renderLine = allowLine
     ? () => {
         if (!started) {

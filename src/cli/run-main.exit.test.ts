@@ -379,7 +379,28 @@ describe("runCli exit behavior", () => {
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
+      enabled: true,
     });
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables startup progress for full CLI json output", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "mcp", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "mcp", "list", "--json"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      enabled: false,
+    });
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "mcp", "list", "--json"]);
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 

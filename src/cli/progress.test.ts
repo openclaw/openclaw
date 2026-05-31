@@ -19,6 +19,23 @@ function withStdinIsRaw<T>(isRaw: boolean, run: () => T): T {
   }
 }
 
+function withStdoutIsTty<T>(isTty: boolean, run: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", {
+    configurable: true,
+    value: isTty,
+  });
+  try {
+    return run();
+  } finally {
+    if (original) {
+      Object.defineProperty(process.stdout, "isTTY", original);
+    } else {
+      Reflect.deleteProperty(process.stdout, "isTTY");
+    }
+  }
+}
+
 describe("cli progress", () => {
   it("logs progress when non-tty and fallback=log", () => {
     const writes: string[] = [];
@@ -73,9 +90,43 @@ describe("cli progress", () => {
     expect(
       shouldUseInteractiveProgressSpinner({
         streamIsTty: true,
+        stdoutIsTty: true,
         stdinIsRaw: false,
       }),
     ).toBe(true);
+  });
+
+  it("does not use the interactive spinner when stdout is not tty-safe", () => {
+    expect(
+      shouldUseInteractiveProgressSpinner({
+        streamIsTty: true,
+        stdoutIsTty: false,
+        stdinIsRaw: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not emit default tty progress when stdout is piped", () => {
+    const writes: string[] = [];
+    const stream = {
+      isTTY: true,
+      write: vi.fn((chunk: string) => {
+        writes.push(chunk);
+      }),
+    } as unknown as NodeJS.WriteStream;
+
+    withStdoutIsTty(false, () => {
+      const progress = createCliProgress({
+        label: "Scanning",
+        total: 2,
+        stream,
+      });
+      progress.setLabel("Still scanning");
+      progress.tick();
+      progress.done();
+    });
+
+    expect(writes).toStrictEqual([]);
   });
 
   it("does not write terminal controls when raw TUI input suppresses the default spinner", () => {
@@ -114,20 +165,22 @@ describe("cli progress", () => {
       write: vi.fn(),
     } as unknown as NodeJS.WriteStream;
 
-    const delayed = createCliProgress({
-      label: "Delayed",
-      stream: firstStream,
-      fallback: "line",
-      delayMs: 10_000,
-    });
-    delayed.done();
+    withStdoutIsTty(true, () => {
+      const delayed = createCliProgress({
+        label: "Delayed",
+        stream: firstStream,
+        fallback: "line",
+        delayMs: 10_000,
+      });
+      delayed.done();
 
-    const next = createCliProgress({
-      label: "Next",
-      stream: secondStream,
-      fallback: "line",
+      const next = createCliProgress({
+        label: "Next",
+        stream: secondStream,
+        fallback: "line",
+      });
+      next.done();
     });
-    next.done();
 
     expect(firstWrites).toStrictEqual([]);
   });
@@ -139,13 +192,15 @@ describe("cli progress", () => {
     } as unknown as NodeJS.WriteStream;
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const progress = createCliProgress({
-        label: "Delayed",
-        stream,
-        fallback: "line",
-        delayMs: Number.MAX_SAFE_INTEGER,
+      withStdoutIsTty(true, () => {
+        const progress = createCliProgress({
+          label: "Delayed",
+          stream,
+          fallback: "line",
+          delayMs: Number.MAX_SAFE_INTEGER,
+        });
+        progress.done();
       });
-      progress.done();
 
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
