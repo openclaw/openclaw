@@ -160,7 +160,7 @@ and pairing-path families.
     | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/runtime helpers |
     | `plugin-sdk/embedding-providers` | General embedding provider types and read helpers, including `EmbeddingProviderAdapter`, `getEmbeddingProvider(...)`, and `listEmbeddingProviders(...)`; plugins register providers through `api.registerEmbeddingProvider(...)` so manifest ownership is enforced |
     | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
-    | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
+    | `plugin-sdk/provider-usage` | Provider usage snapshot types, shared usage fetch helpers, and provider fetchers such as `fetchClaudeUsage` |
     | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, plain-text tool-call compat, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
     | `plugin-sdk/provider-stream-shared` | Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
     | `plugin-sdk/provider-transport-runtime` | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
@@ -168,6 +168,13 @@ and pairing-path families.
     | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
     | `plugin-sdk/group-activation` | Narrow group activation mode and command parsing helpers |
   </Accordion>
+
+Provider usage snapshots normally report one or more quota `windows`, each with
+a label, percent used, and optional reset time. Providers that expose balance or
+account-state text instead of resettable quota windows should return
+`summary` with an empty `windows` array rather than fabricating percentages.
+OpenClaw displays that summary text in status output; use `error` only when the
+usage endpoint failed or returned no usable usage data.
 
   <Accordion title="Auth and security subpaths">
     | Subpath | Key exports |

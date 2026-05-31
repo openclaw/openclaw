@@ -6,7 +6,7 @@ describe("fetchDeepSeekUsage", () => {
   it("parses CNY balance snapshots", async () => {
     const mockFetch = createProviderUsageFetch(async (url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
-      expect(url).toBe("https://api.deepseek.com/v1/user/balance");
+      expect(url).toBe("https://api.deepseek.com/user/balance");
       expect(headers.Authorization).toBe("Bearer deepseek-key");
       expect(headers.Accept).toBe("application/json");
       return makeResponse(200, {

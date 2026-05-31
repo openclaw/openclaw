@@ -19,7 +19,7 @@ type DeepSeekBalanceResponse = {
   balance_infos?: DeepSeekBalanceInfo[];
 };
 
-const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/v1/user/balance";
+const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 
 function formatCurrencyAmount(amount: number, currency?: string): string {
   const normalized = currency?.trim().toUpperCase();
