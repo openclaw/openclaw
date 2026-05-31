@@ -108,6 +108,7 @@ describe("dispatchSmsInboundEvent", () => {
       id: "+15551234567",
       meta: undefined,
     });
+    expect(sendSmsViaTwilio).toHaveBeenCalledOnce();
     expect(sendSmsViaTwilio).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "+15551234567",
