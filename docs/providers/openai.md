@@ -46,15 +46,15 @@ changing config.
 
 The names are similar but not interchangeable:
 
-| Name you see                            | Layer             | Meaning                                                                                           |
-| --------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
-| `openai`                                | Provider prefix   | Canonical OpenAI model route; agent turns use the Codex runtime.                                  |
+| Name you see                            | Layer             | Meaning                                                                                                                                                                                                     |
+| --------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openai`                                | Provider prefix   | Canonical OpenAI model route; agent turns use the Codex runtime.                                                                                                                                            |
 | `openai-codex`                          | Login flow        | Identifier for the Codex OAuth login flow (`--provider openai-codex`). The resulting auth profile stores `"provider": "openai"` — `openai-codex` is **not** a valid provider ID in auth profiles or config. |
-| legacy OpenAI Codex prefix              | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates it to `openai`.                   |
-| `codex` plugin                          | Plugin            | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls. |
-| provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                            |
-| `/codex ...`                            | Chat command set  | Bind/control Codex app-server threads from a conversation.                                        |
-| `runtime: "acp", agentId: "codex"`      | ACP session route | Explicit fallback path that runs Codex through ACP/acpx.                                          |
+| legacy OpenAI Codex prefix              | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates it to `openai`.                                                                                                                             |
+| `codex` plugin                          | Plugin            | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls.                                                                                                           |
+| provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                                                                                                                                      |
+| `/codex ...`                            | Chat command set  | Bind/control Codex app-server threads from a conversation.                                                                                                                                                  |
+| `runtime: "acp", agentId: "codex"`      | ACP session route | Explicit fallback path that runs Codex through ACP/acpx.                                                                                                                                                    |
 
 This means a config can intentionally contain `openai/*` model refs while auth
 profiles point at either API-key or ChatGPT/Codex OAuth credentials. Use
