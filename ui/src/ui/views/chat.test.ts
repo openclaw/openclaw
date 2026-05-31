@@ -845,22 +845,18 @@ describe("chat voice controls", () => {
     const model = container.querySelector<HTMLInputElement>(
       '.agent-chat__talk-options-primary input[placeholder="Auto"]',
     );
-    const voice = container.querySelector<HTMLSelectElement>(
-      ".agent-chat__talk-options-primary label:nth-of-type(1) select",
-    );
-    const sensitivity = container.querySelector<HTMLSelectElement>(
-      ".agent-chat__talk-options-primary label:nth-of-type(3) select",
-    );
+    const voice = container.querySelector<HTMLElement>('[data-talk-select="voice"]');
+    const sensitivity = container.querySelector<HTMLElement>('[data-talk-select="sensitivity"]');
     const voiceOptions = Array.from(
       container.querySelectorAll<HTMLOptionElement>(
-        ".agent-chat__talk-options-primary label:nth-of-type(1) option",
+        '[data-talk-select="voice"] [data-talk-select-option]',
       ),
-    ).map((option) => option.value);
+    ).map((option) => option.dataset.talkSelectOption ?? "");
     const reasoningOptions = Array.from(
       container.querySelectorAll<HTMLOptionElement>(
-        ".agent-chat__talk-options-advanced label:nth-of-type(3) option",
+        '[data-talk-select="reasoning"] [data-talk-select-option]',
       ),
-    ).map((option) => option.value);
+    ).map((option) => option.dataset.talkSelectOption ?? "");
 
     if (voice === null) {
       throw new Error("expected Talk voice select");
@@ -881,14 +877,14 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(sensitivity.value).toBe("__custom");
-    expect(Array.from(sensitivity.options).map((option) => option.value)).toEqual([
-      "",
-      "0.65",
-      "0.5",
-      "0.35",
-      "__custom",
-    ]);
+    expect(
+      sensitivity.querySelector<HTMLElement>('[aria-selected="true"]')?.dataset.talkSelectOption,
+    ).toBe("__custom");
+    expect(
+      Array.from(sensitivity.querySelectorAll<HTMLElement>("[data-talk-select-option]")).map(
+        (option) => option.dataset.talkSelectOption ?? "",
+      ),
+    ).toEqual(["", "0.65", "0.5", "0.35", "__custom"]);
     expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
     expect(container.textContent).toContain("Sensitivity");
     expect(container.textContent).toContain("Advanced");
@@ -898,12 +894,19 @@ describe("chat voice controls", () => {
     if (model === null) {
       throw new Error("expected Talk model input");
     }
+    const chooseOption = (root: HTMLElement, value: string) => {
+      const option = Array.from(
+        root.querySelectorAll<HTMLButtonElement>("[data-talk-select-option]"),
+      ).find((button) => button.dataset.talkSelectOption === value);
+      if (!option) {
+        throw new Error(`expected Talk option ${value}`);
+      }
+      option.click();
+    };
     model.value = "gpt-realtime-mini";
     model.dispatchEvent(new Event("input", { bubbles: true }));
-    sensitivity.value = "0.35";
-    sensitivity.dispatchEvent(new Event("change", { bubbles: true }));
-    sensitivity.value = "";
-    sensitivity.dispatchEvent(new Event("change", { bubbles: true }));
+    chooseOption(sensitivity, "0.35");
+    chooseOption(sensitivity, "");
 
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ model: "gpt-realtime-mini" });
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ vadThreshold: "0.35" });
@@ -923,16 +926,18 @@ describe("chat voice controls", () => {
       },
       onRealtimeTalkOptionsChange,
     });
-    const defaultSensitivity = defaultContainer.querySelector<HTMLSelectElement>(
-      ".agent-chat__talk-options-primary label:nth-of-type(3) select",
+    const defaultSensitivity = defaultContainer.querySelector<HTMLElement>(
+      '[data-talk-select="sensitivity"]',
     );
-    expect(defaultSensitivity?.value).toBe("");
-    expect(Array.from(defaultSensitivity?.options ?? []).map((option) => option.value)).toEqual([
-      "",
-      "0.65",
-      "0.5",
-      "0.35",
-    ]);
+    expect(
+      defaultSensitivity?.querySelector<HTMLElement>('[aria-selected="true"]')?.dataset
+        .talkSelectOption,
+    ).toBe("");
+    expect(
+      Array.from(
+        defaultSensitivity?.querySelectorAll<HTMLElement>("[data-talk-select-option]") ?? [],
+      ).map((option) => option.dataset.talkSelectOption ?? ""),
+    ).toEqual(["", "0.65", "0.5", "0.35"]);
   });
 
   it("renders composer and Talk labels from the active locale", async () => {
