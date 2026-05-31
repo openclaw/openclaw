@@ -795,7 +795,7 @@ export async function runPreparedCliAgent(
                 reason: err.reason,
                 sessionId: retryableSessionId,
               });
-              if (clearedStaleBinding !== true) {
+              if (!clearedStaleBinding) {
                 throw err;
               }
             }

@@ -408,7 +408,7 @@ describe("runCliAgent reliability", () => {
 
   it("does not retry a resumed CLI session after the hard overall timeout", async () => {
     supervisorSpawnMock.mockClear();
-    const clearBeforeRetry = vi.fn(async () => undefined);
+    const clearBeforeRetry = vi.fn(async () => false);
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "overall-timeout",
@@ -445,7 +445,7 @@ describe("runCliAgent reliability", () => {
 
   it("does not retry a resumed recoverable failover without a reseed prompt", async () => {
     supervisorSpawnMock.mockClear();
-    const clearBeforeRetry = vi.fn(async () => undefined);
+    const clearBeforeRetry = vi.fn(async () => false);
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "no-output-timeout",
