@@ -152,10 +152,7 @@ export async function handleSessionHistoryHttpRequest(
   }
   const limit = resolveLimit(req);
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
-  const effectiveMaxChars =
-    typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
-      ? cfg.gateway.webchat.chatHistoryMaxChars
-      : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+  const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(

@@ -443,7 +443,19 @@ export async function recoverStaleTelegramSpooledUpdateClaims(params: {
     if (await pathExists(pendingPath)) {
       await unlinkIfPresent(claimedPath);
     } else {
-      await fs.rename(claimedPath, pendingPath);
+      try {
+        await fs.rename(claimedPath, pendingPath);
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code === "ENOENT") {
+          continue;
+        }
+        if (code === "EEXIST") {
+          await unlinkIfPresent(claimedPath);
+        } else {
+          throw err;
+        }
+      }
     }
     recovered += 1;
   }

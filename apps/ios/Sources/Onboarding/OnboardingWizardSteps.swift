@@ -148,6 +148,7 @@ struct OnboardingWelcomeStep: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
             }
+            .padding(.horizontal, 24)
             .padding(.bottom, 12)
 
             Text(self.statusLine)

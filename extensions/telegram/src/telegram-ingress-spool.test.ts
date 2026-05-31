@@ -242,6 +242,37 @@ describe("Telegram ingress spool", () => {
     });
   });
 
+  it("handles ENOENT race when processing file is removed before recovery rename", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 45, message: { text: "vanishes" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+      let shouldRecoverCalls = 0;
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+        spoolDir,
+        staleMs: 0,
+        shouldRecover: async () => {
+          shouldRecoverCalls += 1;
+          await fs.unlink(claimed.path);
+          return true;
+        },
+      });
+
+      expect(recovered).toBe(0);
+      expect(shouldRecoverCalls).toBe(1);
+      expect(await fs.readdir(spoolDir)).toEqual([]);
+    });
+  });
+
   it("does not treat stale claims with reused pids as live-owned", () => {
     const now = Date.now();
     expect(

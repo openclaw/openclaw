@@ -193,6 +193,29 @@ gh pr view <number> --json additions,deletions,changedFiles \
 - Judge solution quality, not only correctness. Ask whether the PR is the clean owner-boundary fix or a wart/workaround that should be replaced by a small refactor, moved seam, contract change, or deletion of duplicate logic.
 - Mention the main files read when the verdict depends on code-path evidence.
 
+## Best-fix review loop
+
+Every PR review must explicitly answer: "Is this the best fix, or only a plausible fix?"
+
+Before verdict:
+
+1. Reconstruct the bug, feature need, or behavior claim from issue/PR/proof.
+2. Trace current behavior from entry point to failure or decision point.
+3. Read touched files, callers, callees, owner modules, adjacent tests, and relevant docs.
+4. Read sibling surfaces that should share the invariant or could be broken by a one-sided fix.
+5. Compare against current `origin/main` and shipped behavior when regression/compat matters.
+6. Inspect upstream dependency/Codex source or docs for dependency-backed behavior.
+7. Identify at least one alternative fix location or shape, then reject it with evidence.
+
+Review output must include:
+
+- `Best-fix verdict:` best / acceptable mitigation / wrong layer / too narrow / too broad.
+- `Alternatives considered:` 1-3 concrete alternatives and why rejected.
+- `Code read:` compact list of main files/contracts checked.
+- `Remaining uncertainty:` what was not proven.
+
+If the best-fix answer is only "maybe", keep reading or state the missing evidence. Do not call proof sufficient until the best-fix judgment is explicit.
+
 ## Enforce the bug-fix evidence bar
 
 - Never merge a bug-fix PR based only on issue text, PR text, or AI rationale.

@@ -329,8 +329,12 @@ type CodeModeFailedResult = {
 };
 ```
 
-`exec` returns `waiting` when the QuickJS VM suspends with resumable state. The
-result includes a `runId` for `wait`.
+`exec` returns `waiting` when the QuickJS VM suspends with resumable state that
+still needs a model-visible continuation. The result includes a `runId` for
+`wait`. Namespace bridge calls, including MCP namespace calls, are auto-drained
+inside the same `exec`/`wait` call while they are ready, so a compact code block
+can inspect `$api()` and call an MCP tool without forcing one model tool call per
+namespace await.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -436,9 +440,14 @@ const hits = await tools.web_search({ query: "OpenClaw code mode" });
 ```
 
 MCP catalog entries are not callable through `tools.call(...)` or convenience
-functions in code mode. Use the generated `MCP` namespace instead:
+functions in code mode. They are exposed only through the generated `MCP`
+namespace, which includes TypeScript-style API headers for discovery:
 
 ```typescript
+const servers = await MCP.$api();
+const githubApi = await MCP.github.$api();
+const createIssueApi = await MCP.github.$api("createIssue", { schema: true });
+
 const issue = await MCP.github.createIssue({
   owner: "openclaw",
   repo: "openclaw",
@@ -446,8 +455,40 @@ const issue = await MCP.github.createIssue({
 });
 
 const snapshot = await MCP.chromeDevtools.takeSnapshot({ output: "markdown" });
-const resource = await MCP.docs.resources.read("memo://one");
-const prompt = await MCP.docs.prompts.get("brief", { topic: "release" });
+const resource = await MCP.docs.resources.read({ uri: "memo://one" });
+const prompt = await MCP.docs.prompts.get({
+  name: "brief",
+  arguments: { topic: "release" },
+});
+```
+
+`MCP.<server>.$api()` returns a compact header inferred from MCP tool metadata:
+
+```typescript
+type McpToolResult = {
+  content?: unknown[];
+  structuredContent?: unknown;
+  isError?: boolean;
+  [key: string]: unknown;
+};
+
+declare namespace MCP.github {
+  /** Return this TypeScript-style API header. */
+  function $api(toolName?: string, options?: { schema?: boolean }): Promise<McpApiHeader>;
+
+  /**
+   * Create a GitHub issue.
+   * @param owner Repository owner
+   * @param repo Repository name
+   * @param title Issue title
+   */
+  function createIssue(input: {
+    owner: string;
+    repo: string;
+    title: string;
+    body?: string;
+  }): Promise<McpToolResult>;
+}
 ```
 
 The guest runtime must not expose host objects directly. Inputs and outputs cross
@@ -493,8 +534,9 @@ run follows this path:
 6. Guest calls suspend through the worker bridge, resolve the namespace path on
    the host, map the call to a declared plugin-owned catalog tool, and execute
    that tool through `ToolSearchRuntime.call`.
-7. `wait` resumes the same namespace runtime when a code-mode run suspended on
-   nested tool work.
+7. OpenClaw auto-drains ready namespace bridge calls inside the active
+   `exec`/`wait` tool call. If namespace work is still pending at the timeout or
+   the guest yields explicitly, `wait` resumes the same namespace runtime later.
 8. Plugin rollback or uninstall calls `clearCodeModeNamespacesForPlugin(pluginId)`
    so stale globals do not survive a failed plugin load.
 
@@ -701,9 +743,10 @@ This prevents recursion and keeps the model-facing contract narrow.
 
 MCP entries stay in the run-scoped catalog so policy, approvals, hooks,
 telemetry, transcript projection, and exact tool ids remain shared with normal
-tool execution. The guest-facing `tools.call(...)` bridge rejects MCP entries;
-the generated `MCP.<server>.<tool>(...)` namespace resolves back to the exact
-catalog id and then dispatches through the same executor path.
+tool execution. The guest-facing `ALL_TOOLS`, `tools.search(...)`,
+`tools.describe(...)`, and `tools.call(...)` views omit MCP entries. The
+generated `MCP.<server>.<tool>({ ...input })` namespace resolves back to the
+exact catalog id and then dispatches through the same executor path.
 
 ## Tool Search interaction
 
@@ -716,8 +759,9 @@ When `tools.codeMode.enabled` is true and code mode activates:
   or `tool_call` as model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives compact `ALL_TOOLS` metadata and search, describe,
-  and call helpers.
-- MCP calls use the generated `MCP` namespace instead of `tools.call(...)`.
+  and call helpers for non-MCP tools.
+- MCP calls use the generated `MCP` namespace and its `$api()` headers instead
+  of `tools.call(...)`.
 - Nested calls dispatch through the same OpenClaw executor path that Tool Search
   uses.
 
@@ -934,11 +978,13 @@ Code mode coverage should prove:
   active for the run
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger code-mode
   payload enforcement
-- all effective tools appear in `ALL_TOOLS`
+- all effective non-MCP tools appear in `ALL_TOOLS`
 - denied tools do not appear in `ALL_TOOLS`
 - `tools.search`, `tools.describe`, and `tools.call` work for OpenClaw tools
-- MCP namespace calls work for visible MCP tools and direct MCP `tools.call`
-  attempts fail closed
+- MCP namespace `$api()` returns TypeScript-style headers inferred from MCP
+  schemas
+- MCP namespace calls work for visible MCP tools with one object input, while
+  direct MCP catalog entries are absent from `tools.*`
 - Tool Search control tools are hidden from both the model surface and the hidden
   catalog
 - nested calls preserve approval and hook behavior
@@ -968,14 +1014,16 @@ Run these as integration or end-to-end tests when changing the runtime:
 7. In `exec`, read `ALL_TOOLS` and assert the effective test tools are present.
 8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
    `tools.describe`, and `tools.call`.
-9. In `exec`, call MCP tools through `MCP.<server>.<tool>(...)` and assert direct
-   MCP `tools.call(...)` attempts fail.
-10. Assert denied tools are absent and cannot be called by guessed id.
-11. Start a nested tool call that resolves after `exec` returns `waiting`.
-12. Call `wait` and assert the restored VM receives the tool result.
-13. Assert the final answer contains output produced after restore.
-14. Assert timeout, abort, and snapshot expiry clean up runtime state.
-15. Export trajectory and assert nested calls are visible under the parent
+9. In `exec`, call `MCP.$api()` and `MCP.<server>.$api()` and assert the headers
+   describe visible MCP tools.
+10. In `exec`, call MCP tools through `MCP.<server>.<tool>({ ...input })` and
+    assert direct MCP catalog entries are absent from `ALL_TOOLS` and `tools.*`.
+11. Assert denied tools are absent and cannot be called by guessed id.
+12. Start a nested tool call that resolves after `exec` returns `waiting`.
+13. Call `wait` and assert the restored VM receives the tool result.
+14. Assert the final answer contains output produced after restore.
+15. Assert timeout, abort, and snapshot expiry clean up runtime state.
+16. Export trajectory and assert nested calls are visible under the parent
     code-mode call.
 
 Docs-only changes to this page should still run `pnpm check:docs`.

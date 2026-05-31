@@ -27,8 +27,13 @@ import {
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
-import type { AcpRuntimeErrorCode } from "../runtime/errors.js";
 import { clearAcpTurnActive, markAcpTurnActive } from "./active-turns.js";
+import {
+  isFailoverWorthyBackendError,
+  resolveBackendCandidatePlan,
+  shouldAttemptBackendFailover,
+  type BackendAttempt,
+} from "./manager.backend-failover.js";
 import {
   appendBackgroundTaskProgressSummary,
   createBackgroundTaskRecord,
@@ -689,34 +694,12 @@ export class AcpSessionManager {
           sessionKey,
         });
         const initialMeta = requireReadySessionMeta(initialResolution);
-        const configuredPrimaryBackend = normalizeText(input.cfg.acp?.backend);
-        const resolvedPrimaryBackend = normalizeText(initialMeta.backend);
-        const fallbackBackends = Array.isArray(input.cfg.acp?.fallbacks)
-          ? input.cfg.acp.fallbacks
-              .map((backend) => normalizeText(backend))
-              .filter((backend): backend is string => backend != null)
-          : [];
-        const candidateBackends = Array.from(
-          new Set([configuredPrimaryBackend ?? resolvedPrimaryBackend ?? "", ...fallbackBackends]),
-        );
-        const describeBackendCandidate = (backend: string) =>
-          backend || resolvedPrimaryBackend || configuredPrimaryBackend || "<auto>";
-
-        type BackendAttempt = {
-          backend: string;
-          error: string;
-          code: AcpRuntimeErrorCode;
-          sawOutput: boolean;
-        };
+        const { candidateBackends, describeBackendCandidate } = resolveBackendCandidatePlan({
+          configuredPrimaryBackend: input.cfg.acp?.backend,
+          resolvedPrimaryBackend: initialMeta.backend,
+          fallbackBackends: input.cfg.acp?.fallbacks,
+        });
         const backendAttempts: BackendAttempt[] = [];
-        const isFailoverWorthyBackendError = (attempt: BackendAttempt) =>
-          !attempt.sawOutput &&
-          (attempt.code === "ACP_TURN_FAILED" ||
-            attempt.code === "ACP_SESSION_INIT_FAILED" ||
-            attempt.code === "ACP_BACKEND_UNAVAILABLE") &&
-          /\b(?:unavailable|rate[-\s]?limit(?:ed|ing)?|quota|exhausted|temporar(?:y|ily)|overloaded)\b/i.test(
-            attempt.error,
-          );
         const recordBackendFailure = async (error: AcpRuntimeError) => {
           const failedBackends = backendAttempts
             .map((attempt) => `${attempt.backend}: ${attempt.error}`)
@@ -751,8 +734,6 @@ export class AcpSessionManager {
           });
           throw errorToRecord;
         };
-        const shouldAttemptFailover = (backendIdx: number) =>
-          backendIdx < candidateBackends.length - 1;
 
         let acpTurnMarkedActive = false;
         // Liveness spans the whole task, not one attempt: mark once before the backend loop
@@ -967,7 +948,10 @@ export class AcpSessionManager {
                 backendAttempts.push(backendAttempt);
                 if (
                   !isFailoverWorthyBackendError(backendAttempt) ||
-                  !shouldAttemptFailover(backendIdx)
+                  !shouldAttemptBackendFailover({
+                    backendIndex: backendIdx,
+                    candidateBackends,
+                  })
                 ) {
                   await recordBackendFailure(acpError);
                 }

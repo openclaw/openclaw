@@ -111,6 +111,36 @@ vi.mock("../process/supervisor/index.js", () => {
     env[readPathKey(env)] = value;
   };
   const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
+  const parseShellSingleQuoted = (input: string) => {
+    if (!input.startsWith("'")) {
+      return null;
+    }
+    let output = "";
+    for (let index = 1; index < input.length; index += 1) {
+      const char = input[index];
+      if (char !== "'") {
+        output += char;
+        continue;
+      }
+      if (input.startsWith("'\\''", index)) {
+        output += "'";
+        index += 3;
+        continue;
+      }
+      return input.slice(index + 1).trim().length === 0 ? output : null;
+    }
+    return null;
+  };
+  const unwrapSnapshotEvalCommand = (command: string) => {
+    const evalIndex = command.lastIndexOf("\neval ");
+    const evalCommand =
+      evalIndex === -1
+        ? command.trimStart().startsWith("eval ")
+          ? command.trimStart().slice("eval ".length)
+          : null
+        : command.slice(evalIndex + "\neval ".length);
+    return evalCommand ? (parseShellSingleQuoted(evalCommand.trim()) ?? command) : command;
+  };
   const splitCommands = (command: string) => {
     const commands: string[] = [];
     for (const part of command.split(";")) {
@@ -147,7 +177,7 @@ vi.mock("../process/supervisor/index.js", () => {
 
   const commandOutput = (command: string, env?: NodeJS.ProcessEnv) => {
     const shellEnv = { ...env };
-    return splitCommands(command)
+    return splitCommands(unwrapSnapshotEvalCommand(command))
       .map((segment) => {
         applySegmentShellEffects(segment, shellEnv);
         return stdoutForSegment(segment, shellEnv);
@@ -160,7 +190,9 @@ vi.mock("../process/supervisor/index.js", () => {
       spawn: async (input: SpawnInput) => {
         const command = extractCommand(input);
         const output = commandOutput(command, input.env);
-        const exitCode = splitCommands(command).includes("exit 1") ? 1 : 0;
+        const exitCode = splitCommands(unwrapSnapshotEvalCommand(command)).includes("exit 1")
+          ? 1
+          : 0;
         const stagedOutput = command.includes("after")
           ? output.replace(/after[^\n]*\n?/gu, "")
           : output;
@@ -174,6 +206,7 @@ vi.mock("../process/supervisor/index.js", () => {
           pid: 123,
           stdin: undefined,
           wait: async () => {
+            await immediate();
             await immediate();
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
@@ -217,8 +250,8 @@ const NOTIFY_POLL_OPTIONS = {
   timeout: NOTIFY_EVENT_TIMEOUT_MS,
   interval: POLL_INTERVAL_MS,
 };
-const SHELL_ENV_KEYS = ["SHELL"] as const;
-const PATH_SHELL_ENV_KEYS = ["PATH", "SHELL"] as const;
+const SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "SHELL"] as const;
+const PATH_SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL"] as const;
 const PROCESS_STATUS_RUNNING = "running";
 const PROCESS_STATUS_COMPLETED = "completed";
 const PROCESS_STATUS_FAILED = "failed";
@@ -266,6 +299,7 @@ const createNotifyOnExitExecTool = (overrides: Partial<ExecToolConfig> = {}) =>
     allowBackground: true,
     backgroundMs: 0,
     notifyOnExit: true,
+    notifyOnExitEmptySuccess: true,
     sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
     ...overrides,
   });
@@ -348,6 +382,7 @@ async function pollProcessSession(params: {
   };
 }
 function applyDefaultShellEnv() {
+  process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
   if (!isWin && defaultShell) {
     process.env.SHELL = defaultShell;
   }
@@ -638,9 +673,7 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
 const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
-  const tool = createNotifyOnExitExecTool(
-    notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
-  );
+  const tool = createNotifyOnExitExecTool({ notifyOnExitEmptySuccess });
 
   const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
@@ -771,6 +804,8 @@ describe("exec exit codes", () => {
 });
 
 describe("exec notifyOnExit", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
   beforeEach(() => {
     resetHeartbeatWakeStateForTests();
   });

@@ -381,7 +381,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.pairing.autoApproveCidrs": "Gateway Node Pairing Auto-Approve CIDRs",
   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
-  "gateway.webchat.chatHistoryMaxChars": "WebChat History Max Chars",
   nodeHost: "Node Host",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",

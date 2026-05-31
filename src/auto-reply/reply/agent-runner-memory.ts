@@ -37,7 +37,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
@@ -67,6 +67,8 @@ import { incrementCompactionCount } from "./session-updates.js";
 type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
 
 const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
+const MAX_FLUSH_FAILURES = 3;
+const MAX_FLUSH_ERROR_LENGTH = 200;
 
 const embeddedAgentRuntimeLoader = createLazyImportLoader<EmbeddedAgentRuntime>(
   () => import("../../agents/embedded-agent.js"),
@@ -126,6 +128,7 @@ const memoryDeps = {
   refreshQueuedFollowupSession,
   incrementCompactionCount,
   updateSessionStoreEntry,
+  emitAgentEvent,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
 };
@@ -141,6 +144,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     refreshQueuedFollowupSession,
     incrementCompactionCount,
     updateSessionStoreEntry,
+    emitAgentEvent,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
     ...overrides,
@@ -320,6 +324,13 @@ function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
         : visibleText,
     isError: true,
   };
+}
+
+function truncateMemoryFlushErrorMessage(err: unknown): string {
+  const message = normalizeOptionalString(formatErrorMessage(err)) || String(err);
+  return message.length > MAX_FLUSH_ERROR_LENGTH
+    ? `${message.slice(0, MAX_FLUSH_ERROR_LENGTH - 1)}…`
+    : message;
 }
 
 export type SessionTranscriptUsageSnapshot = {
@@ -1327,6 +1338,9 @@ export async function runMemoryFlushIfNeeded(params: {
           update: async () => ({
             memoryFlushAt: memoryDeps.now(),
             memoryFlushCompactionCount: flushedCompactionCount,
+            memoryFlushFailureCount: 0,
+            memoryFlushLastFailedAt: undefined,
+            memoryFlushLastFailureError: undefined,
           }),
         });
         if (updatedEntry) {
@@ -1342,7 +1356,87 @@ export async function runMemoryFlushIfNeeded(params: {
       }
     }
   } catch (err) {
-    logVerbose(`memory flush run failed: ${String(err)}`);
+    const truncatedError = truncateMemoryFlushErrorMessage(err);
+    if (!isAbortError(err) && params.storePath && params.sessionKey) {
+      try {
+        const failedAt = memoryDeps.now();
+        const failedEntry = await memoryDeps.updateSessionStoreEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+          update: async (entry) => ({
+            memoryFlushFailureCount: Math.max(0, entry.memoryFlushFailureCount ?? 0) + 1,
+            memoryFlushLastFailedAt: failedAt,
+            memoryFlushLastFailureError: truncatedError,
+          }),
+        });
+        if (failedEntry) {
+          activeSessionEntry = failedEntry;
+          if (activeSessionStore) {
+            activeSessionStore[params.sessionKey] = failedEntry;
+          }
+        }
+        const failureCount = Math.max(0, failedEntry?.memoryFlushFailureCount ?? 0);
+        logVerbose(
+          `memory flush failed (attempt ${failureCount}/${MAX_FLUSH_FAILURES}): ${truncatedError}`,
+        );
+        memoryDeps.emitAgentEvent({
+          runId: flushRunId,
+          stream: "lifecycle",
+          sessionKey: params.sessionKey,
+          sessionId: activeSessionEntry?.sessionId,
+          data: {
+            phase: "memory_flush_failed",
+            attempt: failureCount,
+            maxAttempts: MAX_FLUSH_FAILURES,
+            error: truncatedError,
+          },
+        });
+        if (failedEntry && failureCount >= MAX_FLUSH_FAILURES) {
+          logVerbose(
+            `memory flush exhausted: skipping flush for this compaction cycle after ${failureCount} consecutive failures`,
+          );
+          memoryDeps.emitAgentEvent({
+            runId: flushRunId,
+            stream: "lifecycle",
+            sessionKey: params.sessionKey,
+            sessionId: failedEntry.sessionId,
+            data: {
+              phase: "memory_flush_exhausted",
+              attempt: failureCount,
+              maxAttempts: MAX_FLUSH_FAILURES,
+            },
+          });
+          const exhaustedEntry = await memoryDeps.updateSessionStoreEntry({
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+            update: async (entry) => ({
+              memoryFlushAt: memoryDeps.now(),
+              memoryFlushCompactionCount: entry.compactionCount ?? 0,
+            }),
+          });
+          if (exhaustedEntry) {
+            activeSessionEntry = exhaustedEntry;
+            if (activeSessionStore) {
+              activeSessionStore[params.sessionKey] = exhaustedEntry;
+            }
+          }
+          params.onVisibleErrorPayloads?.([
+            {
+              text: `⚠️ Memory flush failed after ${MAX_FLUSH_FAILURES} attempts; skipping for this cycle. It will retry after the next compaction.`,
+              isError: true,
+            },
+          ]);
+        }
+      } catch (persistErr) {
+        logVerbose(`failed to persist memory flush failure metadata: ${String(persistErr)}`);
+      }
+    } else {
+      logVerbose(`memory flush run failed: ${String(err)}`);
+    }
     const visibleErrorPayload = buildMemoryFlushErrorPayload(err);
     if (visibleErrorPayload) {
       params.onVisibleErrorPayloads?.([visibleErrorPayload]);

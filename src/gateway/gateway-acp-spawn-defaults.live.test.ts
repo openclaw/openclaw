@@ -180,6 +180,17 @@ function createConfig(params: {
   thinking?: string;
   includePrimaryOnlyAcpAgent?: boolean;
 }): OpenClawConfig {
+  const subagents = params.subagentModel
+    ? {
+        allowAgents: ["*"],
+        maxSpawnDepth: 2,
+        model: params.subagentModel,
+      }
+    : {
+        allowAgents: ["*"],
+        maxSpawnDepth: 2,
+      };
+
   return {
     agents: {
       list: params.includePrimaryOnlyAcpAgent
@@ -198,11 +209,7 @@ function createConfig(params: {
         model: {
           primary: "openai/gpt-5.5",
         },
-        subagents: {
-          allowAgents: ["*"],
-          maxSpawnDepth: 2,
-          ...(params.subagentModel ? { model: params.subagentModel } : {}),
-        },
+        subagents,
         models:
           params.subagentModel && params.thinking
             ? {

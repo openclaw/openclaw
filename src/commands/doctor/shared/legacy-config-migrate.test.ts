@@ -761,7 +761,7 @@ describe("legacy diagnostics memory pressure snapshot migrate", () => {
 });
 
 describe("legacy WebChat channel config migrate", () => {
-  it("moves WebChat textChunkLimit to the gateway history cap and removes channels.webchat", () => {
+  it("removes retired WebChat channel config", () => {
     const raw = {
       channels: {
         webchat: {
@@ -778,24 +778,35 @@ describe("legacy WebChat channel config migrate", () => {
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.gateway?.webchat?.chatHistoryMaxChars).toBe(16000);
+    expect(res.config).not.toHaveProperty("gateway");
     expect(res.config?.channels).toEqual({
       discord: {
         textChunkLimit: 2000,
       },
     });
-    expect(res.changes).toStrictEqual([
-      "Moved channels.webchat.textChunkLimit → gateway.webchat.chatHistoryMaxChars.",
-      "Removed retired channels.webchat config.",
-    ]);
+    expect(res.changes).toStrictEqual(["Removed retired channels.webchat config."]);
   });
 
-  it("removes channels.webchat without overwriting an existing gateway history cap", () => {
+  it("removes retired WebChat gateway config", () => {
     const res = migrateLegacyConfigForTest({
       gateway: {
         webchat: {
           chatHistoryMaxChars: 8000,
         },
+      },
+    });
+
+    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.changes).toStrictEqual(["Removed retired gateway.webchat config."]);
+  });
+
+  it("removes both retired WebChat config sections when present together", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 8000,
+        },
+        bind: "loopback",
       },
       channels: {
         webchat: {
@@ -804,25 +815,11 @@ describe("legacy WebChat channel config migrate", () => {
       },
     });
 
-    expect(res.config?.gateway?.webchat?.chatHistoryMaxChars).toBe(8000);
-    expect(res.config).not.toHaveProperty("channels");
-    expect(res.changes).toStrictEqual(["Removed retired channels.webchat config."]);
-  });
-
-  it("drops invalid WebChat textChunkLimit values instead of creating invalid gateway config", () => {
-    const res = migrateLegacyConfigForTest({
-      channels: {
-        webchat: {
-          textChunkLimit: 600000,
-        },
-      },
-    });
-
-    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.config?.gateway).toEqual({ bind: "loopback" });
     expect(res.config).not.toHaveProperty("channels");
     expect(res.changes).toStrictEqual([
-      "Removed channels.webchat.textChunkLimit (not a valid gateway.webchat.chatHistoryMaxChars value).",
       "Removed retired channels.webchat config.",
+      "Removed retired gateway.webchat config.",
     ]);
   });
 });

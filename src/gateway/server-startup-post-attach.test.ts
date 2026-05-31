@@ -925,7 +925,9 @@ describe("startGatewayPostAttachRuntime", () => {
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
         onSidecarsReady: () => {
-          setImmediate(postReadyRequestTurn);
+          setImmediate(() => {
+            postReadyRequestTurn();
+          });
         },
       });
 

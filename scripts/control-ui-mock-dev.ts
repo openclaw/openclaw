@@ -291,7 +291,7 @@ const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
   clearScreen: false,
-  configFile: false,
+  configFile: path.join(uiRoot, "vite.config.ts"),
   define: {
     OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify("mock"),
   },
