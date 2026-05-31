@@ -1493,12 +1493,12 @@ describe("gatewayInstallErrorHint", () => {
 describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist", () => {
   const managedKeys = new Set<string>();
 
-  it("preserves OPENCLAW_ALLOW_ROOT operator opt-in", () => {
+  it("continues to drop stale OPENCLAW_ALLOW_ROOT", () => {
     const result = collectPreservedExistingServiceEnvVars(
       { OPENCLAW_ALLOW_ROOT: "1" },
       managedKeys,
     );
-    expect(result.OPENCLAW_ALLOW_ROOT).toBe("1");
+    expect(result.OPENCLAW_ALLOW_ROOT).toBeUndefined();
   });
 
   it("preserves OPENCLAW_CLI_CONTAINER_BYPASS and OPENCLAW_CONTAINER_HINT", () => {
@@ -1518,12 +1518,17 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
     expect(result.OPENCLAW_FOO).toBeUndefined();
   });
 
-  it("preserves the opt-in while dropping unrelated OPENCLAW_* keys", () => {
+  it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", () => {
     const result = collectPreservedExistingServiceEnvVars(
-      { OPENCLAW_ALLOW_ROOT: "1", OPENCLAW_BAZ: "qux" },
+      {
+        OPENCLAW_CLI_CONTAINER_BYPASS: "1",
+        OPENCLAW_CONTAINER_HINT: "ci",
+        OPENCLAW_BAZ: "qux",
+      },
       managedKeys,
     );
-    expect(result.OPENCLAW_ALLOW_ROOT).toBe("1");
+    expect(result.OPENCLAW_CLI_CONTAINER_BYPASS).toBe("1");
+    expect(result.OPENCLAW_CONTAINER_HINT).toBe("ci");
     expect(result.OPENCLAW_BAZ).toBeUndefined();
   });
 });
