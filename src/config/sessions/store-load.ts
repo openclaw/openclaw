@@ -1,5 +1,6 @@
 // Session store loading normalizes persisted records, migrations, maintenance, and caches.
 import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -11,6 +12,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { isSessionStoreTempArtifactName, SESSION_STORE_TEMP_STALE_MS } from "./artifacts.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
@@ -54,8 +56,85 @@ export type ReadSessionEntryOptions = {
 
 const log = createSubsystemLogger("sessions/store");
 
+// --- shape guards -----------------------------------------------------------
+
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return isRecord(value);
+}
+
+function isSessionEntryRecord(value: unknown): value is SessionEntry {
+  return isRecord(value);
+}
+
+function hasAtLeastOneSessionEntry(record: Record<string, unknown>): boolean {
+  for (const value of Object.values(record)) {
+    if (
+      isRecord(value) &&
+      typeof (value as { sessionId?: unknown }).sessionId === "string" &&
+      (value as { sessionId: string }).sessionId.length > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeRecoveredSessionStore(value: unknown): Record<string, SessionEntry> | undefined {
+  if (!isSessionStoreRecord(value) || !hasAtLeastOneSessionEntry(value)) {
+    return undefined;
+  }
+  for (const key of Object.keys(value)) {
+    const entry = value[key];
+    if (!isSessionEntryRecord(entry)) {
+      delete value[key];
+      continue;
+    }
+    const shaped = normalizePersistedSessionEntryShape(entry);
+    if (!shaped) {
+      delete value[key];
+      continue;
+    }
+    value[key] = stripPersistedSkillsCache(
+      normalizePluginExtensionSlotKeys(
+        normalizePluginExtensions(
+          normalizePendingFinalDeliveryFields(
+            normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+          ),
+        ),
+      ),
+    );
+  }
+  return hasAtLeastOneSessionEntry(value) ? value : undefined;
+}
+
+function readStaleSessionStoreTempCandidate(params: {
+  filePath: string;
+  now: number;
+}): Record<string, SessionEntry> | undefined {
+  let fd: number | undefined;
+  try {
+    const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+    fd = fs.openSync(params.filePath, fs.constants.O_RDONLY | noFollow);
+    const stats = fs.fstatSync(fd);
+    if (!stats.isFile() || stats.nlink !== 1) {
+      return undefined;
+    }
+    if (params.now - stats.mtimeMs < SESSION_STORE_TEMP_STALE_MS) {
+      return undefined;
+    }
+    const raw = fs.readFileSync(fd, "utf-8");
+    return normalizeRecoveredSessionStore(JSON.parse(raw));
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Best-effort cleanup for a rejected recovery candidate.
+      }
+    }
+  }
 }
 
 function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
@@ -398,15 +477,35 @@ export function loadSessionStore(
   const fileStat = getFileStatSnapshot(storePath);
   const mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
+  let recoveredFromArtifact = false;
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
+
+  // Recovery only runs after the live store file was readable but unusable. A
+  // permission or transient I/O read error may still hide a valid primary store,
+  // so it must not promote a sibling artifact over the primary file.
+  let primaryContentNeedsRecovery = false;
+
   for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
+    let raw: string;
     try {
-      const raw = fs.readFileSync(storePath, "utf-8");
-      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
+      raw = fs.readFileSync(storePath, "utf-8");
+    } catch {
+      if (attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
       }
+      break;
+    }
+    if (raw.length === 0) {
+      if (attempt < maxReadAttempts - 1) {
+        Atomics.wait(retryBuf!, 0, 0, 50);
+        continue;
+      }
+      primaryContentNeedsRecovery = true;
+      break;
+    }
+    try {
       const parsed = JSON.parse(raw);
       if (isSessionStoreRecord(parsed)) {
         store = parsed;
@@ -420,6 +519,77 @@ export function loadSessionStore(
       if (attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
+      }
+      primaryContentNeedsRecovery = true;
+    }
+  }
+
+  // A successful parse, even of an empty store, short-circuits recovery so
+  // sibling artifacts cannot overwrite a valid primary file.
+  const mainFileExists = fs.existsSync(storePath);
+  if (mainFileExists && primaryContentNeedsRecovery) {
+    const storeDir = path.dirname(storePath);
+
+    // Try stale .tmp files left by the real atomic writer. Do not promote
+    // operator-created .bak files here; there is no current writer contract for
+    // sessions.json.bak, and load-time recovery must not invent one.
+    if (Object.keys(store).length === 0) {
+      try {
+        const entries = fs.readdirSync(storeDir);
+        const tmpCandidates: { name: string; full: string; mtime: number }[] = [];
+
+        for (const entry of entries) {
+          if (!isSessionStoreTempArtifactName(entry, path.basename(storePath))) {
+            continue;
+          }
+
+          const fullPath = path.join(storeDir, entry);
+
+          // Fast path integrity gate before sorting. The opened-file read path
+          // repeats the regular-file and hardlink checks on the same file
+          // descriptor that provides the recovery bytes.
+          let stats: fs.Stats;
+          try {
+            stats = fs.lstatSync(fullPath);
+          } catch {
+            continue;
+          }
+          if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
+            continue;
+          }
+
+          // Fast prefilter for ordering. The opened-file read path repeats this
+          // stale check on the file descriptor that provides the bytes.
+          if (Date.now() - stats.mtimeMs < SESSION_STORE_TEMP_STALE_MS) {
+            continue;
+          }
+
+          tmpCandidates.push({ name: entry, full: fullPath, mtime: stats.mtimeMs });
+        }
+
+        // Newest mtime first — the most recent completed atomic write wins.
+        tmpCandidates.sort((a, b) => b.mtime - a.mtime);
+
+        for (const candidate of tmpCandidates) {
+          const recovered = readStaleSessionStoreTempCandidate({
+            filePath: candidate.full,
+            now: Date.now(),
+          });
+          if (recovered) {
+            store = recovered;
+            recoveredFromArtifact = true;
+            serializedFromDisk = undefined;
+            log.info("loaded session store from stale tmp artifact", {
+              storePath,
+              recoverySource: "tmp",
+              recoveryPath: candidate.full,
+              entryCount: Object.keys(store).length,
+            });
+            break;
+          }
+        }
+      } catch {
+        // readdir failed; skip recovery.
       }
     }
   }
@@ -469,9 +639,14 @@ export function loadSessionStore(
     }
   }
 
-  setSerializedSessionStore(storePath, serializedFromDisk);
+  setSerializedSessionStore(storePath, recoveredFromArtifact ? undefined : serializedFromDisk);
 
-  if (!opts.skipCache && canWriteSessionStoreCache && isSessionStoreCacheEnabled()) {
+  if (
+    !opts.skipCache &&
+    canWriteSessionStoreCache &&
+    isSessionStoreCacheEnabled() &&
+    !recoveredFromArtifact
+  ) {
     writeSessionStoreCache({
       storePath,
       store,
