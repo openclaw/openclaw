@@ -43,7 +43,7 @@ export function bumpSkillsSnapshotVersion(params?: {
   const reason = params?.reason ?? "manual";
   const changedPath = params?.changedPath;
   if (params?.workspaceDir) {
-    const current = workspaceVersions.get(params.workspaceDir) ?? 0;
+    const current = Math.max(globalVersion, workspaceVersions.get(params.workspaceDir) ?? 0);
     const next = bumpVersion(current);
     workspaceVersions.set(params.workspaceDir, next);
     emit({ workspaceDir: params.workspaceDir, reason, changedPath });

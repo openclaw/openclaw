@@ -697,9 +697,11 @@ describe("ensureSkillsWatcher", () => {
     expect(nextVersion).toBeGreaterThan(firstVersion);
     expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, nextVersion)).toBe(true);
     vi.setSystemTime(new Date(nextVersion));
-    expect(refreshModule.bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" })).toBe(
-      nextVersion,
-    );
+    const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch",
+    });
+    expect(followupVersion).toBeGreaterThan(nextVersion);
   });
 
   it("evicts idle workspace subscriptions on a later ensure call", () => {
@@ -731,9 +733,10 @@ describe("ensureSkillsWatcher", () => {
     expect(evictedVersion).toBeGreaterThan(firstVersion);
     expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
     vi.setSystemTime(new Date(evictedVersion));
-    expect(refreshModule.bumpSkillsSnapshotVersion({ workspaceDir: idleWorkspaceDir })).toBe(
-      evictedVersion,
-    );
+    const followupVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir: idleWorkspaceDir,
+    });
+    expect(followupVersion).toBeGreaterThan(evictedVersion);
   });
 
   it("keeps refreshed workspace subscriptions within the idle TTL", () => {
