@@ -20,12 +20,16 @@ function hasExplicitTargetPrefix(value: string): boolean {
 
 function normalizeLegacyChannelIdTarget(params: {
   action: ChannelMessageActionName;
+  channel: string;
   channelId: string;
 }): string {
   if (MESSAGE_ACTION_TARGET_MODE[params.action] !== "to") {
     return params.channelId;
   }
   if (hasExplicitTargetPrefix(params.channelId)) {
+    return params.channelId;
+  }
+  if (params.channel !== "discord") {
     return params.channelId;
   }
   return `channel:${params.channelId}`;
@@ -76,6 +80,7 @@ export function normalizeMessageActionInput(params: {
     } else if (legacyChannelId) {
       normalizedArgs.target = normalizeLegacyChannelIdTarget({
         action,
+        channel: inferredChannel,
         channelId: legacyChannelId,
       });
       delete normalizedArgs.to;

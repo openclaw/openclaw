@@ -192,6 +192,39 @@ describe("normalizeMessageActionInput", () => {
         action: "read",
         args: {
           channel: "discord",
+          channelId: "1507887702379335791",
+        },
+        toolContext: {
+          currentChannelProvider: "telegram",
+        },
+      },
+      expectedFields: {
+        target: "channel:1507887702379335791",
+        to: "channel:1507887702379335791",
+      },
+      absentFields: ["channelId"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
+          channelId: "1507887702379335791",
+        },
+        toolContext: {
+          currentChannelProvider: "discord",
+        },
+      },
+      expectedFields: {
+        target: "channel:1507887702379335791",
+        to: "channel:1507887702379335791",
+      },
+      absentFields: ["channelId"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
+          channel: "discord",
           channelId: "channel:1507887702379335791",
           limit: 50,
         },
@@ -228,6 +261,38 @@ describe("normalizeMessageActionInput", () => {
       expectedFields: {
         target: "group:1507887702379335791",
         to: "group:1507887702379335791",
+      },
+      absentFields: ["channelId"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
+          channel: "telegram",
+          channelId: "-1001234567890:topic:77",
+          limit: 20,
+        },
+      },
+      expectedFields: {
+        target: "-1001234567890:topic:77",
+        to: "-1001234567890:topic:77",
+        limit: 20,
+      },
+      absentFields: ["channelId"],
+    },
+    {
+      input: {
+        action: "send",
+        args: {
+          channel: "telegram",
+          channelId: "group:-1001234567890:topic:77",
+          text: "hello",
+        },
+      },
+      expectedFields: {
+        target: "group:-1001234567890:topic:77",
+        to: "group:-1001234567890:topic:77",
+        text: "hello",
       },
       absentFields: ["channelId"],
     },
