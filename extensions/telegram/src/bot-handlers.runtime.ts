@@ -961,8 +961,8 @@ export const registerTelegramHandlers = ({
 
   const scheduleTextFragmentFlush = (entry: TextFragmentEntry) => {
     clearTimeout(entry.timer);
-    entry.timer = setTimeout(async () => {
-      await runTextFragmentFlush(entry);
+    entry.timer = setTimeout(() => {
+      void runTextFragmentFlush(entry);
     }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
   };
 
@@ -1797,9 +1797,9 @@ export const registerTelegramHandlers = ({
           existing.dispatchDedupeKeys,
           dispatchDedupeKeys,
         );
-        existing.timer = setTimeout(async () => {
+        existing.timer = setTimeout(() => {
           mediaGroupBuffer.delete(mediaGroupKey);
-          await queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
+          void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
             await processMediaGroup(existing);
           });
         }, mediaGroupTimeoutMs);
@@ -1818,9 +1818,9 @@ export const registerTelegramHandlers = ({
           topicConfig,
           dispatchDedupeKeys,
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
-          timer: setTimeout(async () => {
+          timer: setTimeout(() => {
             mediaGroupBuffer.delete(mediaGroupKey);
-            await queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
+            void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
               await processMediaGroup(entry);
             });
           }, mediaGroupTimeoutMs),

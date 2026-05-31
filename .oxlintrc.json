@@ -78,6 +78,7 @@
     "typescript/no-extraneous-class": "error",
     "typescript/no-import-type-side-effects": "error",
     "typescript/no-meaningless-void-operator": "error",
+    "typescript/no-misused-promises": "error",
     "typescript/no-inferrable-types": "error",
     "typescript/no-non-null-asserted-nullish-coalescing": "error",
     "typescript/no-unnecessary-qualifier": "error",

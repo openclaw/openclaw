@@ -387,6 +387,40 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith("__notifications__");
   });
 
+  it("renders Notifications with the shared settings card and button styles", () => {
+    const onWebPushSubscribe = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__notifications__",
+      includeSections: ["channels", "messages", "__notifications__"],
+      includeVirtualSections: true,
+      onWebPushSubscribe,
+      schema: {
+        type: "object",
+        properties: {
+          channels: { type: "object", properties: {} },
+          messages: { type: "object", properties: {} },
+        },
+      },
+      webPush: {
+        supported: true,
+        permission: "default",
+        subscribed: false,
+        loading: false,
+      },
+    });
+
+    const card = queryRequired(container, ".settings-notifications__card", HTMLElement);
+    expect(card.querySelector(".settings-notifications__badge")?.textContent?.trim()).toBe("Ready");
+
+    const enableButton = findButtonByText(container, "Enable notifications");
+    expect(enableButton.classList.contains("btn")).toBe(true);
+    expect(enableButton.classList.contains("primary")).toBe(true);
+    expect(container.querySelector(".config-bar__btn")).toBeNull();
+
+    enableButton.click();
+    expect(onWebPushSubscribe).toHaveBeenCalledOnce();
+  });
+
   it("resets config content scroll when switching top-tab sections", async () => {
     const { container } = renderConfigView({
       activeSection: "channels",

@@ -53,16 +53,17 @@ type SessionEventShape = {
   timestamp: string;
   type: string;
 };
+type SendAndWaitFn = (options?: unknown) => Promise<SessionEventShape | undefined>;
 
 type FakeSession = {
-  abort: ReturnType<typeof vi.fn>;
+  abort: ReturnType<typeof vi.fn<() => Promise<void>>>;
   cfg: Record<string, unknown>;
-  disconnect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn<() => Promise<void>>>;
   emit: (eventType: string, data: Record<string, unknown>) => void;
   id: string;
   off: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
-  sendAndWait: ReturnType<typeof vi.fn>;
+  sendAndWait: ReturnType<typeof vi.fn<SendAndWaitFn>>;
   sessionId: string;
 };
 
@@ -129,9 +130,9 @@ function makeAssistantMessageEvent(
 function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSession {
   const listeners = new Map<string, Array<(event: SessionEventShape) => void>>();
   return {
-    abort: vi.fn(async () => undefined),
+    abort: vi.fn<() => Promise<void>>(async () => undefined),
     cfg,
-    disconnect: vi.fn(async () => undefined),
+    disconnect: vi.fn<() => Promise<void>>(async () => undefined),
     emit: (eventType: string, data: Record<string, unknown>) => {
       const event = makeEvent(eventType, data);
       for (const listener of listeners.get(eventType) ?? []) {
@@ -151,7 +152,7 @@ function createFakeSession(cfg: Record<string, unknown>, id: string): FakeSessio
       handlers.push(handler);
       listeners.set(eventType, handlers);
     }),
-    sendAndWait: vi.fn(async () => makeAssistantMessageEvent()),
+    sendAndWait: vi.fn<SendAndWaitFn>(async () => makeAssistantMessageEvent()),
     sessionId: id,
   };
 }

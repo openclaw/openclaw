@@ -1202,6 +1202,9 @@ jobs:
           - check_name: check-guards
             task: guards
             runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-shrinkwrap
+            task: shrinkwrap
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-prod-types
             task: prod-types
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1277,7 +1280,6 @@ jobs:
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
-              pnpm deps:shrinkwrap:check
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
               pnpm lint:auth:no-pairing-store-group
@@ -1285,6 +1287,9 @@ jobs:
               pnpm check:import-cycles
               # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
               NODE_OPTIONS=--max-old-space-size=8192 pnpm build:plugin-sdk:strict-smoke
+              ;;
+            shrinkwrap)
+              pnpm deps:shrinkwrap:check
               ;;
             prod-types)
               pnpm tsgo:prod

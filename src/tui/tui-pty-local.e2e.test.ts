@@ -97,23 +97,25 @@ function writeResponsesSse(res: ServerResponse, text: string) {
 
 async function startMockModelServer(replyText: string): Promise<MockModelServer> {
   const requests: Array<Record<string, unknown>> = [];
-  const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-      writeJson(res, 200, { ok: true });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/v1/models") {
-      writeJson(res, 200, { data: [{ id: "gpt-5.5", object: "model" }] });
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/v1/responses") {
-      const raw = await readRequestBody(req);
-      requests.push(raw ? (JSON.parse(raw) as Record<string, unknown>) : {});
-      writeResponsesSse(res, replyText);
-      return;
-    }
-    writeJson(res, 404, { error: "not found" });
+  const server = createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
+        writeJson(res, 200, { ok: true });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/v1/models") {
+        writeJson(res, 200, { data: [{ id: "gpt-5.5", object: "model" }] });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/responses") {
+        const raw = await readRequestBody(req);
+        requests.push(raw ? (JSON.parse(raw) as Record<string, unknown>) : {});
+        writeResponsesSse(res, replyText);
+        return;
+      }
+      writeJson(res, 404, { error: "not found" });
+    })();
   });
 
   await new Promise<void>((resolve, reject) => {

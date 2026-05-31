@@ -819,11 +819,19 @@ function renderNotificationsSection(props: ConfigProps) {
   const push = props.webPush;
   if (!push) {
     return html`
-      <div class="settings-appearance">
-        <div class="settings-appearance__section">
-          <h3 class="settings-appearance__heading">Push Notifications</h3>
-          <p class="settings-appearance__hint">Not available in this browser.</p>
-        </div>
+      <div class="settings-notifications">
+        <section class="settings-notifications__card">
+          <div class="settings-notifications__header">
+            <span class="settings-notifications__icon">${getSectionIcon("__notifications__")}</span>
+            <div class="settings-notifications__copy">
+              <h3 class="settings-notifications__title">Push notifications</h3>
+              <p class="settings-notifications__hint">Not available in this browser.</p>
+            </div>
+            <span class="settings-notifications__badge settings-notifications__badge--muted">
+              Unavailable
+            </span>
+          </div>
+        </section>
       </div>
     `;
   }
@@ -836,80 +844,101 @@ function renderNotificationsSection(props: ConfigProps) {
         : push.permission === "default"
           ? "Not requested"
           : "Unsupported";
-  const statusDot = push.subscribed ? "settings-status-dot--ok" : "";
+  const subscriptionLabel = push.subscribed ? "Subscribed" : "Not subscribed";
+  const badgeLabel = !push.supported
+    ? "Unsupported"
+    : push.permission === "denied"
+      ? "Blocked"
+      : push.subscribed
+        ? "Subscribed"
+        : "Ready";
+  const badgeTone = !push.supported
+    ? "settings-notifications__badge--muted"
+    : push.permission === "denied"
+      ? "settings-notifications__badge--danger"
+      : push.subscribed
+        ? "settings-notifications__badge--ok"
+        : "settings-notifications__badge--accent";
 
   return html`
-    <div class="settings-appearance">
-      <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Push Notifications</h3>
-        <p class="settings-appearance__hint">
-          Subscribe to receive browser push notifications from your gateway.
-        </p>
+    <div class="settings-notifications">
+      <section class="settings-notifications__card">
+        <div class="settings-notifications__header">
+          <span class="settings-notifications__icon">${getSectionIcon("__notifications__")}</span>
+          <div class="settings-notifications__copy">
+            <h3 class="settings-notifications__title">Push notifications</h3>
+            <p class="settings-notifications__hint">
+              Receive browser push notifications from your gateway.
+            </p>
+          </div>
+          <span class="settings-notifications__badge ${badgeTone}">${badgeLabel}</span>
+        </div>
 
-        <div class="settings-info-grid">
-          <div class="settings-info-row">
-            <span class="settings-info-row__label">Browser support</span>
-            <span class="settings-info-row__value"
-              >${push.supported ? "Available" : "Not supported"}</span
-            >
+        <div class="settings-notifications__body">
+          <div class="settings-notifications__details">
+            <div class="settings-notifications__detail">
+              <span class="settings-notifications__label">Browser support</span>
+              <span class="settings-notifications__value">
+                ${push.supported ? "Available" : "Not supported"}
+              </span>
+            </div>
+            <div class="settings-notifications__detail">
+              <span class="settings-notifications__label">Permission</span>
+              <span class="settings-notifications__value">${permissionLabel}</span>
+            </div>
+            <div class="settings-notifications__detail">
+              <span class="settings-notifications__label">Status</span>
+              <span class="settings-notifications__value settings-notifications__value--status">
+                <span
+                  class="settings-notifications__dot ${push.subscribed
+                    ? "settings-notifications__dot--ok"
+                    : ""}"
+                ></span>
+                ${subscriptionLabel}
+              </span>
+            </div>
           </div>
-          <div class="settings-info-row">
-            <span class="settings-info-row__label">Permission</span>
-            <span class="settings-info-row__value">${permissionLabel}</span>
-          </div>
-          <div class="settings-info-row">
-            <span class="settings-info-row__label">Status</span>
-            <span class="settings-info-row__value">
-              <span class="settings-status-dot ${statusDot}"></span>
-              ${push.subscribed ? "Subscribed" : "Not subscribed"}
-            </span>
+
+          <div class="settings-notifications__actions">
+            ${push.supported && push.permission !== "denied"
+              ? push.subscribed
+                ? html`
+                    <button
+                      class="btn"
+                      ?disabled=${push.loading || !props.connected}
+                      @click=${() => props.onWebPushUnsubscribe?.()}
+                    >
+                      ${icons.x} Unsubscribe
+                    </button>
+                    <button
+                      class="btn primary"
+                      ?disabled=${push.loading || !props.connected}
+                      @click=${() => props.onWebPushTest?.()}
+                    >
+                      ${icons.send} Send test
+                    </button>
+                  `
+                : html`
+                    <button
+                      class="btn primary"
+                      ?disabled=${push.loading || !props.connected}
+                      @click=${() => props.onWebPushSubscribe?.()}
+                    >
+                      ${push.loading ? icons.loader : getSectionIcon("__notifications__")}
+                      ${push.loading ? "Subscribing..." : "Enable notifications"}
+                    </button>
+                  `
+              : push.permission === "denied"
+                ? html`
+                    <div class="settings-notifications__callout">
+                      Notifications are blocked. Update your browser site permissions to allow
+                      notifications.
+                    </div>
+                  `
+                : nothing}
           </div>
         </div>
-      </div>
-
-      ${push.supported && push.permission !== "denied"
-        ? html`
-            <div class="settings-appearance__section">
-              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                ${push.subscribed
-                  ? html`
-                      <button
-                        class="config-bar__btn"
-                        ?disabled=${push.loading || !props.connected}
-                        @click=${() => props.onWebPushUnsubscribe?.()}
-                      >
-                        Unsubscribe
-                      </button>
-                      <button
-                        class="config-bar__btn"
-                        ?disabled=${push.loading || !props.connected}
-                        @click=${() => props.onWebPushTest?.()}
-                      >
-                        Send test
-                      </button>
-                    `
-                  : html`
-                      <button
-                        class="config-bar__btn config-bar__btn--primary"
-                        ?disabled=${push.loading || !props.connected}
-                        @click=${() => props.onWebPushSubscribe?.()}
-                      >
-                        ${push.loading ? "Subscribing..." : "Enable notifications"}
-                      </button>
-                    `}
-              </div>
-            </div>
-          `
-        : push.permission === "denied"
-          ? html`
-              <div class="settings-appearance__section">
-                <p class="settings-appearance__hint">
-                  Notifications are blocked. Update your browser site permissions to allow
-                  notifications.
-                </p>
-              </div>
-            `
-          : nothing}
+      </section>
     </div>
   `;
 }

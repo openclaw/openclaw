@@ -115,90 +115,92 @@ function resolveResponseText(bodyText) {
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (req.method === "GET" && url.pathname === "/health") {
-    writeJson(res, 200, { ok: true });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/v1/models") {
-    writeJson(res, 200, {
-      object: "list",
-      data: [{ id: "gpt-5.5", object: "model", owned_by: "openclaw-e2e" }],
-    });
-    return;
-  }
-
-  const bodyText = await readBody(req);
-  if (requestLog) {
-    fs.appendFileSync(
-      requestLog,
-      `${JSON.stringify({ method: req.method, path: url.pathname, body: bodyText })}\n`,
-    );
-  }
-  let body = {};
-  try {
-    body = bodyText ? JSON.parse(bodyText) : {};
-  } catch {
-    body = {};
-  }
-
-  if (req.method === "POST" && url.pathname === "/v1/responses") {
-    const responseText = resolveResponseText(bodyText);
-    if (body.stream === false) {
+const server = http.createServer((req, res) => {
+  void (async () => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (req.method === "GET" && url.pathname === "/health") {
+      writeJson(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/v1/models") {
       writeJson(res, 200, {
-        id: "resp_e2e",
-        object: "response",
-        status: "completed",
-        output: [
-          {
-            type: "message",
-            id: "msg_e2e_1",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: responseText, annotations: [] }],
-          },
-        ],
-        usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+        object: "list",
+        data: [{ id: "gpt-5.5", object: "model", owned_by: "openclaw-e2e" }],
       });
       return;
     }
-    writeSse(res, responseEvents(responseText));
-    return;
-  }
 
-  if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-    const responseText = resolveResponseText(bodyText);
-    writeChatCompletion(res, body.stream !== false, responseText);
-    return;
-  }
+    const bodyText = await readBody(req);
+    if (requestLog) {
+      fs.appendFileSync(
+        requestLog,
+        `${JSON.stringify({ method: req.method, path: url.pathname, body: bodyText })}\n`,
+      );
+    }
+    let body = {};
+    try {
+      body = bodyText ? JSON.parse(bodyText) : {};
+    } catch {
+      body = {};
+    }
 
-  if (req.method === "POST" && url.pathname === "/v1/embeddings") {
-    const input = Array.isArray(body.input) ? body.input : [body.input ?? ""];
-    writeJson(res, 200, {
-      object: "list",
-      data: input.map((_, index) => ({
-        object: "embedding",
-        index,
-        embedding: [1, index / 100, 0, 0],
-      })),
-      model: body.model ?? "text-embedding-3-small",
-      usage: { prompt_tokens: input.length, total_tokens: input.length },
+    if (req.method === "POST" && url.pathname === "/v1/responses") {
+      const responseText = resolveResponseText(bodyText);
+      if (body.stream === false) {
+        writeJson(res, 200, {
+          id: "resp_e2e",
+          object: "response",
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              id: "msg_e2e_1",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: responseText, annotations: [] }],
+            },
+          ],
+          usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+        });
+        return;
+      }
+      writeSse(res, responseEvents(responseText));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
+      const responseText = resolveResponseText(bodyText);
+      writeChatCompletion(res, body.stream !== false, responseText);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+      const input = Array.isArray(body.input) ? body.input : [body.input ?? ""];
+      writeJson(res, 200, {
+        object: "list",
+        data: input.map((_, index) => ({
+          object: "embedding",
+          index,
+          embedding: [1, index / 100, 0, 0],
+        })),
+        model: body.model ?? "text-embedding-3-small",
+        usage: { prompt_tokens: input.length, total_tokens: input.length },
+      });
+      return;
+    }
+
+    if (
+      req.method === "POST" &&
+      (url.pathname === "/v1/images/generations" || url.pathname === "/v1/images/edits")
+    ) {
+      writeImageGeneration(res);
+      return;
+    }
+
+    writeJson(res, 404, {
+      error: { message: `unhandled mock route: ${req.method} ${url.pathname}` },
     });
-    return;
-  }
-
-  if (
-    req.method === "POST" &&
-    (url.pathname === "/v1/images/generations" || url.pathname === "/v1/images/edits")
-  ) {
-    writeImageGeneration(res);
-    return;
-  }
-
-  writeJson(res, 404, {
-    error: { message: `unhandled mock route: ${req.method} ${url.pathname}` },
-  });
+  })();
 });
 
 server.listen(port, "127.0.0.1", () => {

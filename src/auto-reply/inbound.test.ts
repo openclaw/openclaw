@@ -555,9 +555,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const firstFlush = (
-        setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await vi.waitFor(() => {
         expect(started).toEqual(["1"]);
@@ -573,9 +571,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const thirdFlush = (
-        setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await Promise.resolve();
 
@@ -586,10 +582,12 @@ describe("createInboundDebouncer", () => {
         throw new Error("Expected first inbound debounce release callback to be initialized");
       }
       releaseFirst();
-      await Promise.all([firstFlush, secondEnqueue, thirdFlush, thirdEnqueue]);
+      await Promise.all([secondEnqueue, thirdEnqueue]);
 
-      expect(started).toEqual(["1", "2", "3"]);
-      expect(finished).toEqual(["1", "2", "3"]);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1", "2", "3"]);
+        expect(finished).toEqual(["1", "2", "3"]);
+      });
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -775,9 +773,7 @@ describe("createInboundDebouncer", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[bufferedTimerIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      const bufferedFlush = (
-        setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => Promise<void>) | undefined
-      )?.();
+      (setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => void) | undefined)?.();
 
       await Promise.resolve();
       expect(started).toEqual(["2"]);
@@ -787,10 +783,12 @@ describe("createInboundDebouncer", () => {
         throw new Error("Expected inbound overflow release callback to be initialized");
       }
       releaseOverflow();
-      await Promise.all([overflowEnqueue, bufferedEnqueue, bufferedFlush]);
+      await Promise.all([overflowEnqueue, bufferedEnqueue]);
 
-      expect(started).toEqual(["2", "3"]);
-      expect(finished).toEqual(["2", "3"]);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2", "3"]);
+        expect(finished).toEqual(["2", "3"]);
+      });
     } finally {
       setTimeoutSpy.mockRestore();
     }

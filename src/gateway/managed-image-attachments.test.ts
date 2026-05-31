@@ -181,17 +181,19 @@ async function requestManagedImage(params: {
   );
 
   const auth = { mode: "test" } as never;
-  const server = http.createServer(async (req, res) => {
-    const handled = await handleManagedOutgoingImageHttpRequest(req, res, {
-      auth,
-      trustedProxies: ["127.0.0.1/32"],
-      allowRealIpFallback: false,
-      stateDir: params.stateDir,
-    });
-    if (!handled) {
-      res.statusCode = 404;
-      res.end("unhandled");
-    }
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      const handled = await handleManagedOutgoingImageHttpRequest(req, res, {
+        auth,
+        trustedProxies: ["127.0.0.1/32"],
+        allowRealIpFallback: false,
+        stateDir: params.stateDir,
+      });
+      if (!handled) {
+        res.statusCode = 404;
+        res.end("unhandled");
+      }
+    })();
   });
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -207,16 +209,18 @@ async function requestManagedImage(params: {
           method: params.method ?? "GET",
           headers: params.headers,
         },
-        async (res) => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of res) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          resolve({
-            statusCode: res.statusCode ?? 0,
-            headers: res.headers,
-            body: Buffer.concat(chunks),
-          });
+        (res) => {
+          void (async () => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of res) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            resolve({
+              statusCode: res.statusCode ?? 0,
+              headers: res.headers,
+              body: Buffer.concat(chunks),
+            });
+          })();
         },
       );
       req.on("error", reject);

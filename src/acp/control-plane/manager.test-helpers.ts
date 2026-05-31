@@ -136,17 +136,17 @@ export function expectNoMockCallFields(
 
 export function createRuntime(): {
   runtime: AcpRuntime;
-  ensureSession: ReturnType<typeof vi.fn>;
-  runTurn: ReturnType<typeof vi.fn>;
-  prepareFreshSession: ReturnType<typeof vi.fn>;
-  cancel: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-  getCapabilities: ReturnType<typeof vi.fn>;
-  getStatus: ReturnType<typeof vi.fn>;
-  setMode: ReturnType<typeof vi.fn>;
-  setConfigOption: ReturnType<typeof vi.fn>;
+  ensureSession: ReturnType<typeof vi.fn<AcpRuntime["ensureSession"]>>;
+  runTurn: ReturnType<typeof vi.fn<AcpRuntime["runTurn"]>>;
+  prepareFreshSession: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>>;
+  cancel: ReturnType<typeof vi.fn<AcpRuntime["cancel"]>>;
+  close: ReturnType<typeof vi.fn<AcpRuntime["close"]>>;
+  getCapabilities: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["getCapabilities"]>>>;
+  getStatus: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["getStatus"]>>>;
+  setMode: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["setMode"]>>>;
+  setConfigOption: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["setConfigOption"]>>>;
 } {
-  const ensureSession = vi.fn(
+  const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(
     async (input: {
       sessionKey: string;
       agent: string;
@@ -161,23 +161,23 @@ export function createRuntime(): {
       runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
     }),
   );
-  const runTurn = vi.fn(async function* () {
+  const runTurn = vi.fn<AcpRuntime["runTurn"]>(async function* () {
     yield { type: "done" as const };
   });
-  const prepareFreshSession = vi.fn(async () => {});
-  const cancel = vi.fn(async () => {});
-  const close = vi.fn(async () => {});
-  const getCapabilities = vi.fn(
+  const prepareFreshSession = vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>(async () => {});
+  const cancel = vi.fn<AcpRuntime["cancel"]>(async () => {});
+  const close = vi.fn<AcpRuntime["close"]>(async () => {});
+  const getCapabilities = vi.fn<NonNullable<AcpRuntime["getCapabilities"]>>(
     async (): Promise<AcpRuntimeCapabilities> => ({
       controls: ["session/set_mode", "session/set_config_option", "session/status"],
     }),
   );
-  const getStatus = vi.fn(async () => ({
+  const getStatus = vi.fn<NonNullable<AcpRuntime["getStatus"]>>(async () => ({
     summary: "status=alive",
     details: { status: "alive" },
   }));
-  const setMode = vi.fn(async () => {});
-  const setConfigOption = vi.fn(async () => {});
+  const setMode = vi.fn<NonNullable<AcpRuntime["setMode"]>>(async () => {});
+  const setConfigOption = vi.fn<NonNullable<AcpRuntime["setConfigOption"]>>(async () => {});
   return {
     runtime: {
       ensureSession,

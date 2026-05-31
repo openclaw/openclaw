@@ -31,12 +31,14 @@ async function startLocalStreamableHttpMcpServer(): Promise<{
 
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await mcpServer.connect(transport);
-  const httpServer = http.createServer(async (req, res) => {
-    if (!req.url?.startsWith("/mcp")) {
-      res.writeHead(404).end();
-      return;
-    }
-    await transport.handleRequest(req, res);
+  const httpServer = http.createServer((req, res) => {
+    void (async () => {
+      if (!req.url?.startsWith("/mcp")) {
+        res.writeHead(404).end();
+        return;
+      }
+      await transport.handleRequest(req, res);
+    })();
   });
 
   await new Promise<void>((resolve) => {

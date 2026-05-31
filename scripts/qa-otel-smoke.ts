@@ -693,69 +693,71 @@ function startLocalOtlpReceiver(disallowedBodyNeedlesLocal: string[] = []) {
   const capturedMetrics: CapturedMetric[] = [];
   const capturedLogRecords: CapturedLogRecord[] = [];
   const capturedBodyText: Partial<Record<OtlpSignal, string[]>> = {};
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== "POST" || !req.url) {
-      res.writeHead(404, { "content-type": "text/plain" });
-      res.end("not found");
-      return;
-    }
-    const requestPath = req.url;
-    const signal = OTLP_SIGNAL_PATHS.get(requestPath);
-    if (!signal) {
-      res.writeHead(404, { "content-type": "text/plain" });
-      res.end("not found");
-      return;
-    }
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void (async () => {
+      if (req.method !== "POST" || !req.url) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("not found");
+        return;
+      }
+      const requestPath = req.url;
+      const signal = OTLP_SIGNAL_PATHS.get(requestPath);
+      if (!signal) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("not found");
+        return;
+      }
 
-    const contentEncoding = headerValue(req.headers["content-encoding"]);
-    let body: Buffer;
-    try {
-      const compressedBody = await readRequestBody(req);
-      body = decodeRequestBody(compressedBody, contentEncoding);
-    } catch (error) {
-      const statusCode =
-        typeof (error as { statusCode?: unknown }).statusCode === "number"
-          ? (error as { statusCode: number }).statusCode
-          : 400;
+      const contentEncoding = headerValue(req.headers["content-encoding"]);
+      let body: Buffer;
+      try {
+        const compressedBody = await readRequestBody(req);
+        body = decodeRequestBody(compressedBody, contentEncoding);
+      } catch (error) {
+        const statusCode =
+          typeof (error as { statusCode?: unknown }).statusCode === "number"
+            ? (error as { statusCode: number }).statusCode
+            : 400;
+        capturedRequests.push({
+          path: requestPath,
+          signal,
+          bytes: 0,
+          contentEncoding,
+          status: statusCode,
+          spanCount: 0,
+          metricCount: 0,
+          logCount: 0,
+        });
+        res.writeHead(statusCode, { "content-type": "text/plain" });
+        res.end(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      const spans = signal === "traces" ? decodeTraceRequest(body) : [];
+      const metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
+      const logRecords = signal === "logs" ? decodeLogRequest(body) : [];
+      if (spans.length > 0) {
+        capturedSpans.push(...spans);
+      }
+      if (metrics.length > 0) {
+        capturedMetrics.push(...metrics);
+      }
+      if (logRecords.length > 0) {
+        capturedLogRecords.push(...logRecords);
+      }
+      appendCapturedBodyText(capturedBodyText, signal, body, undefined, disallowedBodyNeedlesLocal);
       capturedRequests.push({
         path: requestPath,
         signal,
-        bytes: 0,
+        bytes: body.length,
         contentEncoding,
-        status: statusCode,
-        spanCount: 0,
-        metricCount: 0,
-        logCount: 0,
+        status: 200,
+        spanCount: spans.length,
+        metricCount: metrics.length,
+        logCount: logRecords.length,
       });
-      res.writeHead(statusCode, { "content-type": "text/plain" });
-      res.end(error instanceof Error ? error.message : String(error));
-      return;
-    }
-    const spans = signal === "traces" ? decodeTraceRequest(body) : [];
-    const metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
-    const logRecords = signal === "logs" ? decodeLogRequest(body) : [];
-    if (spans.length > 0) {
-      capturedSpans.push(...spans);
-    }
-    if (metrics.length > 0) {
-      capturedMetrics.push(...metrics);
-    }
-    if (logRecords.length > 0) {
-      capturedLogRecords.push(...logRecords);
-    }
-    appendCapturedBodyText(capturedBodyText, signal, body, undefined, disallowedBodyNeedlesLocal);
-    capturedRequests.push({
-      path: requestPath,
-      signal,
-      bytes: body.length,
-      contentEncoding,
-      status: 200,
-      spanCount: spans.length,
-      metricCount: metrics.length,
-      logCount: logRecords.length,
-    });
-    res.writeHead(200, { "content-type": "application/x-protobuf" });
-    res.end();
+      res.writeHead(200, { "content-type": "application/x-protobuf" });
+      res.end();
+    })();
   });
 
   return {

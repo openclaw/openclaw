@@ -619,7 +619,9 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   >[1];
   const relayAbort = new AbortController();
   const sub = pool.subscribeMany(relays, dmFilter, {
-    onevent: handleEvent,
+    onevent: (event) => {
+      void handleEvent(event);
+    },
     oneose: () => {
       // EOSE handler - called when all stored events have been received
       for (const relay of relays) {
@@ -766,10 +768,11 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      const [publishPromise] = pool.publish([relay], reply);
-      if (!publishPromise) {
+      const publishPromises = pool.publish([relay], reply);
+      if (publishPromises.length === 0) {
         throw new Error(`Failed to create publish promise for relay ${relay}`);
       }
+      const publishPromise = publishPromises[0];
       await publishPromise;
       const latency = Date.now() - startTime;
 

@@ -1092,7 +1092,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     await api.subscribe({
       app: "channels",
       path: "/v2",
-      event: handleChannelsFirehose,
+      event: (event) => {
+        void handleChannelsFirehose(event);
+      },
       err: (error) => {
         runtime.error?.(`[tlon] Channels firehose error: ${String(error)}`);
       },
@@ -1106,7 +1108,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     await api.subscribe({
       app: "chat",
       path: "/v3",
-      event: handleChatFirehose,
+      event: (event) => {
+        void handleChatFirehose(event);
+      },
       err: (error) => {
         runtime.error?.(`[tlon] Chat firehose error: ${String(error)}`);
       },
@@ -1196,81 +1200,36 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       await api.subscribe({
         app: "groups",
         path: "/groups/ui",
-        event: async (event: unknown) => {
-          try {
-            const eventRecord = asRecord(event);
-            // Handle group/channel join events
-            // Event structure: { group: { flag: "~host/group-name", ... }, channels: { ... } }
-            if (eventRecord) {
-              // Check for new channels being added to groups
-              const channels = asRecord(eventRecord.channels);
-              if (channels) {
-                for (const [channelNest, _channelData] of Object.entries(channels)) {
-                  // Only monitor chat channels
-                  if (!channelNest.startsWith("chat/")) {
-                    continue;
-                  }
-
-                  // If this is a new channel we're not watching yet, add it
-                  if (!watchedChannels.has(channelNest)) {
-                    watchedChannels.add(channelNest);
-                    runtime.log?.(
-                      `[tlon] Auto-detected new channel (invite accepted): ${channelNest}`,
-                    );
-
-                    // Persist to settings store so it survives restarts
-                    if (effectiveAutoAcceptGroupInvites) {
-                      try {
-                        const currentChannels = currentSettings.groupChannels || [];
-                        if (!currentChannels.includes(channelNest)) {
-                          const updatedChannels = [...currentChannels, channelNest];
-                          // Poke settings store to persist
-                          await api.poke({
-                            app: "settings",
-                            mark: "settings-event",
-                            json: {
-                              "put-entry": {
-                                "bucket-key": "tlon",
-                                "entry-key": "groupChannels",
-                                value: updatedChannels,
-                                desk: "moltbot",
-                              },
-                            },
-                          });
-                          runtime.log?.(`[tlon] Persisted ${channelNest} to settings store`);
-                        }
-                      } catch (err) {
-                        runtime.error?.(
-                          `[tlon] Failed to persist channel to settings: ${String(err)}`,
-                        );
-                      }
-                    }
-                  }
-                }
-              }
-
-              // Also check for the "join" event structure
-              const join = asRecord(eventRecord.join);
-              if (join) {
-                const joinChannels = Array.isArray(join.channels) ? join.channels : [];
-                if (joinChannels.length > 0) {
-                  for (const channelNest of joinChannels) {
-                    if (typeof channelNest !== "string") {
-                      continue;
-                    }
+        event: (event: unknown) => {
+          void (async () => {
+            try {
+              const eventRecord = asRecord(event);
+              // Handle group/channel join events
+              // Event structure: { group: { flag: "~host/group-name", ... }, channels: { ... } }
+              if (eventRecord) {
+                // Check for new channels being added to groups
+                const channels = asRecord(eventRecord.channels);
+                if (channels) {
+                  for (const [channelNest, _channelData] of Object.entries(channels)) {
+                    // Only monitor chat channels
                     if (!channelNest.startsWith("chat/")) {
                       continue;
                     }
+
+                    // If this is a new channel we're not watching yet, add it
                     if (!watchedChannels.has(channelNest)) {
                       watchedChannels.add(channelNest);
-                      runtime.log?.(`[tlon] Auto-detected joined channel: ${channelNest}`);
+                      runtime.log?.(
+                        `[tlon] Auto-detected new channel (invite accepted): ${channelNest}`,
+                      );
 
-                      // Persist to settings store
+                      // Persist to settings store so it survives restarts
                       if (effectiveAutoAcceptGroupInvites) {
                         try {
                           const currentChannels = currentSettings.groupChannels || [];
                           if (!currentChannels.includes(channelNest)) {
                             const updatedChannels = [...currentChannels, channelNest];
+                            // Poke settings store to persist
                             await api.poke({
                               app: "settings",
                               mark: "settings-event",
@@ -1294,11 +1253,60 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                     }
                   }
                 }
+
+                // Also check for the "join" event structure
+                const join = asRecord(eventRecord.join);
+                if (join) {
+                  const joinChannels = Array.isArray(join.channels) ? join.channels : [];
+                  if (joinChannels.length > 0) {
+                    for (const channelNest of joinChannels) {
+                      if (typeof channelNest !== "string") {
+                        continue;
+                      }
+                      if (!channelNest.startsWith("chat/")) {
+                        continue;
+                      }
+                      if (!watchedChannels.has(channelNest)) {
+                        watchedChannels.add(channelNest);
+                        runtime.log?.(`[tlon] Auto-detected joined channel: ${channelNest}`);
+
+                        // Persist to settings store
+                        if (effectiveAutoAcceptGroupInvites) {
+                          try {
+                            const currentChannels = currentSettings.groupChannels || [];
+                            if (!currentChannels.includes(channelNest)) {
+                              const updatedChannels = [...currentChannels, channelNest];
+                              await api.poke({
+                                app: "settings",
+                                mark: "settings-event",
+                                json: {
+                                  "put-entry": {
+                                    "bucket-key": "tlon",
+                                    "entry-key": "groupChannels",
+                                    value: updatedChannels,
+                                    desk: "moltbot",
+                                  },
+                                },
+                              });
+                              runtime.log?.(`[tlon] Persisted ${channelNest} to settings store`);
+                            }
+                          } catch (err) {
+                            runtime.error?.(
+                              `[tlon] Failed to persist channel to settings: ${String(err)}`,
+                            );
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
+            } catch (error: unknown) {
+              runtime.error?.(
+                `[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`,
+              );
             }
-          } catch (error: unknown) {
-            runtime.error?.(`[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`);
-          }
+          })();
         },
         err: (error) => {
           runtime.error?.(`[tlon] Groups-ui subscription error: ${String(error)}`);
@@ -1469,22 +1477,24 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     // Periodically refresh channel discovery
     const pollInterval = setInterval(
-      async () => {
-        if (!opts.abortSignal?.aborted) {
-          try {
-            if (effectiveAutoDiscoverChannels) {
-              const discoveredChannels = await fetchAllChannels(api, runtime);
-              for (const channelNest of discoveredChannels) {
-                if (!watchedChannels.has(channelNest)) {
-                  watchedChannels.add(channelNest);
-                  runtime.log?.(`[tlon] Now watching new channel: ${channelNest}`);
+      () => {
+        void (async () => {
+          if (!opts.abortSignal?.aborted) {
+            try {
+              if (effectiveAutoDiscoverChannels) {
+                const discoveredChannels = await fetchAllChannels(api, runtime);
+                for (const channelNest of discoveredChannels) {
+                  if (!watchedChannels.has(channelNest)) {
+                    watchedChannels.add(channelNest);
+                    runtime.log?.(`[tlon] Now watching new channel: ${channelNest}`);
+                  }
                 }
               }
+            } catch (error: unknown) {
+              runtime.error?.(`[tlon] Channel refresh error: ${formatErrorMessage(error)}`);
             }
-          } catch (error: unknown) {
-            runtime.error?.(`[tlon] Channel refresh error: ${formatErrorMessage(error)}`);
           }
-        }
+        })();
       },
       2 * 60 * 1000,
     );

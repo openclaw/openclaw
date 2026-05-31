@@ -287,7 +287,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     }
 
     if (!isStopped() && !abortSignal.aborted) {
-      setImmediate(poll);
+      setImmediate(() => {
+        void poll();
+      });
     }
   };
 

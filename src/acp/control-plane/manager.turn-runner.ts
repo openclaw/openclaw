@@ -28,20 +28,17 @@ import {
 import type {
   AcpRunTurnInput,
   AcpSessionManagerDeps,
-  AcpSessionResolution,
   ActiveTurnState,
+  EnsureManagerRuntimeHandle,
+  ReconcileManagerRuntimeSessionIdentifiers,
+  ResolveManagerSession,
+  SetManagerSessionState,
   SessionAcpMeta,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { normalizeActorKey, requireReadySessionMeta } from "./manager.utils.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
-
-type EnsureRuntimeHandle = (params: {
-  cfg: AcpRunTurnInput["cfg"];
-  sessionKey: string;
-  meta: SessionAcpMeta;
-}) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
 
 type ApplyRuntimeControls = (params: {
   sessionKey: string;
@@ -50,41 +47,21 @@ type ApplyRuntimeControls = (params: {
   meta: SessionAcpMeta;
 }) => Promise<void>;
 
-type SetSessionState = (params: {
-  cfg: AcpRunTurnInput["cfg"];
-  sessionKey: string;
-  state: SessionAcpMeta["state"];
-  lastError?: string;
-  clearLastError?: boolean;
-}) => Promise<void>;
-
-type ReconcileRuntimeSessionIdentifiers = (params: {
-  cfg: AcpRunTurnInput["cfg"];
-  sessionKey: string;
-  runtime: AcpRuntime;
-  handle: AcpRuntimeHandle;
-  meta: SessionAcpMeta;
-  failOnStatusError: boolean;
-}) => Promise<{ handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
-
 export async function runManagerTurn(params: {
   input: AcpRunTurnInput;
   sessionKey: string;
   deps: AcpSessionManagerDeps;
   runtimeHandles: ManagerRuntimeHandleCache;
   activeTurnBySession: Map<string, ActiveTurnState>;
-  resolveSession: (params: {
-    cfg: AcpRunTurnInput["cfg"];
-    sessionKey: string;
-  }) => AcpSessionResolution;
-  ensureRuntimeHandle: EnsureRuntimeHandle;
+  resolveSession: ResolveManagerSession;
+  ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   applyRuntimeControls: ApplyRuntimeControls;
-  setSessionState: SetSessionState;
+  setSessionState: SetManagerSessionState;
   recordTurnCompletion: (params: {
     startedAt: number;
     errorCode?: AcpRuntimeError["code"];
   }) => void;
-  reconcileRuntimeSessionIdentifiers: ReconcileRuntimeSessionIdentifiers;
+  reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<void> {
   const { input, sessionKey } = params;

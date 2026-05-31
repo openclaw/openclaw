@@ -188,34 +188,36 @@ export async function createWaSocket(
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
-  sock.ev.on("connection.update", async (update: Partial<import("baileys").ConnectionState>) => {
-    try {
-      const { connection, lastDisconnect, qr } = update;
-      if (qr) {
-        opts.onQr?.(qr);
-        if (printQr) {
-          console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
-          void printTerminalQr(qr).catch((err) => {
-            sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
-          });
+  sock.ev.on("connection.update", (update: Partial<import("baileys").ConnectionState>) => {
+    void (async () => {
+      try {
+        const { connection, lastDisconnect, qr } = update;
+        if (qr) {
+          opts.onQr?.(qr);
+          if (printQr) {
+            console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
+            void printTerminalQr(qr).catch((err) => {
+              sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
+            });
+          }
         }
-      }
-      if (connection === "close") {
-        const status = getStatusCode(lastDisconnect?.error);
-        if (status === LOGGED_OUT_STATUS) {
-          console.error(
-            danger(
-              `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
-            ),
-          );
+        if (connection === "close") {
+          const status = getStatusCode(lastDisconnect?.error);
+          if (status === LOGGED_OUT_STATUS) {
+            console.error(
+              danger(
+                `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
+              ),
+            );
+          }
         }
+        if (connection === "open" && verbose) {
+          console.log(success("WhatsApp Web connected."));
+        }
+      } catch (err) {
+        sessionLogger.error({ error: String(err) }, "connection.update handler error");
       }
-      if (connection === "open" && verbose) {
-        console.log(success("WhatsApp Web connected."));
-      }
-    } catch (err) {
-      sessionLogger.error({ error: String(err) }, "connection.update handler error");
-    }
+    })();
   });
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process

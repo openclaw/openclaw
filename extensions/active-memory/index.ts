@@ -1793,7 +1793,9 @@ function watchTerminalMemorySearchResult(params: {
     if (stopped) {
       return;
     }
-    timeoutId = setTimeout(tick, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
+    timeoutId = setTimeout(() => {
+      void tick();
+    }, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
     timeoutId.unref?.();
   };
   const tick = async () => {

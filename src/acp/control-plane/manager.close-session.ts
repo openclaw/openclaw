@@ -2,8 +2,6 @@ import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
-import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toAcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
@@ -15,25 +13,19 @@ import type {
   AcpCloseSessionInput,
   AcpCloseSessionResult,
   AcpSessionManagerDeps,
-  AcpSessionResolution,
-  SessionAcpMeta,
+  EnsureManagerRuntimeHandle,
+  ResolveManagerSession,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { requireReadySessionMeta, resolveAcpSessionResolutionError } from "./manager.utils.js";
-
-type EnsureRuntimeHandle = (params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  meta: SessionAcpMeta;
-}) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
 
 export async function runManagerCloseSession(params: {
   input: AcpCloseSessionInput;
   sessionKey: string;
   deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
-  resolveSession: (params: { cfg: OpenClawConfig; sessionKey: string }) => AcpSessionResolution;
-  ensureRuntimeHandle: EnsureRuntimeHandle;
+  resolveSession: ResolveManagerSession;
+  ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<AcpCloseSessionResult> {
   const { input, sessionKey } = params;

@@ -266,7 +266,9 @@ export async function finalizeSetupWizard(
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
-              warn: (message, title) => prompter.note(message, title),
+              warn: (message, title) => {
+                void prompter.note(message, title);
+              },
               config: nextConfig,
             },
           );

@@ -17,7 +17,7 @@ let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
 let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
-let readFileMock: ReturnType<typeof vi.fn>;
+let readFileMock: ReturnType<typeof vi.fn<(pathname: string) => Promise<string>>>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
@@ -230,7 +230,7 @@ function requireMockCallParam(
 describe("loadModelCatalog", () => {
   beforeAll(async () => {
     vi.resetModules();
-    readFileMock = vi.fn();
+    readFileMock = vi.fn<(pathname: string) => Promise<string>>();
     vi.doMock("node:fs/promises", async (importOriginal) => ({
       ...(await importOriginal<typeof import("node:fs/promises")>()),
       readFile: readFileMock,

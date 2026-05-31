@@ -47,6 +47,9 @@ const {
   throttlerSpy,
   useSpy,
 } = harness;
+type BuildModelsProviderDataMock = ReturnType<
+  typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
+>;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const {
   createTelegramBotCore: createTelegramBotBase,
@@ -630,7 +633,7 @@ describe("createTelegramBot", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      return setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => Promise<void>) | undefined;
+      return setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
     };
 
     try {
@@ -650,7 +653,7 @@ describe("createTelegramBot", () => {
       });
 
       const flushFirst = extractLatestDebounceFlush();
-      const firstFlush = flushFirst?.();
+      flushFirst?.();
 
       await vi.waitFor(
         () => {
@@ -674,7 +677,7 @@ describe("createTelegramBot", () => {
       });
 
       const flushSecond = extractLatestDebounceFlush();
-      const secondFlush = flushSecond?.();
+      flushSecond?.();
       await Promise.resolve();
 
       expect(startedBodies).toHaveLength(1);
@@ -684,7 +687,6 @@ describe("createTelegramBot", () => {
         throw new Error("Expected first Telegram run release callback to be initialized");
       }
       releaseFirstRun();
-      await Promise.all([firstFlush, secondFlush]);
 
       await vi.waitFor(
         () => {
@@ -743,9 +745,7 @@ describe("createTelegramBot", () => {
         clearTimeout(
           setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
         );
-        return setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as
-          | (() => Promise<void>)
-          | undefined;
+        return setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
       };
 
       try {
@@ -791,7 +791,8 @@ describe("createTelegramBot", () => {
         expect(startedBodies).toHaveLength(1);
         expect(startedBodies[0]).toContain("stop");
 
-        await flushFirst?.();
+        flushFirst?.();
+        await Promise.resolve();
         expect(startedBodies).toHaveLength(1);
         expect(sendMessageSpy.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain(
           "reply:first",
@@ -814,8 +815,13 @@ describe("createTelegramBot", () => {
         });
 
         const flushReplay = extractLatestDebounceFlush();
-        await flushReplay?.();
-        expect(startedBodies).toHaveLength(2);
+        flushReplay?.();
+        await vi.waitFor(
+          () => {
+            expect(startedBodies).toHaveLength(2);
+          },
+          { interval: 1, timeout: 500 },
+        );
         expect(startedBodies[1]).toContain("first");
       } finally {
         setTimeoutSpy.mockRestore();
@@ -858,7 +864,7 @@ describe("createTelegramBot", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      return setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => Promise<void>) | undefined;
+      return setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
     };
 
     try {
@@ -905,7 +911,8 @@ describe("createTelegramBot", () => {
       expect(startedBodies).toHaveLength(1);
       expect(startedBodies[0]).toContain("stop");
 
-      await flushForward?.();
+      flushForward?.();
+      await Promise.resolve();
       expect(startedBodies).toHaveLength(1);
       expect(sendMessageSpy.mock.calls.map((call) => String(call[1])).join("\n")).not.toContain(
         "reply:forwarded first",
@@ -956,7 +963,7 @@ describe("createTelegramBot", () => {
       clearTimeout(
         setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
       );
-      return setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => Promise<void>) | undefined;
+      return setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
     };
 
     try {
@@ -999,7 +1006,7 @@ describe("createTelegramBot", () => {
         finalHandler: messageHandler,
       });
 
-      await flushFirst?.();
+      flushFirst?.();
       await vi.waitFor(() => {
         expect(startedBodies.some((body) => body.includes("first"))).toBe(true);
       });
@@ -1213,7 +1220,7 @@ describe("createTelegramBot", () => {
   });
   it("reloads callback model routing bindings without recreating the bot", async () => {
     const buildModelsProviderDataMock =
-      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+      telegramBotDepsForTest.buildModelsProviderData as unknown as BuildModelsProviderDataMock;
     let boundAgentId = "agent-a";
     loadConfig.mockImplementation(() => ({
       agents: {
@@ -4166,7 +4173,7 @@ describe("createTelegramBot", () => {
     });
 
     const buildModelsProviderDataMock =
-      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+      telegramBotDepsForTest.buildModelsProviderData as unknown as BuildModelsProviderDataMock;
     buildModelsProviderDataMock.mockClear();
     editMessageTextSpy.mockClear();
 
@@ -4674,12 +4681,13 @@ describe("createTelegramBot", () => {
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(String(editMessageTextSpy.mock.calls.at(-1)?.[2] ?? "")).toContain(
+    const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
+    expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
       "Session-only model selection. Runtime unchanged.",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>
-        String(call[2] ?? "").includes("Failed to change model"),
+        (typeof call[2] === "string" ? call[2] : "").includes("Failed to change model"),
       ),
     ).toBe(false);
   });

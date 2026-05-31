@@ -9,10 +9,12 @@ import type { GatewayHelloOk } from "./gateway.ts";
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadControlUiBootstrapConfigMock = vi.hoisted(() => vi.fn(async () => undefined));
 
+type GatewayRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  request: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn<GatewayRequest>>;
   options: { clientVersion?: string };
   emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
@@ -43,7 +45,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
-    readonly request = vi.fn(async (method: string) => {
+    readonly request = vi.fn<GatewayRequest>(async (method: string) => {
       if (method === "update.status") {
         return { sentinel: null };
       }
