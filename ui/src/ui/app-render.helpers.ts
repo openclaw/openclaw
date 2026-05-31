@@ -199,14 +199,19 @@ const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
 const NEW_CHAT_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
 
-export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
+export function renderTab(
+  state: AppViewState,
+  tab: Tab,
+  opts?: { collapsed?: boolean; child?: boolean },
+) {
   const href = pathForTab(tab, state.basePath);
   const isActive = tab === "config" ? isSettingsTab(state.tab) : state.tab === tab;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
+  const isChild = opts?.child === true;
   return html`
     <a
       href=${href}
-      class="nav-item ${isActive ? "nav-item--active" : ""}"
+      class="nav-item ${isActive ? "nav-item--active" : ""} ${isChild ? "nav-item--child" : ""}"
       @click=${(event: MouseEvent) => {
         if (
           event.defaultPrevented ||

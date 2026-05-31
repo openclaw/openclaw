@@ -153,6 +153,8 @@ import {
   pathForTab,
   SETTINGS_TABS,
   TAB_GROUPS,
+  childTabsOf,
+  isChildTab,
   subtitleForTab,
   titleForTab,
   type Tab,
@@ -444,6 +446,10 @@ const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewC
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
+const lazySkillWorkshop = createLazyView(
+  () => import("./views/skill-workshop.ts"),
+  notifyLazyViewChanged,
+);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
 export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
@@ -1911,9 +1917,14 @@ export function renderApp(state: AppViewState) {
                           `
                         : nothing}
                       <div class="nav-section__items">
-                        ${group.tabs.map((tab) =>
-                          renderTab(state, tab, { collapsed: navCollapsed }),
-                        )}
+                        ${group.tabs
+                          .filter((tab) => !isChildTab(tab))
+                          .flatMap((tab) => [
+                            renderTab(state, tab, { collapsed: navCollapsed }),
+                            ...childTabsOf(tab).map((child) =>
+                              renderTab(state, child, { collapsed: navCollapsed, child: true }),
+                            ),
+                          ])}
                       </div>
                     </section>
                   `;
@@ -2845,6 +2856,43 @@ export function renderApp(state: AppViewState) {
                 onClawHubInstall: (slug) => void installFromClawHub(state, slug),
               }),
             )
+          : nothing}
+        ${state.tab === "skillWorkshop"
+          ? renderLazyView(lazySkillWorkshop, (m) => {
+              const proposals = m.getDemoSkillWorkshopProposals();
+              const counts = m.countProposals(proposals);
+              const selectedKey = state.skillWorkshopSelectedKey ?? proposals[0]?.key ?? null;
+              const currentIndex = proposals.findIndex((p) => p.key === selectedKey);
+              const goto = (offset: number) => {
+                if (proposals.length === 0) return;
+                const idx = currentIndex < 0 ? 0 : currentIndex;
+                const next = (idx + offset + proposals.length) % proposals.length;
+                state.skillWorkshopSelectedKey = proposals[next].key;
+              };
+              return m.renderSkillWorkshop({
+                loading: false,
+                proposals,
+                selectedKey,
+                statusFilter: state.skillWorkshopStatusFilter,
+                query: state.skillWorkshopQuery,
+                filePreviewKey: state.skillWorkshopFilePreviewKey,
+                counts,
+                onStatusFilterChange: (next) => (state.skillWorkshopStatusFilter = next),
+                onQueryChange: (next) => (state.skillWorkshopQuery = next),
+                onSelect: (key) => {
+                  state.skillWorkshopSelectedKey = key;
+                  state.skillWorkshopFilePreviewKey = null;
+                },
+                onPrev: () => goto(-1),
+                onNext: () => goto(1),
+                onApply: () => {},
+                onRevise: () => {},
+                onSetAside: () => {},
+                onReject: () => {},
+                onPreviewFile: (_key, path) => (state.skillWorkshopFilePreviewKey = path),
+                onClosePreview: () => (state.skillWorkshopFilePreviewKey = null),
+              });
+            })
           : nothing}
         ${state.tab === "nodes"
           ? renderLazyView(lazyNodes, (m) =>

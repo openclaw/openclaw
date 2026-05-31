@@ -425,6 +425,10 @@ export type AppViewState = {
     skillCardContentKeys: Record<string, string>;
     skillCardLoadingKey: string | null;
     skillCardErrors: Record<string, string>;
+    skillWorkshopSelectedKey: string | null;
+    skillWorkshopStatusFilter: "all" | "pending" | "applied" | "rejected" | "quarantined" | "stale";
+    skillWorkshopQuery: string;
+    skillWorkshopFilePreviewKey: string | null;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

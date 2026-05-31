@@ -622,6 +622,17 @@ export class OpenClawApp extends LitElement {
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
 
+  @state() skillWorkshopSelectedKey: string | null = null;
+  @state() skillWorkshopStatusFilter:
+    | "all"
+    | "pending"
+    | "applied"
+    | "rejected"
+    | "quarantined"
+    | "stale" = "all";
+  @state() skillWorkshopQuery = "";
+  @state() skillWorkshopFilePreviewKey: string | null = null;
+
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
