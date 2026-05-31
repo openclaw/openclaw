@@ -529,6 +529,91 @@ test("sessions.changed command metadata excludes only the command run from activ
   expect(payload.excludeActiveRunIds).toBeUndefined();
 });
 
+test("sessions.changed command metadata marks selected global runs active", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  await writeSessionStore({
+    entries: {},
+    storePath: path.join(dir, "prime-sessions.json"),
+  });
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-main-global") }, null, 2),
+    "utf-8",
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify(
+      {
+        global: sessionStoreEntry("sess-work-global", {
+          label: "Work global",
+        }),
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required");
+  }
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
+    await getGatewayConfigModule();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  const broadcastToConnIds = vi.fn();
+  emitSessionsChanged(
+    {
+      broadcastToConnIds,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getRuntimeConfig,
+      chatAbortControllers: new Map([["agent-run", { sessionKey: "agent:work:global" }]]),
+    } as never,
+    {
+      sessionKey: "global",
+      agentId: "work",
+      reason: "command-metadata",
+      excludeActiveRunIds: ["command-run"],
+    },
+  );
+
+  const payload = expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "global",
+    agentId: "work",
+    reason: "command-metadata",
+    sessionId: "sess-work-global",
+    label: "Work global",
+    hasActiveRun: true,
+  });
+  expect(payload.excludeActiveRunIds).toBeUndefined();
+
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  await fs.writeFile(configPath, "{}\n", "utf-8");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
 test("sessions.changed mutation events include live session setting metadata", async () => {
   const sessionSettings = {
     verboseLevel: "on",

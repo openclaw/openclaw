@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -58,11 +58,20 @@ function hasTrackedActiveSessionRun(params: {
   canonicalKey: string;
   agentId?: string;
   defaultAgentId?: string;
+  mainKey?: string;
   excludeRunIds?: ReadonlySet<string>;
 }): boolean {
   const activeRuns = collectTrackedActiveSessionRuns(params.context, {
     excludeRunIds: params.excludeRunIds,
   });
+  const scopedGlobalKey =
+    params.canonicalKey === "global" && params.agentId
+      ? scopeLegacySessionKeyToAgent({
+          agentId: params.agentId,
+          sessionKey: params.canonicalKey,
+          mainKey: params.mainKey,
+        })
+      : undefined;
   return activeRuns.some(
     (active) =>
       isTrackedActiveSessionRunForKey(
@@ -76,7 +85,9 @@ function hasTrackedActiveSessionRun(params: {
         params.requestedKey,
         params.agentId,
         params.defaultAgentId,
-      ),
+      ) ||
+      (scopedGlobalKey !== undefined &&
+        isTrackedActiveSessionRunForKey(active, scopedGlobalKey)),
   );
 }
 
@@ -110,7 +121,8 @@ export function emitSessionsChanged(
       )
     : null;
   const omitUnscopedGlobalGoal = payload.sessionKey === "global" && !payload.agentId;
-  const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
+  const cfg = context.getRuntimeConfig();
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   const { excludeActiveRunIds, ...eventPayload } = payload;
   const excludeRunIds = new Set(excludeActiveRunIds ?? []);
   context.broadcastToConnIds(
@@ -173,6 +185,7 @@ export function emitSessionsChanged(
                 canonicalKey: sessionRow.key,
                 agentId: sessionRow.key === "global" ? payload.agentId : undefined,
                 defaultAgentId,
+                mainKey: cfg.session?.mainKey,
                 excludeRunIds,
               }),
             startedAt: sessionRow.startedAt,
