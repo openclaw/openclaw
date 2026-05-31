@@ -68,6 +68,8 @@ describe("buildCompactAnnounceStatsLine", () => {
     testing.setDepsForTest({
       getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
       readSessionEntry: (() => ({
+        sessionId: "child-session",
+        updatedAt: 0,
         inputTokens: 999_999,
         outputTokens: 0,
         totalTokens: 999_999,
