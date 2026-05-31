@@ -1,7 +1,6 @@
 import { Readable, Writable } from "node:stream";
 import {
   invokeNativeHookRelayBridge,
-  isNativeHookRelayBridgeStaleRegistrationError,
   renderNativeHookRelayUnavailableResponse,
   type NativeHookRelayProcessResponse,
 } from "../agents/harness/native-hook-relay.js";
@@ -71,19 +70,8 @@ export async function runNativeHookRelayCli(
     writeText(stderr, response.stderr);
     return response.exitCode;
   } catch (error) {
-    if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
-      writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-      const response = renderNativeHookRelayUnavailableResponse({
-        provider,
-        event,
-        message: "Native hook relay unavailable",
-      });
-      writeText(stdout, response.stdout);
-      writeText(stderr, response.stderr);
-      return response.exitCode;
-    }
     // Fall through to the gateway path for embedded/local gateway cases and
-    // older registrations that predate the direct relay bridge.
+    // direct bridge records that are missing, stale, or otherwise unusable.
   }
 
   try {
