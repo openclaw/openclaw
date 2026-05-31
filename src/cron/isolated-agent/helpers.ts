@@ -11,6 +11,7 @@ type DeliveryPayload = Pick<
   "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData" | "isError"
 >;
 
+/** Normalized cron run payload state used for summaries, delivery, and failure classification. */
 export type CronPayloadOutcome = {
   summary?: string;
   outputText?: string;
@@ -296,6 +297,8 @@ export function resolveCronPayloadOutcome(params: {
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
     !hasRecoveredToolWarning;
+  // Fatal structured errors own the final delivery payload unless later output
+  // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual
   // cron announce output to the final assistant-visible answer.
   // A final assistant answer can replace textual warning payloads, but never
