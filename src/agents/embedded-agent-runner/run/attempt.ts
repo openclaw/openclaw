@@ -2976,6 +2976,9 @@ export async function runEmbeddedAttempt(
         }
         abortCompaction();
         void abortActiveSession();
+        void sessionLockController.releaseHeldLockForAbort().catch((err) => {
+          log.warn(`failed to release session lock on abort: runId=${params.runId} ${String(err)}`);
+        });
         if (isTimeout && queueHandleForAbandonment) {
           markActiveEmbeddedRunAbandoned({
             sessionId: params.sessionId,
@@ -2983,11 +2986,6 @@ export async function runEmbeddedAttempt(
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
             reason: "timeout",
-          });
-          void sessionLockController.releaseHeldLockForAbort().catch((err) => {
-            log.warn(
-              `failed to release session lock on timeout abort: runId=${params.runId} ${String(err)}`,
-            );
           });
         }
       };
