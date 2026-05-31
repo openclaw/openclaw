@@ -282,6 +282,9 @@ function buildCaptureShellArgs(shellName: string, shellArgs: string[]): string[]
   if (shellName === "bash") {
     return ["-i", "-c"];
   }
+  if (shellName === "zsh") {
+    return ["-f", "-i", "-c"];
+  }
   return shellArgs;
 }
 

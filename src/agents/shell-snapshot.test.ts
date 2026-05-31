@@ -465,7 +465,9 @@ describe("exec shell snapshots", () => {
     fs.writeFileSync(path.join(home, ".zshrc"), "alias oc_snap_zdot_alias='printf wrong-home'\n");
     fs.writeFileSync(
       path.join(zdotdir, ".zshrc"),
-      "alias oc_snap_zdot_alias='printf zdotdir-ok'\n",
+      ["[[ -o interactive ]] || return", "alias oc_snap_zdot_alias='printf zdotdir-ok'", ""].join(
+        "\n",
+      ),
     );
 
     const env = {
