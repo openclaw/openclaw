@@ -184,6 +184,7 @@ import { normalizeOptionalString } from "./string-coerce.ts";
 import type { GatewaySessionRow } from "./types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
+import "./components/tooltip.ts";
 import {
   resolveAgentConfig,
   resolveConfiguredCronModelSuggestions,
@@ -715,19 +716,25 @@ function setSkillWorkshopMode(state: AppViewState, mode: "board" | "today"): voi
 function renderSkillWorkshopHeaderControls(state: AppViewState) {
   return html`
     <div class="sw-header-controls">
-      <label class="sw-revision-session-toggle">
-        <input
-          type="checkbox"
-          .checked=${state.skillWorkshopUseCurrentChatForRevisions}
-          @change=${(event: Event) =>
-            setSkillWorkshopUseCurrentChatForRevisions(
-              state,
-              (event.currentTarget as HTMLInputElement).checked,
-            )}
-        />
-        <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
-        <span class="sw-revision-session-toggle__label">Use current chat</span>
-      </label>
+      <openclaw-tooltip
+        .text=${"Send revision requests to the current chat session instead of the proposal's workshop session."}
+        placement="bottom"
+        align="end"
+      >
+        <label class="sw-revision-session-toggle">
+          <input
+            type="checkbox"
+            .checked=${state.skillWorkshopUseCurrentChatForRevisions}
+            @change=${(event: Event) =>
+              setSkillWorkshopUseCurrentChatForRevisions(
+                state,
+                (event.currentTarget as HTMLInputElement).checked,
+              )}
+          />
+          <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
+          <span class="sw-revision-session-toggle__label">Use current chat</span>
+        </label>
+      </openclaw-tooltip>
       <div
         class="sw-mode-switch"
         role="tablist"
