@@ -521,6 +521,17 @@ describe("compactRawCommand middle truncation", () => {
     const result = resolveExecDetail({ command: "/opt/custom/bin/my-tool --version" });
     expect(result).toBe("/opt/custom/bin/my-tool --version");
   });
+
+  it("redacts credential-like tails before middle truncation", () => {
+    // The --token flag and its value sit in the middle of a long command.
+    // Without redaction-before-truncation, middle truncation could cut out
+    // the --token flag context but preserve the raw secret at the tail.
+    const longCommand =
+      "/opt/custom/bin/deploy --region us-east-1 --token sk-proj-ABCDEFGHIJKLMNOP1234567890abcdefghij --output /data/results/deploy-output.json";
+    const result = resolveExecDetail({ command: longCommand });
+    // The sk- prefixed token must be redacted (masked) before truncation
+    expect(result).not.toContain("ABCDEFGHIJKLMNOP1234567890abcdefghij");
+  });
 });
 
 describe("coerceDisplayValue middle truncation", () => {
@@ -552,5 +563,23 @@ describe("coerceDisplayValue middle truncation", () => {
     );
     expect(detail).toBe("short-task-name");
     expect(detail).not.toContain("…");
+  });
+
+  it("redacts credential-like values in long generic string details", () => {
+    // A long string whose tail contains a GitHub PAT. Without
+    // redaction-before-truncation, middle truncation could preserve
+    // the raw token at the tail after its prefix context is cut.
+    const longValue =
+      "Deploying service to production cluster with auth ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop and " +
+      "x".repeat(200) +
+      " final-step";
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: { task: longValue },
+      }),
+    );
+    // The ghp_ token must be redacted before truncation
+    expect(detail).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop");
   });
 });
