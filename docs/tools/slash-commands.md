@@ -212,11 +212,13 @@ plugins.
         - `/fast on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
         - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`; direct Anthropic requests map it to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
+
       </Accordion>
       <Accordion title="Model switching details">
         - `/model` persists the new model immediately to the session.
         - If the agent is idle, the next run uses it right away.
         - If a run is active, the switch is marked pending and applied at the next clean retry point.
+
       </Accordion>
     </AccordionGroup>
 
@@ -468,6 +470,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
     - **`/stop`** targets the active chat session to abort the current run.
+
   </Accordion>
   <Accordion title="Slack specifics">
     `channels.slack.slashCommand` supports a single `/openclaw`-style command.
@@ -479,11 +482,13 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
     - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
     - Unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text.
+
   </Accordion>
   <Accordion title="Argument notes">
     - Commands accept an optional `:` between the command and args (`/think: high`, `/send: on`).
     - `/new <model>` accepts a model alias, `provider/model`, or a provider name (fuzzy match); if no match, the text is treated as the message body.
     - `/allowlist add|remove` requires `commands.config: true` and honors channel `configWrites`.
+
   </Accordion>
 </AccordionGroup>
 
