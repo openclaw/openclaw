@@ -481,6 +481,7 @@ function migrateRetiredWebchatChannelConfig(raw: Record<string, unknown>, change
   const gateway = getRecord(raw.gateway) ?? {};
   const gatewayWebchat = getRecord(gateway.webchat) ?? {};
   const canMoveLegacyTextChunkLimit =
+    typeof legacyTextChunkLimit === "number" &&
     Number.isInteger(legacyTextChunkLimit) &&
     legacyTextChunkLimit > 0 &&
     legacyTextChunkLimit <= WEBCHAT_CHAT_HISTORY_MAX_CHARS_LIMIT;
