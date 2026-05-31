@@ -684,6 +684,66 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.sessionId).toBe("post-compact-session");
     expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
   });
+
+  it("registers the admitted session id when the local session store is stale", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const active = createReplyOperationForTest({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    let observedRunId: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { runId: string; sessionId?: string }) => {
+        observedRunId = params.runId;
+        expect(params.sessionId).toBe("post-compact-session");
+        return {
+          payloads: [],
+          meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+        };
+      },
+    );
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        run: {
+          sessionId: "queued-stale-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    active.updateSessionId("post-compact-session");
+    active.complete();
+    await pending;
+
+    expect(observedRunId).toBeDefined();
+    expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe(
+      "post-compact-session",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+  });
 });
 
 async function normalizeComparablePath(filePath: string): Promise<string> {
