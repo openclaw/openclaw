@@ -1,10 +1,12 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildDynamicToolInFlightKey,
   CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  createCodexDynamicToolInFlightCoalescer,
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveTerminalDynamicToolBatchAction,
@@ -175,6 +177,68 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(90_000);
+  });
+
+  it("builds stable in-flight keys without including the call id", () => {
+    const first = buildDynamicToolInFlightKey({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-a",
+      namespace: null,
+      tool: "process",
+      arguments: { cwd: "/workspace", command: "pwd" },
+    });
+    const second = buildDynamicToolInFlightKey({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-b",
+      namespace: null,
+      tool: "process",
+      arguments: { command: "pwd", cwd: "/workspace" },
+    });
+    const third = buildDynamicToolInFlightKey({
+      threadId: "thread-1",
+      turnId: "turn-2",
+      callId: "call-c",
+      namespace: null,
+      tool: "process",
+      arguments: { command: "pwd", cwd: "/workspace" },
+    });
+
+    expect(first).toBe(second);
+    expect(first).not.toBe(third);
+  });
+
+  it("coalesces only duplicate in-flight dynamic tool calls", async () => {
+    const coalescer = createCodexDynamicToolInFlightCoalescer();
+    const execute = vi.fn(async () => ({
+      contentItems: [{ type: "inputText" as const, text: "done" }],
+      success: true,
+    }));
+    const firstCall = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-a",
+      namespace: null,
+      tool: "process",
+      arguments: { cwd: "/workspace", command: "pwd" },
+    };
+    const secondCall = {
+      ...firstCall,
+      callId: "call-b",
+      arguments: { command: "pwd", cwd: "/workspace" },
+    };
+
+    const [first, second] = await Promise.all([
+      coalescer.run(firstCall, execute),
+      coalescer.run(secondCall, execute),
+    ]);
+
+    expect(first).toEqual(second);
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    await coalescer.run(secondCall, execute);
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {

@@ -952,6 +952,80 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
+  it("coalesces duplicate in-flight side-thread dynamic tool requests", async () => {
+    const client = createFakeClient();
+    let firstResponse: unknown;
+    let secondResponse: unknown;
+    let resolveTool: (() => void) | undefined;
+    toolExecuteMock.mockImplementation(
+      async () =>
+        new Promise((resolve) => {
+          resolveTool = () =>
+            resolve({
+              content: [{ type: "text", text: "tool output" }],
+            });
+        }),
+    );
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(async () => {
+          const first = client.handleRequest({
+            id: 42,
+            method: "item/tool/call",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              callId: "tool-1",
+              tool: "wiki_status",
+              arguments: { topic: "AGENTS.md", mode: "full" },
+            },
+          });
+          await vi.waitFor(() => expect(toolExecuteMock).toHaveBeenCalledTimes(1));
+          const second = client.handleRequest({
+            id: 43,
+            method: "item/tool/call",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              callId: "tool-2",
+              tool: "wiki_status",
+              arguments: { mode: "full", topic: "AGENTS.md" },
+            },
+          });
+          expect(toolExecuteMock).toHaveBeenCalledTimes(1);
+          resolveTool?.();
+          firstResponse = await first;
+          secondResponse = await second;
+          client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(runCodexAppServerSideQuestion(sideParams())).resolves.toEqual({
+      text: "Tool answer.",
+    });
+
+    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
+    expect(firstResponse).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "tool output" }],
+    });
+    expect(secondResponse).toEqual(firstResponse);
+  });
+
   it("clears side-thread dynamic tool diagnostics at the app-server request boundary", async () => {
     const client = createFakeClient();
     const diagnosticEvents: DiagnosticEventPayload[] = [];

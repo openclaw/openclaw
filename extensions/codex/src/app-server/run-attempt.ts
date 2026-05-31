@@ -152,6 +152,7 @@ import {
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
 import {
+  createCodexDynamicToolInFlightCoalescer,
   handleDynamicToolCallWithTimeout,
   hasPendingDynamicToolTerminalDiagnostic,
   isDynamicToolTerminalDiagnosticEvent,
@@ -1034,6 +1035,7 @@ export async function runCodexAppServerAttempt(
     | undefined;
   let terminalDynamicToolReleaseCheckScheduled = false;
   let currentTurnHadNonTerminalDynamicToolResult = false;
+  const dynamicToolInFlightCoalescer = createCodexDynamicToolInFlightCoalescer();
 
   const renewNativeHookRelayForTurnProgress = () => {
     if (!nativeHookRelay || options.nativeHookRelay?.ttlMs !== undefined) {
@@ -1508,21 +1510,23 @@ export async function runCodexAppServerAttempt(
         }
       });
       try {
-        const response = await handleDynamicToolCallWithTimeout({
-          call,
-          toolBridge,
-          signal: runAbortController.signal,
-          timeoutMs: dynamicToolTimeoutMs,
-          onTimeout: () => {
-            trajectoryRecorder?.recordEvent("tool.timeout", {
-              threadId: call.threadId,
-              turnId: call.turnId,
-              toolCallId: call.callId,
-              name: call.tool,
-              timeoutMs: dynamicToolTimeoutMs,
-            });
-          },
-        });
+        const response = await dynamicToolInFlightCoalescer.run(call, () =>
+          handleDynamicToolCallWithTimeout({
+            call,
+            toolBridge,
+            signal: runAbortController.signal,
+            timeoutMs: dynamicToolTimeoutMs,
+            onTimeout: () => {
+              trajectoryRecorder?.recordEvent("tool.timeout", {
+                threadId: call.threadId,
+                turnId: call.turnId,
+                toolCallId: call.callId,
+                name: call.tool,
+                timeoutMs: dynamicToolTimeoutMs,
+              });
+            },
+          }),
+        );
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
         const toolDurationMs = Math.max(0, Date.now() - toolStartedAt);
         trajectoryRecorder?.recordEvent("tool.result", {
