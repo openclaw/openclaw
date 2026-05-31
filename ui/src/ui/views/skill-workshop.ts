@@ -53,6 +53,8 @@ export type SkillWorkshopActionNotice = {
   slug: string;
 };
 
+type SkillWorkshopEmptyIcon = "search" | "clock" | "check" | "x" | "shield" | "refresh";
+
 export type SkillWorkshopProps = {
   loading: boolean;
   error: string | null;
@@ -246,7 +248,7 @@ function renderBoard(
     ${renderLifecycleTabs(props)}
     <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
       ${renderQueue(props, groups, selected)} ${renderQueueResizer(props)}
-      ${selected ? renderDetail(props, selected) : renderEmpty()}
+      ${selected ? renderDetail(props, selected) : renderEmpty(props)}
     </div>
   `;
 }
@@ -340,7 +342,7 @@ function renderQueue(
     <aside class="sw-queue">
       <div class="sw-queue__search">
         <input
-          placeholder="Search proposals… (/)"
+          placeholder="Search proposals…"
           .value=${props.query}
           @input=${(event: Event) =>
             props.onQueryChange((event.target as HTMLInputElement).value ?? "")}
@@ -498,15 +500,120 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
   `;
 }
 
-function renderEmpty() {
+function renderEmpty(props: SkillWorkshopProps) {
+  const empty = resolveBoardEmptyState(props);
   return html`
     <div class="sw-detail sw-detail--empty">
-      <p class="sw-empty__title">No proposals match</p>
-      <p class="sw-empty__sub">
-        Try a different lifecycle tab or clear the search to see everything.
-      </p>
+      <div class="sw-filter-empty">
+        <div class="sw-filter-empty__icon" aria-hidden="true">
+          ${renderEmptyStateIcon(empty.icon)}
+        </div>
+        <p class="sw-empty__title">${empty.title}</p>
+        <p class="sw-empty__sub">${empty.body}</p>
+      </div>
     </div>
   `;
+}
+
+function resolveBoardEmptyState(props: SkillWorkshopProps): {
+  icon: SkillWorkshopEmptyIcon;
+  title: string;
+  body: string;
+} {
+  if (props.query.trim()) {
+    return {
+      icon: "search",
+      title: "No matching proposals",
+      body: "Clear the search or try a different keyword.",
+    };
+  }
+
+  switch (props.statusFilter) {
+    case "pending":
+      return {
+        icon: "clock",
+        title: "No pending proposals",
+        body: "New drafts will appear here when they need review.",
+      };
+    case "applied":
+      return {
+        icon: "check",
+        title: "Nothing applied yet",
+        body: "Use a pending proposal and it will appear here as a live skill.",
+      };
+    case "rejected":
+      return {
+        icon: "x",
+        title: "No rejected proposals",
+        body: "Skipped proposals will stay here for a clean review history.",
+      };
+    case "quarantined":
+      return {
+        icon: "shield",
+        title: "Nothing quarantined",
+        body: "Scanner-blocked or safety-held proposals will appear here.",
+      };
+    case "stale":
+      return {
+        icon: "refresh",
+        title: "No stale proposals",
+        body: "Proposals that can no longer apply cleanly will appear here.",
+      };
+    case "all":
+      return {
+        icon: "search",
+        title: "No proposals here",
+        body: "Skill Workshop proposals will appear here when your agent drafts them.",
+      };
+  }
+}
+
+function renderEmptyStateIcon(icon: SkillWorkshopEmptyIcon) {
+  switch (icon) {
+    case "clock":
+      return html`
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="8"></circle>
+          <path d="M12 7v5l3 2"></path>
+        </svg>
+      `;
+    case "check":
+      return html`
+        <svg viewBox="0 0 24 24">
+          <path d="M5 12.5l4 4L19 7"></path>
+        </svg>
+      `;
+    case "x":
+      return html`
+        <svg viewBox="0 0 24 24">
+          <path d="M7 7l10 10"></path>
+          <path d="M17 7L7 17"></path>
+        </svg>
+      `;
+    case "shield":
+      return html`
+        <svg viewBox="0 0 24 24">
+          <path d="M12 3l7 3v5c0 4.2-2.8 7.8-7 10-4.2-2.2-7-5.8-7-10V6l7-3z"></path>
+          <path d="M9 12l2 2 4-5"></path>
+        </svg>
+      `;
+    case "refresh":
+      return html`
+        <svg viewBox="0 0 24 24">
+          <path d="M17 2v5h-5"></path>
+          <path d="M7 22v-5h5"></path>
+          <path d="M19 10a7 7 0 0 0-12-4l-2 2"></path>
+          <path d="M5 14a7 7 0 0 0 12 4l2-2"></path>
+        </svg>
+      `;
+    case "search":
+      return html`
+        <svg viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="6"></circle>
+          <path d="M16 16l4 4"></path>
+        </svg>
+      `;
+  }
 }
 
 function renderWorkshopEmptyState(props: SkillWorkshopProps) {

@@ -296,11 +296,41 @@
   min-height: 60vh;
 }
 
+.sw-filter-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 360px;
+}
+
+.sw-filter-empty__icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border) 78%);
+  box-shadow: 0 14px 40px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.sw-filter-empty__icon svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sw-empty__title {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-strong);
-  margin: 0 0 8px;
+  margin: 0;
 }
 
 .sw-empty__sub {
