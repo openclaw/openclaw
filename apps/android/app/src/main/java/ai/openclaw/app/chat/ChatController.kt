@@ -61,8 +61,10 @@ class ChatController(
 
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
+  // Preserve sent messages locally until chat.history includes the gateway-confirmed copy.
   private val optimisticMessagesByRunId = LinkedHashMap<String, ChatMessage>()
   private val pendingRunTimeoutMs = 120_000L
+  // Drops stale history responses after session switches or refresh races.
   private val historyLoadGeneration = AtomicLong(0)
 
   private var lastHealthPollAtMs: Long? = null
@@ -194,7 +196,7 @@ class ChatController(
     val sessionKey = _sessionKey.value
     val thinking = normalizeThinking(thinkingLevel)
 
-    // Optimistic user message.
+    // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
     val userContent =
       buildList {
         add(ChatMessageContent(type = "text", text = text))
@@ -257,6 +259,7 @@ class ChatController(
       val res = session.request("chat.send", params.toString())
       val actualRunId = parseRunId(res) ?: runId
       if (actualRunId != runId) {
+        // Gateway may return a canonical run id; move all pending bookkeeping to that id.
         optimisticMessagesByRunId[actualRunId] = optimisticMessagesByRunId.remove(runId) ?: optimisticMessage
         clearPendingRun(runId)
         armPendingRunTimeout(actualRunId)
@@ -396,7 +399,7 @@ class ChatController(
     val state = payload["state"].asStringOrNull()
     when (state) {
       "delta" -> {
-        // Only show streaming text for runs we initiated
+        // Only show streaming text for runs we initiated in this controller.
         if (!isPending) return
         val text = parseAssistantDeltaText(payload)
         if (!text.isNullOrEmpty()) {
@@ -637,6 +640,9 @@ internal fun isCurrentHistoryLoad(
   activeGeneration: Long,
 ): Boolean = requestedSessionKey == currentSessionKey && requestGeneration == activeGeneration
 
+/**
+ * Convert gateway chat content parts into Android UI content parts.
+ */
 internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
   val obj = el.asObjectOrNull() ?: return null
   return when (obj["type"].asStringOrNull() ?: "text") {
@@ -663,6 +669,9 @@ internal data class MainSessionState(
   val appliedMainSessionKey: String,
 )
 
+/**
+ * Rewrite only the active "main" alias when the gateway publishes a new canonical main session key.
+ */
 internal fun applyMainSessionKey(
   currentSessionKey: String,
   appliedMainSessionKey: String,
@@ -680,6 +689,9 @@ internal fun applyMainSessionKey(
   )
 }
 
+/**
+ * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
+ */
 internal fun reconcileMessageIds(
   previous: List<ChatMessage>,
   incoming: List<ChatMessage>,
@@ -729,6 +741,9 @@ internal fun mergeOptimisticMessages(
   return (incoming + missingOptimistic).sortedWith(compareBy<ChatMessage> { it.timestampMs ?: Long.MAX_VALUE }.thenBy { it.id })
 }
 
+/**
+ * Message identity used only for refresh reconciliation; it avoids exposing gateway ids as UI keys.
+ */
 internal fun messageIdentityKey(message: ChatMessage): String? {
   val contentKey = messageContentIdentityKey(message) ?: return null
   val timestamp = message.timestampMs?.toString().orEmpty()

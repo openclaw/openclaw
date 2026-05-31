@@ -265,6 +265,9 @@ private fun ChatErrorRail(errorText: String) {
   }
 }
 
+/**
+ * Image selected in the composer and held in memory until the next chat.send call.
+ */
 data class PendingImageAttachment(
   val id: String,
   val fileName: String,
