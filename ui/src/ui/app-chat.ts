@@ -567,10 +567,17 @@ async function sendQueuedChatMessage(
   }
 
   const runId = prepared.sendRunId ?? generateUUID();
+  const sendAttempt = (prepared.sendAttempts ?? 0) + 1;
   const startedAt = Date.now();
+  const readCurrentQueuedSend = () =>
+    readChatQueueForSession(host, sessionKey).find((item) => item.id === id) ?? null;
+  const isCurrentSendAttempt = () => {
+    const current = readCurrentQueuedSend();
+    return current?.sendAttempts === sendAttempt;
+  };
   updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
     ...item,
-    sendAttempts: (item.sendAttempts ?? 0) + 1,
+    sendAttempts: sendAttempt,
     sendError: undefined,
     sendRunId: runId,
     sendState: "sending",
@@ -594,6 +601,9 @@ async function sendQueuedChatMessage(
       sessionKey,
       agentId: prepared.agentId,
     });
+    if (!isCurrentSendAttempt()) {
+      return "pending";
+    }
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
     if (isVisibleSession()) {
       appendUserChatMessage(
@@ -642,6 +652,9 @@ async function sendQueuedChatMessage(
     return "sent";
   } catch (err) {
     const error = formatConnectError(err);
+    if (!isCurrentSendAttempt()) {
+      return "pending";
+    }
     if (isRecoverableChatSendError(err, error)) {
       updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
         ...item,
@@ -664,7 +677,10 @@ async function sendQueuedChatMessage(
     }
     return "failed";
   } finally {
-    host.chatSending = false;
+    const current = readCurrentQueuedSend();
+    if (!current || current.sendAttempts === sendAttempt || current.sendState !== "sending") {
+      host.chatSending = false;
+    }
   }
 }
 
@@ -953,8 +969,8 @@ async function flushChatQueue(host: ChatHost) {
 }
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
-  const removed = host.chatQueue.filter((item) => item.id === id);
-  host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+  const removed = host.chatQueue.filter((item) => item.id === id && item.sendState !== "sending");
+  host.chatQueue = host.chatQueue.filter((item) => item.id !== id || item.sendState === "sending");
   for (const item of removed) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, item.attachments));
   }

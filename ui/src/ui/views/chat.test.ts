@@ -1230,6 +1230,23 @@ describe("chat queue", () => {
 
     expect(onQueueRetry).toHaveBeenCalledWith("failed-1");
   });
+
+  it("does not render remove for in-flight sends", () => {
+    const container = renderQueue({
+      queue: [
+        {
+          id: "sending-1",
+          text: "already sent",
+          createdAt: 1,
+          sendRunId: "run-sending-1",
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe("Sending");
+    expect(container.querySelector(".chat-queue__remove")).toBeNull();
+  });
 });
 
 describe("chat sidebar raw content", () => {

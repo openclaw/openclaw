@@ -458,7 +458,7 @@ export class GatewayBrowserClient {
     this.connect();
   }
 
-  stop() {
+  stop(options: { retryablePending?: boolean } = {}) {
     this.closed = true;
     this.clearConnectTimer();
     this.ws?.close();
@@ -467,7 +467,15 @@ export class GatewayBrowserClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingStartupReconnectDelayMs = null;
-    this.flushPending(new Error("gateway client stopped"));
+    this.flushPending(
+      options.retryablePending
+        ? new GatewayRequestError({
+            code: "client_stopped",
+            message: "gateway client stopped",
+            retryable: true,
+          })
+        : new Error("gateway client stopped"),
+    );
   }
 
   get connected() {

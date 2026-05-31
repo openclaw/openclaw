@@ -2,6 +2,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
+import { GatewayRequestError } from "./gateway.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
@@ -1470,6 +1471,154 @@ describe("handleSendChat", () => {
     expect(host.chatQueueBySession?.["agent:a"]).toBeUndefined();
   });
 
+  it("ignores stale in-flight send completion after reconnect replay starts", async () => {
+    const firstSend = createDeferred<unknown>();
+    const replaySend = createDeferred<unknown>();
+    const sends = [firstSend, replaySend];
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        const next = sends.shift();
+        if (!next) {
+          throw new Error("Unexpected extra chat.send");
+        }
+        return next.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry once",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    const runId = host.chatQueue[0]?.sendRunId;
+    expect(runId).toEqual(expect.any(String));
+    markQueuedChatSendsWaitingForReconnect(host);
+    host.chatSending = false;
+    const replay = retryReconnectableQueuedChatSends(host);
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    firstSend.resolve({ runId, status: "started" });
+    await send;
+
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      sendAttempts: 2,
+      sendRunId: runId,
+      sendState: "sending",
+      text: "retry once",
+    });
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatSending).toBe(true);
+
+    replaySend.resolve({ runId, status: "started" });
+    await replay;
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toBe(runId);
+    expect(host.chatMessages).toHaveLength(1);
+    const userMessage = requireRecord(host.chatMessages[0], "user message");
+    expect(userMessage.role).toBe("user");
+  });
+
+  it("ignores stale in-flight send completion after reconnect replay succeeds", async () => {
+    const firstSend = createDeferred<unknown>();
+    const replaySend = createDeferred<unknown>();
+    const sends = [firstSend, replaySend];
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        const next = sends.shift();
+        if (!next) {
+          throw new Error("Unexpected extra chat.send");
+        }
+        return next.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry once",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    const runId = host.chatQueue[0]?.sendRunId;
+    expect(runId).toEqual(expect.any(String));
+    markQueuedChatSendsWaitingForReconnect(host);
+    host.chatSending = false;
+    const replay = retryReconnectableQueuedChatSends(host);
+    await Promise.resolve();
+
+    replaySend.resolve({ runId, status: "started" });
+    await replay;
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatMessages).toHaveLength(1);
+
+    firstSend.resolve({ runId, status: "started" });
+    await send;
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toBe(runId);
+    expect(host.chatMessages).toHaveLength(1);
+    const userMessage = requireRecord(host.chatMessages[0], "user message");
+    expect(userMessage.role).toBe("user");
+  });
+
+  it("keeps a stopped gateway client error recoverable with the same run id", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        throw new GatewayRequestError({
+          code: "client_stopped",
+          message: "gateway client stopped",
+          retryable: true,
+        });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry after client stop",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "retry after client stop",
+      sendState: "waiting-reconnect",
+    });
+    expect(host.chatQueue[0]?.sendRunId).toEqual(expect.any(String));
+    expect(host.lastError).toBe("Message will send when the Gateway reconnects.");
+  });
+
+  it("does not replay non-retryable stopped gateway client errors", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        throw new Error("gateway client stopped");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "do not replay after gateway switch",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "do not replay after gateway switch",
+      sendState: "failed",
+    });
+    expect(host.lastError).toBe("gateway client stopped");
+  });
+
   it("keeps a pre-ack socket close recoverable with the same run id", async () => {
     const request = vi.fn((method: string) => {
       if (method === "chat.send") {
@@ -1871,6 +2020,25 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
+  });
+
+  it("does not remove an in-flight send", () => {
+    const host = makeHost({
+      chatQueue: [
+        {
+          id: "sending-1",
+          text: "already sent",
+          createdAt: 1,
+          sendRunId: "run-sending-1",
+          sendState: "sending",
+        },
+      ],
+    });
+
+    removeQueuedMessage(host, "sending-1");
+
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]?.id).toBe("sending-1");
   });
 });
 

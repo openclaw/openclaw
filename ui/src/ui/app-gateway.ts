@@ -147,6 +147,7 @@ type SessionDefaultsSnapshot = {
 };
 
 type GatewayHostWithShutdownMessage = GatewayHost & {
+  gatewayClientScopeKey?: string;
   pendingShutdownMessage?: string | null;
   resumeChatQueueAfterReconnect?: boolean;
 };
@@ -581,9 +582,16 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   }
 }
 
+function gatewayClientScopeKey(host: GatewayHost): string {
+  return JSON.stringify([host.settings.gatewayUrl, host.settings.token.trim(), host.password]);
+}
+
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
+  const previousGatewayClientScopeKey = shutdownHost.gatewayClientScopeKey;
+  const nextGatewayClientScopeKey = gatewayClientScopeKey(host);
+  shutdownHost.gatewayClientScopeKey = nextGatewayClientScopeKey;
   shutdownHost.pendingShutdownMessage = null;
   shutdownHost.resumeChatQueueAfterReconnect = false;
   clearSessionsChangedReloadTimer(host);
@@ -604,6 +612,8 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   host.execApprovalError = null;
 
   const previousClient = host.client;
+  const canReplayPreviousClientSends =
+    previousClient != null && previousGatewayClientScopeKey === nextGatewayClientScopeKey;
   const clientVersion = resolveControlUiClientVersion({
     gatewayUrl: host.settings.gatewayUrl,
     serverVersion: host.serverVersion,
@@ -676,6 +686,16 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           clearRunStatus: !hadOrphanedRun,
         },
       );
+      if (canReplayPreviousClientSends) {
+        // Stale client onClose may never run after reconnect; normalize in-flight sends here.
+        markQueuedChatSendsWaitingForReconnect(
+          host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
+        );
+        const chatHost = host as unknown as { chatSending?: boolean };
+        if (chatHost.chatSending) {
+          chatHost.chatSending = false;
+        }
+      }
       const hasReconnectableChatSends = hasReconnectableQueuedChatSends(
         host as unknown as Parameters<typeof hasReconnectableQueuedChatSends>[0],
       );
@@ -763,7 +783,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
     },
   });
   host.client = client;
-  previousClient?.stop();
+  previousClient?.stop({
+    retryablePending: previousGatewayClientScopeKey === nextGatewayClientScopeKey,
+  });
   client.start();
 }
 
