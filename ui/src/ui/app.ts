@@ -645,6 +645,8 @@ export class OpenClawApp extends LitElement {
     null;
   @state() skillWorkshopActionNotice: { key: string; label: string; slug: string } | null = null;
   @state() skillWorkshopStatusOverrides: Record<string, "applied" | "rejected"> = {};
+  @state() skillWorkshopRevisionKey: string | null = null;
+  @state() skillWorkshopRevisionDraft = "";
   skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
 
   @state() healthLoading = false;

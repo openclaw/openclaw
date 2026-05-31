@@ -714,6 +714,7 @@ function runSkillWorkshopDemoAction(
   action: "apply" | "revise" | "reject",
   key: string,
   proposals: SkillWorkshopReviewableProposal[],
+  options?: { onComplete?: () => void },
 ): void {
   if (state.skillWorkshopActionBusy) {
     return;
@@ -747,9 +748,11 @@ function runSkillWorkshopDemoAction(
     }
     state.skillWorkshopActionNotice = {
       key,
-      label: action === "apply" ? "Applied" : action === "reject" ? "Rejected" : "Revision opened",
+      label:
+        action === "apply" ? "Applied" : action === "reject" ? "Rejected" : "Revision requested",
       slug: "slug" in proposal && typeof proposal.slug === "string" ? proposal.slug : proposal.key,
     };
+    options?.onComplete?.();
     state.skillWorkshopActionNoticeTimer = globalThis.setTimeout(() => {
       if (state.skillWorkshopActionNotice?.key === key) {
         state.skillWorkshopActionNotice = null;
@@ -3125,6 +3128,8 @@ export function renderApp(state: AppViewState) {
                 mode: state.skillWorkshopMode,
                 actionBusy: state.skillWorkshopActionBusy,
                 actionNotice: state.skillWorkshopActionNotice,
+                revisionKey: state.skillWorkshopRevisionKey,
+                revisionDraft: state.skillWorkshopRevisionDraft,
                 counts,
                 onStatusFilterChange: (next) => (state.skillWorkshopStatusFilter = next),
                 onQueryChange: (next) => (state.skillWorkshopQuery = next),
@@ -3148,8 +3153,33 @@ export function renderApp(state: AppViewState) {
                 onPrev: () => goto(-1),
                 onNext: () => goto(1),
                 onApply: (key) => runSkillWorkshopDemoAction(state, "apply", key, proposals),
-                onRevise: (key) => runSkillWorkshopDemoAction(state, "revise", key, proposals),
+                onRevise: (key) => {
+                  state.skillWorkshopRevisionKey = key;
+                  state.skillWorkshopRevisionDraft = "";
+                  state.skillWorkshopActionNotice = null;
+                },
                 onReject: (key) => runSkillWorkshopDemoAction(state, "reject", key, proposals),
+                onRevisionDraftChange: (draft) => {
+                  state.skillWorkshopRevisionDraft = draft;
+                },
+                onRevisionCancel: () => {
+                  if (state.skillWorkshopActionBusy) {
+                    return;
+                  }
+                  state.skillWorkshopRevisionKey = null;
+                  state.skillWorkshopRevisionDraft = "";
+                },
+                onRevisionSubmit: (key) => {
+                  if (!state.skillWorkshopRevisionDraft.trim()) {
+                    return;
+                  }
+                  runSkillWorkshopDemoAction(state, "revise", key, proposals, {
+                    onComplete: () => {
+                      state.skillWorkshopRevisionKey = null;
+                      state.skillWorkshopRevisionDraft = "";
+                    },
+                  });
+                },
                 onPreviewFile: (_key, path) => {
                   state.skillWorkshopFilePreviewKey = path;
                 },

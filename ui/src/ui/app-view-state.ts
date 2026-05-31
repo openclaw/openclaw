@@ -436,6 +436,8 @@ export type AppViewState = {
     skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null;
     skillWorkshopActionNotice: { key: string; label: string; slug: string } | null;
     skillWorkshopStatusOverrides: Record<string, "applied" | "rejected">;
+    skillWorkshopRevisionKey: string | null;
+    skillWorkshopRevisionDraft: string;
     skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
     healthLoading: boolean;
     healthResult: HealthSummary | null;

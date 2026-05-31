@@ -511,6 +511,102 @@
   text-overflow: ellipsis;
 }
 
+.sw-revision-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(10px);
+}
+
+.sw-revision-dialog {
+  width: min(560px, 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+  padding: 22px;
+}
+
+.sw-revision-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.sw-revision-dialog__eyebrow {
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.sw-revision-dialog h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.sw-revision-dialog__close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.sw-revision-dialog__close:hover:not(:disabled) {
+  color: var(--text-strong);
+  border-color: var(--border-strong);
+}
+
+.sw-revision-dialog__copy {
+  margin: 16px 0 12px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.sw-revision-dialog__input {
+  width: 100%;
+  min-height: 138px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.sw-revision-dialog__input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+  box-shadow: none;
+}
+
+.sw-revision-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .sw-action-bar {
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 60%, var(--bg-elevated) 40%);

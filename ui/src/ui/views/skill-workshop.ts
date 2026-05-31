@@ -59,6 +59,8 @@ export type SkillWorkshopProps = {
   mode: SkillWorkshopMode;
   actionBusy: SkillWorkshopActionBusy | null;
   actionNotice: SkillWorkshopActionNotice | null;
+  revisionKey: string | null;
+  revisionDraft: string;
   counts: Record<SkillWorkshopStatusFilter, number>;
   onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
   onQueryChange: (query: string) => void;
@@ -72,6 +74,9 @@ export type SkillWorkshopProps = {
   onApply: (key: string) => void;
   onRevise: (key: string) => void;
   onReject: (key: string) => void;
+  onRevisionDraftChange: (draft: string) => void;
+  onRevisionCancel: () => void;
+  onRevisionSubmit: (key: string) => void;
   onPreviewFile: (key: string, path: string) => void;
   onClosePreview: () => void;
 };
@@ -108,6 +113,9 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
     selected && props.filePreviewKey
       ? selected.supportFiles.find((f) => f.path === props.filePreviewKey)
       : null;
+  const revisionProposal = props.revisionKey
+    ? props.proposals.find((p) => p.key === props.revisionKey)
+    : null;
   const allPending = props.proposals.filter((p) => p.status === "pending");
   const todayHero = selected ?? allPending[0] ?? props.proposals[0];
 
@@ -137,6 +145,70 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
           ></openclaw-file-preview-modal>
         `
       : nothing}
+    ${revisionProposal ? renderRevisionDialog(props, revisionProposal) : nothing}
+  `;
+}
+
+function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
+  const busy = props.actionBusy?.key === proposal.key && props.actionBusy.action === "revise";
+  const canSubmit = props.revisionDraft.trim().length > 0 && !props.actionBusy;
+  const verb = props.mode === "board" ? "Revise" : "Tweak";
+
+  return html`
+    <div class="sw-revision-backdrop" role="presentation" @click=${props.onRevisionCancel}>
+      <section
+        class="sw-revision-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sw-revision-title"
+        @click=${(event: MouseEvent) => event.stopPropagation()}
+      >
+        <div class="sw-revision-dialog__head">
+          <div>
+            <div class="sw-revision-dialog__eyebrow">${verb} proposal</div>
+            <h2 id="sw-revision-title">${proposal.slug}</h2>
+          </div>
+          <button
+            class="sw-revision-dialog__close"
+            title="Close"
+            aria-label="Close"
+            ?disabled=${Boolean(props.actionBusy)}
+            @click=${props.onRevisionCancel}
+          >
+            ×
+          </button>
+        </div>
+        <p class="sw-revision-dialog__copy">
+          Tell the agent what should change. The proposal stays pending and the workshop will create
+          a revised version.
+        </p>
+        <textarea
+          class="sw-revision-dialog__input"
+          autofocus
+          placeholder="Example: Make this use Gmail labels instead of unread search, and add a safer dry-run step."
+          .value=${props.revisionDraft}
+          ?disabled=${Boolean(props.actionBusy)}
+          @input=${(event: Event) =>
+            props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
+        ></textarea>
+        <div class="sw-revision-dialog__actions">
+          <button
+            class="sw-btn sw-btn--ghost"
+            ?disabled=${Boolean(props.actionBusy)}
+            @click=${props.onRevisionCancel}
+          >
+            Cancel
+          </button>
+          <button
+            class="sw-btn sw-btn--primary ${busy ? "is-busy" : ""}"
+            ?disabled=${!canSubmit}
+            @click=${() => props.onRevisionSubmit(proposal.key)}
+          >
+            ${busy ? "Sending…" : "Send revision"}
+          </button>
+        </div>
+      </section>
+    </div>
   `;
 }
 
