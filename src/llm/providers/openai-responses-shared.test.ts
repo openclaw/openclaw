@@ -304,10 +304,10 @@ describe("convertResponsesMessages", () => {
     const reasoningItem = input.find((item) => item.type === "reasoning");
     expect(reasoningItem).toMatchObject({
       type: "reasoning",
+      encrypted_content: "ciphertext",
       summary: [],
     });
     expect(reasoningItem).not.toHaveProperty("id");
-    expect(reasoningItem).not.toHaveProperty("encrypted_content");
 
     const assistantMessage = input.find(
       (item) => item.type === "message" && item.role === "assistant",

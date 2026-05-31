@@ -53,7 +53,6 @@ function normalizeResponsesReasoningReplayItem(params: {
   }
   if (!params.replayResponsesItemIds) {
     delete next.id;
-    delete next.encrypted_content;
   }
   return next as ReplayableResponseReasoningItem;
 }
