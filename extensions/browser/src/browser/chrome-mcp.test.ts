@@ -950,8 +950,11 @@ describe("chrome MCP page parsing", () => {
     (firstSession.transport as { pid: number | null }).pid = null;
 
     const tabsPromise = listChromeMcpTabs("chrome-live");
+    const siblingTabsPromise = listChromeMcpTabs("chrome-live");
     await vi.waitFor(() => expect(factoryCalls).toBe(2));
-    await expect(tabsPromise).resolves.toHaveLength(2);
+    const [tabs, siblingTabs] = await Promise.all([tabsPromise, siblingTabsPromise]);
+    expect(tabs).toHaveLength(2);
+    expect(siblingTabs).toHaveLength(2);
 
     ctrl.abort(new Error("first waiter cancelled"));
     releaseFirstReady();
