@@ -562,6 +562,11 @@ function historyRowIsStaleForActiveSession(
   return existingStartedAt > incomingUpdatedAt;
 }
 
+function isPersistedChatHistorySessionRow(row: GatewaySessionRow): boolean {
+  const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
+  return Boolean(sessionId || typeof row.updatedAt === "number");
+}
+
 function sessionRowMatchesChatHistoryRow(
   state: SessionsState,
   existing: GatewaySessionRow,
@@ -911,6 +916,9 @@ export function applyChatHistorySessionInfo(
   }
   const session = sanitizeChatHistorySessionRow(row);
   if (!state.sessionsResult) {
+    if (!isPersistedChatHistorySessionRow(session)) {
+      return false;
+    }
     const sessions = state.sessionsShowArchived || !isArchivedSessionRow(session) ? [session] : [];
     state.sessionsResult = {
       ts: Date.now(),
@@ -936,6 +944,9 @@ export function applyChatHistorySessionInfo(
   const existingVisibleSession = state.sessionsResult.sessions.find((existing) =>
     sessionRowMatchesChatHistoryRow(state, existing, session),
   );
+  if (!existingVisibleSession && !isPersistedChatHistorySessionRow(session)) {
+    return false;
+  }
   if (defaults) {
     state.sessionsResult = {
       ...state.sessionsResult,

@@ -2087,6 +2087,23 @@ describe("applySessionsChangedEvent", () => {
     });
   });
 
+  it("does not create visible rows from synthetic chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: null,
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:missing",
+      kind: "direct",
+      updatedAt: null,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(false);
+    expect(state.sessionsResult).toBeNull();
+  });
+
   it("updates catalog-backed thinking metadata from chat history session info", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
