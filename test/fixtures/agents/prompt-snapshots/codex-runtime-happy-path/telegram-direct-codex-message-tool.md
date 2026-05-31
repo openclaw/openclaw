@@ -80,17 +80,14 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false,
-    "features.standalone_web_search": false,
-    "web_search": "cached"
+    "features.code_mode_only": false
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
-    "message",
-    "sessions_yield",
     "nodes",
     "cron",
+    "message",
     "tts",
     "gateway",
     "agents_list",
@@ -98,6 +95,7 @@
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
+    "sessions_yield",
     "subagents",
     "session_status",
     "web_search",
@@ -121,9 +119,7 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false,
-    "features.standalone_web_search": false,
-    "web_search": "cached"
+    "features.code_mode_only": false
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -227,8 +223,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 50616,
-    "roughTokens": 12654
+    "chars": 44184,
+    "roughTokens": 11046
   },
   "openClawDeveloperInstructions": {
     "chars": 1964,
@@ -239,8 +235,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6544
   },
   "totalWithDynamicToolsJson": {
-    "chars": 76794,
-    "roughTokens": 19199
+    "chars": 70362,
+    "roughTokens": 17591
   },
   "userInputText": {
     "chars": 1129,
@@ -543,10 +539,9 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 
 ```json
 [
-  "message",
-  "sessions_yield",
   "nodes",
   "cron",
+  "message",
   "tts",
   "gateway",
   "agents_list",
@@ -554,6 +549,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
+  "sessions_yield",
   "subagents",
   "session_status",
   "web_search",
@@ -687,8 +683,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
       "required": ["action"],
       "type": "object"
     },
-    "name": "message",
-    "type": "function"
+    "name": "message"
   }
 ]
 ```

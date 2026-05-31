@@ -80,17 +80,14 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false,
-    "features.standalone_web_search": false,
-    "web_search": "cached"
+    "features.code_mode_only": false
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
-    "message",
-    "sessions_yield",
     "nodes",
     "cron",
+    "message",
     "heartbeat_respond",
     "tts",
     "gateway",
@@ -99,6 +96,7 @@
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
+    "sessions_yield",
     "subagents",
     "session_status",
     "web_search",
@@ -122,9 +120,7 @@
   "config": {
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
-    "features.code_mode_only": false,
-    "features.standalone_web_search": false,
-    "web_search": "cached"
+    "features.code_mode_only": false
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -228,8 +224,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 51906,
-    "roughTokens": 12977
+    "chars": 45279,
+    "roughTokens": 11320
   },
   "openClawDeveloperInstructions": {
     "chars": 1983,
@@ -240,8 +236,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6780
   },
   "totalWithDynamicToolsJson": {
-    "chars": 79027,
-    "roughTokens": 19757
+    "chars": 72400,
+    "roughTokens": 18100
   },
   "userInputText": {
     "chars": 1367,
@@ -553,10 +549,9 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 
 ```json
 [
-  "message",
-  "sessions_yield",
   "nodes",
   "cron",
+  "message",
   "heartbeat_respond",
   "tts",
   "gateway",
@@ -565,6 +560,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
+  "sessions_yield",
   "subagents",
   "session_status",
   "web_search",
@@ -698,8 +694,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
       "required": ["action"],
       "type": "object"
     },
-    "name": "message",
-    "type": "function"
+    "name": "message"
   },
   {
     "deferLoading": true,
@@ -735,7 +730,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
       "type": "object"
     },
     "name": "heartbeat_respond",
-    "type": "function"
+    "namespace": "openclaw"
   }
 ]
 ```
