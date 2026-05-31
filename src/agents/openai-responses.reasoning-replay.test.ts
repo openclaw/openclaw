@@ -86,6 +86,7 @@ async function runAbortedOpenAIResponsesStream(params: {
     description: string;
     parameters: ReturnType<typeof Type.Object>;
   }>;
+  replayResponsesItemIds?: boolean;
 }) {
   const controller = new AbortController();
   controller.abort();
@@ -100,11 +101,12 @@ async function runAbortedOpenAIResponsesStream(params: {
     },
     {
       apiKey: "test",
+      replayResponsesItemIds: params.replayResponsesItemIds ?? true,
       signal: controller.signal,
       onPayload: (nextPayload) => {
         payload = nextPayload as Record<string, unknown>;
       },
-    },
+    } as never,
   );
 
   await responseStream.result();

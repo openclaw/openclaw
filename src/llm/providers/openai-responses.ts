@@ -193,7 +193,7 @@ function buildParams(
   options?: OpenAIResponsesOptions,
 ) {
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
-    replayResponsesItemIds: options?.replayResponsesItemIds,
+    replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
   });
 
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
