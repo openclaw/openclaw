@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   disableTailscaleServe: vi.fn(async () => undefined),
   enableTailscaleFunnel: vi.fn(async (_port: number) => undefined),
   disableTailscaleFunnel: vi.fn(async () => undefined),
-  getTailnetHostname: vi.fn(async () => null),
+  getTailnetHostname: vi.fn<() => Promise<string | null>>(async () => null),
   hasTailscaleFunnelRouteForPort: vi.fn(async (_port: number) => false),
 }));
 
