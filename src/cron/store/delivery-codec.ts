@@ -2,6 +2,7 @@ import type { CronDelivery } from "../types.js";
 import { booleanToInteger, integerToBoolean } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 
+/** Maps cron delivery config into normalized SQLite columns. */
 export function bindDeliveryColumns(
   delivery: CronDelivery | undefined,
 ): Pick<
@@ -42,6 +43,7 @@ function cronDeliveryModeFromValue(value: unknown): CronDelivery["mode"] | undef
   return value === "none" || value === "announce" || value === "webhook" ? value : undefined;
 }
 
+/** Reconstructs delivery config from split SQLite columns, preserving legacy partial rows. */
 export function deliveryFromRow(row: CronJobRow): CronDelivery | undefined {
   const rowMode = cronDeliveryModeFromValue(row.delivery_mode);
   const hasDeliveryColumns =
@@ -85,6 +87,8 @@ export function deliveryFromRow(row: CronJobRow): CronDelivery | undefined {
   if (!rowMode && !hasDeliveryColumns) {
     return undefined;
   }
+  // Old rows may have destination columns without a mode; announce matches the
+  // historical default for configured channel delivery.
   return {
     mode: rowMode ?? "announce",
     ...(row.delivery_channel ? { channel: row.delivery_channel as CronDelivery["channel"] } : {}),
