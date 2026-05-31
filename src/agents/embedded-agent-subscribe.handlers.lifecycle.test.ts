@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createInlineCodeState } from "../markdown/code-spans.js";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { handleAgentEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
@@ -220,7 +220,7 @@ describe("handleAgentEnd", () => {
     const ctx = createContext({
       role: "assistant",
       stopReason: "error",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       errorMessage:
         '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
@@ -256,7 +256,7 @@ describe("handleAgentEnd", () => {
       const ctx = createContext({
         role: "assistant",
         stopReason: "error",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         errorMessage,
         content: [{ type: "text", text: "" }],
@@ -685,6 +685,22 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: { phase: "end" },
     });
+  });
+
+  it("final-flushes block replies before clearing pending fence fragments", async () => {
+    const ctx = createContext(undefined);
+    ctx.state.blockState.pendingFenceFragment = "```";
+    ctx.flushBlockReplyBuffer = vi.fn((options?: { final?: boolean }) => {
+      if (vi.mocked(ctx.flushBlockReplyBuffer).mock.calls.length === 1) {
+        expect(options).toEqual({ final: true });
+        expect(ctx.state.blockState.pendingFenceFragment).toBe("```");
+      }
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(ctx.flushBlockReplyBuffer).toHaveBeenNthCalledWith(1, { final: true });
+    expect(ctx.state.blockState.pendingFenceFragment).toBeUndefined();
   });
 
   it("emits lifecycle end when block reply flush throws", () => {

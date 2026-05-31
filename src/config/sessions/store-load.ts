@@ -1,9 +1,9 @@
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
@@ -13,6 +13,7 @@ import { getFileStatSnapshot } from "../cache-utils.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
+  cloneSessionStoreSnapshotEntry,
   cloneSessionStoreSnapshot,
   internSessionEntryLargeStrings,
   isSessionStoreCacheEnabled,
@@ -43,6 +44,11 @@ export type LoadSessionStoreOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
   clone?: boolean;
+  hydrateSkillPromptRefs?: boolean;
+};
+
+export type ReadSessionEntryOptions = {
+  hydrateSkillPromptRefs?: boolean;
 };
 
 const log = createSubsystemLogger("sessions/store");
@@ -64,6 +70,10 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
     return value;
   }
   return undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeRecordKey(value: string): string | undefined {
@@ -145,6 +155,16 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
   assign(
     "pendingFinalDeliveryIntentId",
     normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
+  );
+  const restartRecoveryDeliveryContext = normalizeOptionalDeliveryContext(
+    entry.restartRecoveryDeliveryContext,
+  );
+  if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
+    assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
+  }
+  assign(
+    "restartRecoveryDeliveryRunId",
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
   );
 
   return next;
@@ -310,7 +330,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 
 // resolvedSkills carries the full parsed Skill[] (including each SKILL.md body)
 // and is only used as an in-turn cache by the runtime — see
-// src/agents/embedded-agent-runner/skills-runtime.ts. Persisting it bloats
+// src/skills/runtime/embedded-run-entries.ts. Persisting it bloats
 // sessions.json by orders of magnitude when many sessions are active. Strip
 // it from every entry that flows through normalize, so neither the in-memory
 // store reloaded from disk nor the JSON serialized back to disk carries it.
@@ -354,6 +374,8 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
+  const shouldHydrateSkillPromptRefs = opts.hydrateSkillPromptRefs !== false;
+  const canWriteSessionStoreCache = shouldHydrateSkillPromptRefs;
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
@@ -399,7 +421,9 @@ export function loadSessionStore(
     }
   }
 
-  const hydratedPromptRefs = hydrateSessionStoreSkillPromptRefs({ storePath, store });
+  const hydratedPromptRefs = shouldHydrateSkillPromptRefs
+    ? hydrateSessionStoreSkillPromptRefs({ storePath, store })
+    : false;
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (hydratedPromptRefs || migrated || normalized) {
@@ -443,7 +467,7 @@ export function loadSessionStore(
 
   setSerializedSessionStore(storePath, serializedFromDisk);
 
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  if (!opts.skipCache && canWriteSessionStoreCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
       storePath,
       store,
@@ -487,13 +511,17 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
 export function readSessionEntry(
   storePath: string,
   sessionKey: string,
+  opts: ReadSessionEntryOptions = {},
 ): SessionStoreSnapshotEntry | undefined {
-  const snapshot = readSessionStoreSnapshot(storePath);
+  const store = loadSessionStore(storePath, {
+    clone: false,
+    ...(opts.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
   const resolved = resolveSessionStoreEntry({
-    store: snapshot as Record<string, SessionEntry>,
+    store,
     sessionKey,
   });
-  return resolved.existing as SessionStoreSnapshotEntry | undefined;
+  return resolved.existing ? cloneSessionStoreSnapshotEntry(resolved.existing) : undefined;
 }
 
 export function readSessionEntries(storePath: string): SessionStoreSnapshotEntries {

@@ -1,5 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import type {
   AgentPromptGuidance,
@@ -11,6 +11,7 @@ export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
   pluginName?: string;
   pluginRoot?: string;
+  trustedOwnerStatusExposure?: true;
 };
 
 type PluginCommandState = {
@@ -57,6 +58,13 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
 
 export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
   return command.ownership === "reserved";
+}
+
+export function canExposeSenderIsOwner(command: RegisteredPluginCommand): boolean {
+  return (
+    (Array.isArray(command.requiredScopes) && command.requiredScopes.length > 0) ||
+    command.trustedOwnerStatusExposure === true
+  );
 }
 
 export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {

@@ -1,7 +1,35 @@
 // Numeric coercion helpers for plugin runtime inputs.
 
 export {
+  asDateTimestampMs,
+  asFiniteNumberInRange,
+  asSafeIntegerInRange,
+  isFutureDateTimestampMs,
   parseFiniteNumber,
+  clampTimerTimeoutMs,
+  clampPositiveTimerTimeoutMs,
+  addTimerTimeoutGraceMs,
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  MAX_DATE_TIMESTAMP_MS,
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+  parseStrictInteger,
   parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
-} from "../infra/parse-finite-number.js";
+  positiveSecondsToSafeMilliseconds,
+  nonNegativeSecondsToSafeMilliseconds,
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+  timestampMsToIsoString,
+  resolveExpiresAtMsFromDurationMs,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "../../packages/normalization-core/src/number-coercion.js";
+export { MAX_TCP_PORT, parseTcpPort } from "../infra/tcp-port.js";

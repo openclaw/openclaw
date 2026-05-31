@@ -1,5 +1,7 @@
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
-import type { SessionEntry } from "./types.js";
+import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
+import type { SessionEntry, SessionSkillPromptRef } from "./types.js";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
@@ -33,6 +35,7 @@ type SessionStoreSnapshotCacheEntry = {
 type SerializedSessionStoreCacheEntry = {
   serialized: string;
   sizeBytes: number;
+  promptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
 };
 
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
@@ -49,6 +52,7 @@ const SESSION_STORE_SNAPSHOT_CACHE = createExpiringMapCache<string, SessionStore
     ttlMs: getSessionStoreTtl,
   },
 );
+const SESSION_STORE_CACHE_VERSION = new Map<string, number>();
 const SESSION_STORE_SERIALIZED_CACHE = new Map<string, SerializedSessionStoreCacheEntry>();
 const SESSION_STORE_STRING_INTERN_POOL = new Map<string, string>();
 const SESSION_STORE_STRING_INTERN_STATS = {
@@ -64,8 +68,7 @@ function parseNonNegativeInteger(value: string | undefined): number | null {
   if (!trimmed) {
     return null;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  return parseStrictNonNegativeInteger(trimmed) ?? null;
 }
 
 function getSerializedSessionStoreCacheMaxBytes(): number {
@@ -242,6 +245,10 @@ export function cloneSessionStoreSnapshot(
   return deepFreeze(cloned);
 }
 
+export function cloneSessionStoreSnapshotEntry(entry: SessionEntry): SessionStoreSnapshotEntry {
+  return deepFreeze(cloneSessionStoreRecord({ entry }).entry);
+}
+
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
     envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
@@ -253,16 +260,27 @@ export function isSessionStoreCacheEnabled(): boolean {
   return isCacheEnabled(getSessionStoreTtl());
 }
 
+function bumpSessionStoreCacheVersion(storePath: string): void {
+  SESSION_STORE_CACHE_VERSION.set(storePath, (SESSION_STORE_CACHE_VERSION.get(storePath) ?? 0) + 1);
+}
+
+export function getSessionStoreCacheVersion(storePath: string): number {
+  return SESSION_STORE_CACHE_VERSION.get(storePath) ?? 0;
+}
+
 export function clearSessionStoreCaches(): void {
   SESSION_STORE_CACHE.clear();
   SESSION_STORE_SNAPSHOT_CACHE.clear();
+  SESSION_STORE_CACHE_VERSION.clear();
   SESSION_STORE_SERIALIZED_CACHE.clear();
   sessionStoreSerializedCacheBytes = 0;
   SESSION_STORE_STRING_INTERN_POOL.clear();
+  clearSessionSkillPromptRefCache();
   resetSessionStoreStringInternStats();
 }
 
 export function invalidateSessionStoreCache(storePath: string): void {
+  bumpSessionStoreCacheVersion(storePath);
   SESSION_STORE_CACHE.delete(storePath);
   SESSION_STORE_SNAPSHOT_CACHE.delete(storePath);
   deleteSerializedSessionStore(storePath);
@@ -298,10 +316,30 @@ export function getSerializedSessionStore(storePath: string): string | undefined
   return SESSION_STORE_SERIALIZED_CACHE.get(storePath)?.serialized;
 }
 
+export function getSerializedSessionStorePromptRefs(
+  storePath: string,
+): ReadonlyMap<string, SessionSkillPromptRef> | undefined {
+  pruneSerializedSessionStoreCache();
+  return SESSION_STORE_SERIALIZED_CACHE.get(storePath)?.promptRefs;
+}
+
+export function setSerializedSessionStorePromptRefs(
+  storePath: string,
+  promptRefs: ReadonlyMap<string, SessionSkillPromptRef>,
+): void {
+  pruneSerializedSessionStoreCache();
+  const cached = SESSION_STORE_SERIALIZED_CACHE.get(storePath);
+  if (!cached) {
+    return;
+  }
+  cached.promptRefs = promptRefs;
+}
+
 export function setSerializedSessionStore(
   storePath: string,
   serialized?: string,
   sizeBytesHint?: number,
+  promptRefs?: ReadonlyMap<string, SessionSkillPromptRef>,
 ): void {
   deleteSerializedSessionStore(storePath);
   if (serialized === undefined) {
@@ -316,12 +354,13 @@ export function setSerializedSessionStore(
   if (maxEntries <= 0 || maxBytes <= 0 || sizeBytes > maxBytes) {
     return;
   }
-  SESSION_STORE_SERIALIZED_CACHE.set(storePath, { serialized, sizeBytes });
+  SESSION_STORE_SERIALIZED_CACHE.set(storePath, { serialized, sizeBytes, promptRefs });
   sessionStoreSerializedCacheBytes += sizeBytes;
   pruneSerializedSessionStoreCache();
 }
 
 export function dropSessionStoreObjectCache(storePath: string): void {
+  bumpSessionStoreCacheVersion(storePath);
   SESSION_STORE_CACHE.delete(storePath);
 }
 
@@ -404,9 +443,11 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  serializedPromptRefs?: ReadonlyMap<string, SessionSkillPromptRef>;
   cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
+  bumpSessionStoreCacheVersion(params.storePath);
   const store =
     params.takeOwnership === true ? params.store : cloneSessionStoreRecord(params.store);
   if (params.takeOwnership === true) {
@@ -418,5 +459,10 @@ export function writeSessionStoreCache(params: {
     sizeBytes: params.sizeBytes,
     serialized: params.cloneSerialized,
   });
-  setSerializedSessionStore(params.storePath, params.serialized, params.sizeBytes);
+  setSerializedSessionStore(
+    params.storePath,
+    params.serialized,
+    params.sizeBytes,
+    params.serializedPromptRefs,
+  );
 }

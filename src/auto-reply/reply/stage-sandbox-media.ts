@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
@@ -14,11 +15,11 @@ import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-
 import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
+export const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // `staged` maps every absolute source path that was copied into the sandbox
 // (or remote cache) to its rewritten ctx path. Callers like chat.send's
@@ -335,7 +336,7 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
     let stderr = "";
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk) => {
-      stderr += chunk;
+      stderr = appendScpStderrTail(stderr, chunk);
     });
 
     child.once("error", reject);
@@ -347,4 +348,16 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
       }
     });
   });
+}
+
+export function appendScpStderrTail(
+  current: string,
+  chunk: string,
+  maxChars = SCP_STDERR_TAIL_CHARS,
+): string {
+  const combined = `${current}${chunk}`;
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+  return combined.slice(-maxChars);
 }

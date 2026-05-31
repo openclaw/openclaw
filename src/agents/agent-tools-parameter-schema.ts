@@ -1,13 +1,13 @@
+import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import {
   resolveUnsupportedToolSchemaKeywords,
   shouldOmitEmptyArrayItems,
 } from "../plugins/provider-model-compat.js";
-import { isRecord as isSchemaRecord } from "../shared/record-coerce.js";
 import { stripUnsupportedSchemaKeywords } from "../shared/schema-keyword-strip.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
 export type ToolParameterSchemaOptions = {
@@ -15,6 +15,42 @@ export type ToolParameterSchemaOptions = {
   modelId?: string;
   modelCompat?: ModelCompatConfig;
 };
+
+const MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
+const toolParameterSchemaCache = new WeakMap<object, Array<{ key: string; value: TSchema }>>();
+
+function resolveToolParameterSchemaCacheKey(
+  options: ToolParameterSchemaOptions | undefined,
+): string {
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
+  const unsupportedKeywords = Array.from(
+    resolveUnsupportedToolSchemaKeywords(options?.modelCompat),
+  ).toSorted();
+  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
+  return JSON.stringify([
+    normalizedProvider,
+    normalizedModelId,
+    unsupportedKeywords,
+    omitEmptyArrayItems,
+  ]);
+}
+
+function getCachedToolParameterSchema(schema: object, key: string): TSchema | undefined {
+  return toolParameterSchemaCache.get(schema)?.find((entry) => entry.key === key)?.value;
+}
+
+function rememberCachedToolParameterSchema(schema: object, key: string, value: TSchema): TSchema {
+  const entries = toolParameterSchemaCache.get(schema) ?? [];
+  toolParameterSchemaCache.set(
+    schema,
+    [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(
+      0,
+      MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
+    ),
+  );
+  return value;
+}
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -705,9 +741,9 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
   return changed || nullable ? normalized : schema;
 }
 
-export function normalizeToolParameterSchema(
+function normalizeToolParameterSchemaUncached(
   schema: unknown,
-  options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
+  options?: ToolParameterSchemaOptions,
 ): TSchema {
   const inlinedSchema = normalizeOpenApiSchemaKeywords(inlineLocalToolSchemaRefs(schema));
   const schemaRecord =
@@ -843,4 +879,23 @@ export function normalizeToolParameterSchema(
   // - Anthropic accepts proper JSON Schema with constraints.
   // Merging properties preserves useful enums like `action` while keeping schemas portable.
   return applyProviderCleaning(flattenedSchema);
+}
+
+export function normalizeToolParameterSchema(
+  schema: unknown,
+  options?: ToolParameterSchemaOptions,
+): TSchema {
+  if (!schema || typeof schema !== "object") {
+    return normalizeToolParameterSchemaUncached(schema, options);
+  }
+  const cacheKey = resolveToolParameterSchemaCacheKey(options);
+  const cached = getCachedToolParameterSchema(schema, cacheKey);
+  if (cached) {
+    return cached;
+  }
+  return rememberCachedToolParameterSchema(
+    schema,
+    cacheKey,
+    normalizeToolParameterSchemaUncached(schema, options),
+  );
 }

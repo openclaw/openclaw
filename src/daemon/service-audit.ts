@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -136,11 +140,22 @@ function isRestartSecPreferred(value: string | undefined): boolean {
   if (!value) {
     return false;
   }
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseSystemdRestartSecSeconds(value);
+  if (parsed === undefined) {
     return false;
   }
   return Math.abs(parsed - 5) < 0.01;
+}
+
+function parseSystemdRestartSecSeconds(value: string): number | undefined {
+  const match = value
+    .trim()
+    .match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s*(?:s|sec|secs|second|seconds))?$/iu);
+  if (!match) {
+    return undefined;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 async function auditSystemdUnit(
@@ -237,14 +252,25 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
-function parseGatewayPortArg(value: string | undefined): number | undefined {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : undefined;
+type GatewayServiceCommandPort =
+  | { kind: "missing" }
+  | { kind: "valid"; port: number }
+  | { kind: "invalid"; raw: string };
+
+function parseGatewayPortArg(value: string | undefined): GatewayServiceCommandPort {
+  const raw = value?.trim() ?? "";
+  const port = parseTcpPort(raw);
+  if (port !== null) {
+    return { kind: "valid", port };
+  }
+  return raw ? { kind: "invalid", raw } : { kind: "missing" };
 }
 
-export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+function readGatewayServiceCommandPortState(
+  programArguments?: string[],
+): GatewayServiceCommandPort {
   if (!programArguments || programArguments.length === 0) {
-    return undefined;
+    return { kind: "missing" };
   }
   for (let index = 0; index < programArguments.length; index += 1) {
     const arg = programArguments[index];
@@ -255,7 +281,12 @@ export function readGatewayServiceCommandPort(programArguments?: string[]): numb
       return parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return undefined;
+  return { kind: "missing" };
+}
+
+export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+  const servicePort = readGatewayServiceCommandPortState(programArguments);
+  return servicePort.kind === "valid" ? servicePort.port : undefined;
 }
 
 function auditGatewayServicePort(params: {
@@ -271,14 +302,21 @@ function auditGatewayServicePort(params: {
   ) {
     return;
   }
-  const servicePort = readGatewayServiceCommandPort(params.programArguments);
-  if (servicePort === undefined || servicePort === params.expectedPort) {
+  const servicePort = readGatewayServiceCommandPortState(params.programArguments);
+  if (servicePort.kind === "missing") {
     return;
   }
+  if (servicePort.kind === "valid" && servicePort.port === params.expectedPort) {
+    return;
+  }
+  const detail =
+    servicePort.kind === "valid"
+      ? `${servicePort.port} -> ${params.expectedPort}`
+      : `${servicePort.raw} -> ${params.expectedPort}`;
   params.issues.push({
     code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
     message: "Gateway service port does not match current gateway config.",
-    detail: `${servicePort} -> ${params.expectedPort}`,
+    detail,
     level: "recommended",
   });
 }

@@ -247,7 +247,7 @@ describe("sessions tools", () => {
     });
   });
 
-  it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
+  it("uses integer schemas for session count and window parameters", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
       const tool = tools.find((candidate) => candidate.name === name);
@@ -274,17 +274,131 @@ describe("sessions tools", () => {
       }
       return value;
     };
+    const hasSchemaProp = (toolName: string, prop: string) => {
+      const tool = byName(toolName);
+      const schema = tool.parameters as {
+        properties?: Record<string, unknown>;
+      };
+      return Object.hasOwn(schema.properties ?? {}, prop);
+    };
 
-    expect(schemaProp("sessions_history", "limit").type).toBe("number");
-    expect(schemaProp("sessions_list", "limit").type).toBe("number");
-    expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
-    expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
+    expect(schemaProp("sessions_history", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_list", "limit").type).toBe("integer");
+    expect(schemaProp("sessions_list", "activeMinutes").type).toBe("integer");
+    expect(schemaProp("sessions_list", "messageLimit").type).toBe("integer");
     expect(schemaProp("sessions_list", "label").type).toBe("string");
     expect(schemaProp("sessions_list", "agentId").type).toBe("string");
     expect(schemaProp("sessions_list", "search").type).toBe("string");
     expect(schemaProp("sessions_list", "includeDerivedTitles").type).toBe("boolean");
     expect(schemaProp("sessions_list", "includeLastMessage").type).toBe("boolean");
-    expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
+    expect(schemaProp("sessions_send", "message").type).toBe("string");
+    expect(hasSchemaProp("sessions_send", "SendMessage")).toBe(false);
+    expect(hasSchemaProp("sessions_send", "content")).toBe(false);
+    expect(hasSchemaProp("sessions_send", "text")).toBe(false);
+    expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("integer");
+    const sendRequired =
+      (byName("sessions_send").parameters as { required?: string[] }).required ?? [];
+    expect(sendRequired).toContain("message");
+  });
+
+  it.each([
+    { alias: "SendMessage", value: "hello from SendMessage" },
+    { alias: "content", value: "hello from content" },
+    { alias: "text", value: "hello from text" },
+  ])("sessions_send prepares hidden $alias alias before validation", ({ alias, value }) => {
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+    if (!tool.prepareArguments) {
+      throw new Error("sessions_send missing prepareArguments");
+    }
+
+    const prepared = tool.prepareArguments({
+      sessionKey: "main",
+      [alias]: value,
+      timeoutSeconds: 0,
+    }) as Record<string, unknown>;
+
+    expect(prepared.message).toBe(value);
+    expect(prepared[alias]).toBeUndefined();
+  });
+
+  it.each([
+    { alias: "SendMessage", value: "hello from SendMessage" },
+    { alias: "content", value: "hello from content" },
+    { alias: "text", value: "hello from text" },
+  ])("sessions_send normalizes $alias alias to message", async ({ alias, value }) => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-alias", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-alias", {
+      sessionKey: "main",
+      [alias]: value,
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details).status).toBe("accepted");
+    const agentCall = callGatewayMock.mock.calls
+      .map((call) => call[0] as GatewayCall)
+      .find((call) => call.method === "agent");
+    expect(agentCall).toBeDefined();
+    expect(agentParams(agentCall ?? {}).message).toContain(value);
+  });
+
+  it("sessions_send sanitizes formatted reasoning from aliases", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-alias", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-alias", {
+      sessionKey: "main",
+      SendMessage: "Reasoning:\n_internal plan_\n\nVisible answer",
+      timeoutSeconds: 0,
+    });
+
+    expect(sessionsSendDetails(result.details).status).toBe("accepted");
+    const agentCall = callGatewayMock.mock.calls
+      .map((call) => call[0] as GatewayCall)
+      .find((call) => call.method === "agent");
+    expect(agentCall).toBeDefined();
+    expect(agentParams(agentCall ?? {}).message).toContain("Visible answer");
+    expect(agentParams(agentCall ?? {}).message).not.toContain("internal plan");
+  });
+
+  it("sessions_send prepares sanitized aliases without exposing alias keys", () => {
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    if (!tool?.prepareArguments) {
+      throw new Error("missing sessions_send prepareArguments");
+    }
+
+    const prepared = tool.prepareArguments({
+      sessionKey: "main",
+      SendMessage: "Reasoning:\n_internal plan_\n\nVisible answer",
+      timeoutSeconds: 0,
+    }) as Record<string, unknown>;
+
+    expect(prepared.message).toBe("Visible answer");
+    expect(prepared.SendMessage).toBeUndefined();
   });
 
   it("sessions_list forwards mailbox filters and includes messages", async () => {
@@ -634,8 +748,8 @@ describe("sessions tools", () => {
           openclawReasoningReplay: {
             v: 1,
             source: "openai-responses",
-            provider: "openai-codex",
-            api: "openai-codex-responses",
+            provider: "openai",
+            api: "openai-chatgpt-responses",
             model: "gpt-5.5",
           },
         },

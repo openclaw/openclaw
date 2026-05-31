@@ -18,6 +18,7 @@ function bedrockModel(overrides: Record<string, unknown>) {
 }
 
 function signedThinkingContext(modelId: string) {
+  const highSurrogate = String.fromCharCode(0xd83d);
   return {
     messages: [
       {
@@ -25,7 +26,13 @@ function signedThinkingContext(modelId: string) {
         api: "bedrock-converse-stream",
         provider: "amazon-bedrock",
         model: modelId,
-        content: [{ type: "thinking", thinking: "private reasoning", thinkingSignature: "sig-1" }],
+        content: [
+          {
+            type: "thinking",
+            thinking: `private${highSurrogate}reasoning`,
+            thinkingSignature: "sig-1",
+          },
+        ],
       },
     ],
   } as never;
@@ -47,7 +54,10 @@ describe("Bedrock reasoning replay", () => {
     expect(messages[0]?.content).toEqual([
       {
         reasoningContent: {
-          reasoningText: { text: "private reasoning", signature: "sig-1" },
+          reasoningText: {
+            text: `private${String.fromCharCode(0xd83d)}reasoning`,
+            signature: "sig-1",
+          },
         },
       },
     ]);
@@ -61,7 +71,7 @@ describe("Bedrock reasoning replay", () => {
       "none",
     );
 
-    expect(messages[0]?.content).toEqual([{ text: "private reasoning" }]);
+    expect(messages[0]?.content).toEqual([{ text: "privatereasoning" }]);
   });
 });
 
@@ -77,5 +87,31 @@ describe("Bedrock profile endpoint resolution", () => {
         testing.hasConfiguredBedrockProfile({ profile: "prod-bedrock" }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("Bedrock thinking effort mapping", () => {
+  it("clamps max effort for Claude models without native max support", () => {
+    expect(
+      testing.mapThinkingLevelToEffort(
+        bedrockModel({
+          id: "anthropic.claude-sonnet-4-6-v1:0",
+          name: "Claude Sonnet 4.6",
+        }),
+        "max",
+      ),
+    ).toBe("high");
+  });
+
+  it("preserves max effort for Claude Opus 4.8", () => {
+    expect(
+      testing.mapThinkingLevelToEffort(
+        bedrockModel({
+          id: "anthropic.claude-opus-4.8-v1:0",
+          name: "Claude Opus 4.8",
+        }),
+        "max",
+      ),
+    ).toBe("max");
   });
 });

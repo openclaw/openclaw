@@ -43,6 +43,14 @@ export type EmbeddedRunWaiter = {
   timer: NodeJS.Timeout;
 };
 
+export type AbandonedEmbeddedRun = {
+  sessionId: string;
+  sessionKey?: string;
+  sessionFile?: string;
+  abandonedAtMs: number;
+  reason: "timeout";
+};
+
 const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
@@ -50,6 +58,9 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   sessionIdsByKey: new Map<string, string>(),
   sessionIdsByFile: new Map<string, string>(),
+  abandonedRunsBySessionId: new Map<string, AbandonedEmbeddedRun>(),
+  abandonedRunSessionIdsByKey: new Map<string, string>(),
+  abandonedRunSessionIdsByFile: new Map<string, string>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
   modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
 }));
@@ -66,6 +77,15 @@ export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
 export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
   embeddedRunState.sessionIdsByFile ??
   (embeddedRunState.sessionIdsByFile = new Map<string, string>());
+export const ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID =
+  embeddedRunState.abandonedRunsBySessionId ??
+  (embeddedRunState.abandonedRunsBySessionId = new Map<string, AbandonedEmbeddedRun>());
+export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
+  embeddedRunState.abandonedRunSessionIdsByKey ??
+  (embeddedRunState.abandonedRunSessionIdsByKey = new Map<string, string>());
+export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
+  embeddedRunState.abandonedRunSessionIdsByFile ??
+  (embeddedRunState.abandonedRunSessionIdsByFile = new Map<string, string>());
 export const EMBEDDED_RUN_WAITERS =
   embeddedRunState.waiters ??
   (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());

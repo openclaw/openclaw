@@ -1,7 +1,9 @@
 #!/usr/bin/env -S pnpm tsx
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   die,
   ensureValue,
@@ -9,6 +11,7 @@ import {
   packOpenClaw,
   parsePlatformList,
   parseProvider,
+  readPositiveIntEnv,
   repoRoot,
   resolveHostIp,
   resolveLatestVersion,
@@ -73,6 +76,8 @@ interface NpmUpdateSummary {
   provider: Provider;
   latestVersion: string;
   currentHead: string;
+  harnessCheckoutVersion: string;
+  harnessTargetFamily: string;
   runDir: string;
   slowestTiming?: {
     durationMs: number;
@@ -96,7 +101,7 @@ interface NpmUpdateSummary {
 const macosVm = "macOS Tahoe";
 const windowsVm = "Windows 11";
 const linuxVmDefault = "Ubuntu 26.04";
-const updateTimeoutSeconds = Number(process.env.OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S || 1200);
+const updateTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 1200);
 const updateCleanupBackstopMs = 60_000;
 
 function usage(): string {
@@ -122,7 +127,8 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): NpmUpdateOptions {
+export function parseArgs(argv: string[]): NpmUpdateOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: NpmUpdateOptions = {
     apiKeyEnv: undefined,
     betaValidation: undefined,
@@ -134,25 +140,25 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
     provider: "openai",
     updateTarget: "",
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--package-spec":
-        options.packageSpec = ensureValue(argv, i, arg);
+        options.packageSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--update-target":
-        options.updateTarget = ensureValue(argv, i, arg);
+        options.updateTarget = ensureValue(args, i, arg);
         i++;
         break;
       case "--fresh-target":
-        options.freshTargetSpec = ensureValue(argv, i, arg);
+        options.freshTargetSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--beta-validation": {
-        const next = argv[i + 1];
+        const next = args[i + 1];
         if (next && !next.startsWith("-")) {
           options.betaValidation = next;
           i++;
@@ -163,24 +169,24 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
       }
       case "--platform":
       case "--only":
-        options.platforms = parsePlatformList(ensureValue(argv, i, arg));
+        options.platforms = parsePlatformList(ensureValue(args, i, arg));
         i++;
         break;
       case "--provider":
-        options.provider = parseProvider(ensureValue(argv, i, arg));
+        options.provider = parseProvider(ensureValue(args, i, arg));
         i++;
         break;
       case "--model":
-        options.modelId = ensureValue(argv, i, arg);
+        options.modelId = ensureValue(args, i, arg);
         i++;
         break;
       case "--host-ip":
-        options.hostIp = ensureValue(argv, i, arg);
+        options.hostIp = ensureValue(args, i, arg);
         i++;
         break;
       case "--api-key-env":
       case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(argv, i, arg);
+        options.apiKeyEnv = ensureValue(args, i, arg);
         i++;
         break;
       case "--json":
@@ -197,6 +203,10 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
   return options;
 }
 
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
+}
+
 function platformRecord<T>(value: T): Record<Platform, T> {
   return { linux: value, macos: value, windows: value };
 }
@@ -208,6 +218,25 @@ function formatDuration(durationMs: number): string {
   return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`;
 }
 
+function readHarnessCheckoutVersion(): string {
+  const pkg = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+    version?: unknown;
+  };
+  return typeof pkg.version === "string" ? pkg.version : "";
+}
+
+function openClawVersionFamily(version: string): string {
+  return /^(\d{4}\.\d{1,2}\.\d{1,2})(?:[-.]|$)/u.exec(version.trim())?.[1] ?? "";
+}
+
+function parseOpenClawPackageSpecVersion(spec: string): string {
+  const value = spec.trim();
+  if (!value) {
+    return "";
+  }
+  return resolveOpenClawRegistryVersion(value) || "";
+}
+
 class NpmUpdateSmoke {
   private auth: ProviderAuth;
   private windowsAuth: ProviderAuth;
@@ -217,6 +246,8 @@ class NpmUpdateSmoke {
   private packageSpec = "";
   private currentHead = "";
   private currentHeadShort = "";
+  private harnessCheckoutVersion = "";
+  private harnessTargetFamily = "";
   private hostIp = "";
   private server: HostServer | null = null;
   private artifact: PackageArtifact | null = null;
@@ -259,8 +290,10 @@ class NpmUpdateSmoke {
       this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"], {
         quiet: true,
       }).stdout.trim();
+      this.harnessCheckoutVersion = readHarnessCheckoutVersion();
       this.hostIp = resolveHostIp(this.options.hostIp ?? "");
       this.configurePublishedTargets();
+      this.assertPublishedTargetMatchesHarnessCheckout();
 
       if (this.options.platforms.has("linux")) {
         this.linuxVm = resolveUbuntuVmName(linuxVmDefault);
@@ -369,10 +402,9 @@ class NpmUpdateSmoke {
   ): Job {
     const logPath = path.join(this.runDir, `${platform}-${phase}.log`);
     const auth = this.authForPlatform(platform);
+    const script = `scripts/e2e/parallels-${platform}-smoke.sh`;
     const args = [
-      "exec",
-      "tsx",
-      `scripts/e2e/parallels/${platform}-smoke.ts`,
+      script,
       "--mode",
       "fresh",
       "--provider",
@@ -396,10 +428,10 @@ class NpmUpdateSmoke {
       lastPhase: "starting",
       logPath,
       promise: Promise.resolve(1),
-      rerunCommand: this.formatRerun("pnpm", args, env),
+      rerunCommand: this.formatRerun("bash", args, env),
       startedAt,
     };
-    job.promise = this.spawnLogged("pnpm", args, logPath, env, (text) =>
+    job.promise = this.spawnLogged("bash", args, logPath, env, (text) =>
       this.noteJobOutput(job, text),
     ).finally(() => {
       job.durationMs = Date.now() - job.startedAt;
@@ -970,6 +1002,27 @@ class NpmUpdateSmoke {
     }
   }
 
+  private assertPublishedTargetMatchesHarnessCheckout(): void {
+    if (process.env.OPENCLAW_PARALLELS_ALLOW_HARNESS_TARGET_MISMATCH === "1") {
+      return;
+    }
+    const candidateVersion = this.freshTargetSpec
+      ? parseOpenClawPackageSpecVersion(this.freshTargetSpec)
+      : parseOpenClawPackageSpecVersion(this.options.updateTarget);
+    const targetFamily = openClawVersionFamily(candidateVersion);
+    if (!targetFamily) {
+      return;
+    }
+    this.harnessTargetFamily = targetFamily;
+    const checkoutFamily = openClawVersionFamily(this.harnessCheckoutVersion);
+    if (checkoutFamily === targetFamily) {
+      return;
+    }
+    die(
+      `refusing to run Parallels ${candidateVersion} target with harness checkout ${this.harnessCheckoutVersion || "unknown"}; checkout the matching release branch or set OPENCLAW_PARALLELS_ALLOW_HARNESS_TARGET_MISMATCH=1 for an intentional cross-version harness run`,
+    );
+  }
+
   private noteJobOutput(job: Job, text: string): void {
     job.lastOutputAt = Date.now();
     job.lastBytes += text.length;
@@ -994,6 +1047,8 @@ class NpmUpdateSmoke {
       fresh: this.freshStatus,
       freshTarget: this.freshTargetStatus,
       freshTargetSpec: this.freshTargetSpec,
+      harnessCheckoutVersion: this.harnessCheckoutVersion,
+      harnessTargetFamily: this.harnessTargetFamily,
       latestVersion: this.latestVersion,
       packageSpec: this.packageSpec,
       provider: this.options.provider,
@@ -1041,6 +1096,8 @@ class NpmUpdateSmoke {
   }
 }
 
-await new NpmUpdateSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
-  die(error instanceof Error ? error.message : String(error));
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await new NpmUpdateSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+    die(error instanceof Error ? error.message : String(error));
+  });
+}

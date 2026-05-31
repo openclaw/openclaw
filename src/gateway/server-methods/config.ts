@@ -1,5 +1,23 @@
 import { execFile } from "node:child_process";
 import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateConfigApplyParams,
+  validateConfigGetParams,
+  validateConfigPatchParams,
+  validateConfigSchemaLookupParams,
+  validateConfigSchemaLookupResult,
+  validateConfigSchemaParams,
+  validateConfigSetParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   createConfigIO,
   parseConfigJson5,
   readConfigFileSnapshot,
@@ -25,8 +43,6 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
-import { isRecord } from "../../shared/record-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
@@ -34,18 +50,6 @@ import {
   resolveControlPlaneActor,
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateConfigApplyParams,
-  validateConfigGetParams,
-  validateConfigPatchParams,
-  validateConfigSchemaLookupParams,
-  validateConfigSchemaLookupResult,
-  validateConfigSchemaParams,
-  validateConfigSetParams,
-} from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   commitGatewayConfigWrite,
@@ -366,16 +370,31 @@ function clearConfigSchemaResponseCache() {
 }
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
-  const now = Date.now();
-  if (configSchemaResponseCache && configSchemaResponseCache.expiresAtMs > now) {
+  const now = asDateTimestampMs(Date.now());
+  const cachedExpiresAt =
+    configSchemaResponseCache === null
+      ? undefined
+      : asDateTimestampMs(configSchemaResponseCache.expiresAtMs);
+  if (
+    configSchemaResponseCache &&
+    now !== undefined &&
+    cachedExpiresAt !== undefined &&
+    cachedExpiresAt > now
+  ) {
     return configSchemaResponseCache.response;
+  }
+  if (configSchemaResponseCache) {
+    configSchemaResponseCache = null;
   }
 
   const response = loadGatewayRuntimeConfigSchema();
-  configSchemaResponseCache = {
-    expiresAtMs: Date.now() + CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS,
-    response,
-  };
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS);
+  if (expiresAtMs !== undefined) {
+    configSchemaResponseCache = {
+      expiresAtMs,
+      response,
+    };
+  }
   return response;
 }
 
@@ -703,18 +722,15 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, path: configPath }, undefined);
     } catch (error) {
       const errorMessage = formatConfigOpenError(error);
-      const isHeadlessError = errorMessage.includes("xdg-open") && errorMessage.includes("no method available");
+      const isHeadlessError =
+        errorMessage.includes("xdg-open") && errorMessage.includes("no method available");
       const detailedError = isHeadlessError
         ? `Cannot open file in headless environment. File path: ${configPath}. This environment appears to lack a graphical or terminal browser handler.`
         : `Failed to open config file: ${errorMessage}`;
       context?.logGateway?.warn(
         `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${errorMessage}`,
       );
-      respond(
-        true,
-        { ok: false, path: configPath, error: detailedError },
-        undefined,
-      );
+      respond(true, { ok: false, path: configPath, error: detailedError }, undefined);
     }
   },
 };

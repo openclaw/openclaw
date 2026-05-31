@@ -1,15 +1,6 @@
 import { createHash } from "node:crypto";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
-} from "../../routing/session-key.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
-import { normalizeOptionalString as asNonEmptyString } from "../../shared/string-coerce.js";
-import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -18,7 +9,16 @@ import {
   validateArtifactsDownloadParams,
   validateArtifactsGetParams,
   validateArtifactsListParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../../routing/session-key.js";
+import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   resolveSessionStoreAgentId,

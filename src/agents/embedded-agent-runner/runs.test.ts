@@ -18,10 +18,14 @@ import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
+  clearEmbeddedRunAbandonment,
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunHandleActive,
+  isEmbeddedRunAbandoned,
   formatEmbeddedAgentQueueFailureSummary,
+  markActiveEmbeddedRunAbandoned,
+  markEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   requestEmbeddedRunModelSwitch,
@@ -410,6 +414,56 @@ describe("embedded-agent runner run registry", () => {
 
     expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(false);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+  });
+
+  it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {
+    const sessionFile = "/tmp/openclaw-abandoned-session.jsonl";
+    const handle = createRunHandle();
+
+    markEmbeddedRunAbandoned({
+      sessionId: "session-timeout",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      reason: "timeout",
+    });
+
+    expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(true);
+    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(true);
+    expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(true);
+
+    setActiveEmbeddedRun("session-next", handle, "agent:main:main", sessionFile);
+
+    expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(false);
+    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
+    expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(false);
+
+    markEmbeddedRunAbandoned({
+      sessionId: "session-next",
+      sessionKey: "agent:main:main",
+      reason: "timeout",
+    });
+    clearEmbeddedRunAbandonment({ sessionId: "session-next" });
+
+    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
+  });
+
+  it("ignores timeout abandonment from a stale replaced handle", () => {
+    const oldHandle = createRunHandle();
+    const newHandle = createRunHandle();
+
+    setActiveEmbeddedRun("session-replaced", oldHandle, "agent:main:main");
+    setActiveEmbeddedRun("session-replaced", newHandle, "agent:main:main");
+
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-replaced",
+        handle: oldHandle,
+        sessionKey: "agent:main:main",
+        reason: "timeout",
+      }),
+    ).toBe(false);
+
+    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
   });
 
   it("treats repeated clears for a completed run handle as idempotent", () => {

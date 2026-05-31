@@ -4,14 +4,18 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
-import type { QaReportCheck } from "../../report.js";
-import { renderQaMarkdownReport } from "../../report.js";
-import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 import {
-  appendLiveLaneIssue,
-  buildLiveLaneArtifactsError,
-} from "../../shared/live-lane-helpers.js";
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
+import {
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+  renderQaMarkdownReport,
+  type QaReportCheck,
+} from "openclaw/plugin-sdk/qa-runtime";
+import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
 import {
@@ -195,11 +199,7 @@ function parsePositiveMatrixQaEnvMs(name: string, fallback: number) {
   if (raw === undefined) {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return Math.floor(parsed);
+  return resolveTimerTimeoutMs(parseStrictPositiveInteger(raw), fallback);
 }
 
 function createMatrixQaRunDeadline() {

@@ -1,11 +1,11 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedAgentExecutionContract } from "../../../config/types.agent-defaults.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
@@ -46,6 +46,7 @@ type IncompleteTurnAttempt = Pick<
   | "messagingToolSentTargets"
   | "lastToolError"
   | "lastAssistant"
+  | "itemLifecycle"
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
@@ -143,7 +144,7 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "anthropic-messages",
   "bedrock-converse-stream",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
   "openclaw-azure-openai-responses-transport",
@@ -304,6 +305,58 @@ export function resolveIncompleteTurnPayloadText(params: {
   return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
+}
+
+export function shouldRetryMissingAssistantTurn(params: {
+  payloadCount: number;
+  aborted: boolean;
+  promptError?: unknown;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  if (
+    params.payloadCount !== 0 ||
+    params.aborted ||
+    Boolean(params.promptError) ||
+    params.timedOut ||
+    params.attempt.clientToolCalls ||
+    params.attempt.currentAttemptAssistant ||
+    params.attempt.lastAssistant ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError
+  ) {
+    return false;
+  }
+
+  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+    return false;
+  }
+
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return false;
+  }
+
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
+    return false;
+  }
+
+  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
+    return false;
+  }
+
+  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+    return false;
+  }
+
+  if (
+    (params.attempt.itemLifecycle?.startedCount ?? 0) > 0 ||
+    (params.attempt.itemLifecycle?.activeCount ?? 0) > 0
+  ) {
+    return false;
+  }
+
+  return !resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects;
 }
 
 function joinAssistantTexts(assistantTexts?: readonly string[]): string {

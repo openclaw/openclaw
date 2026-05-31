@@ -244,6 +244,30 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
   });
 
+  it("skips persisted registry filesystem fingerprints after a process memo hit", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    const first = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    const statSpy = vi.spyOn(fs, "statSync");
+    const readdirSpy = vi.spyOn(fs, "readdirSync");
+    try {
+      const second = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+      expect(second).toBe(first);
+      expect(statSpy).not.toHaveBeenCalled();
+      expect(readdirSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("clears the process memo at plugin metadata lifecycle boundaries", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
@@ -481,7 +505,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
-  it("refreshes when the persisted registry file changes", () => {
+  it("keeps persisted registry snapshots process-stable until lifecycle clear", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir, 1);
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
@@ -492,6 +516,11 @@ describe("loadPluginMetadataSnapshot process memo", () => {
 
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
     touchPersistedIndex(stateDir, 22);
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+
+    clearPluginMetadataLifecycleCaches();
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
@@ -655,6 +684,42 @@ describe("loadPluginMetadataSnapshot process memo", () => {
       writeRootManifest: false,
     });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+  });
+
+  it("keeps npm project package fingerprints stable across directory order changes", () => {
+    const stateDir = tempStateDir();
+    const projectsDir = path.join(stateDir, "npm", "projects");
+    writeJson(path.join(projectsDir, "zeta", "package.json"), { name: "zeta", version: "1.0.0" });
+    writeJson(path.join(projectsDir, "alpha", "package.json"), { name: "alpha", version: "1.0.0" });
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+    const originalReaddirSync = fs.readdirSync.bind(fs);
+    let reverseProjectEntries = false;
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation(((
+      directoryPath: fs.PathLike,
+      options?: Parameters<typeof fs.readdirSync>[1],
+    ): unknown => {
+      const entries = originalReaddirSync(directoryPath, options as never);
+      if (directoryPath === projectsDir && reverseProjectEntries && Array.isArray(entries)) {
+        return entries.toReversed();
+      }
+      return entries;
+    }) as unknown as typeof fs.readdirSync);
+
+    try {
+      loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+      reverseProjectEntries = true;
+      loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    } finally {
+      readdirSpy.mockRestore();
+    }
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();

@@ -21,6 +21,7 @@ const modelAuthMocks = vi.hoisted(() => ({
     syntheticAuthProviderRefs: [],
     syntheticAuthProviderRefsComplete: true,
   })),
+  hasAvailableAuthForProvider: vi.fn(() => true),
   hasRuntimeAvailableProviderAuth:
     vi.fn<
       (params: {
@@ -49,6 +50,7 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-auth.js", () => ({
   createRuntimeProviderAuthLookup: modelAuthMocks.createRuntimeProviderAuthLookup,
+  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth: modelAuthMocks.hasRuntimeAvailableProviderAuth,
 }));
 
@@ -257,6 +259,28 @@ describe("prepared provider auth state", () => {
       modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[0]?.[0].runtimeLookup;
     expect(runtimeLookup).toBe(
       modelAuthMocks.createRuntimeProviderAuthLookup.mock.results[0]?.value,
+    );
+  });
+
+  it("uses an explicit agent auth store directory for provider auth checks", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    authProfilesMocks.listProfilesForProvider.mockReturnValueOnce([{} as never]);
+
+    const hasAuth = createProviderAuthChecker({
+      cfg,
+      agentDir: "/state/agents/worker/agent",
+      discoverExternalCliAuth: false,
+    });
+
+    await expect(hasAuth("nvidia")).resolves.toBe(true);
+    expect(authProfilesMocks.ensureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
+      "/state/agents/worker/agent",
+      { allowKeychainPrompt: false },
+    );
+    expect(authProfilesMocks.listProfilesForProvider).toHaveBeenCalledWith(
+      expect.anything(),
+      "nvidia",
     );
   });
 

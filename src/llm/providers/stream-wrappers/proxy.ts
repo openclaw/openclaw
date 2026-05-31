@@ -1,11 +1,12 @@
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderRequestPolicy } from "../../../agents/provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import {
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "../../../shared/string-coerce.js";
+import { parseStrictFiniteNumber } from "../../../infra/parse-finite-number.js";
 import { streamSimple } from "../../stream.js";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
 import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
@@ -60,9 +61,9 @@ function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | unde
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value.trim())
-        : Number.NaN;
-  if (!Number.isFinite(parsed)) {
+        ? parseStrictFiniteNumber(value)
+        : undefined;
+  if (parsed === undefined) {
     return undefined;
   }
   return String(Math.max(1, Math.min(86400, Math.trunc(parsed))));

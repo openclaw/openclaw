@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   createManagedTaskFlow,
@@ -14,7 +15,7 @@ import {
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
+import { tasksAuditCommand, tasksMaintenanceCommand, tasksShowCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -284,6 +285,30 @@ describe("tasks commands", () => {
     });
   });
 
+  it("shows tasks with Date-invalid optional timestamps without crashing", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-invalid-started-at",
+        status: "running",
+        task: "Inspect malformed task timestamp",
+        startedAt: 8_700_000_000_000_000,
+      });
+
+      const runtime = createRuntime();
+      await tasksShowCommand({ json: false, lookup: task.taskId }, runtime);
+
+      const joined = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(joined).toContain(`taskId: ${task.taskId}`);
+      expect(joined).toContain("startedAt: n/a");
+    });
+  });
+
   it("explains retained lost task cleanup timing in maintenance text output", async () => {
     await withTaskCommandStateDir(async () => {
       const cleanupAfter = Date.now() + 60_000;
@@ -383,7 +408,7 @@ describe("tasks commands", () => {
         ),
         "utf-8",
       );
-      await state.writeJson("cron/jobs.json", {
+      await saveCronStore(state.statePath("cron", "jobs.json"), {
         version: 1,
         jobs: [
           {
@@ -398,7 +423,7 @@ describe("tasks commands", () => {
             delivery: { mode: "none" },
             createdAtMs: now,
             updatedAtMs: now,
-            state: {},
+            state: { runningAtMs: now - 5_000 },
           },
           {
             id: "done-job",
@@ -416,20 +441,6 @@ describe("tasks commands", () => {
           },
         ],
       });
-      await state.writeJson("cron/jobs-state.json", {
-        version: 1,
-        jobs: {
-          "running-job": {
-            updatedAtMs: now,
-            state: { runningAtMs: now - 5_000 },
-          },
-          "done-job": {
-            updatedAtMs: now,
-            state: {},
-          },
-        },
-      });
-
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 

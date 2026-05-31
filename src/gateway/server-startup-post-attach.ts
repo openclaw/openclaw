@@ -32,6 +32,7 @@ const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
+const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
@@ -48,6 +49,43 @@ type GatewayMemoryStartupPolicy =
   | { mode: "off" }
   | { mode: "immediate" }
   | { mode: "idle"; delayMs: number };
+
+let mainSessionRestartRecoveryModulePromise: Promise<
+  typeof import("../agents/main-session-restart-recovery.js")
+> | null = null;
+let agentDefaultsModulePromise: Promise<typeof import("../agents/defaults.js")> | null = null;
+let agentModelSelectionModulePromise: Promise<
+  typeof import("../agents/model-selection.js")
+> | null = null;
+let internalHooksModulePromise: Promise<typeof import("../hooks/internal-hooks.js")> | null = null;
+let gatewayRestartSentinelModulePromise: Promise<
+  typeof import("./server-restart-sentinel.js")
+> | null = null;
+
+const loadMainSessionRestartRecoveryModule = async () => {
+  mainSessionRestartRecoveryModulePromise ??= import("../agents/main-session-restart-recovery.js");
+  return await mainSessionRestartRecoveryModulePromise;
+};
+
+const loadAgentDefaultsModule = async () => {
+  agentDefaultsModulePromise ??= import("../agents/defaults.js");
+  return await agentDefaultsModulePromise;
+};
+
+const loadAgentModelSelectionModule = async () => {
+  agentModelSelectionModulePromise ??= import("../agents/model-selection.js");
+  return await agentModelSelectionModulePromise;
+};
+
+const loadInternalHooksModule = async () => {
+  internalHooksModulePromise ??= import("../hooks/internal-hooks.js");
+  return await internalHooksModulePromise;
+};
+
+const loadGatewayRestartSentinelModule = async () => {
+  gatewayRestartSentinelModulePromise ??= import("./server-restart-sentinel.js");
+  return await gatewayRestartSentinelModulePromise;
+};
 
 export type GatewayPostReadySidecarHandle = {
   stop: () => Awaitable<void>;
@@ -319,6 +357,60 @@ function schedulePostReadySidecarTask(params: {
   };
 }
 
+type CleanStaleLockFiles = typeof import("../agents/session-write-lock.js").cleanStaleLockFiles;
+type MarkRestartAbortedMainSessionsFromLocks =
+  typeof import("../agents/main-session-restart-recovery.js").markRestartAbortedMainSessionsFromLocks;
+
+async function cleanupStaleSessionLocks(params: {
+  sessionDirs: readonly string[];
+  cfg: OpenClawConfig;
+  log: { warn: (msg: string) => void };
+  isStopped: () => boolean;
+  cleanStaleLockFiles: CleanStaleLockFiles;
+  markRestartAbortedMainSessionsFromLocks?: MarkRestartAbortedMainSessionsFromLocks;
+  concurrency?: number;
+}): Promise<void> {
+  const concurrency = Math.max(
+    1,
+    Math.min(
+      params.sessionDirs.length,
+      Math.floor(params.concurrency ?? SESSION_LOCK_CLEANUP_CONCURRENCY),
+    ),
+  );
+  let nextIndex = 0;
+  let markRestartAbortedMainSessionsFromLocks =
+    params.markRestartAbortedMainSessionsFromLocks ?? null;
+  const getMarker = async () => {
+    markRestartAbortedMainSessionsFromLocks ??= (await loadMainSessionRestartRecoveryModule())
+      .markRestartAbortedMainSessionsFromLocks;
+    return markRestartAbortedMainSessionsFromLocks;
+  };
+  const worker = async () => {
+    while (!params.isStopped()) {
+      const sessionsDir = params.sessionDirs[nextIndex];
+      nextIndex += 1;
+      if (!sessionsDir) {
+        return;
+      }
+      const result = await params.cleanStaleLockFiles({
+        sessionsDir,
+        config: params.cfg,
+        removeStale: true,
+        log: { warn: (message) => params.log.warn(message) },
+      });
+      if (result.cleaned.length === 0) {
+        continue;
+      }
+      const markRestartAbortedMainSessionsFromLocks = await getMarker();
+      await markRestartAbortedMainSessionsFromLocks({
+        sessionsDir,
+        cleanedLocks: result.cleaned,
+      });
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+}
+
 function scheduleTranscriptsAutoStartSidecar(params: {
   cfg: OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
@@ -412,7 +504,7 @@ async function refreshLatestUpdateRestartSentinelIfPresent(): Promise<Awaited<
   if (!(await hasRestartSentinelFileFast())) {
     return null;
   }
-  return await (await import("./server-restart-sentinel.js")).refreshLatestUpdateRestartSentinel();
+  return await (await loadGatewayRestartSentinelModule()).refreshLatestUpdateRestartSentinel();
 }
 
 function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
@@ -435,7 +527,7 @@ function isConfiguredCliBackendPrimary(params: {
 }
 
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
-  const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
+  const { hasInternalHookListeners } = await loadInternalHooksModule();
   return hasInternalHookListeners("gateway", "startup");
 }
 
@@ -476,7 +568,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   if (!explicitPrimary) {
     return;
   }
-  const { normalizeProviderId } = await import("../agents/provider-id.js");
+  const { normalizeProviderId } = await import("@openclaw/model-catalog-core/provider-id");
   if (
     isConfiguredCliBackendPrimary({
       cfg: params.cfg,
@@ -492,8 +584,8 @@ async function prewarmConfiguredPrimaryModel(params: {
     { isCliProvider, resolveConfiguredModelRef },
   ] = await Promise.all([
     import("../agents/agent-scope.js"),
-    import("../agents/defaults.js"),
-    import("../agents/model-selection.js"),
+    loadAgentDefaultsModule(),
+    loadAgentModelSelectionModule(),
   ]);
   const { provider, model } = resolveConfiguredModelRef({
     cfg: params.cfg,
@@ -601,7 +693,7 @@ export async function startGatewaySidecars(params: {
     try {
       if (internalHooksConfigured) {
         const [{ setInternalHooksEnabled }, { loadInternalHooks }] = await Promise.all([
-          import("../hooks/internal-hooks.js"),
+          loadInternalHooksModule(),
           import("../hooks/loader.js"),
         ]);
         setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
@@ -677,16 +769,14 @@ export async function startGatewaySidecars(params: {
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
   if (shouldDispatchGatewayStartupInternalHook) {
     setTimeout(() => {
-      void import("../hooks/internal-hooks.js").then(
-        ({ createInternalHookEvent, triggerInternalHook }) => {
-          const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
-            cfg: params.cfg,
-            deps: params.deps,
-            workspaceDir: params.defaultWorkspaceDir,
-          });
-          void triggerInternalHook(hookEvent);
-        },
-      );
+      void loadInternalHooksModule().then(({ createInternalHookEvent, triggerInternalHook }) => {
+        const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: params.cfg,
+          deps: params.deps,
+          workspaceDir: params.defaultWorkspaceDir,
+        });
+        void triggerInternalHook(hookEvent);
+      });
     }, 250);
   }
 
@@ -732,32 +822,21 @@ export async function startGatewaySidecars(params: {
     startupTrace: params.startupTrace,
     name: "sidecars.session-locks",
     log: params.log,
-    run: async () => {
+    run: async (isStopped) => {
       try {
-        const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
-          await Promise.all([
-            import("../config/paths.js"),
-            import("../agents/session-dirs.js"),
-            import("../agents/session-write-lock.js"),
-          ]);
+        const [{ resolveAgentSessionDirs }, { cleanStaleLockFiles }] = await Promise.all([
+          import("../agents/session-dirs.js"),
+          import("../agents/session-write-lock.js"),
+        ]);
         const stateDir = resolveStateDir(process.env);
         const sessionDirs = await resolveAgentSessionDirs(stateDir);
-        for (const sessionsDir of sessionDirs) {
-          const result = await cleanStaleLockFiles({
-            sessionsDir,
-            config: params.cfg,
-            removeStale: true,
-            log: { warn: (message) => params.log.warn(message) },
-          });
-          if (result.cleaned.length > 0) {
-            const { markRestartAbortedMainSessionsFromLocks } =
-              await import("../agents/main-session-restart-recovery.js");
-            await markRestartAbortedMainSessionsFromLocks({
-              sessionsDir,
-              cleanedLocks: result.cleaned,
-            });
-          }
-        }
+        await cleanupStaleSessionLocks({
+          sessionDirs,
+          cfg: params.cfg,
+          log: params.log,
+          isStopped,
+          cleanStaleLockFiles,
+        });
       } catch (err) {
         params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
       }
@@ -776,7 +855,7 @@ export async function startGatewaySidecars(params: {
         return;
       }
       setTimeout(() => {
-        void import("./server-restart-sentinel.js")
+        void loadGatewayRestartSentinelModule()
           .then(({ scheduleRestartSentinelWake }) =>
             scheduleRestartSentinelWake({ deps: params.deps }),
           )
@@ -803,7 +882,7 @@ export async function startGatewaySidecars(params: {
     log: params.log,
     run: async () => {
       const { scheduleRestartAbortedMainSessionRecovery } =
-        await import("../agents/main-session-restart-recovery.js");
+        await loadMainSessionRestartRecoveryModule();
       scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfg });
     },
   });
@@ -842,9 +921,9 @@ export async function startGatewaySidecars(params: {
             { loadModelCatalog },
             { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
           ] = await Promise.all([
-            import("../agents/defaults.js"),
+            loadAgentDefaultsModule(),
             import("../agents/model-catalog.js"),
-            import("../agents/model-selection.js"),
+            loadAgentModelSelectionModule(),
           ]);
           if (isStopped()) {
             return;
@@ -1279,6 +1358,7 @@ export const testing = {
   prewarmConfiguredPrimaryModelWithTimeout,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
+  cleanupStaleSessionLocks,
   scheduleProviderAuthStatePrewarm,
   schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,

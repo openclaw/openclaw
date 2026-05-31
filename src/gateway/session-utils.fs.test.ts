@@ -461,6 +461,51 @@ describe("readSessionMessages", () => {
     expectMessageFields(out[1], { role: "assistant", content: "latest", openclaw: { seq: 4 } });
   });
 
+  test("returns no recent messages for non-finite maxMessages", async () => {
+    const sessionId = "test-session-recent-non-finite-max-messages";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    expect(
+      readRecentSessionMessages(sessionId, storePath, undefined, {
+        maxMessages: Number.NaN,
+        maxBytes: 1024,
+      }),
+    ).toEqual([]);
+    await expect(
+      readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: Number.POSITIVE_INFINITY,
+        maxBytes: 1024,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  test("uses the default recent byte cap for non-finite maxBytes", async () => {
+    const sessionId = "test-session-recent-non-finite-max-bytes";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    const syncOut = readRecentSessionMessages(sessionId, storePath, undefined, {
+      maxMessages: 1,
+      maxBytes: Number.NaN,
+    });
+    const asyncOut = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 1,
+      maxBytes: Number.POSITIVE_INFINITY,
+    });
+
+    expect(syncOut).toHaveLength(1);
+    expectMessageFields(syncOut[0], { role: "assistant", content: "latest" });
+    expect(asyncOut).toHaveLength(1);
+    expectMessageFields(asyncOut[0], { role: "assistant", content: "latest" });
+  });
+
   test("bounds recent-message reads for large append-only transcripts", () => {
     const sessionId = "test-session-recent-large";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -2059,6 +2104,29 @@ describe("oversized transcript line guards", () => {
 
     // The oversized content must NOT appear in the output.
     const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(oversizedContent);
+  });
+
+  test("readSessionMessagesAsync keeps id-less oversized message placeholders", async () => {
+    const sessionId = "test-oversized-idless-async";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "w".repeat(300 * 1024);
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({
+        message: { role: "assistant", content: oversizedContent },
+      })}\n`,
+      "utf-8",
+    );
+
+    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test",
+    });
+
+    expect(out).toHaveLength(1);
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain("[chat.history omitted: message too large]");
     expect(serialized).not.toContain(oversizedContent);
   });
 

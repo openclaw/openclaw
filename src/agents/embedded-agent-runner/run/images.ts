@@ -1,11 +1,11 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { loadWebMedia } from "../../../media/web-media.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
@@ -100,6 +100,17 @@ function isImageExtension(filePath: string): boolean {
 
 function normalizeRefForDedupe(raw: string): string {
   return process.platform === "win32" ? normalizeLowercaseStringOrEmpty(raw) : raw;
+}
+
+function isOpenClawCliImageCachePath(filePath: string): boolean {
+  const parts = filePath.replaceAll("\\", "/").split("/");
+  return parts.some((part, index) => {
+    if (part === ".openclaw-cli-images") {
+      return true;
+    }
+    const parent = parts[index - 1] ?? "";
+    return part === "openclaw-cli-images" && /^openclaw(?:-\d+)?$/.test(parent);
+  });
 }
 
 export function mergePromptAttachmentImages(params: {
@@ -321,8 +332,11 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     } catch {
       return;
     }
-    seen.add(dedupeKey);
     const resolved = trimmed.startsWith("~") ? resolveUserPath(trimmed) : trimmed;
+    if (isOpenClawCliImageCachePath(resolved)) {
+      return;
+    }
+    seen.add(dedupeKey);
     refs.push({ raw: trimmed, type: "path", resolved });
   };
 
@@ -384,10 +398,13 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     if (seen.has(dedupeKey)) {
       continue;
     }
-    seen.add(dedupeKey);
     // Use fileURLToPath for proper handling (e.g., file://localhost/path)
     try {
       const resolved = safeFileURLToPath(raw);
+      if (isOpenClawCliImageCachePath(resolved)) {
+        continue;
+      }
+      seen.add(dedupeKey);
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs
@@ -431,6 +448,7 @@ export async function loadImageFromRef(
   options?: {
     maxBytes?: number;
     workspaceOnly?: boolean;
+    localRoots?: readonly string[];
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
@@ -474,7 +492,7 @@ export async function loadImageFromRef(
       : await loadWebMedia(
           targetPath,
           options?.workspaceOnly
-            ? { maxBytes: options.maxBytes, localRoots: [workspaceDir] }
+            ? { maxBytes: options.maxBytes, localRoots: options.localRoots ?? [workspaceDir] }
             : options?.maxBytes,
         );
 
@@ -525,6 +543,7 @@ export async function detectAndLoadPromptImages(params: {
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
+  localRoots?: readonly string[];
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
@@ -577,6 +596,7 @@ export async function detectAndLoadPromptImages(params: {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
+      localRoots: params.localRoots,
       sandbox: params.sandbox,
     });
     if (image) {
@@ -592,6 +612,7 @@ export async function detectAndLoadPromptImages(params: {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
       workspaceOnly: params.workspaceOnly,
+      localRoots: params.localRoots,
       sandbox: params.sandbox,
     });
     offloadedImages.push(image);

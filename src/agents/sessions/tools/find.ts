@@ -8,6 +8,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.js"
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { FindToolDetails } from "./tool-contracts.js";
@@ -114,6 +115,37 @@ function formatFindResult(
   return text;
 }
 
+function buildFindResult(params: {
+  relativized: string[];
+  effectiveLimit: number;
+  limitNotice: string;
+}): {
+  content: Array<{ type: "text"; text: string }>;
+  details: FindToolDetails | undefined;
+} {
+  const resultLimitReached = params.relativized.length >= params.effectiveLimit;
+  const rawOutput = params.relativized.join("\n");
+  const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+  let resultOutput = truncation.content;
+  const details: FindToolDetails = {};
+  const notices: string[] = [];
+  if (resultLimitReached) {
+    notices.push(params.limitNotice);
+    details.resultLimitReached = params.effectiveLimit;
+  }
+  if (truncation.truncated) {
+    notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
+    details.truncation = truncation;
+  }
+  if (notices.length > 0) {
+    resultOutput += `\n\n[${notices.join(". ")}]`;
+  }
+  return {
+    content: [{ type: "text", text: resultOutput }],
+    details: Object.keys(details).length > 0 ? details : undefined,
+  };
+}
+
 export function createFindToolDefinition(
   cwd: string,
   options?: FindToolOptions,
@@ -161,7 +193,7 @@ export function createFindToolDefinition(
         void (async () => {
           try {
             const searchPath = resolveToCwd(searchDir || ".", cwd);
-            const effectiveLimit = limit ?? DEFAULT_LIMIT;
+            const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             const ops = customOps ?? defaultFindOperations;
 
             // If custom operations provide glob(), use that instead of fd.
@@ -199,28 +231,14 @@ export function createFindToolDefinition(
                 }
                 return toPosixPath(path.relative(searchPath, p));
               });
-              const resultLimitReached = relativized.length >= effectiveLimit;
-              const rawOutput = relativized.join("\n");
-              const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-              let resultOutput = truncation.content;
-              const details: FindToolDetails = {};
-              const notices: string[] = [];
-              if (resultLimitReached) {
-                notices.push(`${effectiveLimit} results limit reached`);
-                details.resultLimitReached = effectiveLimit;
-              }
-              if (truncation.truncated) {
-                notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-                details.truncation = truncation;
-              }
-              if (notices.length > 0) {
-                resultOutput += `\n\n[${notices.join(". ")}]`;
-              }
               settle(() =>
-                resolve({
-                  content: [{ type: "text", text: resultOutput }],
-                  details: Object.keys(details).length > 0 ? details : undefined,
-                }),
+                resolve(
+                  buildFindResult({
+                    relativized,
+                    effectiveLimit,
+                    limitNotice: `${effectiveLimit} results limit reached`,
+                  }),
+                ),
               );
               return;
             }
@@ -276,7 +294,7 @@ export function createFindToolDefinition(
             };
 
             child.stderr?.on("data", (chunk) => {
-              stderr += chunk.toString();
+              stderr = appendBoundedTextTail(stderr, chunk);
             });
 
             rl.on("line", (line) => {
@@ -331,30 +349,14 @@ export function createFindToolDefinition(
                 relativized.push(toPosixPath(relativePath));
               }
 
-              const resultLimitReached = relativized.length >= effectiveLimit;
-              const rawOutput = relativized.join("\n");
-              const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-              let resultOutput = truncation.content;
-              const details: FindToolDetails = {};
-              const notices: string[] = [];
-              if (resultLimitReached) {
-                notices.push(
-                  `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`,
-                );
-                details.resultLimitReached = effectiveLimit;
-              }
-              if (truncation.truncated) {
-                notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
-                details.truncation = truncation;
-              }
-              if (notices.length > 0) {
-                resultOutput += `\n\n[${notices.join(". ")}]`;
-              }
               settle(() =>
-                resolve({
-                  content: [{ type: "text", text: resultOutput }],
-                  details: Object.keys(details).length > 0 ? details : undefined,
-                }),
+                resolve(
+                  buildFindResult({
+                    relativized,
+                    effectiveLimit,
+                    limitNotice: `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`,
+                  }),
+                ),
               );
             });
           } catch (e) {

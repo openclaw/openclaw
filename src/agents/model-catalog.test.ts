@@ -1,6 +1,8 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 
 type AgentModelDiscoveryModule = typeof import("./agent-model-discovery.js");
 
@@ -30,9 +32,7 @@ function isSuppressedModel(provider?: string, id?: string): boolean {
     return false;
   }
   return (
-    (provider === "openai" ||
-      provider === "azure-openai-responses" ||
-      provider === "openai-codex") &&
+    (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
     modelId === "gpt-5.3-codex-spark"
   );
 }
@@ -93,6 +93,16 @@ function emptyPluginMetadataSnapshot() {
     index: {
       policyHash: "test-policy",
       plugins: [],
+    },
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
     },
     plugins: [],
   };
@@ -229,7 +239,13 @@ describe("loadModelCatalog", () => {
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
     vi.doMock("./agent-scope.js", () => ({
+      resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string) => {
+        const entry = cfg.agents?.list?.find((entry) => entry.id === agentId);
+        return entry?.workspace ?? cfg.agents?.defaults?.workspace ?? "/tmp/openclaw-workspace";
+      },
       resolveDefaultAgentDir: () => "/tmp/openclaw",
+      resolveDefaultAgentId: (cfg: OpenClawConfig) =>
+        cfg.agents?.list?.find((entry) => entry.default)?.id ?? cfg.agents?.list?.[0]?.id ?? "main",
     }));
     vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
       augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
@@ -303,6 +319,40 @@ describe("loadModelCatalog", () => {
       setLoggerOverride(null);
       resetLogger();
     }
+  });
+
+  it("uses the resolved default agent workspace for registry discovery", async () => {
+    const discoverModels = vi.fn(() => ({
+      getAll() {
+        return [];
+      },
+    }));
+    setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          discoverModels,
+          ModelRegistry: class {
+            getAll() {
+              return [];
+            }
+          },
+        }) as unknown as AgentModelDiscoveryModule,
+    );
+    const config = {
+      agents: {
+        list: [{ id: "workspace-agent", default: true, workspace: "/tmp/workspace-agent" }],
+      },
+    } as OpenClawConfig;
+
+    await loadModelCatalog({ config });
+
+    expect(discoverModels).toHaveBeenCalledWith(
+      expect.anything(),
+      "/tmp/openclaw",
+      expect.objectContaining({ workspaceDir: "/tmp/workspace-agent" }),
+    );
   });
 
   it("reloads dynamic registry entries after clearing the cache", async () => {
@@ -443,7 +493,7 @@ describe("loadModelCatalog", () => {
     readFileMock.mockResolvedValueOnce(
       JSON.stringify({
         providers: {
-          "openai-codex": {
+          openai: {
             models: [
               {
                 id: "gpt-5.3-codex-spark",
@@ -461,14 +511,6 @@ describe("loadModelCatalog", () => {
               },
             ],
           },
-          openai: {
-            models: [
-              {
-                id: "gpt-5.3-codex-spark",
-                name: "GPT-5.3 Codex Spark",
-              },
-            ],
-          },
         },
       }),
     );
@@ -477,7 +519,7 @@ describe("loadModelCatalog", () => {
 
     expect(result).toEqual([
       {
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4",
         name: "GPT-5.4",
         reasoning: true,
@@ -488,6 +530,79 @@ describe("loadModelCatalog", () => {
     ]);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("loads generated plugin catalog rows in read-only mode", async () => {
+    const catalogPath = "/tmp/openclaw/plugins/read-only-shard/catalog.json";
+    mkdirSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true });
+    writeFileSync(catalogPath, "{}");
+    try {
+      readFileMock.mockImplementation(async (pathname: string) => {
+        if (pathname.endsWith("models.json")) {
+          return JSON.stringify({ providers: {} });
+        }
+        if (pathname === catalogPath) {
+          return JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              zai: {
+                models: [
+                  {
+                    id: "glm-5.1",
+                    name: "GLM 5.1",
+                    reasoning: true,
+                    contextWindow: 131072,
+                    input: ["text"],
+                  },
+                ],
+              },
+            },
+          });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      loadPluginMetadataSnapshotMock.mockReturnValueOnce({
+        ...emptyPluginMetadataSnapshot(),
+        index: {
+          policyHash: "test-policy",
+          plugins: [{ pluginId: "read-only-shard", enabled: true }],
+        },
+        normalizePluginId: (id: string) => id,
+        owners: {
+          providers: new Map([["zai", ["read-only-shard"]]]),
+          modelCatalogProviders: new Map([["zai", ["read-only-shard"]]]),
+          setupProviders: new Map(),
+        },
+      });
+
+      const result = await loadModelCatalog({
+        config: {
+          agents: {
+            list: [{ id: "workspace-agent", default: true, workspace: "/tmp/read-only-workspace" }],
+          },
+        } as OpenClawConfig,
+        readOnly: true,
+      });
+
+      expect(requireCatalogEntry(result, "zai", "glm-5.1")).toMatchObject({
+        provider: "zai",
+        id: "glm-5.1",
+        name: "GLM 5.1",
+        reasoning: true,
+        contextWindow: 131072,
+      });
+      expect(
+        loadPluginMetadataSnapshotMock.mock.calls.some(([call]) => {
+          return (
+            typeof call === "object" &&
+            call !== null &&
+            (call as { workspaceDir?: string }).workspaceDir === "/tmp/read-only-workspace"
+          );
+        }),
+      ).toBe(true);
+    } finally {
+      rmSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true, force: true });
+    }
   });
 
   it("falls back to manifest catalog rows when persisted read-only catalog has no model rows", async () => {
@@ -786,11 +901,11 @@ describe("loadModelCatalog", () => {
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
-  it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
+  it("does not synthesize stale openai/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
     mockAgentDiscoveryModels([
       {
         id: "gpt-5.4",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.3 Codex",
         reasoning: true,
         contextWindow: 200000,
@@ -798,14 +913,14 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.2-codex",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.2 Codex",
       },
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex-spark");
-    const entry = requireCatalogEntry(result, "openai-codex", "gpt-5.4");
+    expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
+    const entry = requireCatalogEntry(result, "openai", "gpt-5.4");
     expect(entry.name).toBe("GPT-5.3 Codex");
   });
 
@@ -829,7 +944,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.3-codex-spark",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.3 Codex Spark",
         reasoning: true,
         contextWindow: 128000,
@@ -840,14 +955,14 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
     expectNoCatalogEntry(result, "azure-openai-responses", "gpt-5.3-codex-spark");
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex-spark");
+    expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
   });
 
-  it("keeps available openai-codex 5.1/5.2/5.3 built-ins in the catalog", async () => {
+  it("keeps available openai 5.1/5.2/5.3 built-ins in the catalog", async () => {
     mockAgentDiscoveryModels([
       {
         id: "gpt-5.1-codex-mini",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.1 Codex Mini",
         reasoning: true,
         contextWindow: 400000,
@@ -855,7 +970,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.2-codex",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.2 Codex",
         reasoning: true,
         contextWindow: 400000,
@@ -863,7 +978,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.3-codex",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.3 Codex",
         reasoning: true,
         contextWindow: 400000,
@@ -871,7 +986,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.5",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.5",
         reasoning: true,
         contextWindow: 400000,
@@ -880,15 +995,15 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.1-codex-mini").name).toBe(
+    expect(requireCatalogEntry(result, "openai", "gpt-5.1-codex-mini").name).toBe(
       "GPT-5.1 Codex Mini",
     );
-    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.2-codex").name).toBe("GPT-5.2 Codex");
-    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.3-codex").name).toBe("GPT-5.3 Codex");
-    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.5").name).toBe("GPT-5.5");
+    expect(requireCatalogEntry(result, "openai", "gpt-5.2-codex").name).toBe("GPT-5.2 Codex");
+    expect(requireCatalogEntry(result, "openai", "gpt-5.3-codex").name).toBe("GPT-5.3 Codex");
+    expect(requireCatalogEntry(result, "openai", "gpt-5.5").name).toBe("GPT-5.5");
   });
 
-  it("does not synthesize gpt-5.4 OpenAI forward-compat entries from template models", async () => {
+  it("keeps OpenAI forward-compat entries on the unified provider", async () => {
     mockAgentDiscoveryModels([
       {
         id: "gpt-5.2",
@@ -924,7 +1039,7 @@ describe("loadModelCatalog", () => {
       },
       {
         id: "gpt-5.4",
-        provider: "openai-codex",
+        provider: "openai",
         name: "GPT-5.3 Codex",
         reasoning: true,
         contextWindow: 272000,
@@ -934,14 +1049,11 @@ describe("loadModelCatalog", () => {
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
 
-    expect(
-      result.some((entry) => entry.provider === "openai" && entry.id.startsWith("gpt-5.4")),
-    ).toBe(false);
-    const entry = requireCatalogEntry(result, "openai-codex", "gpt-5.4");
+    const entry = requireCatalogEntry(result, "openai", "gpt-5.4");
     expect(entry.name).toBe("GPT-5.3 Codex");
-    expect(
-      result.some((entry) => entry.provider === "openai-codex" && entry.id === "gpt-5.4-mini"),
-    ).toBe(false);
+    expect(result.some((entry) => entry.provider === "openai" && entry.id === "gpt-5.4-mini")).toBe(
+      false,
+    );
   });
 
   it("merges provider-owned supplemental catalog entries", async () => {

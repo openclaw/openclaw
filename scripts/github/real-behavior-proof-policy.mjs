@@ -1,3 +1,5 @@
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+
 export const PROOF_OVERRIDE_LABEL = "proof: override";
 export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
@@ -5,6 +7,7 @@ export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proo
 export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
 export const MAINTAINER_TEAM_SLUG = "maintainer";
 export const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+export const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 
 export const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
 const CLAWSWEEPER_BOT_LOGINS = new Set(["clawsweeper[bot]", "openclaw-clawsweeper[bot]"]);
@@ -55,7 +58,7 @@ const allProofFieldNames = requiredProofFields
   .concat(["Before evidence", "Before evidence optional"]);
 
 const missingValueRegex =
-  /^(?:n\/?a|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|-|\[[^\]]*\])$/i;
+  /^(?:n\/?a|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|did not test|didn't test|could not test|couldn't test|-|\[[^\]]*\])\.?$/i;
 
 const standaloneMissingProofRegex =
   /^\s*(?:[-*]\s*)?(?:n\/?a|not applicable|not tested|untested|no evidence|did not test|didn't test|could not test|couldn't test)\s*\.?\s*$/im;
@@ -88,6 +91,12 @@ function createTimeoutError(label, timeoutMs) {
   return error;
 }
 
+function createTooLargeGitHubApiBodyError(label, maxBytes) {
+  const error = new Error(`${label} response body exceeded ${maxBytes} bytes`);
+  error.code = "ETOOBIG";
+  return error;
+}
+
 export async function withGitHubApiTimeout(label, timeoutMs, run) {
   const boundedTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
@@ -108,6 +117,19 @@ export async function withGitHubApiTimeout(label, timeoutMs, run) {
       clearTimeout(timeout);
     }
   }
+}
+
+export async function readBoundedGitHubApiJson(
+  response,
+  label,
+  maxBytes = GITHUB_API_RESPONSE_BODY_MAX_BYTES,
+  options = {},
+) {
+  const text = await readBoundedResponseText(response, label, maxBytes, {
+    ...options,
+    createTooLargeError: () => createTooLargeGitHubApiBodyError(label, maxBytes),
+  });
+  return JSON.parse(text);
 }
 
 function normalizeLineEndings(text = "") {
@@ -178,9 +200,34 @@ export async function isMaintainerTeamMember({
   const body = await withGitHubApiTimeout(
     `maintainer membership response for ${login}`,
     timeoutMs,
-    () => response.json(),
+    (signal) =>
+      readBoundedGitHubApiJson(response, `maintainer membership response for ${login}`, undefined, {
+        signal,
+      }),
   );
   return body?.state === "active";
+}
+
+function nextFenceMarker(line, fenceMarker) {
+  const fence = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  const marker = fence?.[1] ?? "";
+  const suffix = fence?.[2] ?? "";
+  if (!fenceMarker && marker) {
+    return marker;
+  }
+  if (
+    fenceMarker &&
+    marker[0] === fenceMarker[0] &&
+    marker.length >= fenceMarker.length &&
+    suffix.trim() === ""
+  ) {
+    return "";
+  }
+  return fenceMarker;
+}
+
+function isMarkdownHeadingLine(line) {
+  return /^#{1,6}\s+\S/.test(line);
 }
 
 function extractMarkdownSections(headingRegex, body = "") {
@@ -188,15 +235,24 @@ function extractMarkdownSections(headingRegex, body = "") {
   // bodies the same way as locally-authored Markdown.
   const normalizedBody = normalizeLineEndings(body);
   const sections = [];
-  const matcher = new RegExp(
-    headingRegex.source,
-    headingRegex.flags.includes("g") ? headingRegex.flags : `${headingRegex.flags}g`,
-  );
-  for (const match of normalizedBody.matchAll(matcher)) {
-    const sectionStart = match.index + match[0].length;
-    const rest = normalizedBody.slice(sectionStart);
-    const nextHeading = rest.match(/\n#{1,6}\s+\S/);
-    sections.push((nextHeading ? rest.slice(0, nextHeading.index) : rest).trim());
+  const matcher = new RegExp(headingRegex.source, headingRegex.flags.replaceAll("g", ""));
+  let fenceMarker = "";
+  let sectionStart = -1;
+  let lineStart = 0;
+  for (const line of normalizedBody.split("\n")) {
+    const match = !fenceMarker ? line.match(matcher) : null;
+    if (sectionStart >= 0 && !fenceMarker && isMarkdownHeadingLine(line)) {
+      sections.push(normalizedBody.slice(sectionStart, lineStart === 0 ? 0 : lineStart - 1).trim());
+      sectionStart = -1;
+    }
+    if (match) {
+      sectionStart = lineStart + (match.index ?? 0) + match[0].length;
+    }
+    fenceMarker = nextFenceMarker(line, fenceMarker);
+    lineStart += line.length + 1;
+  }
+  if (sectionStart >= 0) {
+    sections.push(normalizedBody.slice(sectionStart).trim());
   }
   return sections;
 }
@@ -224,48 +280,75 @@ function fieldLineRegex(name) {
   );
 }
 
+function proofFieldLineValue(line) {
+  const matchingName = allProofFieldNames.find((name) => fieldLineRegex(name).test(line));
+  const match = matchingName ? line.match(fieldLineRegex(matchingName)) : null;
+  return match?.[1] ?? null;
+}
+
 function isAnyProofFieldLine(line) {
-  return allProofFieldNames.some((name) => fieldLineRegex(name).test(line));
+  return proofFieldLineValue(line) !== null;
 }
 
 function extractFieldValue(section, field) {
   const lines = normalizeLineEndings(section).split("\n");
+  let fenceMarker = "";
   for (let index = 0; index < lines.length; index += 1) {
-    const matchingName = field.names.find((name) => fieldLineRegex(name).test(lines[index]));
+    const line = lines[index];
+    const matchingName = !fenceMarker
+      ? field.names.find((name) => fieldLineRegex(name).test(line))
+      : null;
     if (!matchingName) {
+      const fenceLine = !fenceMarker ? (proofFieldLineValue(line) ?? line) : line;
+      fenceMarker = nextFenceMarker(fenceLine, fenceMarker);
       continue;
     }
 
-    const match = lines[index].match(fieldLineRegex(matchingName));
+    const match = line.match(fieldLineRegex(matchingName));
     const valueLines = [match?.[1] ?? ""];
+    fenceMarker = nextFenceMarker(valueLines[0], "");
     for (let next = index + 1; next < lines.length; next += 1) {
       const line = lines[next];
-      if (/^#{1,6}\s+\S/.test(line) || isAnyProofFieldLine(line)) {
+      if (!fenceMarker && (isMarkdownHeadingLine(line) || isAnyProofFieldLine(line))) {
         break;
       }
       valueLines.push(line);
+      fenceMarker = nextFenceMarker(line, fenceMarker);
     }
     return valueLines.join("\n").trim();
   }
   return "";
 }
 
-function stripProofFieldLabels(section) {
-  return normalizeLineEndings(section)
+function proofContentOutsideFences(section) {
+  let fenceMarker = "";
+  const contentLines = [];
+  for (const line of normalizeLineEndings(section).split("\n")) {
+    if (fenceMarker) {
+      fenceMarker = nextFenceMarker(line, fenceMarker);
+      continue;
+    }
+    const contentLine = proofFieldLineValue(line) ?? line;
+    const nextMarker = nextFenceMarker(contentLine, fenceMarker);
+    const isFenceBoundary = nextMarker !== fenceMarker;
+    if (!isFenceBoundary) {
+      contentLines.push(contentLine);
+    }
+    fenceMarker = nextMarker;
+  }
+  return contentLines.join("\n");
+}
+
+function stripMarkdownFenceMarkers(value) {
+  return normalizeLineEndings(value)
     .split("\n")
-    .map((line) => {
-      if (!isAnyProofFieldLine(line)) {
-        return line;
-      }
-      const matchingName = allProofFieldNames.find((name) => fieldLineRegex(name).test(line));
-      const match = matchingName ? line.match(fieldLineRegex(matchingName)) : null;
-      return match?.[1] ?? "";
-    })
-    .join("\n");
+    .filter((line) => !/^ {0,3}(?:`{3,}|~{3,})(?:.*)?$/.test(line))
+    .join("\n")
+    .trim();
 }
 
 function isMissingValue(value, field) {
-  const trimmed = value.trim();
+  const trimmed = stripMarkdownFenceMarkers(value).replace(/^\s*[-*]\s+/, "");
   if (!trimmed) {
     return true;
   }
@@ -368,7 +451,7 @@ function evaluateRealBehaviorProofSection(section, body) {
     );
   }
 
-  const proofContent = stripProofFieldLabels(section);
+  const proofContent = proofContentOutsideFences(section);
   if (standaloneMissingProofRegex.test(proofContent)) {
     return result("insufficient", "Real behavior proof says the changed behavior was not tested.", {
       fields,

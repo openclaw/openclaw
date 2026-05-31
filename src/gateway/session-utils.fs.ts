@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import {
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -181,13 +185,24 @@ type TailTranscriptRecord = {
   record: Record<string, unknown>;
 };
 
+function normalizeRecentSessionReadOptions(opts?: Partial<ReadRecentSessionMessagesOptions>) {
+  const maxMessages = resolveNonNegativeIntegerOption(opts?.maxMessages, 0);
+  const maxBytes = resolveIntegerOption(opts?.maxBytes, RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES, {
+    min: 1024,
+  });
+  const maxLines = resolveIntegerOption(opts?.maxLines, maxMessages * 20 + 20, {
+    min: maxMessages,
+  });
+  return { maxMessages, maxBytes, maxLines };
+}
+
 export function readRecentSessionMessages(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
   opts?: ReadRecentSessionMessagesOptions,
 ): unknown[] {
-  const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
+  const { maxMessages, maxBytes, maxLines } = normalizeRecentSessionReadOptions(opts);
   if (maxMessages === 0) {
     return [];
   }
@@ -207,13 +222,8 @@ export function readRecentSessionMessages(
     return [];
   }
 
-  const maxBytes = Math.max(
-    1024,
-    Math.floor(opts?.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
-  );
   const readLen = Math.min(stat.size, maxBytes);
   const readStart = Math.max(0, stat.size - readLen);
-  const maxLines = Math.max(maxMessages, Math.floor(opts?.maxLines ?? maxMessages * 20 + 20));
 
   return (
     withOpenTranscriptFd(filePath, (fd) => {
@@ -239,14 +249,9 @@ async function readRecentTranscriptTailLinesAsync(
   stat: fs.Stats,
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<string[]> {
-  const maxMessages = Math.max(0, Math.floor(opts.maxMessages));
-  const maxBytes = Math.max(
-    1024,
-    Math.floor(opts.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
-  );
+  const { maxBytes, maxLines } = normalizeRecentSessionReadOptions(opts);
   const readLen = Math.min(stat.size, maxBytes);
   const readStart = Math.max(0, stat.size - readLen);
-  const maxLines = Math.max(maxMessages, Math.floor(opts.maxLines ?? maxMessages * 20 + 20));
   const handle = await fs.promises.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(readLen);
@@ -583,6 +588,31 @@ export async function readSessionMessagesAsync(
   return index?.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)) ?? [];
 }
 
+export async function readSessionMessageByIdAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  messageId: string,
+): Promise<{ message?: unknown; seq?: number; oversized: boolean; found: boolean }> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return { oversized: false, found: false };
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { oversized: false, found: false };
+  }
+  const entry = index.entries.find((candidate) => candidate.id === messageId);
+  if (!entry) {
+    return { oversized: false, found: false };
+  }
+  if (entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
+    return { oversized: true, found: true, seq: entry.seq };
+  }
+  const message = indexedTranscriptEntryToMessage(entry);
+  return { message, seq: entry.seq, oversized: false, found: true };
+}
+
 export async function visitSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -655,7 +685,8 @@ export async function readRecentSessionMessagesAsync(
   sessionFile?: string,
   opts?: ReadRecentSessionMessagesOptions,
 ): Promise<unknown[]> {
-  const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
+  const normalized = normalizeRecentSessionReadOptions(opts);
+  const { maxMessages } = normalized;
   if (maxMessages === 0) {
     return [];
   }
@@ -675,8 +706,7 @@ export async function readRecentSessionMessagesAsync(
     return [];
   }
   const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
-    ...opts,
-    maxMessages,
+    ...normalized,
   });
   return parseRecentTranscriptTailMessages(lines, maxMessages);
 }

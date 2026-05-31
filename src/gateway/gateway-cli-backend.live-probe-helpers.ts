@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import type { GatewayClient } from "./client.js";
 import {
   shouldRetryCliCronMcpProbeReply,
@@ -117,8 +118,8 @@ function parsePositiveInt(value: string | undefined, fallback: number, name: str
   if (!value?.trim()) {
     return fallback;
   }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     throw new Error(`invalid ${name}: ${value}`);
   }
   return parsed;

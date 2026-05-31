@@ -1,8 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type CronSessionEntry = {
   sessionId: string;
@@ -46,6 +46,7 @@ export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
 export const isCliProviderMock = createMock();
+export const resolveCliRuntimeExecutionProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
@@ -55,6 +56,7 @@ export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
 export const getCliSessionIdMock = createMock();
+export const clearCliSessionMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
@@ -131,6 +133,13 @@ vi.mock("./run.runtime.js", () => ({
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
 }));
 
+vi.mock("../../agents/model-runtime-aliases.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/model-runtime-aliases.js")>(
+    "../../agents/model-runtime-aliases.js",
+  )),
+  resolveCliRuntimeExecutionProvider: resolveCliRuntimeExecutionProviderMock,
+}));
+
 vi.mock("./run-external-content.runtime.js", () => ({
   buildSafeExternalPrompt: buildSafeExternalPromptMock,
   detectSuspiciousPatterns: detectSuspiciousPatternsMock,
@@ -148,12 +157,42 @@ vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
 }));
 
-vi.mock("./skills-snapshot.runtime.js", () => ({
-  buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
+vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
   canExecRequestNode: vi.fn(() => false),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
-  getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
-  resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
+  resolveEffectiveAgentSkillFilter: resolveAgentSkillsFilterMock,
+  resolveReusableWorkspaceSkillSnapshot: (params: {
+    workspaceDir: string;
+    config?: unknown;
+    agentId?: string;
+    existingSnapshot?: { version?: number; skillFilter?: string[] };
+    skillFilter?: string[];
+    eligibility?: unknown;
+  }) => {
+    const normalize = (skillFilter?: string[]) =>
+      Array.from(new Set(skillFilter?.map((entry) => entry.trim()).filter(Boolean))).toSorted();
+    const sameFilter =
+      JSON.stringify(normalize(params.existingSnapshot?.skillFilter)) ===
+      JSON.stringify(normalize(params.skillFilter));
+    const snapshotVersion = getSkillsSnapshotVersionMock(params.workspaceDir);
+    const shouldRefresh =
+      !params.existingSnapshot ||
+      params.existingSnapshot.version !== snapshotVersion ||
+      !sameFilter;
+    return {
+      snapshot: shouldRefresh
+        ? buildWorkspaceSkillSnapshotMock(params.workspaceDir, {
+            config: params.config,
+            agentId: params.agentId,
+            skillFilter: params.skillFilter,
+            eligibility: params.eligibility,
+            snapshotVersion,
+          })
+        : params.existingSnapshot,
+      shouldRefresh,
+      snapshotVersion,
+    };
+  },
 }));
 
 vi.mock("./run-model-selection.runtime.js", () => ({
@@ -205,6 +244,30 @@ vi.mock("./run-execution.runtime.js", () => ({
   logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
 
+vi.mock("../../agents/model-runtime-aliases.js", () => ({
+  resolveCliRuntimeExecutionProvider: ({
+    provider,
+    cfg,
+    modelId,
+  }: {
+    provider?: string;
+    cfg?: {
+      agents?: {
+        defaults?: {
+          models?: Record<string, { agentRuntime?: { id?: string } }>;
+        };
+      };
+    };
+    modelId?: string;
+  }) => {
+    const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+    const runtime = key
+      ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
+      : undefined;
+    return runtime || provider;
+  },
+}));
+
 vi.mock("./run-auth-profile.runtime.js", () => ({
   resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
 }));
@@ -221,6 +284,7 @@ vi.mock("./run-subagent-registry.runtime.js", () => ({
 }));
 
 vi.mock("../../agents/cli-runner.runtime.js", () => ({
+  clearCliSession: clearCliSessionMock,
   setCliSessionId: vi.fn(),
 }));
 
@@ -296,7 +360,7 @@ function makeDefaultModelFallbackResult() {
   return {
     result: {
       payloads: [{ text: "test output" }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      meta: { agentMeta: {} },
     },
     provider: "openai",
     model: "gpt-5.4",
@@ -306,7 +370,7 @@ function makeDefaultModelFallbackResult() {
 function makeDefaultEmbeddedResult() {
   return {
     payloads: [{ text: "test output" }],
-    meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    meta: { agentMeta: {} },
   };
 }
 
@@ -379,6 +443,7 @@ function resetRunConfigMocks(): void {
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
+  resolveCliRuntimeExecutionProviderMock.mockReturnValue(undefined);
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
@@ -389,7 +454,11 @@ function resetRunConfigMocks(): void {
   });
   resolveAgentTimeoutMsMock.mockReturnValue(60_000);
   deriveSessionTotalTokensMock.mockReturnValue(30);
-  hasNonzeroUsageMock.mockReturnValue(true);
+  hasNonzeroUsageMock.mockImplementation(
+    (usage: { input?: unknown; output?: unknown } | undefined) =>
+      (typeof usage?.input === "number" && usage.input > 0) ||
+      (typeof usage?.output === "number" && usage.output > 0),
+  );
   ensureAgentWorkspaceMock.mockResolvedValue({ dir: "/tmp/workspace" });
   normalizeThinkLevelMock.mockImplementation((value: unknown) => value);
   isThinkingLevelSupportedMock.mockReturnValue(true);
@@ -420,6 +489,7 @@ function resetRunExecutionMocks(): void {
   runEmbeddedAgentMock.mockReset();
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
+  clearCliSessionMock.mockReset();
   getCliSessionIdMock.mockReturnValue(undefined);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);

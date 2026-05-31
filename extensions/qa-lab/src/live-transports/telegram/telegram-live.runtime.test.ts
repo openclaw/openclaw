@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
@@ -7,13 +8,20 @@ import {
 import { testing } from "./telegram-live.runtime.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
-  vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
-    response: await fetch(params.url, {
-      ...params.init,
-      signal: params.signal,
+  vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    }) => ({
+      response: await fetch(params.url, {
+        ...params.init,
+        signal: params.signal ?? AbortSignal.timeout(params.timeoutMs ?? 0),
+      }),
+      release: async () => {},
     }),
-    release: async () => {},
-  })),
+  ),
 );
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
@@ -120,6 +128,13 @@ describe("telegram live qa runtime", () => {
         OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "nope",
       }),
     ).toBe(30_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        testing.resolveTelegramQaCanaryTimeoutMs({
+          OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: value,
+        }),
+      ).toBe(30_000);
+    }
   });
 
   it("normalizes the Telegram QA scenario timeout env", () => {
@@ -134,6 +149,13 @@ describe("telegram live qa runtime", () => {
         OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "nope",
       }),
     ).toBe(45_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        testing.resolveTelegramQaScenarioTimeoutMs(45_000, {
+          OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: value,
+        }),
+      ).toBe(45_000);
+    }
   });
 
   it("sanitizes and truncates Telegram live progress details", () => {
@@ -890,6 +912,34 @@ describe("telegram live qa runtime", () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it("caps oversized Telegram API request deadlines", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ok: true, result: { id: 42 } }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+      ),
+    );
+
+    await expect(
+      testing.callTelegramApi("token", "getMe", undefined, Number.MAX_SAFE_INTEGER),
+    ).resolves.toEqual({
+      id: 42,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      timeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+  });
+
   it("treats transient Telegram getUpdates network errors as recoverable", () => {
     expect(testing.isRecoverableTelegramQaPollError(new TypeError("fetch failed"))).toBe(true);
     expect(testing.isRecoverableTelegramQaPollError(new Error("socket hang up"))).toBe(true);
@@ -898,6 +948,7 @@ describe("telegram live qa runtime", () => {
         new Error("The operation was aborted due to timeout"),
       ),
     ).toBe(true);
+    expect(testing.isRecoverableTelegramQaPollError(new Error("request timed out"))).toBe(true);
     expect(testing.isRecoverableTelegramQaPollError(new Error("AbortError"))).toBe(true);
     expect(testing.isRecoverableTelegramQaPollError(new Error("Bad Request: chat not found"))).toBe(
       false,

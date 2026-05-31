@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -9,8 +11,8 @@ import {
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProviderCapabilities,
@@ -281,6 +283,7 @@ export async function runDashscopeVideoGenerationTask(params: {
       timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
       fetchFn: params.fetchFn,
       defaultTimeoutMs,
+      maxBytes: resolveGeneratedMediaMaxBytes(params.req.cfg, "video"),
     });
     return {
       videos,
@@ -302,6 +305,7 @@ export async function downloadDashscopeGeneratedVideos(params: {
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
   defaultTimeoutMs?: number;
+  maxBytes: number;
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
@@ -313,9 +317,12 @@ export async function downloadDashscopeGeneratedVideos(params: {
       provider: params.providerLabel,
       requestFailedMessage: `${params.providerLabel} generated video download failed`,
     });
-    const arrayBuffer = await response.arrayBuffer();
+    const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`${params.providerLabel} generated video download exceeds ${maxBytes} bytes`),
+    });
     videos.push({
-      buffer: Buffer.from(arrayBuffer),
+      buffer,
       mimeType: response.headers.get("content-type")?.trim() || "video/mp4",
       fileName: `video-${index + 1}.mp4`,
       metadata: { sourceUrl: url },

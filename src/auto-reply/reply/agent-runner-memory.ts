@@ -1,17 +1,22 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import {
   classifyCompactionReason,
   DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { isRecoverableNativeHarnessBindingFailure } from "../../agents/harness/compaction-recovery.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
@@ -38,10 +43,6 @@ import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -128,14 +129,6 @@ const memoryDeps = {
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
 };
-
-function isRecoverableNativeHarnessBindingFailure(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
-    return false;
-  }
-  const failure = (result as { failure?: { reason?: unknown } }).failure;
-  return failure?.reason === "missing_thread_binding" || failure?.reason === "stale_thread_binding";
-}
 
 export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
@@ -254,6 +247,7 @@ function resolveFollowupContextConfigProvider(params: {
   return resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: resolveFollowupAgentRuntimeId(params),
+    config: params.cfg,
   });
 }
 
@@ -396,7 +390,7 @@ function resolveSessionLogPath(
 function deriveTranscriptUsageSnapshot(
   snapshot:
     | {
-        usage: ReturnType<typeof normalizeUsage> | undefined;
+        usage?: ReturnType<typeof normalizeUsage>;
         trailingBytes?: number;
       }
     | undefined,
@@ -420,7 +414,7 @@ function deriveTranscriptUsageSnapshot(
     trailingBytesTokens:
       typeof snapshot.trailingBytes === "number" &&
       Number.isFinite(snapshot.trailingBytes) &&
-      snapshot.trailingBytes > 0
+      snapshot.trailingBytes >= 0
         ? Math.ceil(snapshot.trailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
         : undefined,
   };
@@ -472,30 +466,50 @@ async function readSessionLogSnapshot(params: {
   }
 
   const snapshot: SessionLogSnapshot = {};
-
-  if (params.includeByteSize) {
-    try {
-      const stat = await fs.promises.stat(logPath);
-      const size = Math.floor(stat.size);
-      snapshot.byteSize = Number.isFinite(size) && size >= 0 ? size : undefined;
-    } catch {
-      snapshot.byteSize = undefined;
-    }
-  }
+  let usageScan: SessionLogUsageScan | undefined;
 
   if (params.includeUsage) {
     try {
-      const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
-      snapshot.usage = deriveTranscriptUsageSnapshot(lastUsage);
+      usageScan = await readLastNonzeroUsageFromSessionLog(logPath);
+      snapshot.usage = deriveTranscriptUsageSnapshot(usageScan);
     } catch {
       snapshot.usage = undefined;
     }
   }
 
+  if (params.includeByteSize) {
+    const scannedSize = usageScan?.byteSize;
+    if (typeof scannedSize === "number" && Number.isFinite(scannedSize) && scannedSize >= 0) {
+      snapshot.byteSize = Math.floor(scannedSize);
+      return snapshot;
+    }
+    snapshot.byteSize = await readSessionLogByteSize(logPath);
+  }
+
   return snapshot;
 }
 
-async function readLastNonzeroUsageFromSessionLog(logPath: string) {
+type SessionLogUsageScan = {
+  usage?: ReturnType<typeof normalizeUsage>;
+  trailingBytes?: number;
+  byteSize: number;
+};
+
+async function readSessionLogByteSize(logPath: string): Promise<number | undefined> {
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(logPath, "r");
+    const stat = await handle.stat();
+    const size = Math.floor(stat.size);
+    return Number.isFinite(size) && size >= 0 ? size : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function readLastNonzeroUsageFromSessionLog(logPath: string): Promise<SessionLogUsageScan> {
   const handle = await fs.promises.open(logPath, "r");
   try {
     const stat = await handle.stat();
@@ -513,18 +527,24 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
       const appendedPartialBytes = Buffer.byteLength(leadingPartial, "utf8");
       const combined = `${chunk}${leadingPartial}`;
       const lines = combined.split(/\n+/);
-      leadingPartial = lines.shift() ?? "";
+      const firstLine = lines.shift() ?? "";
+      if (start > 0) {
+        leadingPartial = firstLine;
+      } else {
+        leadingPartial = "";
+        lines.unshift(firstLine);
+      }
       const suffixBytesBeforeChunk = stat.size - position;
       const suffixBytesOutsideCombined = Math.max(0, suffixBytesBeforeChunk - appendedPartialBytes);
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
         if (usage) {
           const trailingLines = lines.slice(i + 1);
-          const trailingBytesInChunk =
-            Buffer.byteLength(trailingLines.join("\n"), "utf8") + trailingLines.length;
+          const trailingBytesInChunk = estimatePostUsageTrailingBytes(trailingLines);
           return {
             usage,
             trailingBytes: suffixBytesOutsideCombined + trailingBytesInChunk,
+            byteSize: stat.size,
           };
         }
       }
@@ -535,16 +555,25 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
       ? {
           usage,
           trailingBytes: Math.max(0, stat.size - Buffer.byteLength(leadingPartial, "utf8")),
+          byteSize: stat.size,
         }
-      : undefined;
+      : { byteSize: stat.size };
   } finally {
     await handle.close();
   }
 }
 
+function estimatePostUsageTrailingBytes(lines: string[]): number {
+  if (!lines.some((line) => line.trim())) {
+    return 0;
+  }
+  return Buffer.byteLength(lines.join("\n"), "utf8") + lines.length;
+}
+
 type TranscriptTokenEstimate = {
   promptTokens: number;
   outputTokens?: number;
+  transcriptByteSize?: number;
   transcriptBytesTokens?: number;
 };
 
@@ -581,6 +610,23 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         : undefined;
     const promptTokens = snapshot.usage?.promptTokens;
     const trailingBytesTokens = snapshot.usage?.trailingBytesTokens;
+    const outputTokens = snapshot.usage?.outputTokens;
+    if (
+      typeof promptTokens === "number" &&
+      Number.isFinite(promptTokens) &&
+      promptTokens > 0 &&
+      trailingBytesTokens === 0 &&
+      typeof outputTokens === "number" &&
+      Number.isFinite(outputTokens) &&
+      outputTokens > 0
+    ) {
+      return {
+        promptTokens: Math.ceil(promptTokens),
+        outputTokens: Math.ceil(outputTokens),
+        transcriptByteSize: snapshot.byteSize,
+        transcriptBytesTokens,
+      };
+    }
     const messages = (await readSessionMessagesAsync(
       sessionId,
       params.storePath,
@@ -599,7 +645,6 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
     })();
     if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
-      const outputTokens = snapshot.usage?.outputTokens;
       const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
       return {
         promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
@@ -607,6 +652,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
           typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
             ? Math.ceil(outputTokens)
             : undefined,
+        transcriptByteSize: snapshot.byteSize,
         transcriptBytesTokens,
       };
     }
@@ -616,6 +662,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     }
     return {
       promptTokens: Math.ceil(estimatedTokens),
+      transcriptByteSize: snapshot.byteSize,
       transcriptBytesTokens,
     };
   } catch {
@@ -699,29 +746,11 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof persistedTotalTokens === "number" &&
     Number.isFinite(persistedTotalTokens) &&
     persistedTotalTokens > 0;
-  const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
-  const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
-  const transcriptSizeSnapshot = shouldCheckActiveTranscriptBytes
-    ? await readSessionLogSnapshot({
-        sessionId: entry.sessionId,
-        sessionEntry:
-          entry.sessionFile || !params.followupRun.run.sessionFile
-            ? entry
-            : { ...entry, sessionFile: params.followupRun.run.sessionFile },
-        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-        opts: { storePath: params.storePath },
-        includeByteSize: true,
-        includeUsage: false,
-      })
-    : undefined;
-  const activeTranscriptBytes = transcriptSizeSnapshot?.byteSize;
-  const shouldCompactByTranscriptBytes =
-    typeof activeTranscriptBytes === "number" &&
-    typeof maxActiveTranscriptBytes === "number" &&
-    activeTranscriptBytes >= maxActiveTranscriptBytes;
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
+  const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
+  const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
     typeof freshPersistedTokens === "number"
       ? undefined
@@ -732,6 +761,26 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
           storePath: params.storePath,
         });
+  const transcriptSizeSnapshot =
+    shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
+      ? await readSessionLogSnapshot({
+          sessionId: entry.sessionId,
+          sessionEntry:
+            entry.sessionFile || !params.followupRun.run.sessionFile
+              ? entry
+              : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+          opts: { storePath: params.storePath },
+          includeByteSize: true,
+          includeUsage: false,
+        })
+      : undefined;
+  const activeTranscriptBytes =
+    transcriptUsageTokens?.transcriptByteSize ?? transcriptSizeSnapshot?.byteSize;
+  const shouldCompactByTranscriptBytes =
+    typeof activeTranscriptBytes === "number" &&
+    typeof maxActiveTranscriptBytes === "number" &&
+    activeTranscriptBytes >= maxActiveTranscriptBytes;
   const stalePersistedPromptTokens = hasPersistedTotalTokens
     ? Math.floor(persistedTotalTokens)
     : undefined;
@@ -1043,6 +1092,8 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await applySessionStoreEntryPatch({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
+          skipMaintenance: true,
+          takeCacheOwnership: true,
           patch: { totalTokens: transcriptPromptTokens, totalTokensFresh: true },
         });
         if (updatedEntry) {
@@ -1270,6 +1321,8 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await memoryDeps.updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
+          skipMaintenance: true,
+          takeCacheOwnership: true,
           update: async () => ({
             memoryFlushAt: memoryDeps.now(),
             memoryFlushCompactionCount: flushedCompactionCount,

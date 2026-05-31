@@ -8,6 +8,11 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
+  addTimerTimeoutGraceMs,
+  parseStrictPositiveInteger,
+  resolveNonNegativeIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   normalizeOptionalString,
   readStringValue,
   uniqueStrings,
@@ -122,6 +127,18 @@ const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 let chromeMcpProcessCleanupDepsForTest: ChromeMcpProcessCleanupDeps | null = null;
 
+export function decodeChromeMcpStderrTail(buffer: Buffer): string {
+  if (buffer.length <= CHROME_MCP_STDERR_MAX_BYTES) {
+    return buffer.toString("utf8").trim();
+  }
+
+  let start = buffer.length - CHROME_MCP_STDERR_MAX_BYTES;
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
+    start++;
+  }
+  return buffer.subarray(start).toString("utf8").trim();
+}
+
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
     return [];
@@ -142,8 +159,8 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
 }
 
 function parsePageId(targetId: string): number {
-  const parsed = Number.parseInt(targetId.trim(), 10);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictPositiveInteger(targetId);
+  if (parsed === undefined) {
     throw new BrowserTabNotFoundError();
   }
   return parsed;
@@ -407,7 +424,7 @@ function drainStderr(transport: StdioClientTransport): () => string {
     }
   });
   stream.on("error", () => {});
-  return () => Buffer.concat(chunks).toString("utf8").trim().slice(-CHROME_MCP_STDERR_MAX_BYTES);
+  return () => decodeChromeMcpStderrTail(Buffer.concat(chunks));
 }
 
 function redactChromeMcpDiagnosticText(text: string): string {
@@ -1197,6 +1214,7 @@ export async function navigateChromeMcpPage(params: {
   timeoutMs?: number;
 }): Promise<{ url: string }> {
   const resolvedTimeoutMs = params.timeoutMs ?? CHROME_MCP_NAVIGATE_TIMEOUT_MS;
+  const callTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(resolvedTimeoutMs);
   await callTool(
     params.profileName,
     chromeMcpProfileOptionsFromParams(params),
@@ -1207,7 +1225,7 @@ export async function navigateChromeMcpPage(params: {
       url: params.url,
       timeout: resolvedTimeoutMs,
     },
-    { timeoutMs: resolvedTimeoutMs + 5_000 },
+    { timeoutMs: callTimeoutMs },
   );
   const page = await findPageById(
     params.profileName,
@@ -1215,6 +1233,10 @@ export async function navigateChromeMcpPage(params: {
     chromeMcpProfileOptionsFromParams(params),
   );
   return { url: page.url ?? params.url };
+}
+
+export function resolveChromeMcpNavigateCallTimeoutMs(timeoutMs: number): number {
+  return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
 }
 
 export async function takeChromeMcpSnapshot(params: {
@@ -1307,7 +1329,7 @@ export async function clickChromeMcpCoords(params: {
   const pressedButtons = button === "middle" ? 4 : button === "right" ? 2 : 1;
   const x = JSON.stringify(params.x);
   const y = JSON.stringify(params.y);
-  const delayMs = JSON.stringify(Math.max(0, Math.floor(params.delayMs ?? 0)));
+  const delayMs = JSON.stringify(resolveNonNegativeIntegerOption(params.delayMs, 0));
   const doubleClick = params.doubleClick ? "true" : "false";
   await evaluateChromeMcpScript({
     profileName: params.profileName,

@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,

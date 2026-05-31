@@ -12,6 +12,7 @@ import { GatewayClient } from "../gateway/client.js";
 import { dispatchGatewayMethodInProcess as realDispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
 import { startGatewayServer, type GatewayServer } from "../gateway/server.js";
 import { extractPayloadText } from "../gateway/test-helpers.agent-results.js";
+import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -164,10 +165,11 @@ function liveSubagentConfig(
 async function waitFor<T>(
   label: string,
   fn: () => T | undefined | Promise<T | undefined>,
+  timeoutMs = WAIT_TIMEOUT_MS,
 ): Promise<T> {
   const started = Date.now();
   let lastValue: T | undefined;
-  while (Date.now() - started < WAIT_TIMEOUT_MS) {
+  while (Date.now() - started < timeoutMs) {
     lastValue = await fn();
     if (lastValue !== undefined) {
       return lastValue;
@@ -175,6 +177,42 @@ async function waitFor<T>(
     await sleep(1_000);
   }
   throw new Error(`timed out waiting for ${label}`);
+}
+
+function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForRequester>): string {
+  return JSON.stringify(
+    runs.map((run) => ({
+      runId: run.runId,
+      taskName: run.taskName,
+      ended: typeof run.endedAt === "number",
+      endedReason: run.endedReason,
+      pauseReason: run.pauseReason,
+      outcome: run.outcome?.status,
+      delivery: run.delivery?.status,
+      deliveryError: run.delivery?.lastError,
+      suppressAnnounceReason: run.suppressAnnounceReason,
+      resultText: run.completion?.resultText?.slice(0, 200),
+    })),
+  );
+}
+
+function summarizeAgentEvents(events: AgentEventPayload[], runId: string): string {
+  return JSON.stringify(
+    events
+      .filter((event) => event.runId === runId)
+      .slice(-20)
+      .map((event) => ({
+        stream: event.stream,
+        phase: event.data.phase,
+        name: event.data.name,
+        toolCallId: event.data.toolCallId,
+        isError: event.data.isError,
+      })),
+  );
+}
+
+function isBashToolEventName(value: unknown): boolean {
+  return value === "bash" || value === "exec";
 }
 
 function createGatewayClient(params: {
@@ -203,8 +241,11 @@ describeLive("subagent announce live", () => {
   let state: OpenClawTestState | undefined;
   let server: GatewayServer | undefined;
   let client: GatewayClient | undefined;
+  let stopAgentEventCapture: (() => void) | undefined;
 
   afterEach(async () => {
+    stopAgentEventCapture?.();
+    stopAgentEventCapture = undefined;
     subagentAnnounceTesting.setDepsForTest();
     subagentAnnounceDeliveryTesting.setDepsForTest();
     await client?.stopAndWait().catch(() => undefined);
@@ -360,7 +401,7 @@ describeLive("subagent announce live", () => {
   );
 
   it(
-    "lets a parent steer a subagent and receives completion through in-process agent dispatch",
+    "lets a parent steer an active subagent and receives completion through in-process agent dispatch",
     async () => {
       const modelConfig = resolveLiveSubagentModelConfig();
       requireLiveSubagentAuth(modelConfig);
@@ -370,6 +411,7 @@ describeLive("subagent announce live", () => {
       const modelKey = modelConfig.modelKey;
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `CHILD_STEERED_${nonce}`;
+      const unsteeredToken = `UNSTEERED_${nonce}`;
       const parentToken = `PARENT_SAW_${childToken}`;
       const parentStartedToken = `PARENT_READY_${nonce}`;
       const steerToken = `STEER_${nonce}`;
@@ -379,12 +421,20 @@ describeLive("subagent announce live", () => {
         `Reply exactly ${childToken} and nothing else.`,
       ].join(" ");
       const childTask = [
-        `Immediately call sessions_yield with message="waiting for ${steerToken}".`,
-        `After a steering message says ${steerToken} has arrived, stop waiting and reply exactly ${childToken}.`,
+        `Immediately call the bash tool with exactly this JSON input: ${JSON.stringify({
+          command: `sleep 60; printf ${unsteeredToken}`,
+          yieldMs: 120_000,
+        })}.`,
+        "Do not reply directly before that bash command finishes.",
         `Do not reply with ${childToken} before receiving ${steerToken}.`,
+        `After receiving ${steerToken}, reply exactly ${childToken} and nothing else.`,
       ].join(" ");
       const sessionKey = `agent:main:live-subagent-${nonce.toLowerCase()}`;
       const inProcessAgentDispatches: InProcessAgentDispatch[] = [];
+      const agentEvents: AgentEventPayload[] = [];
+      stopAgentEventCapture = onAgentEvent((event) => {
+        agentEvents.push(event);
+      });
 
       const forbiddenAgentRpc: typeof realCallGateway = async (request) => {
         if (request.method === "agent") {
@@ -440,7 +490,11 @@ describeLive("subagent announce live", () => {
           OPENCLAW_PLUGINS_PATHS: undefined,
         },
       });
-      await state.writeConfig(liveSubagentConfig(modelKey, state.workspaceDir, port, token));
+      await state.writeConfig(
+        liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
+          toolAllow: ["sessions_spawn", "bash"],
+        }),
+      );
       clearRuntimeConfigSnapshot();
       clearCurrentPluginMetadataSnapshot();
 
@@ -481,39 +535,80 @@ describeLive("subagent announce live", () => {
         initialError = error;
       });
 
+      const listSteeredChildRuns = () =>
+        listSubagentRunsForRequester(sessionKey).filter((run) => run.taskName === "steered_child");
       const spawnedRun = await waitFor("steered child spawn", () => {
         if (initialError) {
           throw initialError;
         }
-        return listSubagentRunsForRequester(sessionKey).find(
-          (run) => run.taskName === "steered_child" && !run.endedAt,
-        );
+        return listSteeredChildRuns()[0];
       });
+      expect(spawnedRun.taskName).toBe("steered_child");
       const initialResponse = await initialRequest;
       expect(extractPayloadText(initialResponse.result)).toContain(parentStartedToken);
+      const runBeforeSteer = await waitFor("steered child bash tool start", () => {
+        if (initialError) {
+          throw initialError;
+        }
+        const currentRun =
+          listSteeredChildRuns().find((run) => run.runId === spawnedRun.runId) ?? spawnedRun;
+        const sawBashStart = agentEvents.some(
+          (event) =>
+            event.runId === currentRun.runId &&
+            event.stream === "tool" &&
+            event.data.phase === "start" &&
+            isBashToolEventName(event.data.name),
+        );
+        return sawBashStart ? currentRun : undefined;
+      }).catch((error: unknown) => {
+        throw new Error(
+          `timed out waiting for child bash start; runs=${summarizeSubagentRuns(
+            listSteeredChildRuns(),
+          )}; events=${summarizeAgentEvents(agentEvents, spawnedRun.runId)}`,
+          { cause: error },
+        );
+      });
+      const runStateBeforeSteer = summarizeSubagentRuns(listSteeredChildRuns());
+      expect(runBeforeSteer.endedAt, runStateBeforeSteer).toBeUndefined();
+      expect(runBeforeSteer.pauseReason, runStateBeforeSteer).toBeUndefined();
+      expect(runBeforeSteer.completion?.resultText, runStateBeforeSteer).toBeUndefined();
+      console.log(`[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`);
 
       const cfg = getRuntimeConfig();
       const steerResult = await steerControlledSubagentRun({
         cfg,
         controller: resolveSubagentController({ cfg, agentSessionKey: sessionKey }),
-        entry: spawnedRun,
+        entry: runBeforeSteer,
         message: steerMessage,
       });
-      expect(["accepted", "done"]).toContain(steerResult.status);
+      expect(
+        steerResult.status,
+        `steer result ${JSON.stringify(steerResult)}; runs=${summarizeSubagentRuns(
+          listSteeredChildRuns(),
+        )}`,
+      ).toBe("accepted");
 
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {
           throw initialError;
         }
-        return listSubagentRunsForRequester(sessionKey).find(
+        return listSteeredChildRuns().find(
           (run) =>
-            run.taskName === "steered_child" &&
             run.completion?.resultText?.includes(childToken) === true &&
             run.outcome?.status === "ok",
+        );
+      }).catch((error: unknown) => {
+        throw new Error(
+          `timed out waiting for steered child completion after steer ${JSON.stringify(
+            steerResult,
+          )}; runs=${summarizeSubagentRuns(listSteeredChildRuns())}`,
+          { cause: error },
         );
       });
       expect(steeredRun.endedReason).toBe("subagent-complete");
       expect(steeredRun.delivery?.lastError).toBeUndefined();
+      expect(summarizeSubagentRuns(listSteeredChildRuns())).not.toContain(unsteeredToken);
+      expect(summarizeAgentEvents(agentEvents, runBeforeSteer.runId)).not.toContain(unsteeredToken);
 
       await waitFor("in-process subagent completion agent dispatch start", () => {
         if (initialError) {

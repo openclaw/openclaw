@@ -345,15 +345,15 @@ describe("createVideoGenerateTool", () => {
     expect(emptyConfigTool).toBeNull();
   });
 
-  it("does not treat model aliases as video-generation auth profiles", () => {
+  it("treats legacy OpenAI-Codex auth profiles as canonical OpenAI video auth", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
 
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({}),
-        authProfileStore: createAuthStore(["openai-codex"]),
+        authProfileStore: createAuthStore(["openai"]),
       }),
-    ).toBeNull();
+    );
   });
 
   it("registers when video-generation config is present", () => {
@@ -415,7 +415,7 @@ describe("createVideoGenerateTool", () => {
         config: asConfig({
           agents: {
             defaults: {
-              videoGenerationModel: { primary: "openai-codex/sora-2" },
+              videoGenerationModel: { primary: "openai/sora-2" },
             },
           },
         }),
@@ -571,7 +571,7 @@ describe("createVideoGenerateTool", () => {
       },
       {
         id: "openai",
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         defaultModel: "sora-2",
         models: ["sora-2"],
         capabilities: {},
@@ -586,7 +586,7 @@ describe("createVideoGenerateTool", () => {
           agents: {
             defaults: {
               model: {
-                primary: "openai-codex/gpt-5.5",
+                primary: "openai/gpt-5.5",
               },
             },
           },
@@ -1137,6 +1137,43 @@ describe("createVideoGenerateTool", () => {
       applied: 6,
       supportedValues: [4, 6, 8],
     });
+  });
+
+  it("rejects fractional duration before calling the provider", async () => {
+    const generateVideo = vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+    });
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "google/veo-3.1-fast-generate-preview" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await expect(
+      tool.execute("call-1", {
+        prompt: "friendly lobster surfing",
+        durationSeconds: 5.5,
+      }),
+    ).rejects.toThrow("durationSeconds must be a positive integer");
+    expect(generateVideo).not.toHaveBeenCalled();
   });
 
   it("surfaces normalized video geometry from runtime metadata", async () => {

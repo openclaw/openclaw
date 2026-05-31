@@ -35,13 +35,18 @@ function readPositiveNumberEnv(name, fallback, env = process.env) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function readNonEmptyEnv(name) {
+  const value = process.env[name];
+  return value === undefined || value.length === 0 ? null : value;
+}
+
 function parseArgs(argv) {
   const options = {
     jsonPath:
-      process.env.OPENCLAW_STARTUP_MEMORY_JSON_PATH ||
+      readNonEmptyEnv("OPENCLAW_STARTUP_MEMORY_JSON_PATH") ??
       path.join(repoRoot, ".artifacts", "startup-memory", "startup-memory.json"),
     summaryPath:
-      process.env.OPENCLAW_STARTUP_MEMORY_SUMMARY_PATH ||
+      readNonEmptyEnv("OPENCLAW_STARTUP_MEMORY_SUMMARY_PATH") ??
       path.join(repoRoot, ".artifacts", "startup-memory", "summary.md"),
   };
   for (let index = 0; index < argv.length; index += 1) {
