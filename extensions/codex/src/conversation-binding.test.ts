@@ -1203,7 +1203,7 @@ describe("codex conversation binding", () => {
     });
   });
 
-  it("uses human approval for Guardian-mode bound turns on custom model providers", async () => {
+  it("blocks Guardian-mode bound turns on custom model providers before auto-declining approvals", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
@@ -1282,14 +1282,12 @@ describe("codex conversation binding", () => {
       },
     );
 
-    expect(result).toEqual({ handled: true, reply: { text: "done" } });
-    expect(turnStartParams[0]?.model).toBe("local-model");
-    expect(turnStartParams[0]?.approvalPolicy).toBe("on-request");
-    expect(turnStartParams[0]?.approvalsReviewer).toBe("user");
-    expect(turnStartParams[0]?.sandboxPolicy).toMatchObject({
-      type: "workspaceWrite",
-      writableRoots: [tempDir],
-    });
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toContain(
+      "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+    );
+    expect(turnStartParams).toEqual([]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("infers custom model providers for legacy bound turns without stored modelProvider", async () => {
@@ -1370,9 +1368,16 @@ describe("codex conversation binding", () => {
           },
         },
       ),
-    ).resolves.toEqual({ handled: true, reply: { text: "done" } });
+    ).resolves.toMatchObject({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+        ),
+      },
+    });
 
-    expect(turnStartParams[0]?.model).toBe("lmstudio/local-model");
-    expect(turnStartParams[0]?.approvalsReviewer).toBe("user");
+    expect(turnStartParams).toEqual([]);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });
