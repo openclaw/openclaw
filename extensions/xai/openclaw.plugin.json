@@ -180,9 +180,7 @@
         }
       ]
     },
-    "x_search": {
-      "optional": true
-    }
+    "x_search": {}
   },
   "configContracts": {
     "compatibilityRuntimePaths": ["tools.web.search.apiKey"]

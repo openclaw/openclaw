@@ -266,9 +266,10 @@ When you choose **Kimi** during `openclaw onboard` or
 For `x_search`, exact public post reads need no API key. OpenClaw detects
 `x.com`, `twitter.com`, `fxtwitter.com`, `fixupx.com`, and `vxtwitter.com`
 status URLs, then calls `https://api.fxtwitter.com/2/status/{id}` with guarded
-network fetches. The returned text, author, engagement counts, media summary,
-and raw post payload are wrapped as untrusted external content before reaching
-the model.
+network fetches. OpenClaw returns a sanitized result with wrapped untrusted
+post content, citations, source URL, status ID, author handle, engagement
+counts, and media summary metadata. It does not expose the raw FxTwitter API
+object to the model.
 
 For broader X search queries, configure `plugins.entries.xai.config.xSearch.*`.
 It uses the same xAI auth profile as chat, or the `XAI_API_KEY` / plugin

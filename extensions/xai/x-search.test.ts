@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   AnyAgentTool,
@@ -104,6 +105,14 @@ afterEach(() => {
 });
 
 describe("xai plugin x_search registration", () => {
+  it("keeps x_search in the default manifest tool set for key-free exact post reads", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { toolMetadata?: Record<string, { optional?: boolean }> };
+
+    expect(manifest.toolMetadata?.x_search?.optional).not.toBe(true);
+  });
+
   it("registers the lazy x_search tool without an xAI key so exact FxTwitter posts can run", async () => {
     const tools = registerXaiTools({});
     const tool = tools
