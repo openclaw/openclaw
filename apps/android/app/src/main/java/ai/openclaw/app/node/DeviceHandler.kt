@@ -24,6 +24,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.Locale
 
+/**
+ * Gateway device command adapter for Android status, info, permission, and health snapshots.
+ */
 class DeviceHandler(
   private val appContext: Context,
   private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
@@ -77,6 +80,7 @@ class DeviceHandler(
     val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
     val activeNetwork = connectivity?.activeNetwork
     val caps = activeNetwork?.let { connectivity.getNetworkCapabilities(it) }
+    // elapsedRealtime is monotonic device uptime, not wall-clock time.
     val uptimeSeconds = SystemClock.elapsedRealtime() / 1_000.0
 
     return buildJsonObject {
@@ -160,6 +164,7 @@ class DeviceHandler(
       if (!photosEnabled) {
         false
       } else if (Build.VERSION.SDK_INT >= 33) {
+        // Android 13 split media permissions; earlier versions use external storage.
         hasPermission(Manifest.permission.READ_MEDIA_IMAGES)
       } else {
         hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -167,6 +172,7 @@ class DeviceHandler(
     val motionGranted = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
     val notificationsGranted =
       if (Build.VERSION.SDK_INT >= 33) {
+        // POST_NOTIFICATIONS exists only on Android 13+.
         hasPermission(Manifest.permission.POST_NOTIFICATIONS)
       } else {
         true
@@ -301,6 +307,7 @@ class DeviceHandler(
       if (currentNowUa == null || currentNowUa == Long.MIN_VALUE) {
         null
       } else {
+        // BatteryManager reports microamps; expose milliamps in the gateway payload.
         currentNowUa.toDouble() / 1_000.0
       }
 
@@ -444,6 +451,7 @@ class DeviceHandler(
     if (totalBytes <= 0L) return if (lowMemory) "critical" else "unknown"
     if (lowMemory) return "critical"
     val freeRatio = availableBytes.toDouble() / totalBytes.toDouble()
+    // Thresholds intentionally mirror coarse OS health labels instead of exact memory pressure.
     return when {
       freeRatio <= 0.05 -> "critical"
       freeRatio <= 0.15 -> "high"
