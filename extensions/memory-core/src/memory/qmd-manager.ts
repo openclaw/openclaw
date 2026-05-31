@@ -169,6 +169,7 @@ const MCPORTER_REMOTE_AUTH_KEYS = new Set(
     "oauthClientId",
     "oauthClientSecret",
     "oauthClientSecretEnv",
+    "refresh",
     "refreshToken",
     "refreshTokenEnv",
     "tokenCacheDir",
@@ -202,20 +203,29 @@ function normalizeMcporterConfigKey(key: string): string {
   return key.toLowerCase().replace(/[_-]/g, "");
 }
 
+function isMcporterAuthLikeKey(key: string): boolean {
+  const normalized = normalizeMcporterConfigKey(key);
+  return (
+    MCPORTER_REMOTE_AUTH_KEYS.has(normalized) ||
+    normalized.includes("apikey") ||
+    normalized.includes("auth") ||
+    normalized.includes("bearer") ||
+    normalized.includes("credential") ||
+    normalized.includes("header") ||
+    normalized.includes("jwt") ||
+    normalized.includes("secret") ||
+    normalized.includes("signature") ||
+    normalized.includes("token") ||
+    normalized === "key" ||
+    normalized === "sig"
+  );
+}
+
 function hasMcporterRemoteAuthMaterial(server: Record<string, unknown>): boolean {
   if (hasMcporterRemoteUrlCredentials(server)) {
     return true;
   }
-  return Object.keys(server).some((key) => {
-    const normalized = normalizeMcporterConfigKey(key);
-    return (
-      MCPORTER_REMOTE_AUTH_KEYS.has(normalized) ||
-      normalized.includes("auth") ||
-      normalized.includes("header") ||
-      normalized.includes("secret") ||
-      normalized.includes("token")
-    );
-  });
+  return Object.keys(server).some((key) => isMcporterAuthLikeKey(key));
 }
 
 function hasMcporterRemoteUrlCredentials(server: Record<string, unknown>): boolean {
@@ -228,6 +238,11 @@ function hasMcporterRemoteUrlCredentials(server: Record<string, unknown>): boole
       const parsed = new URL(value);
       if (parsed.username.length > 0 || parsed.password.length > 0) {
         return true;
+      }
+      for (const queryKey of parsed.searchParams.keys()) {
+        if (isMcporterAuthLikeKey(queryKey)) {
+          return true;
+        }
       }
     } catch {
       if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#@]+@/i.test(value)) {
