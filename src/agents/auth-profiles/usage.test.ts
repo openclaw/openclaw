@@ -912,8 +912,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     reason?: "rate_limit" | "unknown";
     useLock?: boolean;
   }): Promise<void> {
-    vi.useFakeTimers();
-    vi.setSystemTime(params.now);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
     if (params.useLock) {
       storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
         async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
