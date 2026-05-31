@@ -580,13 +580,14 @@ describe("memory index", () => {
     try {
       await manager.sync({ reason: "cli", force: true });
 
-      expect(providerRuntimeBatchCalls).toHaveLength(2);
-      expect(providerRuntimeBatchCalls[0]).toEqual([
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      const combinedBatch = providerRuntimeBatchCalls[0] ?? [];
+      expect(combinedBatch.slice(0, 2)).toEqual([
         "# Log\nAlpha memory line.\nZebra memory line.",
         "# Log\nBeta memory line.",
       ]);
-      expect(providerRuntimeBatchCalls[1]?.join("\n")).toContain("Session alpha memory line.");
-      expect(providerRuntimeBatchCalls[1]?.join("\n")).toContain("Session beta memory line.");
+      expect(combinedBatch.join("\n")).toContain("Session alpha memory line.");
+      expect(combinedBatch.join("\n")).toContain("Session beta memory line.");
     } finally {
       await manager.close?.();
     }

@@ -39,7 +39,7 @@ import {
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemoryManagerSyncOps, type MemoryIndexWorkItem } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
@@ -71,23 +71,36 @@ function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
   );
 }
 
-type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  kind?: "markdown" | "multimodal";
-  content?: string;
-  contentText?: string;
-  lineMap?: number[];
-};
+type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
+  source: MemorySource;
   chunks: MemoryChunk[];
   structuredInputBytes?: number;
 };
+
+function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    counts[item.source] = (counts[item.source] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function formatBatchSourceLabel(counts: Record<string, number>): string {
+  const sources = Object.keys(counts).sort();
+  return sources.length > 0 ? sources.join("+") : "unknown";
+}
+
+function formatBatchSourceCounts(counts: Record<string, number>): string {
+  return (
+    Object.entries(counts)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([source, count]) => `${source}=${count}`)
+      .join(",") || "none"
+  );
+}
 
 export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
@@ -264,18 +277,25 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
   }
 
-  private buildBatchDebug(source: MemorySource, chunks: MemoryChunk[]) {
+  private buildBatchDebug(
+    source: string,
+    chunks: MemoryChunk[],
+    context: Record<string, unknown> = {},
+  ) {
     return (message: string, data?: Record<string, unknown>) =>
       log.debug(
         message,
-        data ? { ...data, source, chunks: chunks.length } : { source, chunks: chunks.length },
+        data
+          ? { ...data, source, chunks: chunks.length, ...context }
+          : { source, chunks: chunks.length, ...context },
       );
   }
 
   private async embedChunksWithBatch(
     chunks: MemoryChunk[],
     _entry: MemoryIndexEntry,
-    source: MemorySource,
+    source: string,
+    debugContext: Record<string, unknown> = {},
   ): Promise<number[][]> {
     const provider = this.provider;
     const batchEmbed = this.providerRuntime?.batchEmbed;
@@ -301,7 +321,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           concurrency: this.batch.concurrency,
           pollIntervalMs: this.batch.pollIntervalMs,
           timeoutMs: this.batch.timeoutMs,
-          debug: this.buildBatchDebug(source, chunks),
+          debug: this.buildBatchDebug(source, chunks, debugContext),
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
@@ -768,6 +788,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       }
       return {
         entry,
+        source: options.source,
         chunks: [multimodalChunk.chunk],
         structuredInputBytes: multimodalChunk.structuredInputBytes,
       };
@@ -781,14 +802,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);
     }
-    return { entry, chunks };
+    return { entry, source: options.source, chunks };
   }
 
-  protected override async indexFiles(
-    entries: MemoryIndexEntry[],
-    options: { source: MemorySource; content?: string },
-  ): Promise<void> {
-    if (entries.length === 0) {
+  protected override async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
+    if (items.length === 0) {
       return;
     }
     const provider = this.provider;
@@ -800,30 +818,67 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       this.providerRuntime?.sourceWideBatchEmbed !== true
     ) {
       await runWithConcurrency(
-        entries.map((entry) => async () => await this.indexFile(entry, options)),
+        items.map((item) => async () => await this.indexFile(item.entry, { source: item.source })),
         this.getIndexConcurrency(),
       );
       return;
     }
 
+    const itemSourceCounts = countBatchSources(items);
+    log.debug(
+      `memory embeddings: source-wide batch prepare files=${items.length} sources=${formatBatchSourceCounts(
+        itemSourceCounts,
+      )} maxFiles=${SOURCE_WIDE_BATCH_MAX_FILES} maxChunks=${SOURCE_WIDE_BATCH_MAX_CHUNKS}`,
+      {
+        files: items.length,
+        sources: itemSourceCounts,
+        maxFiles: SOURCE_WIDE_BATCH_MAX_FILES,
+        maxChunks: SOURCE_WIDE_BATCH_MAX_CHUNKS,
+      },
+    );
+
     let prepared: PreparedMemoryIndexEntry[] = [];
     let preparedChunkCount = 0;
-    const flushPrepared = async () => {
+    let sourceWideBatchGroup = 0;
+    const flushPrepared = async (reason: "max-files" | "max-chunks" | "end") => {
       const firstEntry = prepared[0]?.entry;
       if (!firstEntry) {
         return;
       }
-      const chunks = prepared.flatMap((item) => item.chunks);
-      const embeddings = await this.embedChunksWithBatch(chunks, firstEntry, options.source);
+      const current = prepared;
+      const chunks = current.flatMap((item) => item.chunks);
+      const sourceCounts = countBatchSources(current);
+      const source = formatBatchSourceLabel(sourceCounts);
+      sourceWideBatchGroup += 1;
+      log.debug(
+        `memory embeddings: source-wide batch submit group=${sourceWideBatchGroup} source=${source} files=${current.length} chunks=${chunks.length} sources=${formatBatchSourceCounts(
+          sourceCounts,
+        )} reason=${reason}`,
+        {
+          source,
+          files: current.length,
+          chunks: chunks.length,
+          sources: sourceCounts,
+          group: sourceWideBatchGroup,
+          reason,
+          maxFiles: SOURCE_WIDE_BATCH_MAX_FILES,
+          maxChunks: SOURCE_WIDE_BATCH_MAX_CHUNKS,
+        },
+      );
+      const embeddings = await this.embedChunksWithBatch(chunks, firstEntry, source, {
+        sourceWideFiles: current.length,
+        sourceWideSources: sourceCounts,
+        sourceWideBatchGroup,
+      });
       const sample = embeddings.find((embedding) => embedding.length > 0);
       const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
       let offset = 0;
-      for (const item of prepared) {
+      for (const item of current) {
         const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
         offset += item.chunks.length;
         this.writeChunks(
           item.entry,
-          options.source,
+          item.source,
           provider.model,
           item.chunks,
           fileEmbeddings,
@@ -834,21 +889,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       preparedChunkCount = 0;
     };
 
-    for (const entry of entries) {
-      if ("kind" in entry && entry.kind === "multimodal") {
-        await this.indexFile(entry, options);
+    for (const item of items) {
+      if ("kind" in item.entry && item.entry.kind === "multimodal") {
+        await this.indexFile(item.entry, { source: item.source });
         continue;
       }
-      const preparedEntry = await this.prepareIndexEntry(entry, options);
+      const preparedEntry = await this.prepareIndexEntry(item.entry, { source: item.source });
       if (!preparedEntry) {
         continue;
       }
-      if (
-        prepared.length > 0 &&
-        (prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES ||
-          preparedChunkCount + preparedEntry.chunks.length > SOURCE_WIDE_BATCH_MAX_CHUNKS)
-      ) {
-        await flushPrepared();
+      const nextWouldExceedFiles = prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES;
+      const nextWouldExceedChunks =
+        preparedChunkCount + preparedEntry.chunks.length > SOURCE_WIDE_BATCH_MAX_CHUNKS;
+      if (prepared.length > 0 && (nextWouldExceedFiles || nextWouldExceedChunks)) {
+        await flushPrepared(nextWouldExceedFiles ? "max-files" : "max-chunks");
       }
       prepared.push(preparedEntry);
       preparedChunkCount += preparedEntry.chunks.length;
@@ -856,10 +910,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES ||
         preparedChunkCount >= SOURCE_WIDE_BATCH_MAX_CHUNKS
       ) {
-        await flushPrepared();
+        await flushPrepared(
+          prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES ? "max-files" : "max-chunks",
+        );
       }
     }
-    await flushPrepared();
+    await flushPrepared("end");
   }
 
   protected async indexFile(
