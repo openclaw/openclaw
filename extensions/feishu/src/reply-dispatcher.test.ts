@@ -1582,7 +1582,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toContain(
-      "interrupted before I could send a visible reply",
+      "without visible content",
     );
     expect(result.getVisibleReplyState()).toEqual({
       visibleReplySent: true,
@@ -1615,6 +1615,33 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("sends no-visible-reply fallback after an empty card streaming close", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+
+    await options.onReplyStart?.();
+    await options.onIdle?.();
+    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(true);
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("", { note: "Agent: agent" });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(result.getVisibleReplyState()).toEqual({
       visibleReplySent: true,
       skippedFinalReason: null,

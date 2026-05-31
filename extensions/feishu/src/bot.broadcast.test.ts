@@ -227,6 +227,20 @@ describe("broadcast dispatch", () => {
       lastRoutePolicy: "session",
       matchedBy: "default",
     });
+    mockCreateFeishuReplyDispatcher.mockReturnValue({
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
+    });
     mockCreateFeishuClient.mockReturnValue({
       contact: {
         user: {
@@ -327,6 +341,44 @@ describe("broadcast dispatch", () => {
       | { agentId?: string }
       | undefined;
     expect(dispatcherParams?.agentId).toBe("main");
+  });
+
+  it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {
+    mockDispatchReplyFromConfig
+      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
+      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 0 } });
+    const ensureNoVisibleReplyFallback = vi.fn();
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback,
+    });
+    const cfg = createBroadcastConfig();
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-zero-final",
+      text: "hello @bot",
+      botMentioned: true,
+    });
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(ensureNoVisibleReplyFallback).toHaveBeenCalledWith(
+      "broadcast-dispatch-complete-zero-final",
+    );
   });
 
   it("skips broadcast dispatch when bot is NOT mentioned (requireMention=true)", async () => {

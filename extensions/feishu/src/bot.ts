@@ -1487,27 +1487,28 @@ export async function handleFeishuMessage(params: {
         if (agentId === activeAgentId) {
           // Active agent: real Feishu dispatcher (responds on Feishu)
           const identity = resolveAgentOutboundIdentity(cfg, agentId);
-          const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
-            cfg,
-            agentId,
-            runtime: runtime as RuntimeEnv,
-            chatId: ctx.chatId,
-            allowReasoningPreview,
-            replyToMessageId: replyTargetMessageId,
-            skipReplyToInMessages: !isGroup,
-            replyInThread,
-            rootId: ctx.rootId,
-            threadReply,
-            accountId: account.accountId,
-            identity,
-            messageCreateTimeMs,
-            sessionKey: agentSessionKey,
-          });
+          const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } =
+            createFeishuReplyDispatcher({
+              cfg,
+              agentId,
+              runtime: runtime as RuntimeEnv,
+              chatId: ctx.chatId,
+              allowReasoningPreview,
+              replyToMessageId: replyTargetMessageId,
+              skipReplyToInMessages: !isGroup,
+              replyInThread,
+              rootId: ctx.rootId,
+              threadReply,
+              accountId: account.accountId,
+              identity,
+              messageCreateTimeMs,
+              sessionKey: agentSessionKey,
+            });
 
           log(
             `feishu[${account.accountId}]: broadcast active dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.inbound.run({
+          const turnResult = await core.channel.inbound.run({
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
@@ -1548,6 +1549,9 @@ export async function handleFeishuMessage(params: {
               }),
             },
           });
+          if (turnResult.dispatched && turnResult.dispatchResult.counts.final === 0) {
+            await ensureNoVisibleReplyFallback("broadcast-dispatch-complete-zero-final");
+          }
         } else {
           // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply).
           // Strip CommandAuthorized so slash commands (e.g. /reset) don't silently
@@ -1653,22 +1657,23 @@ export async function handleFeishuMessage(params: {
         storePath,
         sessionKey: route.sessionKey,
       });
-      const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } = createFeishuReplyDispatcher({
-        cfg,
-        agentId: route.agentId,
-        runtime: runtime as RuntimeEnv,
-        chatId: ctx.chatId,
-        allowReasoningPreview,
-        replyToMessageId: replyTargetMessageId,
-        skipReplyToInMessages: !isGroup,
-        replyInThread,
-        rootId: ctx.rootId,
-        threadReply,
-        accountId: account.accountId,
-        identity,
-        messageCreateTimeMs,
-        sessionKey: route.sessionKey,
-      });
+      const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } =
+        createFeishuReplyDispatcher({
+          cfg,
+          agentId: route.agentId,
+          runtime: runtime as RuntimeEnv,
+          chatId: ctx.chatId,
+          allowReasoningPreview,
+          replyToMessageId: replyTargetMessageId,
+          skipReplyToInMessages: !isGroup,
+          replyInThread,
+          rootId: ctx.rootId,
+          threadReply,
+          accountId: account.accountId,
+          identity,
+          messageCreateTimeMs,
+          sessionKey: route.sessionKey,
+        });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
       const turnResult = await core.channel.inbound.run({
