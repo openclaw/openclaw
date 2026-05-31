@@ -1,4 +1,9 @@
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -22,11 +27,6 @@ import {
 import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,

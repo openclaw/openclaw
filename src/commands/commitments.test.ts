@@ -89,6 +89,25 @@ describe("commitments command", () => {
     ]);
   });
 
+  it("tolerates Date-invalid commitment due timestamps in table output", async () => {
+    mocks.listCommitments.mockResolvedValue([
+      commitment({
+        dueWindow: {
+          earliestMs: 8_700_000_000_000_000,
+          latestMs: 8_700_000_000_000_000,
+          timezone: "UTC",
+        },
+      }),
+    ]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({}, runtime);
+
+    expect(logs.map(stripAnsi)).toContain(
+      "cm_escape        pending    event_check_in   n/a                      main/telegram/+15551234567   How did it go?\\nspoofed",
+    );
+  });
+
   it("writes list JSON to runtime stdout instead of log output", async () => {
     const { runtime, logs, stdout } = createRuntime();
 

@@ -427,6 +427,35 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("does not keep reconnect group metadata when the expiry would exceed a valid Date", async () => {
+    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    try {
+      const sock = getSock();
+      sock.groupFetchAllParticipating.mockResolvedValueOnce({
+        "123@g.us": {
+          id: "123@g.us",
+          subject: "Boundary Group",
+          owner: undefined,
+          participants: [],
+        },
+      });
+
+      const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+        groupMetadataCache,
+      });
+
+      await vi.waitFor(() => {
+        expect(sock.groupFetchAllParticipating).toHaveBeenCalledTimes(1);
+      });
+      expect(groupMetadataCache.has("123@g.us")).toBe(false);
+
+      await listener.close();
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("does not block inbound listeners while group hydration is pending", async () => {
     let resolveHydration!: () => void;
     const sock = getSock();

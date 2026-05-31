@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -17,7 +18,6 @@ import { JsonFileReadError, tryReadJsonSync } from "../infra/json-files.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 
 type GatewayListedPairedDevice = Omit<PairedDevice, "tokens" | "approvedScopes"> & {
   tokens?: DeviceAuthTokenSummary[];

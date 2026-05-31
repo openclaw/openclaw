@@ -221,6 +221,26 @@ describe("package acceptance workflow", () => {
     );
   });
 
+  it("keeps default Crabbox capacity fail-closed and provider-neutral", () => {
+    const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
+      aws?: { region?: string };
+      capacity?: {
+        availabilityZones?: string[];
+        fallback?: string;
+        market?: string;
+        regions?: string[];
+      };
+      provider?: string;
+    };
+
+    expect(crabboxConfig.provider).toBe("azure");
+    expect(crabboxConfig.capacity?.market).toBe("spot");
+    expect(crabboxConfig.capacity?.fallback).toBe("spot-only");
+    expect(crabboxConfig.capacity?.regions).toBeUndefined();
+    expect(crabboxConfig.capacity?.availabilityZones).toBeUndefined();
+    expect(crabboxConfig.aws?.region).toBe("eu-west-1");
+  });
+
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
@@ -740,7 +760,7 @@ describe("package artifact reuse", () => {
     );
     expect(scheduler).toContain("function liveDockerHarnessScriptCommand");
     expect(scheduler).toContain('liveDockerHarnessScriptCommand("test-live-build-docker.sh")');
-    expect(liveDockerAuth).toContain("codex-cli | openai | openai-codex)");
+    expect(liveDockerAuth).toContain("codex-cli | openai)");
     expect(liveDockerAuth).toContain("openclaw_live_init_docker_run_args()");
     expect(liveDockerAuth).toContain(
       'timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"',
@@ -1345,6 +1365,7 @@ describe("package artifact reuse", () => {
     const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
     const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
     const openclawNpmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+    const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
@@ -1402,9 +1423,14 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
     expect(clawHubWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
     expect(openclawNpmWorkflow).toContain('GITHUB_ACTOR}" != "github-actions[bot]"');
-    expect(pluginNpmWorkflow).toContain("must still be in_progress");
-    expect(clawHubWorkflow).toContain("must still be in_progress");
-    expect(openclawNpmWorkflow).toContain("must still be in_progress");
+    expect(pluginNpmWorkflow).toContain("Direct Plugin NPM Release recovery");
+    expect(clawHubWorkflow).toContain("Direct Plugin ClawHub Release recovery");
+    expect(openclawNpmWorkflow).toContain("Direct OpenClaw npm recovery");
+    expect(pluginNpmWorkflow).toContain("validate-release-publish-approval.mjs");
+    expect(clawHubWorkflow).toContain("validate-release-publish-approval.mjs");
+    expect(openclawNpmWorkflow).toContain("validate-release-publish-approval.mjs");
+    expect(approvalScript).toContain("must still be in_progress");
+    expect(approvalScript).toContain("completed with success/failure");
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
     expect(clawHubWorkflow).toContain("environment: clawhub-plugin-release");
     expect(openclawNpmWorkflow).toContain("environment: npm-release");

@@ -5,7 +5,7 @@ import {
 } from "./live-model-filter.js";
 
 function resolveProviderOwners(provider: string): readonly string[] | undefined {
-  if (provider === "openai" || provider === "openai-codex") {
+  if (provider === "openai") {
     return ["openai"];
   }
   if (provider === "codex" || provider === "codex-cli") {
@@ -66,7 +66,7 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
     ).toBe(false);
     expect(
       shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-        provider: "openai-codex",
+        provider: "openai",
         useExplicitModels: false,
         providerFilter: null,
         resolveProviderOwners,

@@ -588,13 +588,13 @@ describe("optional media tool factory planning", () => {
         contracts: { imageGenerationProviders: ["openai"] },
         imageGenerationProviderMetadata: {
           openai: {
-            aliases: ["openai-codex"],
+            aliases: ["openai"],
             authSignals: [
               {
                 provider: "openai",
               },
               {
-                provider: "openai-codex",
+                provider: "openai",
                 providerBaseUrl: {
                   provider: "openai",
                   defaultBaseUrl: "https://api.openai.com/v1",
@@ -610,7 +610,7 @@ describe("optional media tool factory planning", () => {
 
     const plan = resolveOptionalMediaToolFactoryPlan({
       config,
-      authStore: createAuthStore(["openai-codex"]),
+      authStore: createAuthStore(["openai"]),
     });
     expect(plan.imageGenerate).toBe(true);
     installSnapshot(config, plugins, undefined, process.cwd());
@@ -619,7 +619,7 @@ describe("optional media tool factory planning", () => {
         await createOpenClawToolsForTest({
           config,
           workspaceDir: process.cwd(),
-          authProfileStore: createAuthStore(["openai-codex"]),
+          authProfileStore: createAuthStore(["openai"]),
           pluginToolAllowlist: ["image_generate"],
         })
       ).map((tool) => tool.name),
@@ -993,10 +993,10 @@ describe("optional media tool factory planning", () => {
         contracts: { imageGenerationProviders: ["openai"] },
         imageGenerationProviderMetadata: {
           openai: {
-            aliases: ["openai-codex"],
+            aliases: ["openai"],
             authSignals: [
               {
-                provider: "openai-codex",
+                provider: "openai",
                 providerBaseUrl: {
                   provider: "openai",
                   defaultBaseUrl: "https://api.openai.com/v1",
@@ -1011,7 +1011,7 @@ describe("optional media tool factory planning", () => {
 
     const plan = resolveOptionalMediaToolFactoryPlan({
       config,
-      authStore: createAuthStore(["openai-codex"]),
+      authStore: createAuthStore(["openai"]),
     });
     expect(plan.imageGenerate).toBe(false);
   });

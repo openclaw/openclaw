@@ -94,6 +94,45 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
   </Step>
 </Steps>
 
+## Propose before applying
+
+For agent-generated procedures, use a Skill Workshop proposal instead of
+writing `SKILL.md` directly:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "hello-world" \
+  --description "A simple skill that says hello." \
+  --proposal ./PROPOSAL.md
+```
+
+Use `--proposal-dir` when the proposal also has support files:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "hello-world" \
+  --description "A simple skill that says hello." \
+  --proposal-dir ./hello-world-proposal
+```
+
+The draft is stored under
+`<OPENCLAW_STATE_DIR>/skill-workshop/proposals/<proposal-id>/PROPOSAL.md` and
+stays inactive until an operator reviews and applies it. The default state
+directory is `~/.openclaw`. Proposal directories must contain `PROPOSAL.md`.
+Support files can be included under `assets/`, `examples/`, `references/`,
+`scripts/`, or `templates/`; OpenClaw stores and scans them with the proposal:
+
+```bash
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+```
+
+When applied, OpenClaw writes the final `SKILL.md` into the workspace `skills/`
+root, writes approved support files beside it, and removes proposal-only
+frontmatter such as `status: proposal`, proposal `version`, and proposal
+`date`.
+
 ## Skill metadata reference
 
 The YAML frontmatter supports these fields:

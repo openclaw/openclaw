@@ -1,3 +1,13 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
@@ -5,13 +15,6 @@ import type { OpenAICompletionsOptions } from "../llm/providers/openai-completio
 import { complete } from "../llm/stream.js";
 import { type Context, type Model, type Tool } from "../llm/types.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;

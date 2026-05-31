@@ -167,7 +167,7 @@ function isNativeHarnessCompactionSession(
   return (
     harnessId === providerId ||
     (harnessId === "codex" &&
-      (providerId === "codex" || providerId === "openai" || providerId === "openai-codex"))
+      (providerId === "codex" || providerId === "openai" || providerId === "openai"))
   );
 }
 

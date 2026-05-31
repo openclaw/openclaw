@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
 import {
   createConfigIO,
@@ -38,7 +39,6 @@ import {
 } from "../../infra/restart-handoff.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { VERSION } from "../../version.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";

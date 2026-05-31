@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -89,10 +94,6 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -894,8 +895,8 @@ function buildCommitmentHeartbeatPrompt(params: {
     reason: commitment.reason,
     suggestedText: commitment.suggestedText,
     due: {
-      earliest: new Date(commitment.dueWindow.earliestMs).toISOString(),
-      latest: new Date(commitment.dueWindow.latestMs).toISOString(),
+      earliest: timestampMsToIsoString(commitment.dueWindow.earliestMs) ?? "n/a",
+      latest: timestampMsToIsoString(commitment.dueWindow.latestMs) ?? "n/a",
       timezone: commitment.dueWindow.timezone,
     },
     sourceMessageId: commitment.sourceMessageId,

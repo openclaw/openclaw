@@ -2,7 +2,7 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_RESPONSES_API = "openai-responses";
-const OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
 export type CodexLocalRuntimeAttribution = {
   provider: string;

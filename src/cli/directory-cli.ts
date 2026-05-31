@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
@@ -11,10 +15,6 @@ import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import { formatHelpExamples } from "./help-format.js";
 import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 

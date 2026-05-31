@@ -1255,7 +1255,6 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId,
       currentPromptTexts: [codexTurnPromptText],
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       turnWatches,
       activeTurnItemIds,
       activeAppServerTurnRequests,
@@ -1347,6 +1346,9 @@ export async function runCodexAppServerAttempt(
         isNativeResponseStreamDelta
           ? {
               attemptProgress: true,
+              ...(turnCrossedToolHandoff
+                ? { attemptTimeoutMs: postToolRawAssistantCompletionIdleTimeoutMs }
+                : {}),
               details: { lastNotificationMethod: notification.method },
             }
           : undefined,
@@ -1610,10 +1612,20 @@ export async function runCodexAppServerAttempt(
     } finally {
       if (requestCountsAsTurnActivity) {
         activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
+        const postToolContinuationTimeoutMs =
+          request.method === "item/tool/call" && turnCrossedToolHandoff
+            ? postToolRawAssistantCompletionIdleTimeoutMs
+            : undefined;
         turnWatches.touchActivity(`request:${request.method}:response`, {
           arm: armCompletionWatchOnResponse,
           attemptProgress: true,
+          ...(postToolContinuationTimeoutMs !== undefined
+            ? { attemptTimeoutMs: postToolContinuationTimeoutMs }
+            : {}),
         });
+        if (armCompletionWatchOnResponse && postToolContinuationTimeoutMs !== undefined) {
+          turnWatches.armCompletionIdleWatch({ timeoutMs: postToolContinuationTimeoutMs });
+        }
         scheduleTerminalDynamicToolReleaseCheck();
       } else {
         turnWatches.scheduleProgressWatches();
@@ -1924,6 +1936,8 @@ export async function runCodexAppServerAttempt(
   const activeProjector = projector;
   turnWatches.armTerminalIdleWatch();
   turnWatches.touchActivity("turn:start", { arm: true });
+  turnWatches.armAttemptIdleWatch();
+  turnWatches.touchActivity("turn:start", { attemptProgress: true });
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
@@ -1967,9 +1981,6 @@ export async function runCodexAppServerAttempt(
     threadId: thread.threadId,
     turnId: activeTurnId,
   });
-  turnWatches.armAttemptIdleWatch();
-  turnWatches.armTerminalIdleWatch();
-  turnWatches.touchActivity("turn:start", { attemptProgress: true });
 
   const abortListener = () => {
     const shouldRetireClient = timedOut;

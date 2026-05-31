@@ -1,10 +1,12 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromEpochSeconds,
-} from "../../shared/number-coercion.js";
-import { normalizeProviderId } from "../provider-id.js";
+} from "@openclaw/normalization-core/number-coercion";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
@@ -111,13 +113,18 @@ function shouldProbeWhamForFailure(
 ): boolean {
   const normalizedProvider = normalizeProviderId(provider ?? "");
   return (
-    (normalizedProvider === "openai" || normalizedProvider === "openai-codex") &&
+    normalizedProvider === "openai" &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
       reason === "no_error_details" ||
       reason === "unclassified" ||
       reason === "unknown")
   );
+}
+
+function resolveActiveWindowUntil(value: unknown, now: number): number {
+  const timestampMs = asDateTimestampMs(value);
+  return timestampMs !== undefined && timestampMs > now ? timestampMs : 0;
 }
 
 function resolveWhamResetMs(window: WhamUsageWindow | undefined, now: number): number | null {
@@ -201,9 +208,13 @@ async function probeWhamForCooldown(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WHAM_TIMEOUT_MS);
   try {
+    const version = process.env.OPENCLAW_VERSION?.trim();
     const defaultHeaders: Record<string, string> = {
       Authorization: `Bearer ${profile.access}`,
       Accept: "application/json",
+      originator: "openclaw",
+      ...(version ? { version } : {}),
+      "User-Agent": `openclaw/${version || "dev"}`,
     };
     if (profile.accountId) {
       defaultHeaders["ChatGPT-Account-Id"] = profile.accountId;
@@ -812,8 +823,7 @@ export async function markAuthProfileBlockedUntil(params: {
   if (
     !profile ||
     isAuthCooldownBypassedForProvider(profile.provider) ||
-    !Number.isFinite(blockedUntil) ||
-    blockedUntil <= Date.now()
+    !isFutureDateTimestampMs(blockedUntil)
   ) {
     return;
   }
@@ -828,16 +838,13 @@ export async function markAuthProfileBlockedUntil(params: {
       if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
         return false;
       }
-      const now = Date.now();
+      const now = asDateTimestampMs(Date.now());
+      if (now === undefined) {
+        return false;
+      }
       previousStats = freshStore.usageStats?.[profileId];
       updateTime = now;
-      const existingBlockedUntil = previousStats?.blockedUntil;
-      const activeBlockedUntil =
-        typeof existingBlockedUntil === "number" &&
-        Number.isFinite(existingBlockedUntil) &&
-        existingBlockedUntil > now
-          ? existingBlockedUntil
-          : 0;
+      const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
       nextStats = {
         ...previousStats,
         blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
@@ -876,15 +883,12 @@ export async function markAuthProfileBlockedUntil(params: {
     return;
   }
 
-  const now = Date.now();
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined) {
+    return;
+  }
   previousStats = store.usageStats?.[profileId];
-  const existingBlockedUntil = previousStats?.blockedUntil;
-  const activeBlockedUntil =
-    typeof existingBlockedUntil === "number" &&
-    Number.isFinite(existingBlockedUntil) &&
-    existingBlockedUntil > now
-      ? existingBlockedUntil
-      : 0;
+  const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
   nextStats = {
     ...previousStats,
     blockedUntil: Math.max(activeBlockedUntil, blockedUntil),

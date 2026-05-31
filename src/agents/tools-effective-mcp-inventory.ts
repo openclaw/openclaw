@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";

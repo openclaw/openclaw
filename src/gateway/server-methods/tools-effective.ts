@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -13,7 +14,6 @@ import { buildRuntimeCompatibleMcpToolInventory } from "../../agents/tools-effec
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   applyFinalEffectiveToolPolicy,
   buildBundleMcpToolsFromCatalog,

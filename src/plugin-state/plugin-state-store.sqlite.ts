@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -73,6 +74,27 @@ function createPluginStateError(params: {
     ...(params.path ? { path: params.path } : {}),
     cause: params.cause,
   });
+}
+
+function resolvePluginStateExpiresAtMs(params: {
+  ttlMs: number | undefined;
+  now: number;
+  operation: PluginStateStoreOperation;
+  path?: string;
+}): number | null {
+  if (params.ttlMs == null) {
+    return null;
+  }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(params.ttlMs, { nowMs: params.now });
+  if (expiresAt === undefined) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: params.operation,
+      message: "Plugin state ttlMs cannot produce a valid expiry timestamp.",
+      ...(params.path ? { path: params.path } : {}),
+    });
+  }
+  return expiresAt;
 }
 
 function wrapPluginStateError(
@@ -420,7 +442,12 @@ export function pluginStateRegister(params: {
       "register",
       (store) => {
         const now = Date.now();
-        const expiresAt = params.ttlMs == null ? null : now + params.ttlMs;
+        const expiresAt = resolvePluginStateExpiresAtMs({
+          ttlMs: params.ttlMs,
+          now,
+          operation: "register",
+          path: store.path,
+        });
         deleteExpiredPluginStateNamespaceEntries(store.db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
@@ -472,7 +499,12 @@ export function pluginStateRegisterIfAbsent(params: {
       "register",
       (store) => {
         const now = Date.now();
-        const expiresAt = params.ttlMs == null ? null : now + params.ttlMs;
+        const expiresAt = resolvePluginStateExpiresAtMs({
+          ttlMs: params.ttlMs,
+          now,
+          operation: "register",
+          path: store.path,
+        });
         deleteExpiredPluginStateNamespaceEntries(store.db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
@@ -760,6 +792,12 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
     pushOk("schema");
     runWriteTransaction("probe", ({ db }) => {
       const now = Date.now();
+      const expiresAt = resolvePluginStateExpiresAtMs({
+        ttlMs: 60_000,
+        now,
+        operation: "probe",
+        path: databasePath,
+      });
       upsertPluginStateEntry(
         db,
         bindPluginStateEntry({
@@ -768,7 +806,7 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
           key: "probe",
           valueJson: JSON.stringify({ ok: true }),
           createdAt: now,
-          expiresAt: now + 60_000,
+          expiresAt,
         }),
       );
       selectPluginStateEntry(db, {

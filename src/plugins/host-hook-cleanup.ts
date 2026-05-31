@@ -1,10 +1,10 @@
 import fs from "node:fs";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
   cleanupPluginSessionSchedulerJobs,

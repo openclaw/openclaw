@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import { getConfigValueAtPath, parseConfigPath } from "../../config/config-paths.js";
@@ -8,7 +9,6 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import {
