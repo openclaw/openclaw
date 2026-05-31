@@ -33,7 +33,9 @@ function extractInputTypes(input: unknown[]) {
 function extractInputMessages(input: unknown[]) {
   return input.filter(
     (item): item is Record<string, unknown> =>
-      !!item && typeof item === "object" && (item as Record<string, unknown>).type === "message",
+      Boolean(item) &&
+      typeof item === "object" &&
+      (item as Record<string, unknown>).type === "message",
   );
 }
 

@@ -503,8 +503,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     return;
   }
   const imageItems: DataTransferItem[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+  for (const item of Array.from(items)) {
     if (item.type.startsWith("image/")) {
       imageItems.push(item);
     }

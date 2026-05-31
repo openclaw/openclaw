@@ -572,12 +572,16 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     let resolveRefresh: (() => void) | undefined;
-    vi.spyOn(authBridge, "refreshCodexAppServerAuthTokens").mockImplementation(
-      async () =>
-        await new Promise<void>((resolve) => {
-          resolveRefresh = resolve;
-        }),
-    );
+    vi.spyOn(authBridge, "refreshCodexAppServerAuthTokens").mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        resolveRefresh = resolve;
+      });
+      return {
+        accessToken: "access-token",
+        chatgptAccountId: "account-id",
+        chatgptPlanType: null,
+      };
+    });
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),

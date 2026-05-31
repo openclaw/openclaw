@@ -151,14 +151,11 @@ function hasTrustedOpenClawRootIndicator(params: {
   packageJson: PluginSdkPackageJson;
 }): boolean {
   const packageExports = params.packageJson.exports ?? {};
-  const hasPluginSdkRootExport = Object.prototype.hasOwnProperty.call(
-    packageExports,
-    "./plugin-sdk",
-  );
+  const hasPluginSdkRootExport = Object.hasOwn(packageExports, "./plugin-sdk");
   if (!hasPluginSdkRootExport) {
     return false;
   }
-  const hasCliEntryExport = Object.prototype.hasOwnProperty.call(packageExports, "./cli-entry");
+  const hasCliEntryExport = Object.hasOwn(packageExports, "./cli-entry");
   const hasOpenClawBin =
     (typeof params.packageJson.bin === "string" &&
       normalizeLowercaseStringOrEmpty(params.packageJson.bin).includes("openclaw")) ||
@@ -1408,7 +1405,7 @@ export function resolvePluginSdkScopedAliasMap(
         }
         break;
       }
-      if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
+      if (Object.hasOwn(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         break;
       }
     }

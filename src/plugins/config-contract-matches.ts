@@ -71,7 +71,7 @@ export function collectPluginConfigContractMatches(params: {
         }
         continue;
       }
-      if (!isRecord(state.value) || !Object.prototype.hasOwnProperty.call(state.value, segment)) {
+      if (!isRecord(state.value) || !Object.hasOwn(state.value, segment)) {
         continue;
       }
       nextStates.push({

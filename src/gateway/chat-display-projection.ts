@@ -784,8 +784,7 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
+  for (const message of messages) {
     const record = readRecord(message);
     if (!record) {
       next.push(message);

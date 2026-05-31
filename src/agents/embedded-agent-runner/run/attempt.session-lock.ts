@@ -516,7 +516,7 @@ function isTrustedSessionFileState(
   fingerprint: SessionFileFingerprint,
 ): boolean {
   const trusted = trustedSessionFileStates.get(sessionFileKey);
-  return !!trusted && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
+  return trusted !== undefined && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
 }
 
 async function readSessionFileFingerprint(sessionFile: string): Promise<SessionFileFingerprint> {

@@ -128,7 +128,7 @@ export function resolveSessionStoreEntry(params: {
   const legacyKeySet = new Set<string>();
   if (
     trimmedKey !== normalizedKey &&
-    Object.prototype.hasOwnProperty.call(params.store, trimmedKey) &&
+    Object.hasOwn(params.store, trimmedKey) &&
     !hasMismatchedCaseSensitiveDeliveryProof(params.store[trimmedKey], normalizedKey)
   ) {
     legacyKeySet.add(trimmedKey);
@@ -140,7 +140,7 @@ export function resolveSessionStoreEntry(params: {
   let foldedLegacyUpdatedAt = 0;
   for (const foldedLegacyKey of foldedLegacyKeys) {
     if (
-      !Object.prototype.hasOwnProperty.call(params.store, foldedLegacyKey) ||
+      !Object.hasOwn(params.store, foldedLegacyKey) ||
       !isConfirmedLowercasedLegacyAlias(params.store[foldedLegacyKey], normalizedKey)
     ) {
       continue;
@@ -156,7 +156,7 @@ export function resolveSessionStoreEntry(params: {
   // An exact (opaque-preserving-normalized) entry always wins over any folded
   // legacy alias, regardless of freshness (openclaw#75670). Only when no exact
   // entry exists do we fall back to a confirmed legacy alias.
-  const exactEntry = Object.prototype.hasOwnProperty.call(params.store, normalizedKey)
+  const exactEntry = Object.hasOwn(params.store, normalizedKey)
     ? params.store[normalizedKey]
     : undefined;
   const usableExactEntry = hasMismatchedCaseSensitiveDeliveryProof(exactEntry, normalizedKey)

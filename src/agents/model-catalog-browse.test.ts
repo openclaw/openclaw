@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { loadModelCatalogForBrowse } from "./model-catalog-browse.js";
@@ -24,7 +24,13 @@ function config(params: { providerWildcard?: boolean } = {}): OpenClawConfig {
 }
 
 describe("loadModelCatalogForBrowse", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -65,6 +71,7 @@ describe("loadModelCatalogForBrowse", () => {
   });
 
   it("returns an empty catalog when read-only catalog loading times out", async () => {
+    vi.useFakeTimers();
     const onTimeout = vi.fn();
     const loadCatalog = vi.fn(
       () =>
@@ -80,9 +87,10 @@ describe("loadModelCatalogForBrowse", () => {
       onTimeout,
     });
 
+    await vi.advanceTimersByTimeAsync(5);
     await expect(resultPromise).resolves.toEqual([]);
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await vi.advanceTimersByTimeAsync(10);
   });
 
   it("uses the default timeout when timeoutMs is non-finite", async () => {
@@ -111,22 +119,28 @@ describe("loadModelCatalogForBrowse", () => {
   it("caps oversized browse timeouts before scheduling the fallback timer", async () => {
     vi.useFakeTimers();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const loadCatalog = vi.fn(
-      () =>
-        new Promise<ModelCatalogEntry[]>((resolve) => {
-          setTimeout(() => resolve(readOnlyCatalog), 5);
-        }),
-    );
+    try {
+      const loadCatalog = vi.fn(
+        () =>
+          new Promise<ModelCatalogEntry[]>((resolve) => {
+            setTimeout(() => resolve(readOnlyCatalog), 5);
+          }),
+      );
 
-    const resultPromise = loadModelCatalogForBrowse({
-      cfg: config(),
-      loadCatalog,
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-    });
+      const resultPromise = loadModelCatalogForBrowse({
+        cfg: config(),
+        loadCatalog,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
 
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    await vi.advanceTimersByTimeAsync(5);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(5);
 
-    await expect(resultPromise).resolves.toBe(readOnlyCatalog);
+      await expect(resultPromise).resolves.toBe(readOnlyCatalog);
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

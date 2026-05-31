@@ -185,7 +185,7 @@ describe("gateway shared auth rotation", () => {
       const res = await sendSharedTokenRotationPatch(ws);
       sharedTokenRotationCase = {
         closed: await closed,
-        ok: res.ok === true,
+        ok: res.ok,
       };
     } finally {
       await closeWsAndWait(ws);

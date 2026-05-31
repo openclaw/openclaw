@@ -454,7 +454,7 @@ export async function getHealthSnapshot(params?: {
       boundAccounts,
     });
     const boundAccountIdsAll = Array.from(
-      new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flatMap((ids) => ids)),
+      new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flat()),
     );
     const accountIdsToProbe = Array.from(
       new Set(

@@ -436,7 +436,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       if (!health.healthy) {
         snapshot.healthState = health.reason;
       }
-      return { accountId: accountId, account, snapshot };
+      return { accountId, account, snapshot };
     };
 
     const buildChannelAccounts = async (channelId: ChannelId) => {

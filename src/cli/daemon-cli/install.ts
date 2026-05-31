@@ -154,7 +154,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const service = resolveGatewayService();
   let loaded = false;
-  let existingServiceEnv: Record<string, string> | undefined;
   let existingServiceCommand: GatewayServiceCommandConfig | null = null;
   try {
     loaded = await service.isLoaded({ env: process.env });
@@ -167,7 +166,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
   existingServiceCommand = await service.readCommand(process.env).catch(() => null);
-  existingServiceEnv = existingServiceCommand?.environment;
+  const existingServiceEnv: Record<string, string> | undefined =
+    existingServiceCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,

@@ -1211,7 +1211,7 @@ export async function spawnAcpDirect(
     });
   }
 
-  let requestThreadBinding = params.thread === true;
+  const requestThreadBinding = params.thread === true;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,

@@ -96,11 +96,7 @@ function hasOwnLegacyCompatKey<K extends LegacyCompatKey>(
   params: unknown,
   key: K,
 ): params is SessionKeyCompatParams & Required<Pick<LegacyCompatParamMap, K>> {
-  return (
-    params !== null &&
-    typeof params === "object" &&
-    Object.prototype.hasOwnProperty.call(params, key)
-  );
+  return params !== null && typeof params === "object" && Object.hasOwn(params, key);
 }
 
 function withoutLegacyCompatKeys<T extends SessionKeyCompatParams>(

@@ -378,7 +378,6 @@ describe("scoped vitest configs", () => {
 
   it("keeps scoped lanes on threads with the shared non-isolated runner", () => {
     for (const config of [
-      defaultChannelsConfig,
       defaultAcpConfig,
       defaultExtensionsConfig,
       defaultExtensionChannelsConfig,

@@ -234,7 +234,7 @@ export function resolveProcessToolScopeKey(params: {
 }
 
 function applyModelProviderToolPolicy(
-  tools: AnyAgentTool[],
+  toolsInput: AnyAgentTool[],
   params?: {
     config?: OpenClawConfig;
     modelProvider?: string;
@@ -247,6 +247,7 @@ function applyModelProviderToolPolicy(
     suppressManagedWebSearch?: boolean;
   },
 ): AnyAgentTool[] {
+  let tools = toolsInput;
   tools = filterLocalModelLeanTools({
     tools,
     config: params?.config,
@@ -901,7 +902,7 @@ export function createOpenClawCodingTools(options?: {
             sessionId: options?.sessionId,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
-            sandboxed: !!sandbox,
+            sandboxed: Boolean(sandbox),
             pluginToolAllowlist,
             pluginToolDenylist,
             currentChannelId: options?.currentChannelId,
@@ -986,7 +987,7 @@ export function createOpenClawCodingTools(options?: {
           spawnWorkspaceDir: options?.spawnWorkspaceDir
             ? resolveWorkspaceRoot(options.spawnWorkspaceDir)
             : undefined,
-          sandboxed: !!sandbox,
+          sandboxed: Boolean(sandbox),
           config: options?.config,
           pluginToolAllowlist,
           pluginToolDenylist,

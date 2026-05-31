@@ -107,6 +107,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
@@ -1353,10 +1354,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     for (const key of keys) {
       try {
-        const storeTarget = resolveGatewaySessionStoreTarget({ cfg, key, scanLegacyKeys: false });
-        const store =
-          storeCache.get(storeTarget.storePath) ?? loadSessionStore(storeTarget.storePath);
-        storeCache.set(storeTarget.storePath, store);
+        const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key,
+          scanLegacyKeys: false,
+        });
+        const store = storeCache.get(cachedStoreTarget.storePath) ?? cachedStoreTarget.store;
+        storeCache.set(cachedStoreTarget.storePath, store);
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key,

@@ -375,15 +375,12 @@ export default definePluginEntry({
           tick().catch(() => {});
         }, 15_000);
         expiryInterval.unref?.();
-
-        return;
       },
       stop: async () => {
         if (expiryInterval) {
           clearInterval(expiryInterval);
           expiryInterval = null;
         }
-        return;
       },
     };
 

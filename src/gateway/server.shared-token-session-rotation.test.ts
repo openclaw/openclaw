@@ -65,7 +65,7 @@ beforeAll(async () => {
     });
     configSetRotationCase = {
       closed: await closed,
-      setOk: setRes.ok === true,
+      setOk: setRes.ok,
     };
   } finally {
     ws.close();

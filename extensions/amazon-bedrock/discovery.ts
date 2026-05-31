@@ -1,7 +1,7 @@
-import {
-  type BedrockClient,
-  type ListFoundationModelsCommandOutput,
-  type ListInferenceProfilesCommandOutput,
+import type {
+  BedrockClient,
+  ListFoundationModelsCommandOutput,
+  ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

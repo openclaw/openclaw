@@ -1420,7 +1420,6 @@ function discoverFromPath(params: {
       ...(params.managedPluginDirs ? { managedPluginDirs: params.managedPluginDirs } : {}),
       ...(params.skipRootDirKeys ? { skipRootDirKeys: params.skipRootDirKeys } : {}),
     });
-    return;
   }
 }
 

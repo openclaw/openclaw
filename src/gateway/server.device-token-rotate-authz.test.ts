@@ -226,9 +226,9 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
         pairedBAfterRevokeRevokedAtMs: pairedBAfterRevoke?.tokens?.operator?.revokedAtMs,
         pairedBToken: pairedB?.tokens?.operator?.token,
         revokeMessage: revoke.error?.message,
-        revokeOk: revoke.ok === true,
+        revokeOk: revoke.ok,
         rotateMessage: rotate.error?.message,
-        rotateOk: rotate.ok === true,
+        rotateOk: rotate.ok,
         token: deviceB.pairingToken,
       };
     } finally {

@@ -1276,10 +1276,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           : false;
       const canAutoRouteVoiceWake =
         !agentId && !explicitVoiceWakeSessionTarget && !requestedSessionId && !replyTo && !to;
-      const hasVoiceWakeTriggerField = Object.prototype.hasOwnProperty.call(
-        request,
-        "voiceWakeTrigger",
-      );
+      const hasVoiceWakeTriggerField = Object.hasOwn(request, "voiceWakeTrigger");
       if (hasVoiceWakeTriggerField && canAutoRouteVoiceWake) {
         try {
           const routingConfig = await loadVoiceWakeRoutingConfig();
@@ -1694,8 +1691,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               });
               const hadLegacyStoreKey = preMigrationTarget.storeKeys.some(
                 (storeKey) =>
-                  storeKey !== preMigrationTarget.canonicalKey &&
-                  Object.prototype.hasOwnProperty.call(store, storeKey),
+                  storeKey !== preMigrationTarget.canonicalKey && Object.hasOwn(store, storeKey),
               );
               const { target, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
                 cfg,
@@ -1703,7 +1699,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 store,
               });
               const prunedStoreKey = [...storeKeysBeforeMigration].some(
-                (storeKey) => !Object.prototype.hasOwnProperty.call(store, storeKey),
+                (storeKey) => !Object.hasOwn(store, storeKey),
               );
               const freshEntry = store[primaryKey];
               patchBuild = buildSessionPatch(freshEntry);
@@ -1881,7 +1877,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       let resolvedChannel = deliveryPlan.resolvedChannel;
       let deliveryTargetMode = deliveryPlan.deliveryTargetMode;
-      let resolvedAccountId = deliveryPlan.resolvedAccountId;
+      const resolvedAccountId = deliveryPlan.resolvedAccountId;
       let resolvedTo = deliveryPlan.resolvedTo;
       let effectivePlan = deliveryPlan;
       let deliveryDowngradeReason: string | null = null;

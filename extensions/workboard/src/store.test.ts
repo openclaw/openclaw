@@ -1633,7 +1633,6 @@ describe("WorkboardStore", () => {
   });
 
   it("does not drop concurrent updates while refreshing diagnostics", async () => {
-    let store!: WorkboardStore;
     let proofPromise: Promise<unknown> | undefined;
     let triggered = false;
     const keyed = createMemoryStore({
@@ -1646,7 +1645,7 @@ describe("WorkboardStore", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
     });
-    store = new WorkboardStore(keyed);
+    const store: WorkboardStore = new WorkboardStore(keyed);
     const card = await store.create({ title: "Ready too long", agentId: "main" });
 
     await store.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);

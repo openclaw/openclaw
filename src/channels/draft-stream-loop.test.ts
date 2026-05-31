@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
@@ -29,6 +29,18 @@ async function captureUnhandledRejections(
 }
 
 describe("createDraftStreamLoop", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    if (vi.isFakeTimers()) {
+      vi.clearAllTimers();
+    }
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("contains immediate background flush rejections and preserves pending text", async () => {
     await captureUnhandledRejections(async (rejections) => {
       const error = new Error("send failed");
@@ -91,7 +103,9 @@ describe("createDraftStreamLoop", () => {
         },
       );
     } finally {
+      vi.clearAllTimers();
       vi.useRealTimers();
+      vi.restoreAllMocks();
     }
   });
 
@@ -99,18 +113,23 @@ describe("createDraftStreamLoop", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(0);
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const sendOrEditStreamMessage = vi.fn(async () => true);
       const loop = createDraftStreamLoop({
         throttleMs: Number.MAX_SAFE_INTEGER,
         isStopped: () => false,
-        sendOrEditStreamMessage: vi.fn(async () => true),
+        sendOrEditStreamMessage,
       });
 
       loop.update("hello");
 
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(MAX_TIMER_TIMEOUT_MS - 1);
+      expect(sendOrEditStreamMessage).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(sendOrEditStreamMessage).toHaveBeenCalledExactlyOnceWith("hello");
       loop.stop();
     } finally {
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

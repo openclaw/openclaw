@@ -379,7 +379,7 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   if (plugins.deny.includes(memorySlot)) {
     return false;
   }
-  if (!Object.prototype.hasOwnProperty.call(plugins.entries, memorySlot)) {
+  if (!Object.hasOwn(plugins.entries, memorySlot)) {
     return false;
   }
   const entry = plugins.entries[memorySlot];

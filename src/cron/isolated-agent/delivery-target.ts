@@ -310,8 +310,6 @@ export async function resolveDeliveryTarget(
     };
   }
   toCandidate = docked.to;
-
-  let resolvedTarget: ResolvedMessagingTarget | undefined;
   const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
     cfg,
     channel,
@@ -329,7 +327,7 @@ export async function resolveDeliveryTarget(
       error: targetResolution.error,
     };
   }
-  resolvedTarget = targetResolution.target;
+  const resolvedTarget: ResolvedMessagingTarget | undefined = targetResolution.target;
   const routeTargetCandidate =
     resolvedTarget.source === "directory"
       ? resolvedTarget.to

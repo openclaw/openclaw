@@ -1344,7 +1344,8 @@ function toJsonSafe(value: unknown): unknown {
     return null;
   }
   try {
-    return JSON.parse(JSON.stringify(value)) as unknown;
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
   } catch {
     if (value instanceof Error) {
       return value.message;
@@ -1463,10 +1464,8 @@ function runCodeModeChild(params: {
     const stderr: string[] = [];
     let settled = false;
     let timedOut = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let exitRejectionTimer: ReturnType<typeof setTimeout> | undefined;
     const bridgeAbortController = new AbortController();
-    let abortFromParent: () => void;
     const settle = (callback: () => void) => {
       if (settled) {
         return;
@@ -1482,22 +1481,22 @@ function runCodeModeChild(params: {
       child.kill();
       callback();
     };
-    abortFromParent = () => {
+    const abortFromParent: () => void = () => {
       bridgeAbortController.abort(params.signal?.reason);
       child.kill("SIGKILL");
       settle(() => reject(new Error("tool_search_code aborted")));
     };
-    if (params.signal?.aborted) {
-      abortFromParent();
-      return;
-    }
-    params.signal?.addEventListener("abort", abortFromParent, { once: true });
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       timedOut = true;
       bridgeAbortController.abort(new Error("tool_search_code timed out"));
       child.kill("SIGKILL");
       settle(() => reject(new Error("tool_search_code timed out")));
     }, params.config.codeTimeoutMs);
+    params.signal?.addEventListener("abort", abortFromParent, { once: true });
+    if (params.signal?.aborted) {
+      abortFromParent();
+      return;
+    }
 
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {

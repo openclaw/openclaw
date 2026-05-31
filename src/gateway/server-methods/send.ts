@@ -637,8 +637,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
         const shouldUseDerivedThreadSessionKey =
           channel === "slack" &&
-          !!providedSessionKey &&
-          !!normalizeOptionalString(derivedRoute?.threadId) &&
+          Boolean(providedSessionKey) &&
+          Boolean(normalizeOptionalString(derivedRoute?.threadId)) &&
           normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
             normalizeOptionalLowercaseString(providedSessionBaseKey) &&
           normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
@@ -800,7 +800,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error };
         }
         const resolvedTarget = resolveGatewayOutboundTarget({
-          channel: channel,
+          channel,
           to: request.to.trim(),
           cfg,
           accountId,

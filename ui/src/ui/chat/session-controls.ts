@@ -1020,15 +1020,15 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
   const client = state.client;
-  let switchPromise: Promise<boolean>;
+  const switchPromiseRef: { current?: Promise<boolean> } = {};
   const clearPendingSwitch = () => {
-    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromise) {
+    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromiseRef.current) {
       const nextSwitches = { ...state.chatModelSwitchPromises };
       delete nextSwitches[targetSessionKey];
       state.chatModelSwitchPromises = nextSwitches;
     }
   };
-  switchPromise = (async () => {
+  const switchPromise: Promise<boolean> = (async () => {
     try {
       await client.request("sessions.patch", {
         key: targetSessionKey,
@@ -1046,6 +1046,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
       clearPendingSwitch();
     }
   })();
+  switchPromiseRef.current = switchPromise;
   state.chatModelSwitchPromises = {
     ...state.chatModelSwitchPromises,
     [targetSessionKey]: switchPromise,
@@ -1301,7 +1302,7 @@ export function resolveSessionOptionGroups(
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
       continue;
     }
-    const isSubagent = isSubagentSessionKey(row.key) || !!row.spawnedBy;
+    const isSubagent = isSubagentSessionKey(row.key) || Boolean(row.spawnedBy);
     if (isSubagent && row.key !== sessionKey) {
       continue;
     }

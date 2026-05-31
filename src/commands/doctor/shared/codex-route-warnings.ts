@@ -143,12 +143,14 @@ function collectStringModelSlot(params: {
   if (!model || !isOpenAICodexModelRef(model)) {
     return false;
   }
-  return !!recordCodexModelHit({
-    hits: params.hits,
-    path: params.path,
-    model,
-    runtime: params.runtime,
-  });
+  return Boolean(
+    recordCodexModelHit({
+      hits: params.hits,
+      path: params.path,
+      model,
+      runtime: params.runtime,
+    }),
+  );
 }
 
 function collectModelConfigSlot(params: {
@@ -1015,7 +1017,7 @@ function collectAgentRuntimeModelRefs(params: {
 }): Array<{ path: string; modelRef: string }> {
   const refs: Array<{ path: string; modelRef: string }> = [];
   const agent = asMutableRecord(params.agent);
-  if (agent && Object.prototype.hasOwnProperty.call(agent, "model")) {
+  if (agent && Object.hasOwn(agent, "model")) {
     collectModelConfigRefs({
       refs,
       path: `${params.path}.model`,

@@ -445,7 +445,7 @@ function extractInputText(content: unknown[]): string {
   return content
     .filter(
       (entry): entry is { type: "input_text"; text: string } =>
-        !!entry &&
+        Boolean(entry) &&
         typeof entry === "object" &&
         (entry as { type?: unknown }).type === "input_text" &&
         typeof (entry as { text?: unknown }).text === "string",
@@ -609,14 +609,14 @@ function normalizePromptPathCandidate(candidate: string) {
 function readTargetFromPrompt(prompt: string) {
   const backtickedMatches = Array.from(prompt.matchAll(/`([^`]+)`/g))
     .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => !!value);
+    .filter((value): value is string => Boolean(value));
   if (backtickedMatches.length > 0) {
     return backtickedMatches[0];
   }
 
   const quotedMatches = Array.from(prompt.matchAll(/"([^"]+)"/g))
     .map((match) => normalizePromptPathCandidate(match[1] ?? ""))
-    .filter((value): value is string => !!value);
+    .filter((value): value is string => Boolean(value));
   if (quotedMatches.length > 0) {
     return quotedMatches[0];
   }

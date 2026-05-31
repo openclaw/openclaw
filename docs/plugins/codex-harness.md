@@ -393,6 +393,9 @@ In `tools.exec.mode: "auto"`, OpenClaw does not preserve legacy unsafe Codex
 legacy `plugins.entries.codex.config.appServer.mode: "guardian"` preset still
 works, but `tools.exec.mode: "auto"` is the normalized OpenClaw surface.
 
+For the mode-level comparison with host exec approvals and ACPX permissions,
+see [Permission modes](/tools/permission-modes).
+
 For every app-server field, auth order, environment isolation, discovery, and
 timeout behavior, see [Codex harness reference](/plugins/codex-harness-reference).
 

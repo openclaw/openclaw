@@ -50,6 +50,6 @@ export function extractModelDirective(
     rawModel,
     rawProfile,
     rawRuntime,
-    hasDirective: !!match,
+    hasDirective: Boolean(match),
   };
 }

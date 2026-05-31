@@ -64,7 +64,7 @@ export function resolveOpenClawMetadata(
     export: readStringValue(metadataObj.export),
     os: osRaw.length > 0 ? osRaw : undefined,
     events: eventsRaw.length > 0 ? eventsRaw : [],
-    requires: requires,
+    requires,
     install: install.length > 0 ? install : undefined,
   };
 }

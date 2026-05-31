@@ -331,7 +331,6 @@ export function createTalkRealtimeRelaySession(
     },
     { onEvent: recordTalkObservabilityEvent },
   );
-  let relay: RelaySession | undefined;
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
     broadcastToOwner(params.context, params.connId, {
       ...event,
@@ -339,6 +338,7 @@ export function createTalkRealtimeRelaySession(
     });
   let currentOutputItemId: string | undefined;
   let currentOutputResponseId: string | undefined;
+  const relayRef: { current?: RelaySession } = {};
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
     cfg: params.cfg,
@@ -350,9 +350,9 @@ export function createTalkRealtimeRelaySession(
     tools: params.tools,
     markStrategy: "ack-immediately",
     audioSink: {
-      isOpen: () => Boolean(relay && relaySessions.has(relay.id)),
+      isOpen: () => Boolean(relayRef.current && relaySessions.has(relayRef.current.id)),
       sendAudio: (audio) => {
-        const turnId = relay ? ensureRelayTurn(relay) : undefined;
+        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
         emit(
           {
             relaySessionId,
@@ -369,7 +369,7 @@ export function createTalkRealtimeRelaySession(
         );
       },
       clearAudio: () => {
-        const turnId = relay ? ensureRelayTurn(relay) : undefined;
+        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
         emit(
           { relaySessionId, type: "clear" },
           {
@@ -381,7 +381,7 @@ export function createTalkRealtimeRelaySession(
         );
       },
       sendMark: (markName) => {
-        const turnId = relay ? ensureRelayTurn(relay) : undefined;
+        const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
         emit(
           { relaySessionId, type: "mark", markName },
           {
@@ -428,6 +428,7 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onTranscript: (role, text, final) => {
+      const relay = relayRef.current;
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (final && relay) {
         recordRealtimeVoiceTranscript(relay.transcript, role, text);
@@ -488,6 +489,7 @@ export function createTalkRealtimeRelaySession(
       }
     },
     onToolCall: (toolCall) => {
+      const relay = relayRef.current;
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
       if (relay && toolCall.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
         const forcedConsult = relay.forcedConsults.recordNativeConsult(
@@ -545,7 +547,7 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
-  relay = {
+  const relay: RelaySession = {
     id: relaySessionId,
     connId: params.connId,
     context: params.context,
@@ -565,6 +567,7 @@ export function createTalkRealtimeRelaySession(
     forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
     transcript: [],
   };
+  relayRef.current = relay;
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);
   bridge.connect().catch((error: unknown) => {

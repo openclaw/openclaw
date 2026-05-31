@@ -1470,7 +1470,6 @@ export class GatewayClient {
             : this.requestTimeoutMs;
     const signal = opts?.signal;
     const p = new Promise<T>((resolve, reject) => {
-      let abortHandler: (() => void) | undefined;
       const timeout =
         timeoutMs === null
           ? null
@@ -1488,7 +1487,7 @@ export class GatewayClient {
           signal.removeEventListener("abort", abortHandler);
         }
       };
-      abortHandler = () => {
+      const abortHandler: (() => void) | undefined = () => {
         const pending = this.pending.get(id);
         this.pending.delete(id);
         pending?.cleanup?.();

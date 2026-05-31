@@ -149,6 +149,5 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     );
     await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
     runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);
-    return;
   }
 }

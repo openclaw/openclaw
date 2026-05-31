@@ -192,6 +192,44 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortS
   return controller.signal;
 }
 
+function routeThreadIdsDiffer(
+  left: string | number | undefined,
+  right: string | number | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return false;
+  }
+  return String(left) !== String(right);
+}
+
+function isSlackDirectRoutedThreadTurn(
+  ctx: Pick<
+    FinalizedMsgContext,
+    "ChatType" | "MessageThreadId" | "OriginatingChannel" | "Provider" | "Surface" | "TransportThreadId"
+  >,
+): boolean {
+  if (normalizeChatType(ctx.ChatType) !== "direct") {
+    return false;
+  }
+  if (ctx.MessageThreadId == null && ctx.TransportThreadId == null) {
+    return false;
+  }
+  return [ctx.Provider, ctx.Surface, ctx.OriginatingChannel].some(
+    (value) => normalizeOptionalString(value)?.toLowerCase() === "slack",
+  );
+}
+
+function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
+  activeOperation?: ReplyOperation;
+  ctx: FinalizedMsgContext;
+  routeThreadId?: string | number;
+}): boolean {
+  return (
+    isSlackDirectRoutedThreadTurn(params.ctx) &&
+    routeThreadIdsDiffer(params.activeOperation?.routeThreadId, params.routeThreadId)
+  );
+}
+
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
   () => import("./get-reply-from-config.runtime.js"),
@@ -1178,17 +1216,38 @@ export async function dispatchReplyFromConfig(
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
     const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
+    const allowSlackRoutedThreadBypass =
+      phase === "dispatch" &&
+      shouldLetSlackRoutedThreadBypassBusyReplyOperation({
+        activeOperation: replyRunRegistry.get(dispatchOperationSessionKey),
+        ctx,
+        routeThreadId,
+      });
     const admission = await admitReplyTurn({
       sessionKey: dispatchOperationSessionKey,
       sessionId: operationSessionId,
       kind: replyTurnKind,
       resetTriggered: false,
+      routeThreadId,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
-      waitForActive: !allowActivePreDispatch,
+      waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
     });
     if (admission.status === "skipped") {
       if (allowActivePreDispatch && admission.reason === "active-run") {
         preDispatchAbortOperation = admission.activeOperation;
+        return { status: "ready" };
+      }
+      if (
+        admission.reason === "active-run" &&
+        shouldLetSlackRoutedThreadBypassBusyReplyOperation({
+          activeOperation: admission.activeOperation,
+          ctx,
+          routeThreadId,
+        })
+      ) {
+        logVerbose(
+          `dispatch-from-config: allowing Slack routed thread ${routeThreadId} while ${dispatchOperationSessionKey} has an active reply operation in another Slack thread`,
+        );
         return { status: "ready" };
       }
       dispatchAbortOperation = admission.activeOperation;

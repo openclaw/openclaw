@@ -68,7 +68,6 @@ export async function connectGatewayClient(params: {
     );
   return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
     let settled = false;
-    let client: InstanceType<typeof GatewayClient> | undefined;
     const stop = (err?: Error, connectedClient?: InstanceType<typeof GatewayClient>) => {
       if (settled) {
         return;
@@ -84,7 +83,7 @@ export async function connectGatewayClient(params: {
         resolve(connectedClient as InstanceType<typeof GatewayClient>);
       }
     };
-    client = new GatewayClient({
+    const client: InstanceType<typeof GatewayClient> | undefined = new GatewayClient({
       url: params.url,
       token: params.token,
       deviceToken: params.deviceToken,

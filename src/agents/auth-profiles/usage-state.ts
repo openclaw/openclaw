@@ -29,12 +29,12 @@ function shouldBypassModelScopedCooldown(
   now: number,
   forModel?: string,
 ): boolean {
-  return !!(
+  return Boolean(
     forModel &&
     stats.cooldownReason === "rate_limit" &&
     stats.cooldownModel &&
     stats.cooldownModel !== forModel &&
-    !isActiveUnusableWindow(stats.disabledUntil, now)
+    !isActiveUnusableWindow(stats.disabledUntil, now),
   );
 }
 

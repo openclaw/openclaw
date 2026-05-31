@@ -93,7 +93,7 @@ function resolveProviderRuntimePluginCacheKey(
 
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(providerId);
-  return !!normalized && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
+  return Boolean(normalized) && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
 }
 
 function resolveProviderRuntimeLookupModelId(

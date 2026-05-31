@@ -96,10 +96,10 @@ import {
   updateSessionStore,
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
-import {
-  type SpawnSubagentContextMode,
-  type SpawnSubagentMode,
-  type SpawnSubagentSandboxMode,
+import type {
+  SpawnSubagentContextMode,
+  SpawnSubagentMode,
+  SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
 
 export {

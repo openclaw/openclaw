@@ -147,7 +147,7 @@ function supportsThinkingPolicyLevel(
   policy: ThinkingPolicy,
   level: ReturnType<OpenClawPluginApi["runtime"]["agent"]["normalizeThinkingLevel"]>,
 ): boolean {
-  return !!level && policy.levels.some((entry) => entry.id === level);
+  return Boolean(level) && policy.levels.some((entry) => entry.id === level);
 }
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {

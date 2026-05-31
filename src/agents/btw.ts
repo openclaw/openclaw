@@ -6,12 +6,12 @@ import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
-import {
-  type AssistantMessageEvent,
-  type ImageContent,
-  type Message,
-  type Model,
-  type TextContent,
+import type {
+  AssistantMessageEvent,
+  ImageContent,
+  Message,
+  Model,
+  TextContent,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";

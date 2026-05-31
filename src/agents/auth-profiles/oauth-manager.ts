@@ -326,10 +326,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         allowKeychainPrompt: false,
       });
       const mainCred = mainStore.profiles[params.profileId];
-      const mainExpires = asDateTimestampMs(mainCred?.expires);
+      if (mainCred?.type !== "oauth") {
+        return null;
+      }
+      const mainExpires = asDateTimestampMs(mainCred.expires);
       const localExpires = asDateTimestampMs(params.credential.expires);
       if (
-        mainCred?.type === "oauth" &&
         mainCred.provider === params.credential.provider &&
         hasUsableOAuthCredential(mainCred) &&
         mainExpires !== undefined &&

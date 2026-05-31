@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -106,6 +105,9 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 
 let embeddedAgentCommandPromise: Promise<EmbeddedAgentCommandModule["agentCommand"]> | undefined;
 let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
+let replyPayloadModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/reply-payload")>
+  | undefined;
 const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
   import("./agent/session.js");
 let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
@@ -125,10 +127,16 @@ function loadAgentSessionModule(): Promise<AgentSessionModule> {
   return agentSessionModulePromise;
 }
 
+function loadReplyPayloadModule() {
+  replyPayloadModulePromise ??= import("openclaw/plugin-sdk/reply-payload");
+  return replyPayloadModulePromise;
+}
+
 export const agentViaGatewayTesting = {
   resetLazyImportsForTests(): void {
     embeddedAgentCommandPromise = undefined;
     agentSessionModulePromise = undefined;
+    replyPayloadModulePromise = undefined;
     agentSessionModuleLoader = defaultAgentSessionModuleLoader;
   },
   setAgentSessionModuleLoaderForTests(loader: AgentSessionModuleLoader): void {
@@ -173,11 +181,12 @@ function getGatewayDispatchConfig(): OpenClawConfig {
   return getRuntimeConfig({ skipPluginValidation: true, pin: false });
 }
 
-function formatPayloadForLog(payload: {
+async function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string | null;
 }) {
+  const { resolveSendableOutboundReplyParts } = await loadReplyPayloadModule();
   const parts = resolveSendableOutboundReplyParts({
     text: payload.text,
     mediaUrls: payload.mediaUrls,
@@ -334,7 +343,7 @@ function isAgentCliProcessLike(value: unknown): value is AgentCliProcessLike {
 }
 
 function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliProcessLike {
-  if (!deps || !Object.prototype.hasOwnProperty.call(deps, "process")) {
+  if (!deps || !Object.hasOwn(deps, "process")) {
     return process;
   }
   const processLike = (deps as { process?: unknown }).process;
@@ -724,7 +733,7 @@ async function agentViaGatewayCommand(
   }
 
   for (const payload of payloads) {
-    const out = formatPayloadForLog(payload);
+    const out = await formatPayloadForLog(payload);
     if (out) {
       runtime.log(out);
     }

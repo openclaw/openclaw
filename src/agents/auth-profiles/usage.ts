@@ -160,11 +160,11 @@ function resolveWhamResetMs(window: WhamUsageWindow | undefined, now: number): n
 }
 
 function isWhamWindowExhausted(window: WhamUsageWindow | undefined): boolean {
-  return !!(
+  return Boolean(
     window &&
     typeof window.used_percent === "number" &&
     Number.isFinite(window.used_percent) &&
-    window.used_percent >= 100
+    window.used_percent >= 100,
   );
 }
 
