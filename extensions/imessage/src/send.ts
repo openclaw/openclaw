@@ -905,13 +905,16 @@ export async function sendMessageIMessage(
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
 
   if (filePath && !resolvedReplyToId) {
+    const attachmentEchoText = message.trim()
+      ? resolveOutboundEchoText("", mediaContentType)
+      : echoText;
     const attachmentResult = await trySendAttachmentForTarget({
       accountId: account.accountId,
       dbPath: chatDbLookupPath,
       target,
       service,
       filePath,
-      echoText,
+      echoText: attachmentEchoText,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });

@@ -11,6 +11,7 @@ import {
   findLatestIMessageEntryForChat,
   resetIMessageShortIdState,
 } from "./monitor-reply-cache.js";
+import { hasPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import { sendMessageIMessage } from "./send.js";
 
 const IMESSAGE_TEST_CFG = {
@@ -438,6 +439,28 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.sentText).toBe("caption");
     expect(result.receipt.platformMessageIds).toEqual(["p:0/dm-media-guid", "p:0/caption-guid"]);
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
+  });
+
+  it("does not persist caption text when the caption follow-up send fails", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imessage-send-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const client = createRejectingClient(new Error("caption failed"));
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+
+    await expect(
+      sendMessageIMessage("imessage:+15550004567", "caption", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/image.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        runCliJson,
+      }),
+    ).rejects.toThrow("caption failed");
+
+    const scope = "default:imessage:+15550004567";
+    expect(hasPersistedIMessageEcho({ scope, text: "caption" })).toBe(false);
+    expect(hasPersistedIMessageEcho({ scope, text: "<media:image>" })).toBe(true);
+    expect(hasPersistedIMessageEcho({ scope, messageId: "p:0/dm-media-guid" })).toBe(true);
   });
 
   it("returns the caption message id when captioned attachment only has a placeholder id", async () => {
