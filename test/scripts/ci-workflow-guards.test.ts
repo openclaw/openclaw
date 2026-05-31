@@ -241,5 +241,8 @@ describe("ci workflow guards", () => {
     expect(networkConfig).not.toContain("\n  - extensions\n");
     expect(networkConfig).toContain("\n  - src/infra/net\n");
     expect(networkConfig).toContain("\n  - packages/net-policy/src\n");
+    expect(workflow).toContain("Fast PR network boundary diff scan");
+    expect(workflow).toContain("Network runtime boundary-sensitive added lines");
+    expect(workflow).toContain("if: ${{ github.event_name != 'pull_request' }}");
   });
 });
