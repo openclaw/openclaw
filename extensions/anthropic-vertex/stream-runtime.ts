@@ -115,7 +115,6 @@ function createAnthropicVertexOnPayload(params: {
 
   function applyPolicy(payload: unknown): unknown {
     if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Anthropic payload policy mutates open provider JSON params.
       applyAnthropicPayloadPolicyToParams(payload as Record<string, unknown>, policy);
     }
     return payload;
@@ -150,7 +149,6 @@ export function createAnthropicVertexStreamFn(
   });
 
   return (model, context, options) => {
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- This stream adapter is registered only for Anthropic Messages models.
     const transportModel = model as Model<"anthropic-messages"> & {
       api: string;
       baseUrl?: string;
@@ -190,8 +188,7 @@ export function createAnthropicVertexStreamFn(
         const budgets = options.thinkingBudgets;
         opts.thinkingBudgetTokens =
           (budgets && options.reasoning in budgets
-            ? // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- The key presence check above narrows runtime indexing for configured budgets.
-              budgets[options.reasoning as keyof typeof budgets]
+            ? budgets[options.reasoning as keyof typeof budgets]
             : undefined) ?? 10000;
       }
     } else {

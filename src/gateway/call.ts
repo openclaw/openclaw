@@ -789,9 +789,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
     let settled = false;
     let ignoreClose = false;
     const startAbort = new AbortController();
-    let abortHandler: (() => void) | undefined;
-    let client: GatewayClient | undefined;
-    let timer: NodeJS.Timeout | undefined;
     let primaryRequestStarted = false;
     const cleanup = () => {
       startAbort.abort();
@@ -828,7 +825,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       cleanup();
       stopClientThenSettle(client, err, value);
     };
-    abortHandler = () => {
+    const abortHandler: (() => void) | undefined = () => {
       if (settled) {
         return;
       }
@@ -850,7 +847,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     };
     opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    client = gatewayCallDeps.createGatewayClient({
+    const client: GatewayClient | undefined = gatewayCallDeps.createGatewayClient({
       url,
       token,
       password,
@@ -915,7 +912,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
     });
 
-    timer = setTimeout(() => {
+    const timer: NodeJS.Timeout | undefined = setTimeout(() => {
       ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({

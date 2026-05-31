@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import { loadModelCatalogForBrowse } from "./model-catalog-browse.js";
+import {
+  DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS,
+  loadModelCatalogForBrowse,
+  restoreModelCatalogBrowseTestDeps,
+  setModelCatalogBrowseTestDeps,
+} from "./model-catalog-browse.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 const readOnlyCatalog: ModelCatalogEntry[] = [
@@ -30,7 +35,9 @@ describe("loadModelCatalogForBrowse", () => {
 
   afterEach(() => {
     vi.clearAllTimers();
+    vi.restoreAllMocks();
     vi.useRealTimers();
+    restoreModelCatalogBrowseTestDeps();
   });
 
   it("uses the read-only catalog for default browse views", async () => {
@@ -70,14 +77,17 @@ describe("loadModelCatalogForBrowse", () => {
   });
 
   it("returns an empty catalog when read-only catalog loading times out", async () => {
-    vi.useFakeTimers();
     const onTimeout = vi.fn();
-    const loadCatalog = vi.fn(
-      () =>
-        new Promise<ModelCatalogEntry[]>((_, reject) => {
-          setTimeout(() => reject(new Error("late catalog failure")), 10);
-        }),
-    );
+    const timeoutHandle = { unref: vi.fn() } as unknown as NodeJS.Timeout;
+    const clearTimeout = vi.fn();
+    setModelCatalogBrowseTestDeps({
+      setTimeout: vi.fn((callback: () => void) => {
+        queueMicrotask(callback);
+        return timeoutHandle;
+      }) as unknown as typeof globalThis.setTimeout,
+      clearTimeout: clearTimeout as unknown as typeof globalThis.clearTimeout,
+    });
+    const loadCatalog = vi.fn(() => new Promise<ModelCatalogEntry[]>(() => undefined));
 
     const resultPromise = loadModelCatalogForBrowse({
       cfg: config(),
@@ -86,21 +96,22 @@ describe("loadModelCatalogForBrowse", () => {
       onTimeout,
     });
 
-    await vi.advanceTimersByTimeAsync(5);
     await expect(resultPromise).resolves.toEqual([]);
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
-    await vi.advanceTimersByTimeAsync(10);
+    expect(timeoutHandle.unref).toHaveBeenCalledOnce();
+    expect(clearTimeout).toHaveBeenCalledExactlyOnceWith(timeoutHandle);
   });
 
   it("uses the default timeout when timeoutMs is non-finite", async () => {
-    vi.useFakeTimers();
     const onTimeout = vi.fn();
-    const loadCatalog = vi.fn(
-      () =>
-        new Promise<ModelCatalogEntry[]>((resolve) => {
-          setTimeout(() => resolve(readOnlyCatalog), 5);
-        }),
-    );
+    const timeoutHandle = { unref: vi.fn() } as unknown as NodeJS.Timeout;
+    const setTimeout = vi.fn(() => timeoutHandle);
+    const clearTimeout = vi.fn();
+    setModelCatalogBrowseTestDeps({
+      setTimeout: setTimeout as unknown as typeof globalThis.setTimeout,
+      clearTimeout: clearTimeout as unknown as typeof globalThis.clearTimeout,
+    });
+    const loadCatalog = vi.fn(async () => readOnlyCatalog);
 
     const resultPromise = loadModelCatalogForBrowse({
       cfg: config(),
@@ -109,21 +120,24 @@ describe("loadModelCatalogForBrowse", () => {
       onTimeout,
     });
 
-    await vi.advanceTimersByTimeAsync(5);
-
     await expect(resultPromise).resolves.toBe(readOnlyCatalog);
+    expect(setTimeout).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Function),
+      DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS,
+    );
+    expect(clearTimeout).toHaveBeenCalledExactlyOnceWith(timeoutHandle);
     expect(onTimeout).not.toHaveBeenCalled();
   });
 
   it("caps oversized browse timeouts before scheduling the fallback timer", async () => {
-    vi.useFakeTimers();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const loadCatalog = vi.fn(
-      () =>
-        new Promise<ModelCatalogEntry[]>((resolve) => {
-          setTimeout(() => resolve(readOnlyCatalog), 5);
-        }),
-    );
+    const timeoutHandle = { unref: vi.fn() } as unknown as NodeJS.Timeout;
+    const setTimeout = vi.fn(() => timeoutHandle);
+    const clearTimeout = vi.fn();
+    setModelCatalogBrowseTestDeps({
+      setTimeout: setTimeout as unknown as typeof globalThis.setTimeout,
+      clearTimeout: clearTimeout as unknown as typeof globalThis.clearTimeout,
+    });
+    const loadCatalog = vi.fn(async () => readOnlyCatalog);
 
     const resultPromise = loadModelCatalogForBrowse({
       cfg: config(),
@@ -131,9 +145,8 @@ describe("loadModelCatalogForBrowse", () => {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    await vi.advanceTimersByTimeAsync(5);
-
     await expect(resultPromise).resolves.toBe(readOnlyCatalog);
+    expect(setTimeout).toHaveBeenCalledExactlyOnceWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(clearTimeout).toHaveBeenCalledExactlyOnceWith(timeoutHandle);
   });
 });

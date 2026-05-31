@@ -52,7 +52,7 @@ type DoctorHealthContribution = FlowContribution & {
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
-const LEGACY_POSITIONAL_REPAIR_CHECK_IDS = new Set(["core/doctor/shell-completion"]);
+const PRE_HEALTH_POSITIONAL_HEALTH_CHECK_IDS = new Set(["core/doctor/ui-protocol-freshness"]);
 
 const loadAgentDefaultsModule = async () => await import("../agents/defaults.js");
 const loadAgentScopeModule = async () => await import("../agents/agent-scope.js");
@@ -117,6 +117,19 @@ function createDoctorHealthContribution(params: {
     healthCheckIds: params.healthCheckIds ?? [],
     run: params.run,
   };
+}
+
+function resolvePositionalHealthCheckIds(): ReadonlySet<string> {
+  const ids = new Set(PRE_HEALTH_POSITIONAL_HEALTH_CHECK_IDS);
+  for (const contribution of resolveDoctorHealthContributions()) {
+    if (contribution.id === "doctor:structured-health-repairs") {
+      continue;
+    }
+    for (const checkId of contribution.healthCheckIds) {
+      ids.add(checkId);
+    }
+  }
+  return ids;
 }
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -314,9 +327,8 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   registerCoreHealthChecks();
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
   registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
-  const checks = listHealthChecks().filter(
-    (check) => !LEGACY_POSITIONAL_REPAIR_CHECK_IDS.has(check.id),
-  );
+  const positionalHealthCheckIds = resolvePositionalHealthCheckIds();
+  const checks = listHealthChecks().filter((check) => !positionalHealthCheckIds.has(check.id));
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -362,6 +374,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
+    recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");
@@ -1140,6 +1153,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:shell-completion",
       label: "Shell completion",
+      healthCheckIds: ["core/doctor/shell-completion"],
       run: runShellCompletionHealth,
     }),
     createDoctorHealthContribution({

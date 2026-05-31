@@ -171,8 +171,8 @@ describe("Cron issue regressions", () => {
       }),
     ).rejects.toThrow("CronPattern");
 
-    let persisted = await loadCronStore(store.storePath);
-    let storedJob = persisted.jobs.find((job) => job.id === disabledJob.id);
+    const persisted = await loadCronStore(store.storePath);
+    const storedJob = persisted.jobs.find((job) => job.id === disabledJob.id);
     expect(storedJob?.enabled).toBe(false);
     expect(storedJob?.schedule.kind).toBe("cron");
     if (storedJob?.schedule.kind !== "cron") {

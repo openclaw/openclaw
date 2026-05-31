@@ -108,7 +108,6 @@ export function installQaParentWatchdog(
     ((callback: () => void, ms: number) => setInterval(callback, ms) as QaParentWatchdogTimer);
   let stopped = false;
   let exiting = false;
-  let timer: QaParentWatchdogTimer;
 
   const stop = () => {
     if (stopped) {
@@ -118,7 +117,7 @@ export function installQaParentWatchdog(
     clearIntervalFn(timer);
   };
 
-  timer = setIntervalFn(() => {
+  const timer: QaParentWatchdogTimer = setIntervalFn(() => {
     if (stopped || exiting) {
       return;
     }

@@ -66,6 +66,7 @@ import {
   updateConfigRawValue,
   updateConfigFormValue,
   removeConfigFormValue,
+  updateMcpServerEnabled,
 } from "./controllers/config.ts";
 import {
   loadCronJobsPage,
@@ -195,6 +196,7 @@ import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
+import { renderMcp } from "./views/mcp.ts";
 import { renderOverview } from "./views/overview.ts";
 
 let pendingUpdate: (() => void) | undefined;
@@ -1416,8 +1418,7 @@ export function renderApp(state: AppViewState) {
               state.setTab("skills");
             },
             onConfigureMcp: () => {
-              state.infrastructureActiveSection = "mcp";
-              state.setTab("infrastructure");
+              state.setTab("mcp");
             },
             security: extractQuickSettingsSecurity(state),
             onSecurityConfigure: () => {
@@ -1634,6 +1635,37 @@ export function renderApp(state: AppViewState) {
           onSubsectionChange: (section) => (state.automationActiveSubsection = section),
           navRootLabel: "Automation",
           includeSections: [...AUTOMATION_SECTION_KEYS],
+        });
+      case "mcp":
+        return renderMcp({
+          configObject:
+            state.configForm ??
+            ((state.configSnapshot?.config as Record<string, unknown> | null) || {}),
+          configDirty: state.configFormDirty,
+          configSaving: state.configSaving,
+          configApplying: state.configApplying,
+          connected: state.connected,
+          onSaveConfig: () => saveConfig(state),
+          onApplyConfig: () => applyConfig(state),
+          onServerEnabledChange: (name, enabled) => {
+            updateMcpServerEnabled(state, name, enabled);
+            requestHostUpdate?.();
+          },
+          editor: renderConfigTab({
+            formMode: "form",
+            searchQuery: "",
+            activeSection: "mcp",
+            activeSubsection: null,
+            onFormModeChange: () => undefined,
+            onSearchChange: () => undefined,
+            onSectionChange: () => {
+              state.infrastructureActiveSection = "mcp";
+              state.infrastructureActiveSubsection = null;
+            },
+            onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
+            navRootLabel: "MCP",
+            includeSections: ["mcp"],
+          }),
         });
       case "infrastructure":
         return renderConfigTab({

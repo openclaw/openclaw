@@ -806,9 +806,10 @@ export async function optimizeImageBufferForWebMedia(params: {
 }
 
 async function loadWebMediaInternal(
-  mediaUrl: string,
+  mediaUrlInput: string,
   options: WebMediaOptions = {},
 ): Promise<WebMediaResult> {
+  let mediaUrl = mediaUrlInput;
   const {
     maxBytes,
     optimizeImages = true,

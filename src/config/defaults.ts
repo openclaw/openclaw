@@ -27,7 +27,7 @@ type ProviderPolicyDefaultsOptions = {
   loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
 
-let defaultWarnState: WarnState = { warned: false };
+const defaultWarnState: WarnState = { warned: false };
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
@@ -179,7 +179,7 @@ export function applyModelDefaults(
         continue;
       }
       const providerApi = normalizedProvider.api;
-      let nextProvider = normalizedProvider;
+      const nextProvider = normalizedProvider;
       if (nextProvider !== provider) {
         mutated = true;
       }

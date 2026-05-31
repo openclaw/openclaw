@@ -10,6 +10,8 @@ export type ResolvedReactionLevel = {
   agentReactionGuidance?: "minimal" | "extensive";
 };
 
+const LEVELS = new Set<ReactionLevel>(["off", "ack", "minimal", "extensive"]);
+
 function parseLevel(
   value: unknown,
 ): { kind: "missing" } | { kind: "invalid" } | { kind: "ok"; value: ReactionLevel } {
@@ -23,12 +25,8 @@ function parseLevel(
   if (!trimmed) {
     return { kind: "missing" };
   }
-  switch (trimmed) {
-    case "off":
-    case "ack":
-    case "minimal":
-    case "extensive":
-      return { kind: "ok", value: trimmed };
+  if (LEVELS.has(trimmed as ReactionLevel)) {
+    return { kind: "ok", value: trimmed as ReactionLevel };
   }
   return { kind: "invalid" };
 }

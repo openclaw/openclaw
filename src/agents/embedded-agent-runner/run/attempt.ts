@@ -177,9 +177,13 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../subagent-capabilities.js";
+import { ensureSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
+import {
+  appendModelIdentitySystemPrompt,
+  buildModelIdentityPromptLine,
+} from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -330,7 +334,7 @@ import {
   buildAfterTurnRuntimeContextFromUsage,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
-  resolveAttemptPrependSystemContext,
+  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   resolvePromptSubmissionSkipReason,
@@ -439,7 +443,7 @@ export {
   mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
-  resolveAttemptPrependSystemContext,
+  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
@@ -852,7 +856,7 @@ export async function runEmbeddedAttempt(
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
-  let sessionCleanupOwnsEmbeddedResources = false;
+  const sessionCleanupOwnsEmbeddedResources = false;
   let abortActiveSessionForExternalSignal: (() => Promise<void>) | undefined;
   let abortRunForExternalSignal: ((isTimeout?: boolean, reason?: unknown) => void) | undefined;
   let isCompactionPendingForExternalSignal: (() => boolean) | undefined;
@@ -2659,8 +2663,6 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn,
       );
 
-      let idleTimeoutTrigger: ((error: Error) => void) | undefined;
-
       // Wrap stream with idle timeout detection.
       //
       // Prefer the caller's explicit `runTimeoutOverrideMs` when provided —
@@ -2922,7 +2924,6 @@ export async function runEmbeddedAttempt(
           }
         }
       };
-      let queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined;
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -2954,7 +2955,7 @@ export async function runEmbeddedAttempt(
         }
       };
       abortRunForExternalSignal = abortRun;
-      idleTimeoutTrigger = (error) => {
+      const idleTimeoutTrigger: ((error: Error) => void) | undefined = (error) => {
         idleTimedOut = true;
         abortRun(true, error);
       };
@@ -3131,7 +3132,7 @@ export async function runEmbeddedAttempt(
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
-      queueHandleForAbandonment = queueHandle;
+      const queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined = queueHandle;
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey, params.sessionFile);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
@@ -3350,11 +3351,7 @@ export async function runEmbeddedAttempt(
           }
           const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
             baseSystemPrompt: systemPromptText,
-            prependSystemContext: resolveAttemptPrependSystemContext({
-              sessionKey: params.sessionKey,
-              trigger: params.trigger,
-              hookPrependSystemContext: hookResult?.prependSystemContext,
-            }),
+            prependSystemContext: hookResult?.prependSystemContext,
             appendSystemContext: hookResult?.appendSystemContext,
           });
           if (prependedOrAppendedSystemPrompt) {
@@ -3365,9 +3362,29 @@ export async function runEmbeddedAttempt(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
             );
           }
+          const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
+            sessionKey: params.sessionKey,
+            trigger: params.trigger,
+          });
+          if (mediaTaskSystemPromptAddition) {
+            setActiveSessionSystemPrompt(
+              prependSystemPromptAddition({
+                systemPrompt: ensureSystemPromptCacheBoundary(systemPromptText),
+                systemPromptAddition: mediaTaskSystemPromptAddition,
+              }),
+            );
+          }
         }
+        // The model identity line is appended below; for a marker-free hook systemPrompt
+        // override ensure the cache boundary first so the identity lands in the dynamic
+        // suffix, not the cached prefix — otherwise an idle turn's prefix (O + identity)
+        // diverges from an active media turn's prefix (O) and breaks prompt caching. Skip
+        // empty prompts (raw/gateway runs) and turns with no identity line, which need none.
         const modelAwareSystemPrompt = appendModelIdentitySystemPrompt({
-          systemPrompt: systemPromptText,
+          systemPrompt:
+            buildModelIdentityPromptLine(runtimeInfo.model) && systemPromptText.trim().length > 0
+              ? ensureSystemPromptCacheBoundary(systemPromptText)
+              : systemPromptText,
           model: runtimeInfo.model,
         });
         if (modelAwareSystemPrompt !== systemPromptText) {
@@ -3844,7 +3861,7 @@ export async function runEmbeddedAttempt(
                   prompt: promptForModel,
                   historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
                   imagesCount: imageResult.images.length,
-                  tools: tools,
+                  tools,
                 },
                 {
                   runId: params.runId,

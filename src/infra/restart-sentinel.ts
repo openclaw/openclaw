@@ -91,7 +91,7 @@ export async function writeRestartSentinel(
 }
 
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
-  return structuredClone(payload) as RestartSentinelPayload;
+  return structuredClone(payload);
 }
 
 async function rewriteRestartSentinel(

@@ -234,7 +234,7 @@ export function resolveProcessToolScopeKey(params: {
 }
 
 function applyModelProviderToolPolicy(
-  tools: AnyAgentTool[],
+  toolsInput: AnyAgentTool[],
   params?: {
     config?: OpenClawConfig;
     modelProvider?: string;
@@ -247,6 +247,7 @@ function applyModelProviderToolPolicy(
     suppressManagedWebSearch?: boolean;
   },
 ): AnyAgentTool[] {
+  let tools = toolsInput;
   tools = filterLocalModelLeanTools({
     tools,
     config: params?.config,

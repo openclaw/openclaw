@@ -327,8 +327,9 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
 export function buildSessionContext(
   entries: SessionEntry[],
   leafId?: string | null,
-  byId?: Map<string, SessionEntry>,
+  byIdInput?: Map<string, SessionEntry>,
 ): SessionContext {
+  let byId = byIdInput;
   // Build uuid index if not available
   if (!byId) {
     byId = new Map<string, SessionEntry>();
@@ -612,9 +613,7 @@ async function buildSessionInfosWithConcurrency(
     if (!file) {
       return;
     }
-
-    let task: Promise<void>;
-    task = buildSessionInfo(file)
+    const task: Promise<void> = buildSessionInfo(file)
       .then((info) => {
         results[index] = info;
       })

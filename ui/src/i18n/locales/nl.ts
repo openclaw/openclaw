@@ -417,6 +417,7 @@ export const nl: TranslationMap = {
     communications: "Communicatie",
     appearance: "Weergave",
     automation: "Automatisering",
+    mcp: "MCP",
     infrastructure: "Infrastructuur",
     aiAgents: "AI en agents",
     debug: "Debuggen",
@@ -440,6 +441,7 @@ export const nl: TranslationMap = {
     communications: "Kanalen, berichten en audio-instellingen.",
     appearance: "Thema, UI en instellingen voor de installatiewizard.",
     automation: "Commando's, hooks, cron en plugins.",
+    mcp: "MCP-servers, auth, tools en diagnostiek.",
     infrastructure: "Gateway-, web-, browser- en media-instellingen.",
     aiAgents: "Agents, modellen, skills, tools, geheugen, sessie.",
     debug: "Momentopnamen, gebeurtenissen, RPC.",
@@ -1296,7 +1298,7 @@ export const nl: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "Toolfout",
     },
   },
   languages: {

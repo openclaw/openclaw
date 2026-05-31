@@ -1014,17 +1014,7 @@ async function finalizeCronRun(params: {
       ...telemetry,
     });
   }
-  let {
-    summary,
-    outputText,
-    synthesizedText,
-    deliveryPayloads,
-    deliveryPayloadHasStructuredContent,
-    hasFatalErrorPayload,
-    hasFatalStructuredErrorPayload,
-    embeddedRunError,
-    pendingPresentationWarningError,
-  } = resolveCronPayloadOutcome({
+  const cronPayloadOutcome = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
     failureSignal: finalRunResult.meta?.failureSignal,
@@ -1033,6 +1023,14 @@ async function finalizeCronRun(params: {
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
     ).preferFinalAssistantVisibleText,
   });
+  const {
+    synthesizedText,
+    deliveryPayloads,
+    deliveryPayloadHasStructuredContent,
+    hasFatalStructuredErrorPayload,
+    pendingPresentationWarningError,
+  } = cronPayloadOutcome;
+  let { summary, outputText, hasFatalErrorPayload, embeddedRunError } = cronPayloadOutcome;
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });

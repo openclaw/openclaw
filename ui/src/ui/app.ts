@@ -70,6 +70,7 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
   createRealtimeTalkConversationState,
@@ -1300,12 +1301,14 @@ export class OpenClawApp extends LitElement {
       gatewayUrl: nextGatewayUrl,
       token: nextToken,
     });
+    restoreChatComposerState(this, { preserveCurrent: true });
     this.connect();
   }
 
   handleGatewayUrlCancel() {
     this.pendingGatewayUrl = null;
     this.pendingGatewayToken = null;
+    restoreChatComposerState(this, { preserveCurrent: true });
   }
 
   private async maybeUpgradeSidebarToFullMessage(content: SidebarContent) {

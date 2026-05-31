@@ -1877,7 +1877,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       let resolvedChannel = deliveryPlan.resolvedChannel;
       let deliveryTargetMode = deliveryPlan.deliveryTargetMode;
-      let resolvedAccountId = deliveryPlan.resolvedAccountId;
+      const resolvedAccountId = deliveryPlan.resolvedAccountId;
       let resolvedTo = deliveryPlan.resolvedTo;
       let effectivePlan = deliveryPlan;
       let deliveryDowngradeReason: string | null = null;
@@ -2416,20 +2416,45 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const lifecycleAbortController = new AbortController();
     const dedupeAbortController = new AbortController();
-    const lifecyclePromise = waitForAgentJob({
-      runId,
-      timeoutMs,
-      signal: lifecycleAbortController.signal,
-      // When chat.send is active with the same runId, ignore cached lifecycle
-      // snapshots so stale agent results do not preempt the active chat run.
-      ignoreCachedSnapshot: hasActiveChatRun,
-    });
     const dedupePromise = waitForTerminalGatewayDedupe({
       dedupe: context.dedupe,
       runId,
       timeoutMs,
       signal: dedupeAbortController.signal,
       ignoreAgentTerminalSnapshot: hasActiveChatRun,
+    });
+
+    if (hasActiveChatRun) {
+      const snapshot = await dedupePromise;
+      dedupeAbortController.abort();
+      if (!snapshot) {
+        respond(true, {
+          runId,
+          status: "timeout",
+          timeoutPhase: "gateway_draining",
+        });
+        return;
+      }
+      respond(true, {
+        runId,
+        status: snapshot.status,
+        startedAt: snapshot.startedAt,
+        endedAt: snapshot.endedAt,
+        error: snapshot.error,
+        stopReason: snapshot.stopReason,
+        livenessState: snapshot.livenessState,
+        yielded: snapshot.yielded,
+        pendingError: snapshot.pendingError,
+        timeoutPhase: snapshot.timeoutPhase,
+        providerStarted: snapshot.providerStarted,
+      });
+      return;
+    }
+
+    const lifecyclePromise = waitForAgentJob({
+      runId,
+      timeoutMs,
+      signal: lifecycleAbortController.signal,
     });
 
     const first = await Promise.race([

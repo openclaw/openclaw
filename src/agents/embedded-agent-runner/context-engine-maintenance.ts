@@ -642,7 +642,6 @@ function scheduleDeferredTurnMaintenance(
     });
     return undefined;
   }
-  let state!: DeferredTurnMaintenanceRunState;
   const trackedPromise = runPromise
     .catch((err) => {
       params.onScheduleFailure?.(err);
@@ -670,7 +669,7 @@ function scheduleDeferredTurnMaintenance(
         await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
       }
     });
-  state = {
+  const state: DeferredTurnMaintenanceRunState = {
     promise: trackedPromise,
     rerunRequested: false,
     latestParams: { ...params, sessionKey },

@@ -53,7 +53,7 @@ export async function resolveGatewayControlUiRootState(params: {
       cwd: process.cwd(),
     });
 
-  let resolvedRoot = resolveRoot();
+  const resolvedRoot = resolveRoot();
   if (!resolvedRoot) {
     startControlUiAssetsBuild({
       gatewayRuntime: params.gatewayRuntime,

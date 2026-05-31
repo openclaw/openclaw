@@ -181,9 +181,10 @@ function resolveAzureConfig(
 
 function createClient(
   model: Model<"azure-openai-responses">,
-  apiKey: string,
+  apiKeyInput: string,
   options?: AzureOpenAIResponsesOptions,
 ) {
+  let apiKey = apiKeyInput;
   if (!apiKey) {
     if (!process.env.AZURE_OPENAI_API_KEY) {
       throw new Error(

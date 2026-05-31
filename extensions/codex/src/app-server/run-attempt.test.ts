@@ -2735,17 +2735,18 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not drop turn completion notifications emitted while turn/start is in flight", async () => {
-    let harness: ReturnType<typeof createAppServerHarness>;
-    harness = createAppServerHarness(async (method) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        return turnStartResult("turn-1", "completed");
-      }
-      return {};
-    });
+    const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
+      async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+          return turnStartResult("turn-1", "completed");
+        }
+        return {};
+      },
+    );
 
     const result = await runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
@@ -2755,30 +2756,31 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not fail when a buffered terminal notification is followed by client close", async () => {
-    let harness: ReturnType<typeof createAppServerHarness>;
     let resolveBufferedTerminal!: () => void;
     const bufferedTerminal = new Promise<void>((resolve) => {
       resolveBufferedTerminal = resolve;
     });
-    harness = createAppServerHarness(async (method) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        await harness.notify({
-          method: "item/started",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: { id: "tool-1", type: "commandExecution" },
-          },
-        });
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        resolveBufferedTerminal();
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
+    const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
+      async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          await harness.notify({
+            method: "item/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: { id: "tool-1", type: "commandExecution" },
+            },
+          });
+          await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+          resolveBufferedTerminal();
+          return turnStartResult("turn-1", "inProgress");
+        }
+        return {};
+      },
+    );
 
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
@@ -2795,24 +2797,25 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not time out when turn progress arrives before turn/start returns", async () => {
-    let harness: ReturnType<typeof createAppServerHarness>;
-    harness = createAppServerHarness(async (method) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        await harness.notify({
-          method: "turn/started",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            turn: { id: "turn-1", status: "inProgress" },
-          },
-        });
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
+    const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
+      async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          await harness.notify({
+            method: "turn/started",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              turn: { id: "turn-1", status: "inProgress" },
+            },
+          });
+          return turnStartResult("turn-1", "inProgress");
+        }
+        return {};
+      },
+    );
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),

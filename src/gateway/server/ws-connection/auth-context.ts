@@ -113,7 +113,7 @@ export async function resolveConnectAuthState(params: {
   const { token: deviceTokenCandidate, source: deviceTokenCandidateSource } =
     params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};
 
-  let authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
+  const authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
     auth: params.resolvedAuth,
     connectAuth: sharedConnectAuth,
     req: params.req,

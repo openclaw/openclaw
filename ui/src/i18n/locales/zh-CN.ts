@@ -412,6 +412,7 @@ export const zh_CN: TranslationMap = {
     communications: "通信",
     appearance: "外观与设置",
     automation: "自动化",
+    mcp: "MCP",
     infrastructure: "基础设施",
     aiAgents: "AI 与代理",
     debug: "调试",
@@ -435,6 +436,7 @@ export const zh_CN: TranslationMap = {
     communications: "频道、消息和音频设置。",
     appearance: "主题、界面和设置向导设置。",
     automation: "命令、钩子、定时任务和插件设置。",
+    mcp: "MCP 服务器、身份验证、工具和诊断。",
     infrastructure: "网关、Web、浏览器和媒体设置。",
     aiAgents: "代理、模型、技能、工具、记忆和会话设置。",
     debug: "快照、事件、RPC。",
@@ -1256,7 +1258,7 @@ export const zh_CN: TranslationMap = {
       thinkingLevel: "聊天思考级别",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "工具错误",
     },
   },
   languages: {

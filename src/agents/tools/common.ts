@@ -444,7 +444,6 @@ export function scheduleToolProgress(
     return () => {};
   }
   let cleared = false;
-  let timer: ReturnType<typeof setTimeout>;
   const clear = () => {
     if (cleared) {
       return;
@@ -453,7 +452,7 @@ export function scheduleToolProgress(
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", clear);
   };
-  timer = setTimeout(() => {
+  const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
     clear();
     emitToolProgress(onUpdate, progress);
   }, delayMs);

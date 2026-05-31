@@ -201,7 +201,7 @@ export function resolveOpenClawMetadata(
     skillKey: readStringValue(metadataObj.skillKey),
     primaryEnv: readStringValue(metadataObj.primaryEnv),
     os: osRaw.length > 0 ? osRaw : undefined,
-    requires: requires,
+    requires,
     install: install.length > 0 ? install : undefined,
   };
 }

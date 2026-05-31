@@ -32,17 +32,13 @@ export type ResolvedTranscriptsConfig = {
   autoStart: ResolvedTranscriptsAutoStartConfig[];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
   if (!Array.isArray(raw)) {
     return [];
   }
   return raw
     .map((entry): ResolvedTranscriptsAutoStartConfig | undefined => {
-      const config = isRecord(entry) ? entry : {};
+      const config = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
       const providerId = readString(config.providerId);
       if (!providerId) {
         return undefined;
@@ -61,7 +57,7 @@ function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
 }
 
 export function resolveTranscriptsConfig(raw: unknown): ResolvedTranscriptsConfig {
-  const config = isRecord(raw) ? raw : {};
+  const config = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const maxUtterances =
     typeof config.maxUtterances === "number" && Number.isFinite(config.maxUtterances)
       ? Math.max(1, Math.min(10_000, Math.floor(config.maxUtterances)))

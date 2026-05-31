@@ -29,8 +29,9 @@ export type ChannelsRemoveOptions = {
 function listAccountIds(
   cfg: OpenClawConfig,
   channel: ChatChannel,
-  plugin?: ChannelPlugin,
+  pluginInput?: ChannelPlugin,
 ): string[] {
+  let plugin = pluginInput;
   plugin ??= getChannelPlugin(channel);
   if (!plugin) {
     return [];

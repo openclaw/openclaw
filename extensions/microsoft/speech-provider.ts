@@ -165,7 +165,6 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
       });
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Microsoft voice-list payload is external JSON filtered before returning options.
     const voices = (await response.json()) as MicrosoftVoiceListEntry[];
     return Array.isArray(voices)
       ? voices

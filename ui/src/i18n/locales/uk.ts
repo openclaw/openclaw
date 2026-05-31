@@ -416,6 +416,7 @@ export const uk: TranslationMap = {
     communications: "Комунікації",
     appearance: "Зовнішній вигляд",
     automation: "Автоматизація",
+    mcp: "MCP",
     infrastructure: "Інфраструктура",
     aiAgents: "AI та агенти",
     debug: "Налагодження",
@@ -439,6 +440,7 @@ export const uk: TranslationMap = {
     communications: "Канали, повідомлення та налаштування аудіо.",
     appearance: "Тема, інтерфейс і налаштування майстра налаштування.",
     automation: "Команди, хуки, cron і плагіни.",
+    mcp: "MCP-сервери, автентифікація, інструменти та діагностика.",
     infrastructure: "Налаштування шлюзу, вебу, браузера та медіа.",
     aiAgents: "Агенти, моделі, навички, інструменти, пам’ять, сеанс.",
     debug: "Знімки, події, RPC.",
@@ -1294,7 +1296,7 @@ export const uk: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "Помилка інструмента",
     },
   },
   languages: {
