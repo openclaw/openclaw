@@ -7,15 +7,7 @@ import {
   getTailnetHostname,
   hasTailscaleFunnelRouteForPort,
 } from "../infra/tailscale.js";
-
-function serviceHostnameFromTailnetHost(serviceName: string, tailnetHost: string): string | null {
-  if (/^[\d.:]+$/.test(tailnetHost)) {
-    return null;
-  }
-  const bareServiceName = serviceName.replace(/^svc:/, "");
-  const tailnetSuffix = tailnetHost.split(".").slice(1).join(".");
-  return tailnetSuffix ? `${bareServiceName}.${tailnetSuffix}` : null;
-}
+import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
@@ -60,7 +52,11 @@ export async function startGatewayTailscaleExposure(params: {
     const host = await getTailnetHostname().catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
-      const publicHost = serviceName ? serviceHostnameFromTailnetHost(serviceName, host) : host;
+      const publicHost = resolveTailscalePublishedHost({
+        tailscaleMode: params.tailscaleMode,
+        tailnetHost: host,
+        serviceName,
+      });
       if (publicHost) {
         const serviceLabel = serviceName ? ` for ${serviceName}` : "";
         params.logTailscale.info(
