@@ -697,13 +697,18 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
-  await maybeRepairGatewayServiceConfig(
+  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+  ctx.cfg = await maybeRepairGatewayServiceConfig(
     ctx.cfg,
     resolveDoctorMode(ctx.cfg),
     ctx.runtime,
     ctx.prompter,
     {
       allowExecSecretRefs: ctx.options.allowExec === true,
+      allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
+      skipPluginValidation:
+        ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+      preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
       ...resolveLegacyParentVersionOverride(ctx),
     },
   );

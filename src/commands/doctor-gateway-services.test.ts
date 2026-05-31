@@ -124,6 +124,8 @@ import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js"
 const originalStdinIsTTY = process.stdin.isTTY;
 const originalPlatform = process.platform;
 const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+const originalParentSupportsConfigWrite =
+  process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
 
 function makeDoctorIo() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -356,6 +358,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     } else {
       process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
+    }
+    if (originalParentSupportsConfigWrite === undefined) {
+      delete process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
+    } else {
+      process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE =
+        originalParentSupportsConfigWrite;
     }
   });
 
@@ -919,6 +927,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       configurable: true,
     });
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
 
     await withEnvAsync(
       {
@@ -995,6 +1004,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       configurable: true,
     });
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
 
     await withEnvAsync(
       {
@@ -1032,12 +1042,63 @@ describe("maybeRepairGatewayServiceConfig", () => {
         );
         expectGatewayAuthToken(replaceOptions.nextConfig, "stale-token");
         expect(replaceOptions.afterWrite).toEqual({ mode: "auto" });
-        expect(replaceOptions.writeOptions).toEqual({
-          lastTouchedVersionOverride: "2026.5.14",
-        });
+        expect(replaceOptions.writeOptions).toEqual(
+          expect.objectContaining({
+            allowConfigSizeDrop: true,
+            skipPluginValidation: true,
+            lastTouchedVersionOverride: "2026.5.14",
+          }),
+        );
         expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "stale-token");
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  it("leaves embedded service tokens untouched during legacy Windows update handoffs", async () => {
+    mockProcessPlatform("win32");
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    delete process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+      },
+      async () => {
+        mocks.readCommand.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          environment: {
+            OPENCLAW_GATEWAY_TOKEN: "stale-token",
+            OPENCLAW_SERVICE_VERSION: "2026.5.25",
+          },
+        });
+        mocks.auditGatewayServiceConfig.mockResolvedValue({
+          ok: true,
+          issues: [],
+        });
+        mocks.buildGatewayInstallPlan.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          workingDirectory: "/tmp",
+          environment: {
+            OPENCLAW_SERVICE_VERSION: "2026.5.26",
+          },
+        });
+        mocks.readRuntime.mockResolvedValue({ status: "running" });
+
+        await runNonInteractiveRepair({ updateInProgress: true });
+
+        expectNoteContaining(
+          "Legacy update parent cannot persist gateway.auth.token before service repair",
+          "Gateway",
+        );
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+        expect(mocks.stage).not.toHaveBeenCalled();
+        expect(mocks.install).not.toHaveBeenCalled();
       },
     );
   });
