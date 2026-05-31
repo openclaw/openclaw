@@ -224,12 +224,12 @@ function resolveActiveProfileId(params: {
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],
     params.store.lastGood?.[OPENAI_CODEX_PROVIDER_ID],
-  ].find((profileId): profileId is string => {
-    if (!profileId) {
-      return false;
-    }
-    return params.order.includes(profileId) && isActiveProfileCandidate(params, profileId);
-  });
+  ].find(
+    (profileId): profileId is string =>
+      typeof profileId === "string" &&
+      params.order.includes(profileId) &&
+      isActiveProfileCandidate(params, profileId),
+  );
   if (lastGood) {
     return lastGood;
   }

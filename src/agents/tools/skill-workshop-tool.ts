@@ -386,7 +386,9 @@ function listProposalEntries(params: {
         const lower = value.toLowerCase();
         return (
           lower.includes(query) ||
-          (normalizedSearch ? normalizeProposalSearchText(lower).includes(normalizedSearch) : false)
+          (normalizedQuery !== undefined &&
+            normalizedQuery.length > 0 &&
+            normalizeProposalSearchText(lower).includes(normalizedQuery))
         );
       });
     })
