@@ -1122,9 +1122,7 @@ export function classifyProviderRuntimeFailureKind(
   const has401Evidence =
     status === 401 || (status === undefined && messageMentions401 && !messageMentions403);
   const hasPermissionScopeSignal =
-    /\bpermission_error\b/i.test(message) ||
-    AUTH_SCOPE_HINT_RE.test(message) ||
-    AUTH_SCOPE_NAME_RE.test(message);
+    AUTH_SCOPE_HINT_RE.test(message) || AUTH_SCOPE_NAME_RE.test(message);
   if (
     failoverClassification?.kind === "reason" &&
     failoverClassification.reason === "auth" &&
