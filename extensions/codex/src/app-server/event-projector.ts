@@ -1,5 +1,6 @@
 import {
   classifyAgentHarnessTerminalOutcome,
+  createAgentToolResultMiddlewareRunner,
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
   formatErrorMessage,
@@ -17,6 +18,7 @@ import {
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
+  type OpenClawAgentToolResult,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -138,7 +140,10 @@ type ToolTranscriptResultInput = {
   id: string;
   name: string;
   text?: string;
+  args?: Record<string, unknown>;
+  cwd?: string;
   isError: boolean;
+  result?: OpenClawAgentToolResult;
 };
 
 export class CodexAppServerEventProjector {
@@ -190,6 +195,7 @@ export class CodexAppServerEventProjector {
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
   private latestRateLimits: JsonValue | undefined;
+  private toolResultMiddlewareRunner?: ReturnType<typeof createAgentToolResultMiddlewareRunner>;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -627,7 +633,7 @@ export class CodexAppServerEventProjector {
     this.emitStandardItemEvent({ phase: "end", item });
     this.emitNormalizedToolItemEvent({ phase: "result", item });
     this.recordNativeToolTranscriptCall(item);
-    this.recordNativeToolTranscriptResult(item);
+    await this.recordNativeToolTranscriptResult(item);
     this.emitToolResultSummary(item);
     this.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -731,7 +737,7 @@ export class CodexAppServerEventProjector {
       this.recordToolMeta(item);
       this.emitSnapshotOnlyNativeToolProgress(item);
       this.recordNativeToolTranscriptCall(item);
-      this.recordNativeToolTranscriptResult(item);
+      await this.recordNativeToolTranscriptResult(item);
       this.emitAfterToolCallObservation(item);
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
@@ -1363,7 +1369,7 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): void {
+  private async recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): Promise<void> {
     if (!item || !shouldRecordNativeToolTranscript(item)) {
       return;
     }
@@ -1371,11 +1377,26 @@ export class CodexAppServerEventProjector {
     if (!name) {
       return;
     }
+    const text = itemTranscriptResultText(item, this.toolResultOutputTextByItem);
+    const isError = isNonSuccessItemStatus(itemStatus(item));
+    const args = itemToolArgs(item) ?? {};
+    const transcriptResult = await this.applyToolTranscriptResultMiddleware({
+      id: item.id,
+      name,
+      text,
+      args,
+      cwd: item.type === "commandExecution" && typeof item.cwd === "string" ? item.cwd : undefined,
+      isError,
+      result: createNativeToolTranscriptResult(item, text, isError),
+    });
     this.recordToolTranscriptResult({
       id: item.id,
       name,
-      text: itemTranscriptResultText(item, this.toolResultOutputTextByItem),
-      isError: isNonSuccessItemStatus(itemStatus(item)),
+      text,
+      args,
+      cwd: item.type === "commandExecution" && typeof item.cwd === "string" ? item.cwd : undefined,
+      isError,
+      result: transcriptResult,
     });
   }
 
@@ -1411,6 +1432,35 @@ export class CodexAppServerEventProjector {
         `${this.turnId}:tool:${params.id}:result`,
       ),
     );
+  }
+
+  private async applyToolTranscriptResultMiddleware(
+    params: ToolTranscriptResultInput,
+  ): Promise<OpenClawAgentToolResult> {
+    const result = params.result ?? createTextToolTranscriptResult(params);
+    return await this.nativeToolResultMiddlewareRunner().applyToolResultMiddleware({
+      threadId: this.threadId,
+      turnId: this.turnId,
+      toolCallId: params.id,
+      toolName: params.name,
+      args: params.args ?? {},
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      isError: params.isError,
+      result,
+    });
+  }
+
+  private nativeToolResultMiddlewareRunner(): ReturnType<
+    typeof createAgentToolResultMiddlewareRunner
+  > {
+    this.toolResultMiddlewareRunner ??= createAgentToolResultMiddlewareRunner({
+      runtime: "codex",
+      agentId: this.params.agentId,
+      sessionId: this.params.sessionId,
+      sessionKey: this.params.sessionKey,
+      runId: this.params.runId,
+    });
+    return this.toolResultMiddlewareRunner;
   }
 
   private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
@@ -1610,7 +1660,8 @@ export class CodexAppServerEventProjector {
   }
 
   private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
-    const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
+    const result = params.result ?? createTextToolTranscriptResult(params);
+    const text = toolTranscriptTextFromResult(result) ?? toolResultStatusText(params);
     return {
       role: "toolResult",
       toolCallId: params.id,
@@ -1629,6 +1680,7 @@ export class CodexAppServerEventProjector {
           text,
         },
       ],
+      details: result.details,
       timestamp: Date.now(),
     } as unknown as AgentMessage;
   }
@@ -2221,6 +2273,65 @@ function normalizeToolTranscriptArguments(value: unknown): Record<string, unknow
     return {};
   }
   return value as Record<string, unknown>;
+}
+
+function createNativeToolTranscriptResult(
+  item: CodexThreadItem,
+  text: string | undefined,
+  isError: boolean,
+): OpenClawAgentToolResult {
+  return createTextToolTranscriptResult({
+    id: item.id,
+    name: itemName(item) ?? "tool",
+    text,
+    isError,
+    result: {
+      content: [],
+      details: nativeToolTranscriptDetails(item, text),
+    },
+  });
+}
+
+function nativeToolTranscriptDetails(
+  item: CodexThreadItem,
+  text: string | undefined,
+): Record<string, unknown> {
+  const details = itemToolResult(item).result ?? { status: itemStatus(item) };
+  if (item.type !== "commandExecution") {
+    return details;
+  }
+  return sanitizeCodexAgentEventRecord({
+    ...details,
+    status: itemStatus(item),
+    aggregated: truncateToolTranscriptText(
+      text?.trim() ||
+        toolResultStatusText({
+          id: item.id,
+          name: "bash",
+          isError: isNonSuccessItemStatus(itemStatus(item)),
+        }),
+    ),
+    ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+  });
+}
+
+function createTextToolTranscriptResult(
+  params: ToolTranscriptResultInput,
+): OpenClawAgentToolResult {
+  const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
+  const details = params.result?.details ?? { status: params.isError ? "failed" : "completed" };
+  return {
+    content: [{ type: "text", text }],
+    details,
+  };
+}
+
+function toolTranscriptTextFromResult(result: OpenClawAgentToolResult): string | undefined {
+  const text = result.content
+    .flatMap((entry) => (entry.type === "text" && entry.text.trim() ? [entry.text] : []))
+    .join("\n")
+    .trim();
+  return text ? truncateToolTranscriptText(text) : undefined;
 }
 
 function collectDynamicToolContentText(contentItems: CodexThreadItem["contentItems"]): string {

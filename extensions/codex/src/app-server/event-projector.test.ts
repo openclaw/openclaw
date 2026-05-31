@@ -16,7 +16,11 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerEventProjector,
@@ -99,11 +103,13 @@ async function createProjectorWithAssistantHooks() {
 beforeEach(() => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
+  resetPluginRuntimeStateForTest();
 });
 
 afterEach(async () => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
+  resetPluginRuntimeStateForTest();
   resetGlobalHookRunner();
   resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
@@ -1540,6 +1546,83 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.toolName).toBe("bash");
     expect(toolResultContentItem.toolCallId).toBe("cmd-1");
     expect(toolResultContentItem.content).toBe("ok");
+  });
+
+  it("runs Codex-native bash transcript results through codex tool-result middleware", async () => {
+    const registry = createMockPluginRegistry([]);
+    const handler = vi.fn(async (event) => ({
+      result: {
+        content: [
+          {
+            type: "text" as const,
+            text: "[tokenjuice compacted bash output]\ncompact git status",
+          },
+        ],
+        details: {
+          ...(event.result.details as Record<string, unknown>),
+          tokenjuice: { compacted: true },
+        },
+      },
+    }));
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-tokenjuice",
+          command: "git status",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "On branch main",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        toolCallId: "cmd-tokenjuice",
+        toolName: "bash",
+        args: { command: "git status", cwd: "/workspace" },
+        cwd: "/workspace",
+        isError: false,
+        result: expect.objectContaining({
+          content: [{ type: "text", text: "On branch main" }],
+          details: expect.objectContaining({
+            status: "completed",
+            exitCode: 0,
+            aggregated: "On branch main",
+            cwd: "/workspace",
+          }),
+        }),
+      }),
+      expect.objectContaining({ runtime: "codex" }),
+    );
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toBe(
+      "[tokenjuice compacted bash output]\ncompact git status",
+    );
+    const details = requireRecord(toolResultMessage.details, "tool result details");
+    expect(details.tokenjuice).toEqual({ compacted: true });
   });
 
   it("synthesizes native tool progress from turn completion snapshots", async () => {
