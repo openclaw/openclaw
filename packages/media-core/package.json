@@ -66,6 +66,7 @@
     }
   },
   "dependencies": {
+    "@openclaw/normalization-core": "workspace:*",
     "file-type": "22.0.1"
   },
   "scripts": {
