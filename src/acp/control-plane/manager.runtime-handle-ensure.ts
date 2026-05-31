@@ -13,7 +13,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toAcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
-import type { AcpSessionManagerDeps, SessionAcpMeta, SessionEntry } from "./manager.types.js";
+import type {
+  AcpSessionManagerDeps,
+  SessionAcpMeta,
+  WriteManagerSessionMeta,
+} from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection, resolveAcpAgentFromSessionKey } from "./manager.utils.js";
 import {
   normalizeRuntimeOptions,
@@ -22,18 +26,6 @@ import {
   runtimeOptionsEqual,
 } from "./runtime-options.js";
 
-type WriteSessionMeta = (params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  mutate: (
-    current: SessionAcpMeta | undefined,
-    entry: SessionEntry | undefined,
-  ) => SessionAcpMeta | null | undefined;
-  failOnError?: boolean;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-}) => Promise<SessionEntry | null>;
-
 export async function ensureManagerRuntimeHandle(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -41,7 +33,7 @@ export async function ensureManagerRuntimeHandle(params: {
   deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
   enforceConcurrentSessionLimit: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
-  writeSessionMeta: WriteSessionMeta;
+  writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
   const agent =
     normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
