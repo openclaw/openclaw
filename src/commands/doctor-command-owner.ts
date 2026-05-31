@@ -13,10 +13,14 @@ function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   return normalizeStringEntries(owners.map((entry) => String(entry ?? "")));
 }
 
+/** Returns whether owner-only command senders are configured. */
 export function hasConfiguredCommandOwners(cfg: OpenClawConfig): boolean {
   return resolveConfiguredCommandOwners(cfg).length > 0;
 }
 
+/**
+ * Formats a channel sender id into the canonical ownerAllowFrom entry shape.
+ */
 export function formatCommandOwnerFromChannelSender(params: {
   channel: PairingChannel;
   id: string;
@@ -26,6 +30,8 @@ export function formatCommandOwnerFromChannelSender(params: {
     return null;
   }
   const separatorIndex = id.indexOf(":");
+  // Pairing records may already include a channel prefix; keep matching prefixes
+  // intact so doctor does not suggest `telegram:telegram:123`.
   if (separatorIndex > 0) {
     const prefix = id.slice(0, separatorIndex);
     if (prefix.toLowerCase() === String(params.channel).toLowerCase()) {
@@ -35,6 +41,7 @@ export function formatCommandOwnerFromChannelSender(params: {
   return `${params.channel}:${id}`;
 }
 
+/** Emits the owner-configuration warning used by doctor output. */
 export function noteCommandOwnerHealth(cfg: OpenClawConfig): void {
   if (hasConfiguredCommandOwners(cfg)) {
     return;

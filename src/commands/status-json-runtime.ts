@@ -48,6 +48,10 @@ type StatusJsonScanLike = {
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
 };
 
+/**
+ * Resolves the machine-readable status payload, including optional deep, usage,
+ * security, and compatibility sections according to the JSON command flags.
+ */
 export async function resolveStatusJsonOutput(params: {
   scan: StatusJsonScanLike;
   opts: {

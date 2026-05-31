@@ -26,6 +26,7 @@ type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
 type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
 
+/** Formatter hooks that translate memory backend state into status text tones. */
 export type StatusMemoryStateResolvers = {
   resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
     state: string;
@@ -51,12 +52,14 @@ type PairingRecoveryLike = {
   remediationHint?: string | null;
 };
 
+/** Column contract for the regular `status` health table. */
 export const statusHealthColumns: TableColumn[] = [
   { key: "Item", header: "Item", minWidth: 10 },
   { key: "Status", header: "Status", minWidth: 8 },
   { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
 ];
 
+/** Builds the compact agent/workspace summary shown in the overview table. */
 export function buildStatusAgentsValue(params: {
   agentStatus: AgentStatusLike;
   formatTimeAgo: (ageMs: number) => string;
@@ -72,6 +75,7 @@ export function buildStatusAgentsValue(params: {
   return `${params.agentStatus.agents.length} · ${pending} · sessions ${params.agentStatus.totalSessions}${defSuffix}`;
 }
 
+/** Builds the task/audit overview value, highlighting runtime and audit issues. */
 export function buildStatusTasksValue(params: {
   summary: Pick<SummaryLike, "tasks" | "taskAudit">;
   warn: (value: string) => string;
@@ -100,6 +104,7 @@ export function buildStatusTasksValue(params: {
   ].join(" · ");
 }
 
+/** Formats configured heartbeat intervals for each agent. */
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {
   const parts = params.summary.heartbeat.agents
     .map((agent) => {
@@ -112,6 +117,7 @@ export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "
   return parts.length > 0 ? parts.join(", ") : "disabled";
 }
 
+/** Formats the deep-status last-heartbeat row when gateway data is available. */
 export function buildStatusLastHeartbeatValue(params: {
   deep?: boolean;
   gatewayReachable: boolean;
@@ -139,6 +145,10 @@ export function buildStatusLastHeartbeatValue(params: {
     .join(" · ");
 }
 
+/**
+ * Builds the memory overview value across disabled, unavailable, builtin, and
+ * plugin-backed memory states.
+ */
 export function buildStatusMemoryValue(
   params: {
     memory: MemoryLike;
@@ -169,6 +179,8 @@ export function buildStatusMemoryValue(
   const colorByTone = (tone: Tone, text: string) =>
     tone === "ok" ? params.ok(text) : tone === "warn" ? params.warn(text) : params.muted(text);
   if (params.memory.vector) {
+    // Builtin memory exposes vector availability through the store layer; use it
+    // for the displayed state so missing vector stores are surfaced correctly.
     const vector =
       params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
         ? { ...params.memory.vector, available: params.memory.vector.storeAvailable }
@@ -190,6 +202,7 @@ export function buildStatusMemoryValue(
   return parts.join(" · ");
 }
 
+/** Builds the condensed security audit section for the regular status report. */
 export function buildStatusSecurityAuditLines(params: {
   securityAudit: {
     summary: { critical: number; warn: number; info: number };
@@ -253,6 +266,7 @@ export function buildStatusSecurityAuditLines(params: {
   return lines;
 }
 
+/** Builds health table rows from gateway health and channel health lines. */
 export function buildStatusHealthRows(params: {
   health: HealthSummary;
   formatHealthChannelLines: (summary: HealthSummary, opts: { accountMode: "all" }) => string[];
@@ -291,6 +305,8 @@ export function buildStatusHealthRows(params: {
     const item = line.slice(0, colon).trim();
     const detail = line.slice(colon + 1).trim();
     const normalized = normalizeLowercaseStringOrEmpty(detail);
+    // Channel health lines are still string-formatted by adapters; map the
+    // stable prefixes into table states until the health contract is structured.
     const status = normalized.startsWith("ok")
       ? params.ok("OK")
       : normalized.startsWith("failed")
@@ -309,6 +325,7 @@ export function buildStatusHealthRows(params: {
   return rows;
 }
 
+/** Formats event-loop delay/utilization counters into one table detail cell. */
 export function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   const parts = [
     eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
@@ -320,6 +337,7 @@ export function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): str
   return parts.join(" · ");
 }
 
+/** Builds recent session rows, adding prompt-cache details only in verbose mode. */
 export function buildStatusSessionsRows(params: {
   recent: SessionsRecentLike[];
   verbose?: boolean;
@@ -345,6 +363,10 @@ export function buildStatusSessionsRows(params: {
   }));
 }
 
+/**
+ * Builds warnings for sessions pinned to a model that differs from current
+ * config, treating runtime aliases as equivalent to avoid noisy false positives.
+ */
 export function buildStatusModelSelectionLines(params: {
   recent: SessionsRecentLike[];
   limit?: number;
@@ -388,6 +410,7 @@ export function buildStatusModelSelectionLines(params: {
   return lines;
 }
 
+/** Builds static footer help plus the next best command for the current state. */
 export function buildStatusFooterLines(params: {
   updateHint: string | null;
   warn: (value: string) => string;
@@ -410,6 +433,7 @@ export function buildStatusFooterLines(params: {
   ];
 }
 
+/** Formats plugin compatibility notices with a bounded output limit. */
 export function buildStatusPluginCompatibilityLines<
   TNotice extends PluginCompatibilityNoticeLike,
 >(params: {
@@ -434,6 +458,7 @@ export function buildStatusPluginCompatibilityLines<
   ];
 }
 
+/** Builds device-pairing recovery commands from the latest pairing failure. */
 export function buildStatusPairingRecoveryLines(params: {
   pairingRecovery: PairingRecoveryLike | null;
   warn: (value: string) => string;
@@ -467,6 +492,7 @@ export function buildStatusPairingRecoveryLines(params: {
   ];
 }
 
+/** Builds bounded system-event rows, returning undefined when there is no table. */
 export function buildStatusSystemEventsRows(params: {
   queuedSystemEvents: string[];
   limit?: number;
@@ -478,6 +504,7 @@ export function buildStatusSystemEventsRows(params: {
   return params.queuedSystemEvents.slice(0, limit).map((event) => ({ Event: event }));
 }
 
+/** Builds the overflow trailer for hidden system-event rows. */
 export function buildStatusSystemEventsTrailer(params: {
   queuedSystemEvents: string[];
   limit?: number;

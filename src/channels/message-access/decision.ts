@@ -53,6 +53,8 @@ function routeSenderEmptyGate(state: ChannelIngressState): AccessGraphGate | nul
     return null;
   }
   const reasonCode = "route_sender_empty";
+  // A matched route with an empty sender allowlist is an explicit deny. Without
+  // this gate, route-only configs could accidentally dispatch to every sender.
   return {
     id: `${route.id}:sender`,
     phase: "route",
@@ -253,6 +255,10 @@ function activationGate(params: {
   });
 }
 
+/**
+ * Decide the final ingress admission from normalized sender, route, command,
+ * event, and activation gates.
+ */
 export function decideChannelIngress(
   state: ChannelIngressState,
   policy: ChannelIngressPolicyInput,
@@ -267,6 +273,8 @@ export function decideChannelIngress(
     return decisiveDecision({ admission: "drop", decision: "block", gate: routeBlock, gates });
   }
 
+  // before-sender activation lets mention-only group messages short-circuit
+  // before sender allowlists, but text commands still need sender auth first.
   const activationBeforeSender =
     policy.activation?.order === "before-sender" && !policy.activation.allowTextCommands
       ? activationGate({

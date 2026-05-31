@@ -14,6 +14,9 @@ import type { OpenClawConfig } from "../config/types.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 
+/**
+ * Resolves a status-facing model ref from raw config or session text.
+ */
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
   rawModel: string;
@@ -26,6 +29,8 @@ function resolveStatusModelRefFromRaw(params: {
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   if (!trimmed.includes("/")) {
     const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
+    // Bare model names can be aliases for provider-qualified defaults; scan the
+    // configured registry before falling back to the default provider.
     for (const [modelKey, entry] of Object.entries(configuredModels)) {
       const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
       const alias = normalizeOptionalString(aliasValue) ?? "";
@@ -46,6 +51,9 @@ function resolveStatusModelRefFromRaw(params: {
   });
 }
 
+/**
+ * Resolves the configured model used for status defaults and drift checks.
+ */
 function resolveConfiguredStatusModelRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
@@ -91,6 +99,9 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
+/**
+ * Reads context-window overrides from configured provider model entries.
+ */
 function resolveConfiguredProviderContextTokens(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -125,6 +136,9 @@ function resolveConfiguredProviderContextTokens(
   return undefined;
 }
 
+/**
+ * Resolves the effective model for a persisted session.
+ */
 function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
@@ -150,6 +164,9 @@ function resolveSessionModelRef(
   );
 }
 
+/**
+ * Computes the runtime label shown for a status session row.
+ */
 function resolveSessionRuntimeLabel(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
@@ -177,6 +194,9 @@ function resolveSessionRuntimeLabel(params: {
   });
 }
 
+/**
+ * Resolves context tokens without triggering async catalog loading.
+ */
 function resolveContextTokensForModel(params: {
   cfg?: OpenClawConfig;
   provider?: string;
@@ -185,6 +205,8 @@ function resolveContextTokensForModel(params: {
   fallbackContextTokens?: number;
   allowAsyncLoad?: boolean;
 }): number | undefined {
+  // Status summaries run in read-only CLI paths; this runtime intentionally
+  // ignores async catalog loading and relies on explicit config/fallback data.
   void params.allowAsyncLoad;
   if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
     return params.contextTokensOverride;
@@ -202,6 +224,7 @@ function resolveContextTokensForModel(params: {
   return params.fallbackContextTokens ?? DEFAULT_CONTEXT_TOKENS;
 }
 
+/** Runtime helpers used by status summary assembly and kept lazy for startup. */
 export const statusSummaryRuntime = {
   resolveContextTokensForModel,
   classifySessionKey: classifySessionKind,

@@ -20,10 +20,12 @@ let nextDescriptorCacheObjectId = 1;
 
 export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;
 
+/** Creates a per-resolution memo so equivalent config objects share descriptor cache keys. */
 export function createPluginToolDescriptorConfigCacheKeyMemo(): PluginToolDescriptorConfigCacheKeyMemo {
   return new WeakMap();
 }
 
+/** Clears process-local plugin tool descriptor cache state for tests and plugin lifecycle resets. */
 export function resetPluginToolDescriptorCache(): void {
   descriptorCache.clear();
   descriptorCacheObjectIds = new WeakMap();
@@ -61,6 +63,8 @@ function stripDescriptorVolatileConfigFields(
   if (!("meta" in value) && !("wizard" in value)) {
     return value;
   }
+  // Wizard/meta fields are UI discovery state, not runtime tool inputs. Dropping
+  // them prevents setup progress churn from invalidating stable descriptors.
   const { meta: _meta, wizard: _wizard, ...stableConfig } = value as Record<string, unknown>;
   return stableConfig as NonNullable<PluginLoadOptions["config"]>;
 }
@@ -122,6 +126,8 @@ export function buildPluginToolDescriptorCacheKey(params: {
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
 }): string {
+  // Include source fingerprint and selected runtime context so descriptor reuse
+  // tracks both plugin code changes and per-agent/per-channel tool visibility.
   return JSON.stringify({
     version: PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION,
     pluginId: params.pluginId,
@@ -148,6 +154,8 @@ export function capturePluginToolDescriptor(params: {
 }): CachedPluginToolDescriptor {
   const label = (params.tool as { label?: unknown }).label;
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+  // The descriptor is the model-facing shape; executor metadata keeps dispatch
+  // pointed at the plugin-owned tool even after descriptors are cached.
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
     optional: params.optional,
@@ -176,6 +184,8 @@ export function writeCachedPluginToolDescriptors(params: {
     !descriptorCache.has(params.cacheKey) &&
     descriptorCache.size >= PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT
   ) {
+    // Map iteration order is insertion order; deleting the first key gives a
+    // tiny FIFO cap without adding request-time bookkeeping.
     const oldestKey = descriptorCache.keys().next().value;
     if (oldestKey !== undefined) {
       descriptorCache.delete(oldestKey);

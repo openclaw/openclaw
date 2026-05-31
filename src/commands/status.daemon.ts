@@ -34,10 +34,12 @@ async function buildDaemonStatusSummary(
   };
 }
 
+/** Reads the OpenClaw gateway service summary for status output. */
 export async function getDaemonStatusSummary(): Promise<DaemonStatusSummary> {
   return await buildDaemonStatusSummary("gateway");
 }
 
+/** Reads the OpenClaw node service summary for status output. */
 export async function getNodeDaemonStatusSummary(): Promise<DaemonStatusSummary> {
   return await buildDaemonStatusSummary("node");
 }

@@ -12,6 +12,7 @@ export type PluginJsonValueLimits = {
   maxSerializedBytes: number;
 };
 
+/** Limits for JSON values crossing plugin host-hook boundaries. */
 export const PLUGIN_JSON_VALUE_LIMITS: PluginJsonValueLimits = {
   maxDepth: 32,
   maxNodes: 4096,
@@ -49,6 +50,8 @@ function isPluginJsonValueWithinLimits(
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
+    // Reject class instances, Date, Map, and other objects whose JSON shape
+    // would hide runtime identity or drop data during serialization.
     return false;
   }
   const entries = Object.entries(value as Record<string, unknown>);
@@ -64,6 +67,7 @@ function isPluginJsonValueWithinLimits(
   return ok;
 }
 
+/** Validates that a value is finite, plain JSON, and small enough for plugin host hooks. */
 export function isPluginJsonValue(value: unknown): value is PluginJsonValue {
   if (!isPluginJsonValueWithinLimits(value, PLUGIN_JSON_VALUE_LIMITS, { depth: 0, nodes: 0 })) {
     return false;

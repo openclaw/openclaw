@@ -119,6 +119,7 @@ const buildAccountDetails = (params: {
   return details;
 };
 
+/** Build the user-facing channel status summary lines for CLI/status prompts. */
 export async function buildChannelSummary(
   cfg?: OpenClawConfig,
   options?: ChannelSummaryOptions,
@@ -183,6 +184,8 @@ export async function buildChannelSummary(
         ? summaryRecord.configured
         : configuredEntries.length > 0;
 
+    // Adapter summaries are authoritative for linked/status state, but account
+    // inspection still decides whether any configured account exists.
     const status = !anyEnabled
       ? "disabled"
       : statusState

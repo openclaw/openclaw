@@ -6,6 +6,7 @@ import type {
 } from "../tasks/task-registry.audit.js";
 import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
+/** Recent session row shown by status summaries and status tables. */
 export type SessionStatus = {
   agentId?: string;
   key: string;
@@ -38,6 +39,7 @@ export type SessionStatus = {
   flags: string[];
 };
 
+/** Heartbeat configuration summary for one agent. */
 export type HeartbeatStatus = {
   agentId: string;
   enabled: boolean;
@@ -45,6 +47,7 @@ export type HeartbeatStatus = {
   everyMs: number | null;
 };
 
+/** Aggregated local status snapshot used by text, JSON, and health views. */
 export type StatusSummary = {
   runtimeVersion?: string | null;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
@@ -67,6 +70,7 @@ export type StatusSummary = {
     paths: string[];
     count: number;
     defaults: { model: string | null; contextTokens: number | null };
+    /** Newest sessions first, already normalized for display. */
     recent: SessionStatus[];
     byAgent: Array<{
       agentId: string;

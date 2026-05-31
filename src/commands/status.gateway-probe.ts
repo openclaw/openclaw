@@ -5,6 +5,7 @@ import {
 } from "../gateway/probe-auth.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
+/** Resolves gateway probe credentials plus any non-fatal auth-source warning. */
 export async function resolveGatewayProbeAuthResolution(cfg: OpenClawConfig): Promise<{
   auth: {
     token?: string;
@@ -20,6 +21,7 @@ export async function resolveGatewayProbeAuthResolution(cfg: OpenClawConfig): Pr
   });
 }
 
+/** Resolves only the credential payload for callers that do not display warnings. */
 export async function resolveGatewayProbeAuth(cfg: OpenClawConfig): Promise<{
   token?: string;
   password?: string;

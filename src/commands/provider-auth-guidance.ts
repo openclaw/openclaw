@@ -41,6 +41,9 @@ function resolveProviderAuthLoginCommand(params: {
   return formatCliCommand(`openclaw models auth login --provider ${providerId}`);
 }
 
+/**
+ * Builds a short operator hint for recovering missing provider authentication.
+ */
 export function buildProviderAuthRecoveryHint(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -54,6 +57,8 @@ export function buildProviderAuthRecoveryHint(params: {
   if (loginCommand) {
     parts.push(`Run \`${loginCommand}\``);
   }
+  // Configure remains the broad fallback because provider manifests are optional
+  // and some providers still use env/API-key flows instead of auth profiles.
   if (params.includeConfigure !== false) {
     parts.push(`\`${formatCliCommand("openclaw configure")}\``);
   }

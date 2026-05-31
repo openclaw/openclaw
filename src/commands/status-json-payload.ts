@@ -4,6 +4,12 @@ import {
   type StatusOverviewSurface,
 } from "./status-overview-surface.ts";
 
+/**
+ * Builds the stable `openclaw status --json` payload from scan/runtime pieces.
+ *
+ * Optional runtime sections are omitted unless they were requested or resolved,
+ * keeping default JSON output compact while preserving field names for callers.
+ */
 export function buildStatusJsonPayload(params: {
   summary: Record<string, unknown>;
   surface: StatusOverviewSurface;
@@ -44,6 +50,8 @@ export function buildStatusJsonPayload(params: {
           },
         }
       : {}),
+    // Keep deep/usage-only fields grouped so consumers can distinguish default
+    // status JSON from explicitly requested runtime probes.
     ...(params.health || params.usage || params.lastHeartbeat
       ? {
           health: params.health,

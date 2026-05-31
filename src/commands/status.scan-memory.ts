@@ -19,10 +19,15 @@ function loadStatusScanDepsRuntimeModule() {
   return statusScanDepsRuntimeModuleLoader.load();
 }
 
+/** Resolves the default per-agent builtin memory database path. */
 export function resolveDefaultMemoryStorePath(agentId: string): string {
   return path.join(resolveStateDir(process.env, os.homedir), "memory", `${agentId}.sqlite`);
 }
 
+/**
+ * Resolves memory status for scan output while lazy-loading runtime-only memory
+ * dependencies outside the default status module graph.
+ */
 export async function resolveStatusMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;

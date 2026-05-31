@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
 
+/** Local per-agent state summarized by `openclaw status`. */
 export type AgentLocalStatus = {
   id: string;
   name?: string;
@@ -24,6 +25,9 @@ type AgentLocalStatusesResult = {
   bootstrapPendingCount: number;
 };
 
+/**
+ * Collects local workspace/bootstrap/session counters for configured agents.
+ */
 export async function getAgentLocalStatuses(
   cfg: OpenClawConfig,
 ): Promise<AgentLocalStatusesResult> {
@@ -46,6 +50,8 @@ export async function getAgentLocalStatuses(
 
     const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
     const store = readSessionStoreReadOnly(sessionsPath);
+    // The shared store keeps aggregate buckets under reserved keys; status only
+    // counts real per-session records when reporting local agent activity.
     const sessions = Object.entries(store)
       .filter(([key]) => key !== "global" && key !== "unknown")
       .map(([, entry]) => entry);

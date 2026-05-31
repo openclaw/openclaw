@@ -15,6 +15,7 @@ type AccountInspectionFields = {
   configured?: boolean;
 } | null;
 
+/** Inspect an account through plugin logic, falling back to read-only config projection. */
 export async function inspectChannelAccount(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -30,6 +31,12 @@ export async function inspectChannelAccount(params: {
   );
 }
 
+/**
+ * Resolve the account object and status flags used by channel status views.
+ *
+ * When source config carries a configured-but-unavailable credential snapshot,
+ * prefer that snapshot over a resolved config that would appear unconfigured.
+ */
 export async function resolveInspectedChannelAccount(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;

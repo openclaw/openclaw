@@ -7,6 +7,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
 
+/**
+ * Reads current runtime paths and builds the cleanup plan used by CLI cleanup flows.
+ */
 export function resolveCleanupPlanFromDisk(): {
   cfg: OpenClawConfig;
   stateDir: string;

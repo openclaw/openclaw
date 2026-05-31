@@ -4,12 +4,16 @@ import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
 
+/** Enabled account plus snapshot data used to summarize channel credentials. */
 export type ChannelAccountTokenSummaryRow = {
   account: unknown;
   enabled: boolean;
   snapshot: ChannelAccountSnapshot;
 };
 
+/**
+ * Counts credential source labels while preserving the most common source first.
+ */
 function summarizeSources(sources: Array<string | undefined>): {
   label: string;
   parts: string[];
@@ -26,6 +30,9 @@ function summarizeSources(sources: Array<string | undefined>): {
   return { label, parts };
 }
 
+/**
+ * Formats a token sample without exposing raw secrets unless explicitly allowed.
+ */
 function formatTokenHint(token: string, opts: { showSecrets: boolean }): string {
   const t = token.trim();
   if (!t) {
@@ -42,6 +49,12 @@ function formatTokenHint(token: string, opts: { showSecrets: boolean }): string 
   return `${head}…${tail} · len ${t.length}`;
 }
 
+/**
+ * Summarize credential readiness for enabled channel accounts.
+ *
+ * Multi-token providers are intentionally checked before single-token providers
+ * so bot+signing and bot+app setups report partial/missing credentials precisely.
+ */
 export function summarizeTokenConfig(params: {
   accounts: ChannelAccountTokenSummaryRow[];
   showSecrets: boolean;
@@ -59,6 +72,8 @@ export function summarizeTokenConfig(params: {
   );
   const hasTokenField = accountRecs.some((r) => "token" in r);
 
+  // Plugins without known token-shaped account fields still appear in channel
+  // status, but token summary should not invent a credential state for them.
   if (!hasBotTokenField && !hasAppTokenField && !hasSigningSecretField && !hasTokenField) {
     return { state: null, detail: null };
   }
@@ -97,6 +112,8 @@ export function summarizeTokenConfig(params: {
       return (hasBot && !hasSigning) || (!hasBot && hasSigning);
     });
 
+    // HTTP channel webhook setup needs both bot token and signing secret; either
+    // credential alone is unsafe to report as ready.
     if (unavailable.length > 0) {
       return {
         state: "warn",
@@ -115,6 +132,8 @@ export function summarizeTokenConfig(params: {
       return { state: "setup", detail: "no credentials (need bot+signing)" };
     }
 
+    // Group source labels after readiness checks so unavailable or partial
+    // accounts never contribute misleading "ok" credential provenance.
     const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
     const signingSources = summarizeSources(
       ready.map((a) => a.snapshot.signingSecretSource ?? "none"),
@@ -171,6 +190,8 @@ export function summarizeTokenConfig(params: {
       return { state: "setup", detail: "no tokens (need bot+app)" };
     }
 
+    // Bot+app providers report both source sets because either half can be
+    // supplied by a different credential mechanism.
     const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
     const appSources = summarizeSources(ready.map((a) => a.snapshot.appTokenSource ?? "none"));
 

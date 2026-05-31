@@ -17,10 +17,12 @@ export type MessagingTargetParseOptions = {
   ambiguousMessage?: string;
 };
 
+/** Builds the canonical target lookup key used to compare plugin message destinations. */
 export function normalizeTargetId(kind: MessagingTargetKind, id: string): string {
   return normalizeLowercaseStringOrEmpty(`${kind}:${id}`);
 }
 
+/** Materializes a parsed user/channel target while preserving the operator input. */
 export function buildMessagingTarget(
   kind: MessagingTargetKind,
   id: string,
@@ -73,6 +75,8 @@ export function parseTargetPrefixes(params: {
   raw: string;
   prefixes: Array<{ prefix: string; kind: MessagingTargetKind }>;
 }): MessagingTarget | undefined {
+  // Prefix order is caller-owned so channel plugins can prefer platform-native
+  // mention syntax before generic channel:/user: forms.
   for (const entry of params.prefixes) {
     const parsed = parseTargetPrefix({
       raw: params.raw,
@@ -110,6 +114,8 @@ export function parseMentionPrefixOrAtUserTarget(params: {
   atUserPattern: RegExp;
   atUserErrorMessage: string;
 }): MessagingTarget | undefined {
+  // Prefer explicit platform mentions, then typed prefixes, then @user
+  // shorthand. This keeps ambiguous bare @ values out of channel targets.
   const mentionTarget = parseTargetMention({
     raw: params.raw,
     mentionPattern: params.mentionPattern,

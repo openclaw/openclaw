@@ -35,6 +35,7 @@ type DelegatedStatusBase = Omit<
   "resolveConfigured" | "resolveStatusLines" | "resolveSelectionHint" | "resolveQuickstartScore"
 >;
 
+/** Builds a lightweight setup wizard whose expensive status hooks are loaded on demand. */
 export function createDelegatedSetupWizardProxy(params: {
   channel: string;
   loadWizard: () => Promise<ChannelSetupWizard>;
@@ -54,6 +55,8 @@ export function createDelegatedSetupWizardProxy(params: {
     status: {
       ...params.status,
       resolveConfigured: createDelegatedResolveConfigured(params.loadWizard),
+      // Keep optional status resolvers lazy so startup can advertise setup
+      // metadata without importing each channel's full wizard implementation.
       ...createDelegatedSetupWizardStatusResolvers(params.loadWizard),
     },
     ...(params.resolveShouldPromptAccountIds
@@ -70,6 +73,7 @@ export function createDelegatedSetupWizardProxy(params: {
   } satisfies ChannelSetupWizard;
 }
 
+/** Builds an allowlist-aware proxy that falls back when a channel lacks optional handlers. */
 export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
   loadWizard: () => Promise<ChannelSetupWizard>;
   createBase: (handlers: {
@@ -92,6 +96,8 @@ export function createAllowlistSetupWizardProxy<TGroupResolved>(params: {
     resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) => {
       const wizard = await params.loadWizard();
       if (!wizard.allowFrom) {
+        // Preserve user-entered entries even when a delegated channel has no
+        // resolver; callers can still display unresolved ids consistently.
         return entries.map((input) => ({ input, resolved: false, id: null }));
       }
       return await wizard.allowFrom.resolveEntries({

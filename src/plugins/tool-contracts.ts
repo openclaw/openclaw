@@ -1,5 +1,6 @@
 import type { PluginManifestContracts } from "./manifest.js";
 
+/** Normalizes tool names declared in a plugin manifest contract. */
 export function normalizePluginToolContractNames(
   contracts: Pick<PluginManifestContracts, "tools"> | undefined,
 ): string[] {
@@ -17,6 +18,7 @@ export function normalizePluginToolNames(names: readonly string[] | undefined): 
   return [...normalized];
 }
 
+/** Finds runtime tools missing from the manifest-declared tool contract. */
 export function findUndeclaredPluginToolNames(params: {
   declaredNames: readonly string[];
   toolNames: readonly string[];

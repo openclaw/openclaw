@@ -4,6 +4,7 @@ import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
 
+/** Returns the configured identity block for an agent, after default-agent resolution. */
 export function resolveAgentIdentity(
   cfg: OpenClawConfig,
   agentId: string,
@@ -11,12 +12,13 @@ export function resolveAgentIdentity(
   return resolveAgentConfig(cfg, agentId)?.identity;
 }
 
+/** Resolves the acknowledgement reaction using account, channel, global, then identity fallback precedence. */
 export function resolveAckReaction(
   cfg: OpenClawConfig,
   agentId: string,
   opts?: { channel?: string; accountId?: string },
 ): string {
-  // L1: Channel account level
+  // Account-level channel config wins because the same provider can host multiple differently-branded accounts.
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
@@ -26,7 +28,7 @@ export function resolveAckReaction(
     }
   }
 
-  // L2: Channel level
+  // Channel-wide config is shared across accounts but still more specific than global message defaults.
   if (opts?.channel) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const channelReaction = channelCfg?.ackReaction as string | undefined;
@@ -35,17 +37,16 @@ export function resolveAckReaction(
     }
   }
 
-  // L3: Global messages level
   const configured = cfg.messages?.ackReaction;
   if (configured !== undefined) {
     return configured.trim();
   }
 
-  // L4: Agent identity emoji fallback
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
   return emoji || DEFAULT_ACK_REACTION;
 }
 
+/** Converts an agent identity name into the bracketed prefix used by outbound messages. */
 export function resolveIdentityNamePrefix(
   cfg: OpenClawConfig,
   agentId: string,
@@ -57,6 +58,7 @@ export function resolveIdentityNamePrefix(
   return `[${name}]`;
 }
 
+/** Resolves the outbound message prefix, preserving explicit empty strings for allow-from flows. */
 export function resolveMessagePrefix(
   cfg: OpenClawConfig,
   agentId: string,
@@ -87,12 +89,13 @@ function getChannelConfig(
     : undefined;
 }
 
+/** Resolves response-prefix overrides where the special `auto` value expands to the agent identity name. */
 export function resolveResponsePrefix(
   cfg: OpenClawConfig,
   agentId: string,
   opts?: { channel?: string; accountId?: string },
 ): string | undefined {
-  // L1: Channel account level
+  // Account overrides are checked first so multi-account channels can opt into separate visible identities.
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
@@ -105,7 +108,7 @@ export function resolveResponsePrefix(
     }
   }
 
-  // L2: Channel level
+  // Channel-level `auto` keeps plugin config concise while still deriving the current agent name.
   if (opts?.channel) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const channelPrefix = channelCfg?.responsePrefix as string | undefined;
@@ -117,7 +120,6 @@ export function resolveResponsePrefix(
     }
   }
 
-  // L4: Global level
   const configured = cfg.messages?.responsePrefix;
   if (configured !== undefined) {
     if (configured === "auto") {
@@ -128,6 +130,7 @@ export function resolveResponsePrefix(
   return undefined;
 }
 
+/** Projects the message-prefix and response-prefix rules into the compact shape used by channel senders. */
 export function resolveEffectiveMessagesConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -150,6 +153,7 @@ export function resolveEffectiveMessagesConfig(
   };
 }
 
+/** Merges global human-delay defaults with per-agent overrides while preserving unset fields. */
 export function resolveHumanDelayConfig(
   cfg: OpenClawConfig,
   agentId: string,

@@ -34,6 +34,8 @@ function readModelPricingHealth(params: {
   if (params.health?.modelPricing) {
     return params.health.modelPricing;
   }
+  // Deep status passes structured health directly; fast status can still expose
+  // model-pricing state through the gateway probe health payload.
   const probeHealth = params.surface.gatewayProbe?.health;
   if (!probeHealth || typeof probeHealth !== "object") {
     return undefined;
@@ -66,6 +68,7 @@ function buildModelPricingOverviewValue(params: {
   return params.warn(`warning · optional pricing refresh degraded${detail}`);
 }
 
+/** Builds the regular `openclaw status` overview rows from scan and summary data. */
 export function buildStatusCommandOverviewRows(
   params: {
     opts: {
@@ -155,6 +158,8 @@ export function buildStatusCommandOverviewRows(
     prefixRows: [{ Item: "OS", Value: `${params.osLabel} · node ${process.versions.node}` }],
     updateValue: params.updateValue,
     agentsValue,
+    // Keep operational warnings near the top of the suffix block, before the
+    // lower-signal counters that are useful but less urgent during triage.
     suffixRows: [
       ...(modelPricingValue ? [{ Item: "Model pricing", Value: modelPricingValue }] : []),
       ...(params.updateRestartValue
@@ -181,6 +186,7 @@ export function buildStatusCommandOverviewRows(
   });
 }
 
+/** Builds the expanded `status --all` overview rows used in pasteable reports. */
 export function buildStatusAllOverviewRows(params: {
   surface: StatusOverviewSurface;
   osLabel: string;

@@ -29,6 +29,10 @@ function shouldSkipPinnedMainDmRouteUpdate(
   return true;
 }
 
+/**
+ * Persist inbound session metadata and optionally update the last route used for
+ * replies. Metadata writes are tracked asynchronously; route updates stay awaitable.
+ */
 export async function recordInboundSession(params: {
   storePath: string;
   sessionKey: string;
@@ -51,6 +55,8 @@ export async function recordInboundSession(params: {
       createIfMissing,
     })
     .catch(params.onRecordError);
+  // Recording inbound metadata should not block reply routing, but callers can
+  // still observe the task for shutdown/test synchronization.
   params.trackSessionMetaTask?.(metaTask);
   void metaTask;
 

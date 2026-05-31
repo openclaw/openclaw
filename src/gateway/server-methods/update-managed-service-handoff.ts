@@ -286,6 +286,7 @@ function resolveUpdateCliArgv(params: {
   return ["openclaw", ...updateArgs];
 }
 
+/** Formats the shell command shown to operators when a managed update cannot be handed off. */
 export function formatManagedServiceUpdateCommand(timeoutMs?: number): string {
   const args = ["openclaw", "update", "--yes"];
   if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
@@ -294,6 +295,7 @@ export function formatManagedServiceUpdateCommand(timeoutMs?: number): string {
   return args.join(" ");
 }
 
+/** Removes inherited supervisor hints that would make the handoff helper look like the gateway. */
 export function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next = { ...env };
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
@@ -405,6 +407,7 @@ async function resolveHandoffSpawn(params: {
   };
 }
 
+/** Starts a detached helper that waits for the gateway to exit before running the update CLI. */
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
@@ -443,6 +446,8 @@ export async function startManagedServiceUpdateHandoff(params: {
     logPath,
     metaPath,
     sentinelPath: resolveRestartSentinelPath(),
+    // These files carry restart metadata and helper args; the child deletes
+    // them after launch so temp dirs do not retain operator/session context.
     sensitivePaths: [scriptPath, paramsPath, metaPath],
   };
 
@@ -479,6 +484,7 @@ export async function startManagedServiceUpdateHandoff(params: {
   };
 }
 
+/** Builds the operator-facing fallback text when a global install needs manual update. */
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {
   return [
     "Package updates cannot safely run inside the live gateway process.",

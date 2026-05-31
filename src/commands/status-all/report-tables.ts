@@ -19,11 +19,13 @@ type ChannelDetailLike = {
   rows: Array<Record<string, string>>;
 };
 
+/** Column contract for the top-level `status --all` overview table. */
 export const statusOverviewTableColumns = [
   { key: "Item", header: "Item", minWidth: 10 },
   { key: "Value", header: "Value", flex: true, minWidth: 24 },
 ] as const;
 
+/** Column contract for the `status --all` agent session summary table. */
 export const statusAgentsTableColumns = [
   { key: "Agent", header: "Agent", minWidth: 12 },
   { key: "BootstrapFile", header: "Bootstrap file", minWidth: 14 },
@@ -32,6 +34,10 @@ export const statusAgentsTableColumns = [
   { key: "Store", header: "Store", flex: true, minWidth: 34 },
 ] as const;
 
+/**
+ * Converts agent session metadata into table rows while preserving the
+ * bootstrap-file tri-state: present, absent, or unavailable from this path.
+ */
 export function buildStatusAgentTableRows(params: {
   agentStatus: AgentStatusLike;
   ok: (text: string) => string;
@@ -51,6 +57,10 @@ export function buildStatusAgentTableRows(params: {
   }));
 }
 
+/**
+ * Builds one detail table per configured channel account group and colors only
+ * canonical `OK`/`WARN` statuses so plugins can keep richer notes unmodified.
+ */
 export function buildStatusChannelDetailSections(params: {
   details: ChannelDetailLike[];
   width: number;

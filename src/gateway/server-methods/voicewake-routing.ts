@@ -7,6 +7,7 @@ import {
 } from "../../infra/voicewake-routing.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Gateway methods for reading and replacing voice-wake trigger routing rules. */
 export const voicewakeRoutingHandlers: GatewayRequestHandlers = {
   "voicewake.routing.get": async ({ respond }) => {
     try {

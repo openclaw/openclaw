@@ -1,9 +1,10 @@
-// before_model_resolve hook
+/** Attachment metadata exposed before model selection so plugins can route by modality. */
 export type PluginHookBeforeModelResolveAttachment = {
   kind: "image" | "video" | "audio" | "document" | "other";
   mimeType?: string;
 };
 
+/** Early hook event for choosing a provider/model before session messages exist. */
 export type PluginHookBeforeModelResolveEvent = {
   /** User prompt for this run. No session messages are available yet in this phase. */
   prompt: string;
@@ -11,6 +12,7 @@ export type PluginHookBeforeModelResolveEvent = {
   attachments?: PluginHookBeforeModelResolveAttachment[];
 };
 
+/** Provider/model override payload returned by before_model_resolve hooks. */
 export type PluginHookBeforeModelResolveResult = {
   /** Override the model for this agent run. E.g. "llama3.3:8b" */
   modelOverride?: string;
@@ -18,13 +20,14 @@ export type PluginHookBeforeModelResolveResult = {
   providerOverride?: string;
 };
 
-// before_prompt_build hook
+/** Prompt-build hook event after session messages have been prepared. */
 export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
 };
 
+/** Prompt mutation payload merged into the system prompt/context for one run. */
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
@@ -41,6 +44,7 @@ export type PluginHookBeforePromptBuildResult = {
   appendSystemContext?: string;
 };
 
+/** Fields stripped from legacy before_agent_start when prompt mutation is disabled. */
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "systemPrompt",
   "prependContext",
@@ -80,6 +84,10 @@ export type PluginHookBeforeAgentStartOverrideResult = Omit<
   keyof PluginHookBeforePromptBuildResult
 >;
 
+/**
+ * Keep legacy before_agent_start model/provider overrides while removing prompt
+ * mutation fields that are governed by the newer prompt-build policy gate.
+ */
 export const stripPromptMutationFieldsFromLegacyHookResult = (
   result: PluginHookBeforeAgentStartResult | void,
 ): PluginHookBeforeAgentStartOverrideResult | void => {

@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "./chat-type.js";
 
+/** Returns user-facing sender identity validation issues for plugin contract tests. */
 export function validateSenderIdentity(ctx: MsgContext): string[] {
   const issues: string[] = [];
 
@@ -14,6 +15,8 @@ export function validateSenderIdentity(ctx: MsgContext): string[] {
   const senderE164 = normalizeOptionalString(ctx.SenderE164) || "";
 
   if (!isDirect) {
+    // Group channels need at least one sender marker so replies, audit logs, and
+    // access checks can distinguish the author from the room itself.
     if (!senderId && !senderName && !senderUsername && !senderE164) {
       issues.push("missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)");
     }

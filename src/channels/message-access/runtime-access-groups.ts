@@ -20,6 +20,10 @@ export function allReferencedAccessGroupNames(
   return uniqueStrings(entries.flatMap((entryGroup) => accessGroupNames(entryGroup)));
 }
 
+/**
+ * Normalize literal allowlist entries while preserving access-group references
+ * for the runtime membership pass.
+ */
 export async function normalizeEffectiveEntries(params: {
   adapter: ChannelIngressAdapter;
   accountId: string;
@@ -45,6 +49,12 @@ export async function normalizeEffectiveEntries(params: {
   ]);
 }
 
+/**
+ * Resolve dynamic access-group membership facts for non-message-sender groups.
+ *
+ * Static `message.senders` groups are expanded later by the state resolver so
+ * the access graph can report configured, invalid, disabled, and matched entries.
+ */
 export async function resolveRuntimeAccessGroupMembershipFacts(params: {
   input: ResolveChannelMessageIngressParams;
   channelId: ChannelIngressChannelId;

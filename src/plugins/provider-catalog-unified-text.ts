@@ -1,6 +1,7 @@
 import type { UnifiedModelCatalogEntry } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ProviderCatalogResult } from "./types.js";
 
+/** Projects provider plugin catalog output into unified text-model catalog rows. */
 export function projectProviderCatalogResultToUnifiedTextRows(params: {
   providerId: string;
   result: ProviderCatalogResult;
@@ -9,6 +10,7 @@ export function projectProviderCatalogResultToUnifiedTextRows(params: {
   if (!params.result) {
     return [];
   }
+  // Single-provider catalog hooks inherit the provider id from registration.
   const providers =
     "provider" in params.result
       ? { [params.providerId]: params.result.provider }

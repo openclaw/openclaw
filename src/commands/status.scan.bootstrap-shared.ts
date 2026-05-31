@@ -22,6 +22,7 @@ function buildColdStartAgentLocalStatuses() {
   };
 }
 
+/** Builds the empty summary used when status runs before a config exists. */
 export function buildColdStartStatusSummary() {
   return {
     runtimeVersion: null,
@@ -77,6 +78,10 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   getAgentLocalStatuses: (cfg: OpenClawConfig) => Promise<TAgentStatus>;
 };
 
+/**
+ * Starts the independent status bootstrap probes and returns their promises so
+ * overview scans can await only the pieces they need in their preferred order.
+ */
 export async function createStatusScanCoreBootstrap<TAgentStatus>(
   params: StatusScanCoreBootstrapParams<TAgentStatus>,
 ) {
@@ -89,6 +94,8 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
   const statusTimeoutMs = params.opts.timeoutMs ?? 10_000;
   const updateTimeoutMs = Math.min(params.opts.all ? 6500 : 2500, statusTimeoutMs);
   const tailscaleTimeoutMs = Math.min(1200, statusTimeoutMs);
+  // First-run status without configured channels avoids network probes unless
+  // the caller explicitly requested the full `--all` view.
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)

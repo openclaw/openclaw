@@ -66,6 +66,7 @@ import {
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Defaults omitted Talk session mode from transport so managed-room calls stay STT/TTS. */
 function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
   const mode = normalizeOptionalLowercaseString(params.mode) as TalkMode | undefined;
   if (mode) {
@@ -76,6 +77,7 @@ function normalizeTalkSessionMode(params: { mode?: string; transport?: string })
     : "realtime";
 }
 
+/** Defaults the Gateway-owned transport for each normalized Talk mode. */
 function normalizeTalkSessionTransport(params: {
   mode: TalkMode;
   transport?: string;
@@ -87,6 +89,7 @@ function normalizeTalkSessionTransport(params: {
   return params.mode === "stt-tts" ? "managed-room" : "gateway-relay";
 }
 
+/** Defaults agent ownership for conversational modes and disables it for transcription-only sessions. */
 function normalizeTalkSessionBrain(params: { mode: TalkMode; brain?: string }): TalkBrain {
   const brain = normalizeOptionalLowercaseString(params.brain) as TalkBrain | undefined;
   if (brain) {
@@ -111,6 +114,8 @@ function canCloseManagedRoomSession(
   connId: string | undefined,
 ): boolean {
   const handoff = getTalkHandoff(session.handoffId);
+  // Empty rooms are closeable by cleanup callers; occupied rooms stay owned by
+  // the active client connection so a stale tab cannot end another user's room.
   return !handoff?.room.activeClientId || handoff.room.activeClientId === connId;
 }
 
@@ -127,6 +132,7 @@ function managedRoomOwnershipError(action: string) {
   );
 }
 
+/** Handles Gateway-owned Talk sessions across relay, transcription, and managed-room transports. */
 export const talkSessionHandlers: GatewayRequestHandlers = {
   "talk.session.create": async ({ params, respond, context, client }) => {
     if (!validateTalkSessionCreateParams(params)) {

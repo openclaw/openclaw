@@ -9,6 +9,7 @@ import {
 } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 
+/** Lazy runtime bundle used by model picker flows and mocked as one unit in tests. */
 export const modelPickerRuntime = {
   resolveProviderModelPickerContributions: resolveProviderModelPickerFlowContributions,
   resolveProviderModelPickerEntries: resolveProviderModelPickerFlowEntries,

@@ -13,6 +13,7 @@ type ChannelIssueLike = {
   message: string;
 };
 
+/** Column contract for the `status --all` channel overview table renderer. */
 export const statusChannelsTableColumns = [
   { key: "Channel", header: "Channel", minWidth: 10 },
   { key: "Enabled", header: "Enabled", minWidth: 7 },
@@ -20,6 +21,11 @@ export const statusChannelsTableColumns = [
   { key: "Detail", header: "Detail", flex: true, minWidth: 24 },
 ] as const;
 
+/**
+ * Converts collected channel state into display rows, letting gateway-reported
+ * channel issues upgrade an otherwise healthy row to WARN without mutating the
+ * underlying collector result.
+ */
 export function buildStatusChannelsTableRows(params: {
   rows: readonly ChannelTableRowInput[];
   channelIssues: readonly ChannelIssueLike[];
@@ -33,10 +39,14 @@ export function buildStatusChannelsTableRows(params: {
   const formatIssueMessage = params.formatIssueMessage ?? ((message: string) => message);
   return params.rows.map((row) => {
     const issues = channelIssuesByChannel.get(row.id) ?? [];
+    // Disabled channels stay OFF even if gateway diagnostics reported stale
+    // issues for the same id; enabled/setup rows surface live issues as WARN.
     const effectiveState = row.state === "off" ? "off" : issues.length > 0 ? "warn" : row.state;
     const issueSuffix =
       issues.length > 0
-        ? ` · ${params.warn(`gateway: ${formatIssueMessage(issues[0]?.message ?? "issue")}`)}`
+        ? // Keep only the first issue in the overview; full details stay in the
+          // diagnosis section, while this table needs one-line scanability.
+          ` · ${params.warn(`gateway: ${formatIssueMessage(issues[0]?.message ?? "issue")}`)}`
         : "";
     return {
       Channel: row.label,

@@ -64,6 +64,7 @@ function resolveManagedServiceHandoffRestartDelayMs(
   );
 }
 
+/** Gateway RPC handlers for update status and control-plane initiated package updates. */
 export const updateHandlers: GatewayRequestHandlers = {
   "update.status": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
@@ -88,6 +89,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     } = parseRestartRequestParams(params);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
       extractDeliveryInfo(sessionKey);
+    // Explicit delivery fields win over values encoded in sessionKey so callers
+    // can redirect the post-restart continuation without minting a new session.
     const deliveryContext = requestedDeliveryContext ?? sessionDeliveryContext;
     const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
@@ -218,6 +221,8 @@ export const updateHandlers: GatewayRequestHandlers = {
           };
         }
       } else {
+        // Non-global installs can update in-process because the restart path is
+        // controlled by this gateway and the package root is local to it.
         result = await runGatewayUpdate({
           timeoutMs,
           cwd: root,
@@ -242,6 +247,8 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     let sentinelPath: string | null = null;
     try {
+      // Persist restart metadata even for skipped/error results so status calls
+      // can explain the last update attempt after the handler returns.
       sentinelPath = await writeRestartSentinel(payload);
       recordLatestUpdateRestartSentinel(payload);
     } catch {

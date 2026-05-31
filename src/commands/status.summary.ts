@@ -139,6 +139,7 @@ function listSessionCandidates(store: Record<string, SessionEntry | undefined>) 
     .toSorted(compareSessionCandidatesByUpdatedAt);
 }
 
+/** Removes paths, defaults, and recent session details from shareable summaries. */
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
   return {
     ...summary,
@@ -159,6 +160,10 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
   };
 }
 
+/**
+ * Builds the status summary for text and JSON status commands, with optional
+ * sensitive session details and channel summary enrichment.
+ */
 export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
@@ -280,6 +285,8 @@ export async function getStatusSummary(
       const model = resolvedModel.model ?? configuredSessionModel ?? null;
       const selectedModelLabel =
         resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+      // Only warn about pinned session models when the user chose the override;
+      // automatic fallback provenance should not look like an actionable drift.
       const modelSelectionDiffers =
         selectedModelLabel != null &&
         selectedModelLabel !== configuredSessionModelLabel &&

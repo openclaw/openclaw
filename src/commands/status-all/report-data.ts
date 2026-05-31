@@ -37,6 +37,10 @@ function resolveStatusAllConfigPath(path: string | null | undefined): string {
   return trimmed && trimmed.length > 0 ? trimmed : "(unknown config path)";
 }
 
+/**
+ * Collects local-only diagnosis inputs that are not part of the initial overview
+ * scan, keeping failures best-effort so report generation remains read-only.
+ */
 async function resolveStatusAllLocalDiagnosis(params: {
   overview: StatusScanOverviewResult;
   progress: StatusAllProgress;
@@ -88,6 +92,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
         gatewayProbeError: params.gatewayProbe?.error ?? null,
         ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
       });
+  // Node-only gateway mode has no local gateway endpoint to query; skip health
+  // and delivery calls instead of reporting the expected absence as a failure.
   const diagnostics = params.nodeOnlyGateway
     ? null
     : await resolveStatusGatewayDiagnosticsSafe({
@@ -109,6 +115,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
       ?.workspaceDir ??
     overview.agentStatus.agents[0]?.workspaceDir ??
     null;
+  // Skill discovery is diagnostic only; broken workspace metadata should not
+  // prevent the rest of `status --all` from rendering.
   const skillStatus =
     defaultWorkspace != null
       ? (() => {
@@ -163,6 +171,10 @@ async function resolveStatusAllLocalDiagnosis(params: {
   };
 }
 
+/**
+ * Builds the render-ready `status --all` report model from scan output,
+ * service summaries, and local diagnosis probes.
+ */
 export async function buildStatusAllReportData(params: {
   overview: StatusScanOverviewResult;
   daemon: StatusGatewayServiceSummary;
@@ -188,6 +200,8 @@ export async function buildStatusAllReportData(params: {
     nodeService: params.nodeService,
     nodeOnlyGateway: params.nodeOnlyGateway,
   });
+  // Overview rows use the local diagnosis config path/sentinel data so the top
+  // table matches the detailed diagnosis section that follows.
   const overviewRows = buildStatusAllOverviewRows({
     surface: overviewSurface,
     osLabel: params.overview.osSummary.label,

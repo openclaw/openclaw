@@ -6,10 +6,6 @@ import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
-// Read-only status commands project a safe subset of account fields into snapshots
-// so renderers can preserve "configured but unavailable" state without touching
-// strict runtime-only credential helpers.
-
 const CREDENTIAL_STATUS_KEYS = [
   "tokenStatus",
   "botTokenStatus",
@@ -57,6 +53,12 @@ function readCredentialStatus(record: Record<string, unknown>, key: CredentialSt
     : undefined;
 }
 
+/**
+ * Infer whether any credential is configured from safe status fields only.
+ *
+ * `configured_unavailable` still means configured; status commands use this to
+ * avoid reading or resolving secret material just to render setup state.
+ */
 export function resolveConfiguredFromCredentialStatuses(account: unknown): boolean | undefined {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -76,6 +78,12 @@ export function resolveConfiguredFromCredentialStatuses(account: unknown): boole
   return sawCredentialStatus ? false : undefined;
 }
 
+/**
+ * Infer configured state for a required credential subset.
+ *
+ * Missing required credentials make the whole subset unconfigured even when
+ * other credential status keys are present.
+ */
 export function resolveConfiguredFromRequiredCredentialStatuses(
   account: unknown,
   requiredKeys: CredentialStatusKey[],
@@ -98,6 +106,7 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
   return sawCredentialStatus ? true : undefined;
 }
 
+/** Detect credentials that exist but cannot currently be resolved safely. */
 export function hasConfiguredUnavailableCredentialStatus(account: unknown): boolean {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -108,6 +117,7 @@ export function hasConfiguredUnavailableCredentialStatus(account: unknown): bool
   );
 }
 
+/** Detect inline/resolved credential values or explicit available statuses. */
 export function hasResolvedCredentialValue(account: unknown): boolean {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -120,6 +130,7 @@ export function hasResolvedCredentialValue(account: unknown): boolean {
   );
 }
 
+/** Project only credential source/status fields that are safe for status UIs. */
 export function projectCredentialSnapshotFields(
   account: unknown,
 ): Pick<
@@ -166,6 +177,12 @@ export function projectCredentialSnapshotFields(
   };
 }
 
+/**
+ * Project the read-only account/runtime fields exposed in channel snapshots.
+ *
+ * This strips URL userinfo and leaves strict credential helpers untouched so
+ * status renderers can consume partial runtime/account objects safely.
+ */
 export function projectSafeChannelAccountSnapshotFields(
   account: unknown,
 ): Partial<ChannelAccountSnapshot> {

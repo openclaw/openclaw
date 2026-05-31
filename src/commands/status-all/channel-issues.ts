@@ -1,3 +1,7 @@
+/**
+ * Groups gateway-reported channel issues by plugin id while preserving the
+ * original issue order for first-issue table summaries.
+ */
 export function groupChannelIssuesByChannel<T extends { channel: string }>(
   issues: readonly T[],
 ): Map<string, T[]> {

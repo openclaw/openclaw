@@ -13,6 +13,7 @@ import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.updat
 
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 
+/** Key/value row consumed by the `status --all` overview table renderer. */
 export type StatusOverviewRow = {
   Item: string;
   Value: string;
@@ -57,6 +58,7 @@ type StatusManagedService = {
   } | null;
 };
 
+/** Resolves the configured update channel into the label shown by status output. */
 export function resolveStatusUpdateChannelInfo(params: {
   updateConfigChannel?: string | null;
   update: {
@@ -76,6 +78,7 @@ export function resolveStatusUpdateChannelInfo(params: {
   });
 }
 
+/** Builds all update-related strings needed by overview text and JSON surfaces. */
 export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: StatusUpdateLike;
@@ -93,11 +96,16 @@ export function buildStatusUpdateSurface(params: {
   };
 }
 
+/** Formats the dashboard URL cell, using `disabled` for all absent URL shapes. */
 export function formatStatusDashboardValue(value: string | null | undefined): string {
   const trimmed = normalizeOptionalString(value);
   return trimmed && trimmed.length > 0 ? trimmed : "disabled";
 }
 
+/**
+ * Formats Tailscale exposure with caller-provided decorators so rich terminal
+ * output and plain JSON/text tests share the same status decision.
+ */
 export function formatStatusTailscaleValue(params: {
   tailscaleMode: string;
   dnsName?: string | null;
@@ -139,6 +147,10 @@ export function formatStatusTailscaleValue(params: {
   return decorateWarn(parts.join(" · "));
 }
 
+/**
+ * Formats a launchd/service row while preserving the distinction between
+ * install ownership, loaded state, and runtime process status.
+ */
 export function formatStatusServiceValue(params: {
   label: string;
   installed: boolean;
@@ -161,6 +173,7 @@ export function formatStatusServiceValue(params: {
   return `${params.label} ${installedPrefix}${params.loadedText}${runtimeSuffix}`;
 }
 
+/** Resolves the local Control UI URL when the dashboard surface is enabled. */
 export function resolveStatusDashboardUrl(params: {
   cfg: Pick<OpenClawConfig, "gateway">;
 }): string | null {
@@ -176,6 +189,10 @@ export function resolveStatusDashboardUrl(params: {
   }).httpUrl;
 }
 
+/**
+ * Orders overview rows for stable CLI output while allowing callers to splice
+ * extra rows around the gateway/self/service block.
+ */
 export function buildStatusOverviewRows(params: {
   prefixRows?: StatusOverviewRow[];
   dashboardValue: string;
@@ -224,6 +241,10 @@ export function buildStatusOverviewRows(params: {
   return rows;
 }
 
+/**
+ * Builds the complete overview table model from raw status probes and service
+ * snapshots, centralizing display precedence for dashboard/gateway/update rows.
+ */
 export function buildStatusOverviewSurfaceRows(params: {
   cfg: Pick<OpenClawConfig, "update" | "gateway">;
   update: StatusUpdateLike;
@@ -310,6 +331,7 @@ export function buildStatusOverviewSurfaceRows(params: {
   });
 }
 
+/** Summarizes which gateway auth mechanisms were accepted by the probe. */
 export function formatGatewayAuthUsed(
   auth: {
     token?: string;
@@ -330,6 +352,7 @@ export function formatGatewayAuthUsed(
   return "none";
 }
 
+/** Formats the gateway `/self` payload into a compact host/version summary. */
 export function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null {
   return gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
     ? [
@@ -343,6 +366,12 @@ export function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string
     : null;
 }
 
+/**
+ * Builds reusable gateway status fragments before terminal coloring is applied.
+ *
+ * Remote-url misconfiguration overrides reachability because the fallback URL is
+ * diagnostic only and should not be presented as a healthy remote connection.
+ */
 export function buildGatewayStatusSummaryParts(params: {
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
@@ -383,6 +412,10 @@ export function buildGatewayStatusSummaryParts(params: {
   };
 }
 
+/**
+ * Builds gateway-related overview values, including local dashboard URL and
+ * managed service rows, from the already-probed gateway state.
+ */
 export function buildStatusGatewaySurfaceValues(params: {
   cfg: Pick<OpenClawConfig, "gateway">;
   gatewayMode: "local" | "remote";
@@ -411,6 +444,8 @@ export function buildStatusGatewaySurfaceValues(params: {
     gatewayProbeAuth: params.gatewayProbeAuth,
   });
   const gatewaySelfValue = formatGatewaySelfSummary(params.gatewaySelf);
+  // Node-only mode supplies its own gateway value; otherwise compose the normal
+  // mode/target/reachability/auth/self chain in one stable order.
   const gatewayValue =
     params.nodeOnlyGateway?.gatewayValue ??
     `${gatewaySummary.modeLabel} · ${gatewaySummary.targetTextWithSource} · ${
@@ -452,6 +487,7 @@ export function buildStatusGatewaySurfaceValues(params: {
   };
 }
 
+/** Builds the machine-readable gateway status payload for `status --all --json`. */
 export function buildGatewayStatusJsonPayload(params: {
   gatewayMode: "local" | "remote";
   gatewayConnection: {
@@ -492,18 +528,23 @@ export function buildGatewayStatusJsonPayload(params: {
     ...(params.gatewayProbe?.health &&
     typeof params.gatewayProbe.health === "object" &&
     "modelPricing" in params.gatewayProbe.health
-      ? {
+      ? // Preserve the gateway health pricing payload verbatim for JSON callers;
+        // text output formats it elsewhere and should not stringify it here.
+        {
           modelPricing: (params.gatewayProbe.health as { modelPricing?: unknown }).modelPricing,
         }
       : {}),
   };
 }
 
+/** Redacts common credential shapes before status diagnostics echo text. */
 export function redactSecrets(text: string): string {
   if (!text) {
     return text;
   }
   let out = text;
+  // Key/value redaction runs before bearer/openai-shaped token redaction so
+  // quoted diagnostics keep their surrounding syntax intact.
   out = out.replace(
     /(\b(?:access[_-]?token|refresh[_-]?token|token|password|secret|api[_-]?key)\b\s*[:=]\s*)("?)([^"\\s]+)("?)/gi,
     "$1$2***$4",

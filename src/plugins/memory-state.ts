@@ -155,6 +155,8 @@ export function registerMemoryCorpusSupplement(
   pluginId: string,
   supplement: MemoryCorpusSupplement,
 ): void {
+  // Registration is keyed by plugin id so reloads replace stale corpus hooks
+  // instead of accumulating duplicate search/get providers.
   const next = memoryPluginState.corpusSupplements.filter(
     (registration) => registration.pluginId !== pluginId,
   );
@@ -167,7 +169,8 @@ export function registerMemoryCapability(
   capability: MemoryPluginCapability,
 ): void {
   const existingCapability = memoryPluginState.capability?.capability;
-  // A selected memory plugin can add bridge artifacts while memory-core owns sidecar runtime hooks.
+  // A selected memory plugin can add bridge artifacts while memory-core owns
+  // sidecar runtime hooks; preserve those core hooks when only artifacts arrive.
   const shouldPreserveExisting =
     existingCapability &&
     Boolean(capability.publicArtifacts) &&
@@ -192,6 +195,8 @@ function patchMemoryCapability(pluginId: string, patch: MemoryPluginCapability):
 }
 
 export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
+  // Return shallow copies so callers cannot mutate the process-global
+  // registration object without going through the registration APIs.
   return memoryPluginState.capability
     ? {
         pluginId: memoryPluginState.capability.pluginId,
@@ -213,6 +218,8 @@ export function registerMemoryPromptSectionForPlugin(
   pluginId: string,
   builder: MemoryPromptSectionBuilder,
 ): void {
+  // Legacy prompt registration patches the primary capability, not the
+  // supplement list, so older memory plugins still define the main section.
   patchMemoryCapability(pluginId, { promptBuilder: builder });
 }
 
@@ -220,6 +227,8 @@ export function registerMemoryPromptSupplement(
   pluginId: string,
   builder: MemoryPromptSectionBuilder,
 ): void {
+  // Supplements are additive but single-slot per plugin; repeated registration
+  // replaces that plugin's previous builder to keep prompt output deterministic.
   const next = memoryPluginState.promptSupplements.filter(
     (registration) => registration.pluginId !== pluginId,
   );
@@ -313,6 +322,8 @@ export async function listActiveMemoryPublicArtifacts(params: {
 }): Promise<MemoryPluginPublicArtifact[]> {
   const artifacts =
     (await memoryPluginState.capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
+  // Clone and sort artifacts before exposing them so UI/catalog callers get a
+  // stable view and cannot mutate plugin-owned arrays such as agentIds.
   return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
     const workspaceOrder = left.workspaceDir.localeCompare(right.workspaceDir);
     if (workspaceOrder !== 0) {

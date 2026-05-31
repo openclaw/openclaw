@@ -10,6 +10,7 @@ import type { StatusReportSection } from "./text-report.js";
 
 type TableRenderer = (input: RenderTableOptions) => string;
 
+/** Builds the overview table section from already formatted key/value rows. */
 export function buildStatusOverviewSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -25,6 +26,10 @@ export function buildStatusOverviewSection(params: {
   };
 }
 
+/**
+ * Builds the canonical channel overview section and lets channel issue rows
+ * override display state without changing the collected channel model.
+ */
 export function buildStatusChannelsSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -65,6 +70,7 @@ export function buildStatusChannelsSection(params: {
   } as StatusReportSection;
 }
 
+/** Builds a caller-supplied channel table section for legacy status surfaces. */
 export function buildStatusChannelsTableSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -81,6 +87,7 @@ export function buildStatusChannelsTableSection(params: {
   };
 }
 
+/** Wraps configured channel account detail tables with shared status coloring. */
 export function buildStatusChannelDetailsSections(params: {
   details: Array<{
     title: string;
@@ -101,6 +108,7 @@ export function buildStatusChannelDetailsSections(params: {
   });
 }
 
+/** Builds the agent session table from the collected status agent snapshot. */
 export function buildStatusAgentsSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -131,6 +139,7 @@ export function buildStatusAgentsSection(params: {
   };
 }
 
+/** Builds the sessions table section from caller-owned columns and rows. */
 export function buildStatusSessionsSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -147,6 +156,10 @@ export function buildStatusSessionsSection(params: {
   };
 }
 
+/**
+ * Builds the optional system-events section; empty rows are intentionally hidden
+ * so clean systems do not emit an empty table.
+ */
 export function buildStatusSystemEventsSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -165,6 +178,7 @@ export function buildStatusSystemEventsSection(params: {
   };
 }
 
+/** Builds the optional health section with caller-provided checks. */
 export function buildStatusHealthSection(params: {
   width: number;
   renderTable: TableRenderer;
@@ -182,6 +196,7 @@ export function buildStatusHealthSection(params: {
   };
 }
 
+/** Builds the optional usage section when diagnostics include actionable steps. */
 export function buildStatusUsageSection(params: { usageLines?: string[] }): StatusReportSection {
   return {
     kind: "lines",

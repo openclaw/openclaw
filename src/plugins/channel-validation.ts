@@ -50,6 +50,7 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
   return missing;
 }
 
+/** Validates a channel plugin registration and fills public metadata fallbacks. */
 export function normalizeRegisteredChannelPlugin(params: {
   pluginId: string;
   source: string;
@@ -98,6 +99,8 @@ export function normalizeRegisteredChannelPlugin(params: {
 
   const missingFields = collectMissingChannelMetaFields(rawMeta);
   if (missingFields.length > 0) {
+    // Metadata is displayed in setup/status UIs, so keep the channel usable but
+    // emit diagnostics when we fill labels/docs/blurb from bundled fallbacks.
     pushPluginValidationDiagnostic({
       level: "warn",
       pluginId: params.pluginId,
@@ -110,6 +113,8 @@ export function normalizeRegisteredChannelPlugin(params: {
   return {
     ...params.plugin,
     id,
+    // Force the registration id to be canonical even if plugin meta carried a
+    // stale id; routing and config lookup key off the registered channel id.
     meta: normalizeChannelMeta({
       id,
       meta: rawMeta,

@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
+/** Mutable finalization state shared between draft stream controls and channel cleanup. */
 export type FinalizableDraftStreamState = {
   stopped: boolean;
   final: boolean;
@@ -29,6 +30,7 @@ type FinalizableDraftLifecycleParams<T> = Omit<
   sendOrEditStreamMessage: (text: string) => Promise<boolean>;
 };
 
+/** Creates controls that can flush a final draft, seal it, or discard pending updates. */
 export function createFinalizableDraftStreamControls(params: {
   throttleMs: number;
   isStopped: () => boolean;
@@ -58,6 +60,8 @@ export function createFinalizableDraftStreamControls(params: {
   const stopForClear = async (): Promise<void> => {
     params.markStopped();
     loop.stop();
+    // Wait for the in-flight edit before deleting its message id, otherwise a
+    // late edit can recreate visible draft text after clear/delete succeeds.
     await loop.waitForInFlight();
   };
 
@@ -77,6 +81,7 @@ export function createFinalizableDraftStreamControls(params: {
   };
 }
 
+/** Creates finalizable draft controls backed by a shared mutable state object. */
 export function createFinalizableDraftStreamControlsForState(params: {
   throttleMs: number;
   state: FinalizableDraftStreamState;
@@ -96,6 +101,7 @@ export function createFinalizableDraftStreamControlsForState(params: {
   });
 }
 
+/** Stops draft updates, reads the current message id once, then clears the stored id. */
 export async function takeMessageIdAfterStop<T>(
   params: StopAndClearMessageIdParams<T>,
 ): Promise<T | undefined> {
@@ -105,6 +111,7 @@ export async function takeMessageIdAfterStop<T>(
   return messageId;
 }
 
+/** Deletes a finalizable draft message after stopping further draft updates. */
 export async function clearFinalizableDraftMessage<T>(
   params: ClearFinalizableDraftMessageParams<T>,
 ): Promise<void> {
@@ -124,6 +131,7 @@ export async function clearFinalizableDraftMessage<T>(
   }
 }
 
+/** Bundles stream controls with the clear/delete lifecycle used by channel drafts. */
 export function createFinalizableDraftLifecycle<T>(params: FinalizableDraftLifecycleParams<T>) {
   const controls = createFinalizableDraftStreamControlsForState({
     throttleMs: params.throttleMs,

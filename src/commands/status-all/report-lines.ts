@@ -43,6 +43,10 @@ type AgentStatusLike = {
   }>;
 };
 
+/**
+ * Assembles the complete read-only `status --all` text report from precomputed
+ * status models, keeping terminal styling and diagnosis output in one place.
+ */
 export async function buildStatusAllReportLines(params: {
   progress: ProgressReporter;
   overviewRows: OverviewRow[];
@@ -66,6 +70,8 @@ export async function buildStatusAllReportLines(params: {
 
   const lines: string[] = [];
   lines.push(heading("OpenClaw status --all"));
+  // Sections are built before diagnosis so table output is deterministic even
+  // when the diagnosis collector performs async read-only checks afterwards.
   appendStatusReportSections({
     lines,
     heading,
@@ -84,6 +90,8 @@ export async function buildStatusAllReportLines(params: {
         warn,
         muted,
         accentDim: theme.accentDim,
+        // Issue details can include plugin-provided prose; cap them before
+        // table wrapping so the channel overview remains scannable.
         formatIssueMessage: (message) => message.slice(0, 90),
       }),
       ...buildStatusChannelDetailsSections({

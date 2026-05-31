@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Returns the API owner when a configured provider delegates auth/catalog behavior elsewhere. */
 export function resolveProviderConfigApiOwnerHint(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -18,6 +19,8 @@ export function resolveProviderConfigApiOwnerHint(params: {
     Object.entries(providers).find(
       ([candidateId]) => normalizeProviderId(candidateId) === normalizedProvider,
     )?.[1];
+  // Provider config keys can use aliases/casing; compare normalized ids before
+  // deciding whether the api field points at a different owner.
   const api =
     typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
   if (!api || api === normalizedProvider) {

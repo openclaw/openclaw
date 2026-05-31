@@ -176,6 +176,8 @@ async function originSubjectMatched(input: ChannelIngressStateInput): Promise<bo
     context,
     opaquePrefix: "origin",
   });
+  // Origin and current subjects may carry different identifier kinds for the
+  // same user; run both match directions so adapter aliases can bridge them.
   if (originEntries.length > 0) {
     const currentMatch = await input.adapter.matchSubject({
       subject: input.subject,
@@ -253,6 +255,8 @@ async function resolveAccessGroupEntries(params: {
       continue;
     }
 
+    // message.senders groups are concrete allowlists; dynamic groups arrive as
+    // membership facts and should not be flattened into entry diagnostics here.
     const groupEntries = groupSenderEntries({ groupName, input: params.input });
     const resolved = await normalizeAndMatch({
       adapter: params.input.adapter,
@@ -350,6 +354,12 @@ async function resolveRouteFacts(
   return resolved;
 }
 
+/**
+ * Build the redacted, normalized ingress state used by the policy decider.
+ *
+ * This is the single place that expands sender access groups, computes route
+ * sender allowlists, and compares event origin subjects against the live sender.
+ */
 export async function resolveChannelIngressState(
   input: ChannelIngressStateInput,
 ): Promise<ChannelIngressState> {

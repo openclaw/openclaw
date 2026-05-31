@@ -24,6 +24,7 @@ import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+/** Connection metadata trusted by gateway method handlers after handshake validation. */
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
@@ -46,6 +47,7 @@ export type RespondFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
+/** Shared gateway services and mutable runtime state exposed to method handlers. */
 export type GatewayRequestContext = {
   deps: CliDeps;
   cron: CronServiceContract;
@@ -142,6 +144,7 @@ export type GatewayRequestContext = {
   unavailableGatewayMethods?: ReadonlySet<string>;
 };
 
+/** Raw method-dispatch input before the request params have been normalized. */
 export type GatewayRequestOptions = {
   req: RequestFrame;
   client: GatewayClient | null;
@@ -151,6 +154,7 @@ export type GatewayRequestOptions = {
   methodRegistry?: GatewayMethodRegistryView;
 };
 
+/** Per-method handler input with params narrowed to a record by the dispatcher. */
 export type GatewayRequestHandlerOptions = {
   req: RequestFrame;
   params: Record<string, unknown>;
@@ -160,6 +164,8 @@ export type GatewayRequestHandlerOptions = {
   context: GatewayRequestContext;
 };
 
+/** Gateway method implementation signature. */
 export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
 
+/** Registry object keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

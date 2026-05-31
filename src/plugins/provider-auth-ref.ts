@@ -63,6 +63,8 @@ export function resolveRefFallbackInput(params: {
   preferredEnvVar?: string;
   env?: NodeJS.ProcessEnv;
 }): { ref: SecretRef; resolvedValue: string } {
+  // Non-interactive ref setup must only trust env vars from bundled/catalog
+  // metadata; workspace plugin suggestions are not part of the trusted config.
   const fallbackEnvVar =
     params.preferredEnvVar ??
     getProviderEnvVars(params.provider, {
@@ -240,6 +242,8 @@ async function promptProviderSecretRefForSetup(params: {
   };
 
   try {
+    // Validate the external ref before writing config so setup never persists a
+    // file/exec pointer that cannot resolve in the current runtime environment.
     const { resolveSecretRefString } = await loadSecretResolve();
     const resolvedValue = await resolveSecretRefString(ref, {
       config: params.config,
@@ -318,6 +322,8 @@ export async function promptSecretRefForSetup(params: {
         env: params.env,
       });
     } catch (error) {
+      // Provider selection errors are recoverable prompt states; validation and
+      // unexpected runtime errors still escape so callers can abort setup.
       if (error instanceof Error && error.message === "retry") {
         continue;
       }

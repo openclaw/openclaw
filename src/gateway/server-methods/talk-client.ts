@@ -27,6 +27,7 @@ import {
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Handles browser-owned Talk sessions and their agent-consult control calls. */
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": async ({ params, respond, context }) => {
     if (!validateTalkClientCreateParams(params)) {
@@ -257,6 +258,8 @@ function hasOwnedActiveTalkClientRun(params: {
     return false;
   }
   for (const entry of params.context.chatAbortControllers.values()) {
+    // Browser-owned Talk runs use non-agent abort entries scoped to the owning
+    // websocket connection; otherwise another tab could steer the same session.
     if (entry.sessionKey === sessionKey && entry.ownerConnId === connId && entry.kind !== "agent") {
       return true;
     }

@@ -9,6 +9,12 @@ import {
 } from "./status-all/report-sections.js";
 import { appendStatusReportSections } from "./status-all/text-report.js";
 
+/**
+ * Renders the normalized status command report into terminal lines.
+ *
+ * The caller owns all probing and formatting decisions; this helper only keeps
+ * section order, empty-section handling, and table rendering consistent.
+ */
 export async function buildStatusCommandReportLines(params: {
   heading: (text: string) => string;
   muted: (text: string) => string;
@@ -36,6 +42,8 @@ export async function buildStatusCommandReportLines(params: {
   const lines: string[] = [];
   lines.push(params.heading("OpenClaw status"));
 
+  // Overview stays first because later diagnostics often refer to the selected
+  // gateway, update, and runtime states summarized there.
   appendStatusReportSections({
     lines,
     heading: params.heading,

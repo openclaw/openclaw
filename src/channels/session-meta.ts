@@ -10,6 +10,10 @@ function loadInboundSessionRuntime() {
   return inboundSessionRuntimePromise;
 }
 
+/**
+ * Best-effort inbound session metadata write used when callers cannot let
+ * session persistence failures interrupt channel processing.
+ */
 export async function recordInboundSessionMetaSafe(params: {
   cfg: OpenClawConfig;
   agentId: string;

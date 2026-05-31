@@ -13,6 +13,7 @@ import type {
 } from "./status.scan.shared.js";
 import type { getStatusSummary as getStatusSummaryFn } from "./status.summary.js";
 
+/** Complete scan payload consumed by regular status rendering and JSON output. */
 export type StatusScanResult = {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
@@ -42,6 +43,10 @@ export type StatusScanResult = {
   pluginCompatibility: PluginCompatibilityNotice[];
 };
 
+/**
+ * Flattens gateway snapshot fields into the historical scan result shape while
+ * keeping the scan collector's grouped gateway data as the single input.
+ */
 export function buildStatusScanResult(params: {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;

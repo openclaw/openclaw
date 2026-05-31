@@ -20,6 +20,7 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.js";
 
+/** Channel route with the minimum fields needed for reply delivery. */
 export type RoutableChannelRouteRef = ChannelRouteRef & {
   channel: string;
   target: {
@@ -38,6 +39,7 @@ export type SessionRouteDeliveryFields = {
   lastThreadId?: string | number;
 };
 
+/** Normalizes a route and narrows it to routes that carry a channel and target. */
 export function normalizeRoutableChannelRoute(
   route?: ChannelRouteRef | null,
 ): RoutableChannelRouteRef | undefined {
@@ -70,6 +72,7 @@ export function routeFromSessionEntry(entry?: SessionEntry | null): ChannelRoute
     return undefined;
   }
   return (
+    // Canonical route wins over older delivery-context/last-* fields when sessions carry both.
     normalizeSessionDeliveryFields(entry).route ??
     routeFromDeliveryContext(deliveryContextFromSession(entry))
   );
@@ -92,6 +95,8 @@ export function routeFromConversationRef(
     conversationId: conversation.conversationId,
     parentConversationId: conversation.parentConversationId,
   });
+  // Plugin target projection can split a parent conversation into route target
+  // plus thread id; that keeps later reply code transport-agnostic.
   return normalizeChannelRouteRef({
     channel: conversation.channel,
     accountId: conversation.accountId,
@@ -148,6 +153,7 @@ export function routesShareDeliveryTarget(params: {
   return (
     left.channel === right.channel &&
     channelRouteTarget(left) === channelRouteTarget(right) &&
+    // Missing account ids are wildcards because older routes did not always persist them.
     (left.accountId == null || right.accountId == null || left.accountId === right.accountId) &&
     String(channelRouteThreadId(left) ?? "") === String(channelRouteThreadId(right) ?? "")
   );

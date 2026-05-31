@@ -51,6 +51,8 @@ function fieldDangerous(field: ResolvedIdentityField, value: string): boolean | 
 }
 
 function identityFields(identity: ChannelIngressIdentityDescriptor): ResolvedIdentityField[] {
+  // Primary identities default to the historical stableId/stable-id contract;
+  // aliases get plugin-scoped kinds unless a channel opts into a shared kind.
   const fields: ResolvedIdentityField[] = [
     {
       ...identity.primary,
@@ -104,6 +106,8 @@ export function createIdentityAdapter(
     normalizeEntries({ entries }) {
       const matchable = entries.flatMap((entry, entryIndex) => {
         if (isWildcardEntry(entry)) {
+          // Wildcards bind to the primary field only, preserving legacy allowFrom
+          // behavior where "*" means any sender, not every alias namespace.
           return [
             adapterEntry({
               identity,
@@ -144,6 +148,8 @@ export function createIdentityAdapter(
       const matchedEntryIds = entries
         .filter((entry) => {
           const fallback = entry.value === "*" || subjectKeys.has(identityMatchKey(entry));
+          // Custom matchEntry hooks can support composite/platform matching but
+          // still fall back to normalized field equality when omitted.
           return identity.matchEntry?.({ subject, entry, context }) ?? fallback;
         })
         .map((entry) => entry.opaqueEntryId);
@@ -161,6 +167,8 @@ export function createIdentitySubject(
 ): ChannelIngressSubject {
   const fields = identityFields(identity);
   const identifiers: InternalMatchMaterial[] = fields.flatMap((field, index) => {
+    // The first field consumes stableId; aliases are keyed by their descriptor
+    // names so plugins can expose multiple safe identifiers for one sender.
     const rawValue = index === 0 ? input.stableId : input.aliases?.[field.key];
     if (rawValue == null) {
       return [];

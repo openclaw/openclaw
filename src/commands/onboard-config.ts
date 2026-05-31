@@ -6,6 +6,7 @@ import type { ToolProfileId } from "../config/types.tools.js";
 export const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
 export const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 
+/** Applies local setup defaults while preserving explicit DM scope and tool profile choices. */
 export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
@@ -34,6 +35,7 @@ export function applyLocalSetupWorkspaceConfig(
   };
 }
 
+/** Marks the default agent to skip bootstrap prompts without mutating the original config object. */
 export function applySkipBootstrapConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = structuredClone(cfg);
   setConfigValueAtPath(

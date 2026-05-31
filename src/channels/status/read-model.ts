@@ -23,6 +23,7 @@ function readRuntimeAccountsByChannel(payload: unknown): Record<string, unknown>
   return asRecord(asRecord(payload).channelAccounts);
 }
 
+/** Return live runtime account objects for one channel from a gateway payload. */
 export function getRuntimeChannelAccounts(params: {
   payload: unknown;
   channelId: string;
@@ -31,6 +32,7 @@ export function getRuntimeChannelAccounts(params: {
   return Array.isArray(raw) ? raw.map(asRecord) : [];
 }
 
+/** Normalize gateway channel account snapshots into a channel-keyed lookup map. */
 export function normalizeRuntimeChannelAccountSnapshots(
   payload: unknown,
 ): Map<string, ChannelAccountSnapshot[]> {
@@ -52,6 +54,7 @@ export function normalizeRuntimeChannelAccountSnapshots(
   return out;
 }
 
+/** Resolve the account id used to correlate runtime and config account rows. */
 export function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): string {
   return (
     normalizeOptionalString(account.accountId) ??
@@ -61,6 +64,7 @@ export function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): 
   );
 }
 
+/** Find the live runtime account matching a config account id. */
 export function findRuntimeChannelAccount(params: {
   liveAccounts: RuntimeChannelAccount[];
   accountId: string;
@@ -75,6 +79,7 @@ export function findRuntimeChannelAccount(params: {
   );
 }
 
+/** Treat running/connected runtime accounts as proof that credentials are usable. */
 export function hasRuntimeCredentialAvailable(params: {
   liveAccounts: RuntimeChannelAccount[];
   accountId: string;
@@ -89,6 +94,7 @@ export function hasRuntimeCredentialAvailable(params: {
   return account.running === true || account.connected === true;
 }
 
+/** Upgrade credential status snapshots when live runtime proof shows availability. */
 export function markConfiguredUnavailableCredentialStatusesAvailable(
   account: unknown,
 ): Record<string, unknown> {
@@ -101,6 +107,7 @@ export function markConfiguredUnavailableCredentialStatusesAvailable(
   return record;
 }
 
+/** Merge configured and gateway-reported accounts into display rows. */
 export async function resolveChannelAccountStatusRows(params: {
   localAccountIds: string[];
   runtimeAccounts: ChannelAccountSnapshot[];

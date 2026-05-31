@@ -33,6 +33,7 @@ function isTrustedWorkspaceChannelCatalogEntry(
   ).enabled;
 }
 
+/** Returns a catalog entry only when workspace entries are trusted, otherwise falling back to bundled catalog data. */
 export function getTrustedChannelPluginCatalogEntry(
   channelId: string,
   params: {
@@ -79,6 +80,7 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
   });
 }
 
+/** Lists catalog entries visible to setup after replacing untrusted workspace entries with safe fallbacks. */
 export function listTrustedChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
@@ -87,6 +89,7 @@ export function listTrustedChannelPluginCatalogEntries(params: {
   return listChannelPluginCatalogEntriesWithTrustedFallback(params, () => []);
 }
 
+/** Lists setup-discovery entries while keeping untrusted workspace entries visible as install candidates. */
 export function listSetupDiscoveryChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;

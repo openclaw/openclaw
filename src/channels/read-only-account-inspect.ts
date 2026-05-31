@@ -5,6 +5,7 @@ import type { ChannelId } from "./plugins/types.public.js";
 
 export type ReadOnlyInspectedAccount = Record<string, unknown>;
 
+/** Inspect a channel account without starting or mutating the channel runtime. */
 export async function inspectReadOnlyChannelAccount(params: {
   channelId: ChannelId;
   cfg: OpenClawConfig;

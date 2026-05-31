@@ -71,6 +71,7 @@ export type InboundMentionDecision = MentionGateResult & {
   shouldBypassMention: boolean;
 };
 
+/** Convenience helper for conditionally appending a single implicit mention reason. */
 export function implicitMentionKindWhen(
   kind: InboundImplicitMentionKind,
   enabled: boolean,
@@ -94,6 +95,8 @@ function resolveMatchedImplicitMentionKinds(params: {
     if (allowedKinds && !allowedKinds.has(kind)) {
       continue;
     }
+    // Preserve first-seen order but de-dupe, so diagnostics stay stable when
+    // multiple channel-specific detectors report the same implicit reason.
     if (!matched.includes(kind)) {
       matched.push(kind);
     }
@@ -168,10 +171,13 @@ function normalizeMentionDecisionParams(
   };
 }
 
+/** Resolves whether an inbound group message satisfies mention-gating policy. */
 export function resolveInboundMentionDecision(
   params: ResolveInboundMentionDecisionParams,
 ): InboundMentionDecision {
   const { facts, policy } = normalizeMentionDecisionParams(params);
+  // Text commands may bypass required mention only when no other mention was
+  // detected; an unrelated human mention should not authorize a bot command.
   const shouldBypassMention =
     policy.isGroup &&
     policy.requireMention &&

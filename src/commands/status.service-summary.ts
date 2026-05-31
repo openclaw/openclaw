@@ -5,6 +5,7 @@ import {
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 
+/** Normalized launchd/systemd service state shown by status commands. */
 export type ServiceStatusSummary = {
   label: string;
   installed: boolean | null;
@@ -16,6 +17,10 @@ export type ServiceStatusSummary = {
   layout?: GatewayServiceLayoutSummary;
 };
 
+/**
+ * Reads a managed service state and classifies externally running services as
+ * installed but not managed by OpenClaw.
+ */
 export async function readServiceStatusSummary(
   service: GatewayService,
   fallbackLabel: string,

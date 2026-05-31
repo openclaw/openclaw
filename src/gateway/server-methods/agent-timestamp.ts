@@ -16,6 +16,7 @@ const CRON_TIME_MARKER = "Current time: ";
  */
 const TIMESTAMP_ENVELOPE_PATTERN = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}/;
 
+/** Optional clock and timezone controls for gateway-side timestamp injection. */
 export interface TimestampInjectionOptions {
   timezone?: string;
   now?: Date;
@@ -70,9 +71,7 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
   return `[${dow} ${formatted}] ${message}`;
 }
 
-/**
- * Build TimestampInjectionOptions from an OpenClawConfig.
- */
+/** Build timestamp injection options from the configured default user timezone. */
 export function timestampOptsFromConfig(cfg: OpenClawConfig): TimestampInjectionOptions {
   return {
     timezone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),

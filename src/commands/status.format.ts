@@ -5,9 +5,11 @@ import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
+/** Formats token counts in the compact `k` style used by status tables. */
 export const formatKTokens = (value: number) =>
   `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
+/** Formats nullable millisecond durations for status output. */
 export const formatDuration = (ms: number | null | undefined) => {
   if (ms == null || !Number.isFinite(ms)) {
     return "unknown";
@@ -15,6 +17,7 @@ export const formatDuration = (ms: number | null | undefined) => {
   return formatDurationPrecise(ms, { decimals: 1 });
 };
 
+/** Formats session token usage and prompt-cache hit summary for status rows. */
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
@@ -42,6 +45,7 @@ export const formatTokensCompact = (
   return result;
 };
 
+/** Formats prompt-cache hit/read/write counters for verbose session rows. */
 export const formatPromptCacheCompact = (
   sess: Pick<SessionStatus, "inputTokens" | "totalTokens" | "cacheRead" | "cacheWrite">,
 ) => {
@@ -98,6 +102,7 @@ function resolvePromptCacheStats(
   };
 }
 
+/** Formats launchd/systemd runtime status into a compact service summary. */
 export const formatDaemonRuntimeShort = (runtime?: {
   status?: string;
   pid?: number;
@@ -114,6 +119,8 @@ export const formatDaemonRuntimeShort = (runtime?: {
   const noisyLaunchctlDetail =
     runtime.missingUnit === true &&
     normalizeLowercaseStringOrEmpty(detail).includes("could not find service");
+  // Missing launchd units already have a structured state; suppress the common
+  // launchctl boilerplate so useful runtime details stay visible.
   if (detail && !noisyLaunchctlDetail) {
     details.push(detail);
   }

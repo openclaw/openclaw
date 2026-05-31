@@ -34,6 +34,7 @@ type ChannelThreadBindingsContainerShape = {
 
 export type ThreadBindingSpawnKind = "subagent" | "acp";
 
+/** Resolved spawn policy for a channel/account/kind combination. */
 export type ThreadBindingSpawnPolicy = {
   channel: string;
   accountId: string;
@@ -48,14 +49,17 @@ function normalizeChannelId(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+/** Returns true when a channel's top-level thread binding should spawn a child session. */
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
   return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
+/** Returns true when `/thread here` needs native thread context instead of current session reuse. */
 export function requiresNativeThreadContextForThreadHere(channel: string): boolean {
   return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
+/** Resolves whether a thread binding should use the current session or spawn a child. */
 export function resolveThreadBindingPlacementForCurrentContext(params: {
   channel: string;
   threadId?: string;
@@ -72,6 +76,8 @@ function resolveDefaultTopLevelPlacement(channel: string): "current" | "child" {
     return "current";
   }
   return (
+    // Loaded plugins win over bundled defaults so external channels can define
+    // their native top-level thread behavior without core channel ids.
     getLoadedChannelPlugin(normalized)?.conversationBindings?.defaultTopLevelPlacement ??
     resolveBundledChannelThreadBindingDefaultPlacement(normalized) ??
     "current"
@@ -104,6 +110,7 @@ function resolveThreadBindingHoursMs(raw: unknown, fallbackHours: number): numbe
   return Math.min(durationMs, MAX_DATE_TIMESTAMP_MS);
 }
 
+/** Resolves idle expiry in milliseconds, with channel/account config overriding session defaults. */
 export function resolveThreadBindingIdleTimeoutMs(params: {
   channelIdleHoursRaw: unknown;
   sessionIdleHoursRaw: unknown;
@@ -114,6 +121,7 @@ export function resolveThreadBindingIdleTimeoutMs(params: {
   );
 }
 
+/** Resolves absolute max-age expiry in milliseconds, with zero meaning no max-age limit. */
 export function resolveThreadBindingMaxAgeMs(params: {
   channelMaxAgeHoursRaw: unknown;
   sessionMaxAgeHoursRaw: unknown;
@@ -125,6 +133,7 @@ export function resolveThreadBindingMaxAgeMs(params: {
   );
 }
 
+/** Returns the effective expiry timestamp for a binding lifecycle record. */
 export function resolveThreadBindingEffectiveExpiresAt(params: {
   record: ThreadBindingLifecycleRecord;
   defaultIdleTimeoutMs: number;
@@ -133,6 +142,7 @@ export function resolveThreadBindingEffectiveExpiresAt(params: {
   return resolveSharedThreadBindingLifecycle(params).expiresAt;
 }
 
+/** Resolves whether thread bindings are enabled, defaulting open when unset. */
 export function resolveThreadBindingsEnabled(params: {
   channelEnabledRaw: unknown;
   sessionEnabledRaw: unknown;
@@ -171,6 +181,7 @@ function normalizeSpawnContext(value: unknown): ThreadBindingSpawnContext | unde
   return value === "isolated" || value === "fork" ? value : undefined;
 }
 
+/** Resolves account/channel/global spawn policy for subagent or ACP thread bindings. */
 export function resolveThreadBindingSpawnPolicy(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -191,6 +202,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
     true;
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
+    // Kind-specific flags override the broad spawnSessions flag at each scope.
     normalizeBoolean(account?.[spawnFlagKey]) ??
     normalizeBoolean(account?.spawnSessions) ??
     normalizeBoolean(root?.[spawnFlagKey]) ??
@@ -211,6 +223,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
   };
 }
 
+/** Resolves idle timeout using channel/account scoped thread-binding config. */
 export function resolveThreadBindingIdleTimeoutMsForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -223,6 +236,7 @@ export function resolveThreadBindingIdleTimeoutMsForChannel(params: {
   });
 }
 
+/** Resolves max age using channel/account scoped thread-binding config. */
 export function resolveThreadBindingMaxAgeMsForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -249,6 +263,7 @@ function resolveThreadBindingChannelScope(params: {
   });
 }
 
+/** Formats a user-facing error for disabled thread bindings. */
 export function formatThreadBindingDisabledError(params: {
   channel: string;
   accountId: string;
@@ -257,6 +272,7 @@ export function formatThreadBindingDisabledError(params: {
   return `Thread bindings are disabled for ${params.channel} (set channels.${params.channel}.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).`;
 }
 
+/** Formats a user-facing error for disabled thread-bound session spawning. */
 export function formatThreadBindingSpawnDisabledError(params: {
   channel: string;
   accountId: string;

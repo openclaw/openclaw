@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Cache lookup result that preserves cached `undefined`-like values through an explicit hit flag. */
 export type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
 
+/** Small insertion-ordered LRU cache for process-local plugin metadata. */
 export class PluginLruCache<T> {
   readonly #defaultMaxEntries: number;
   #maxEntries: number;
@@ -42,6 +44,7 @@ export class PluginLruCache<T> {
       return { hit: false };
     }
     const cached = this.#entries.get(cacheKey) as T;
+    // Reinsert hits so Map iteration order tracks recency for oldest-entry eviction.
     this.#entries.delete(cacheKey);
     this.#entries.set(cacheKey, cached);
     return { hit: true, value: cached };
@@ -73,6 +76,7 @@ export type ConfigScopedPromiseLoader<T> = {
   clear(): void;
 };
 
+/** Resolves a synchronous runtime value scoped to one config object and cache key. */
 export function resolveConfigScopedRuntimeCacheValue<T>(params: {
   cache: ConfigScopedRuntimeCache<T>;
   config?: OpenClawConfig;
@@ -99,6 +103,7 @@ export function createPluginCacheKey(parts: readonly unknown[]): string {
   return JSON.stringify(parts);
 }
 
+/** Coalesces async loads by config object, resetting failed promises for retry. */
 export function createConfigScopedPromiseLoader<T>(
   load: (config?: OpenClawConfig) => T | Promise<T>,
 ): ConfigScopedPromiseLoader<T> {

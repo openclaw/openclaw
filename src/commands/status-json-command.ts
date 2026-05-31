@@ -8,6 +8,10 @@ type StatusJsonCommandOptions = {
   all?: boolean;
 };
 
+/**
+ * Runs the injectable JSON status flow used by the CLI and tests, then writes
+ * the resolved payload through the runtime JSON sink.
+ */
 export async function runStatusJsonCommand(params: {
   opts: StatusJsonCommandOptions;
   runtime: RuntimeEnv;

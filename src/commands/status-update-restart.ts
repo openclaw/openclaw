@@ -16,6 +16,9 @@ function readAfterVersion(payload: RestartSentinelPayload): string | null {
   return typeof version === "string" && version.trim().length > 0 ? version : null;
 }
 
+/**
+ * Formats the last update-triggered restart sentinel for the status overview.
+ */
 export function formatUpdateRestartStatusValue(
   payload: RestartSentinelPayload | null | undefined,
   opts: {
@@ -55,10 +58,15 @@ export function formatUpdateRestartStatusValue(
     return muted(`skipped · ${reason ?? "restart skipped"}${age}`);
   }
 
+  // A successful sentinel may omit after.version for older update flows; keep
+  // the green status useful without claiming a gateway version we did not see.
   const version = readAfterVersion(payload);
   return ok(`verified${version ? ` · gateway ${version}` : ""}${age}`);
 }
 
+/**
+ * Returns follow-up commands for update restart states that need operator action.
+ */
 export function formatUpdateRestartActionLines(
   payload: RestartSentinelPayload | null | undefined,
 ): string[] {
@@ -77,6 +85,8 @@ export function formatUpdateRestartActionLines(
     (reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON ||
       reason === CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON)
   ) {
+    // Pending handoff states are not failures yet; direct users to the handoff
+    // state first, then the deeper gateway probe only if it remains stuck.
     return [
       "Update restart is still pending; run openclaw update status --json for handoff state.",
       "If it stays pending, run openclaw gateway status --deep.",

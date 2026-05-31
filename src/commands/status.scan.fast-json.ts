@@ -76,6 +76,10 @@ function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): boole
   return hasExplicitStatusJsonChannelConfig(cfg) || hasStatusJsonChannelEnvConfig();
 }
 
+/**
+ * Runs a policy-driven JSON status scan, sharing the overview collector while
+ * letting callers choose channel, update, gateway, and memory behavior.
+ */
 export async function scanStatusJsonWithPolicy(
   opts: {
     timeoutMs?: number;
@@ -91,6 +95,8 @@ export async function scanStatusJsonWithPolicy(
     runtime,
     allowMissingConfigFastPath: policy.allowMissingConfigFastPath,
     resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
+    // JSON status keeps channel rows out of the fast path; callers can still
+    // request summary data through the policy when compatibility needs it.
     includeChannelsData: false,
     includeChannelSecretTargets: false,
     skipConfigPluginValidation: true,
@@ -112,6 +118,10 @@ export async function scanStatusJsonWithPolicy(
   });
 }
 
+/**
+ * Runs the default fast `status --json` scan, using cheap config/env heuristics
+ * to decide whether channel probing is worth doing before full config exists.
+ */
 export async function scanStatusJsonFast(
   opts: {
     timeoutMs?: number;

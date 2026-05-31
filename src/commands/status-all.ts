@@ -6,6 +6,10 @@ import { resolveStatusServiceSummaries } from "./status-runtime-shared.ts";
 import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 
+/**
+ * Runs the full read-only `openclaw status --all` flow and prints the assembled
+ * diagnostic report through the provided runtime logger.
+ */
 export async function statusAllCommand(
   runtime: RuntimeEnv,
   opts?: { timeoutMs?: number },
@@ -18,6 +22,8 @@ export async function statusAllCommand(
       },
       showSecrets: false,
       runtime,
+      // Channel status should reuse the already-probed gateway path so local
+      // and node-only modes report the same gateway target throughout the run.
       useGatewayCallOverridesForChannelsStatus: true,
       progress,
       labels: {

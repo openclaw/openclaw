@@ -14,6 +14,7 @@ type NodeOnlyServiceLike = {
   runtimeShort?: string | null;
 };
 
+/** Status metadata used when this machine runs only the node service. */
 export type NodeOnlyGatewayInfo = {
   gatewayTarget: string;
   gatewayValue: string;
@@ -50,9 +51,15 @@ function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
   if (hasRunningRuntime(node.runtime)) {
     return true;
   }
+  // Some service backends only provide the compact runtime string; accept the
+  // canonical running prefix so node-only status works across launchd/systemd.
   return typeof node.runtimeShort === "string" && node.runtimeShort.startsWith("running");
 }
 
+/**
+ * Detects node-only installations where the local gateway is absent but the
+ * node service is active and points at a remote gateway.
+ */
 export async function resolveNodeOnlyGatewayInfo(params: {
   daemon: Pick<NodeOnlyServiceLike, "installed">;
   node: NodeOnlyServiceLike;

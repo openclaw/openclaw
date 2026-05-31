@@ -2,6 +2,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { GroupKeyResolution, SessionEntry } from "../config/sessions/types.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 
+/** Last-route update payload recorded alongside inbound session metadata. */
 export type InboundLastRouteUpdate = {
   sessionKey: string;
   channel: SessionEntry["lastChannel"];
@@ -16,6 +17,7 @@ export type InboundLastRouteUpdate = {
   };
 };
 
+/** Runtime hook used by channel plugins to persist inbound session metadata. */
 export type RecordInboundSession = (params: {
   storePath: string;
   sessionKey: string;

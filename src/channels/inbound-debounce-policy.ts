@@ -8,6 +8,7 @@ import {
 } from "../auto-reply/inbound-debounce.js";
 import type { OpenClawConfig } from "../config/types.js";
 
+/** Decide whether a plain-text inbound message can be delayed for coalescing. */
 export function shouldDebounceTextInbound(params: {
   text: string | null | undefined;
   cfg: OpenClawConfig;
@@ -28,6 +29,7 @@ export function shouldDebounceTextInbound(params: {
   return !isControlCommandMessage(text, params.cfg, params.commandOptions);
 }
 
+/** Build a channel debouncer using config/default debounce timing resolution. */
 export function createChannelInboundDebouncer<T>(
   params: Omit<InboundDebounceCreateParams<T>, "debounceMs"> & {
     cfg: OpenClawConfig;

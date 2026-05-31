@@ -18,6 +18,7 @@ export type InteractiveRegistrationResult = {
   error?: string;
 };
 
+/** Resolves a channel payload to the registered plugin interactive handler and stripped payload. */
 export function resolvePluginInteractiveNamespaceMatch(
   channel: string,
   data: string,
@@ -29,6 +30,7 @@ export function resolvePluginInteractiveNamespaceMatch(
   });
 }
 
+/** Registers one plugin interactive namespace for a channel, rejecting duplicate ownership. */
 export function registerPluginInteractiveHandler(
   pluginId: string,
   registration: PluginInteractiveHandlerRegistration,
@@ -51,6 +53,7 @@ export function registerPluginInteractiveHandler(
   interactiveHandlers.set(key, {
     ...registration,
     namespace,
+    // Store normalized channels so restore/list/match use the same registry key shape.
     channel: normalizeOptionalLowercaseString(registration.channel) ?? "",
     pluginId,
     pluginName: opts?.pluginName,
@@ -76,10 +79,12 @@ export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void 
   }
 }
 
+/** Returns a snapshot of registered interactive handlers for diagnostics or restoration. */
 export function listPluginInteractiveHandlers(): RegisteredInteractiveHandler[] {
   return Array.from(getPluginInteractiveHandlersState().values());
 }
 
+/** Replaces registrations from a trusted snapshot, skipping entries with invalid namespaces. */
 export function restorePluginInteractiveHandlers(
   registrations: readonly RegisteredInteractiveHandler[],
 ): void {

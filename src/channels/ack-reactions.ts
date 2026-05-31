@@ -19,6 +19,7 @@ export type AckReactionGateParams = {
   shouldBypassMention?: boolean;
 };
 
+/** Resolve whether a generic channel should send a temporary acknowledgement reaction. */
 export function shouldAckReaction(params: AckReactionGateParams): boolean {
   const scope = params.scope ?? "group-mentions";
   if (scope === "off" || scope === "none") {
@@ -48,6 +49,7 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
   return false;
 }
 
+/** Translate WhatsApp-specific direct/group settings into the shared ack gate. */
 export function shouldAckReactionForWhatsApp(params: {
   emoji: string;
   isDirect: boolean;
@@ -84,6 +86,10 @@ export function shouldAckReactionForWhatsApp(params: {
   });
 }
 
+/**
+ * Start sending an acknowledgement reaction and return a handle that only
+ * reports success/failure; send errors are observed without rejecting callers.
+ */
 export function createAckReactionHandle(params: {
   ackReactionValue: string;
   send: () => Promise<void>;
@@ -115,6 +121,10 @@ export function createAckReactionHandle(params: {
   };
 }
 
+/**
+ * Remove an acknowledgement reaction after the reply only if the original send
+ * succeeded. Fire-and-forget removal keeps reply delivery off the cleanup path.
+ */
 export function removeAckReactionAfterReply(params: {
   removeAfterReply: boolean;
   ackReactionPromise: Promise<boolean> | null;
@@ -139,6 +149,7 @@ export function removeAckReactionAfterReply(params: {
   });
 }
 
+/** Convenience wrapper for SDK/runtime callers that carry the full ack handle. */
 export function removeAckReactionHandleAfterReply(params: {
   removeAfterReply: boolean;
   ackReaction: AckReactionHandle | null | undefined;

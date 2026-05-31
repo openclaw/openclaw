@@ -83,6 +83,7 @@ type AgentStatusLike = {
 
 const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
 
+/** Counts agents with recent session activity for the soft inbound-health warning. */
 function countRecentAgentSessions(agentStatus: AgentStatusLike, thresholdMs: number): number {
   return agentStatus.agents.filter(
     (agent) => agent.lastActiveAgeMs != null && agent.lastActiveAgeMs <= thresholdMs,
@@ -106,6 +107,7 @@ function isDeliveryDiagnosticsLike(value: unknown): value is DeliveryDiagnostics
   return Boolean(value && typeof value === "object");
 }
 
+/** Reads the summary counter format returned by gateway delivery diagnostics. */
 function countDeliveryEvent(snapshot: DeliveryDiagnosticsLike, type: string): number {
   const value = snapshot.summary?.byType?.[type];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -129,6 +131,13 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
   return latestTs > 0 ? Date.now() - latestTs : null;
 }
 
+/**
+ * Appends the read-only diagnosis section for `status --all`.
+ *
+ * This renderer intentionally degrades unavailable local probes into warnings so
+ * one broken config, port, log, gateway, or telemetry source does not hide the
+ * rest of the pasteable debug report.
+ */
 export async function appendStatusAllDiagnosis(params: {
   lines: string[];
   progress: ProgressReporter;
@@ -178,6 +187,8 @@ export async function appendStatusAllDiagnosis(params: {
     const status = !params.snap.exists ? "fail" : params.snap.valid ? "ok" : "warn";
     emitCheck(`Config: ${params.snap.path ?? "(unknown)"}`, status);
     const issues = [...(params.snap.legacyIssues ?? []), ...(params.snap.issues ?? [])];
+    // Legacy and current validators can report the same path/message pair; show
+    // each unique issue once so config noise does not crowd out later checks.
     const uniqueIssues = issues.filter(
       (issue, index) =>
         issues.findIndex((x) => x.path === issue.path && x.message === issue.message) === index,
@@ -244,6 +255,8 @@ export async function appendStatusAllDiagnosis(params: {
       params.portUsage.listeners,
       params.port,
     );
+    // Dual-stack loopback listeners are normal for one local gateway process;
+    // unrelated or duplicate listeners should stay visible as warnings.
     const portOk = params.portUsage.listeners.length === 0 || expectedGatewayListeners;
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
@@ -347,6 +360,8 @@ export async function appendStatusAllDiagnosis(params: {
       const dispatchGap = dispatchStarted - dispatchCompleted;
       const hasDispatchGap = dispatchGap >= 2;
       const latestAgeMs = latestDeliveryEventAgeMs(params.deliveryDiagnostics);
+      // These ratios distinguish routing failures, session creation failures,
+      // and stuck in-flight dispatches without needing channel-specific logic.
       emitCheck(
         `Inbound delivery telemetry: received ${received} · dispatch ${dispatchStarted}/${dispatchCompleted} · turns ${turnsCreated} · processed ${processed}`,
         hasReceivedWithoutDispatch || hasDispatchWithoutTurn || hasDispatchGap ? "warn" : "ok",
@@ -389,6 +404,8 @@ export async function appendStatusAllDiagnosis(params: {
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
     const restartLogPath = resolveGatewayRestartLogPath(process.env);
+    // launchd combines useful service output on stdout; Linux keeps stderr
+    // separate, so only read stderr where the log path is expected to exist.
     const readStderr = process.platform !== "darwin";
     const [stderrTail, stdoutTail, restartTail] = await Promise.all([
       readStderr ? readFileTailLines(logPaths.stderrPath, 40).catch(() => []) : [],
@@ -461,6 +478,8 @@ export async function appendStatusAllDiagnosis(params: {
       return value;
     }
     try {
+      // Preserve object-shaped health errors for pasteable diagnosis while still
+      // passing through the same redaction path as string errors.
       return JSON.stringify(value, null, 2);
     } catch {
       return "[unserializable error]";

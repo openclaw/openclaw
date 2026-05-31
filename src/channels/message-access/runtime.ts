@@ -286,6 +286,8 @@ export function createChannelIngressResolver(
       route: input.route,
       routeFacts: input.routeFacts,
       accessGroups: base.accessGroups ?? base.cfg?.accessGroups,
+      // Resolver-level memberships are stable for the account; per-message
+      // facts can add transient sender/group membership without replacing them.
       accessGroupMembership: [
         ...(base.accessGroupMembership ?? []),
         ...(input.accessGroupMembership ?? []),
@@ -319,6 +321,8 @@ export function createChannelIngressResolver(
 export async function resolveStableChannelMessageIngress(
   params: ResolveStableChannelMessageIngressParams,
 ): Promise<ResolvedChannelMessageIngress> {
+  // This convenience path keeps simple plugins on the stable-id contract while
+  // still using the full route/sender/command/activation resolver underneath.
   return await createChannelIngressResolver({
     ...params,
     identity: defineStableChannelIngressIdentity(params.identity),
@@ -414,6 +418,8 @@ function routeFactsFromDescriptors(
     ) {
       return [];
     }
+    // A descriptor with only sender metadata is not a route gate; it becomes a
+    // route-sender fact unless deny-when-empty must surface as a route block.
     return [
       routeFact({
         ...defaults,
@@ -633,6 +639,8 @@ export async function resolveChannelMessageIngress(
     channelId,
     names: referencedAccessGroups,
   });
+  // Runtime resolution happens only for groups referenced by the effective
+  // allowlists/route facts, then caller-supplied membership facts are appended.
   const accessGroupMembership = [
     ...runtimeAccessGroupMembership,
     ...(params.accessGroupMembership ?? []),
@@ -664,6 +672,8 @@ export async function resolveChannelMessageIngress(
     ...params.policy,
     ...(params.command !== undefined ? { command: params.command } : {}),
   };
+  // Decision state keeps raw allowlist values for graph/explainability while
+  // normalized lists below are returned to callers for enforcement display.
   const state = await resolveChannelIngressState({
     channelId,
     accountId: params.accountId,

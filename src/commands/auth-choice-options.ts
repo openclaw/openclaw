@@ -31,6 +31,7 @@ function compareLabelsCaseInsensitive(a: string, b: string): number {
   return a.localeCompare(b, undefined, { sensitivity: "base" });
 }
 
+/** Sorts provider auth groups with featured first, then stable case-insensitive labels for CLI/help output. */
 export function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
   const priorityA = FEATURED_AUTH_GROUP_ORDER.get(a.value) ?? Number.POSITIVE_INFINITY;
   const priorityB = FEATURED_AUTH_GROUP_ORDER.get(b.value) ?? Number.POSITIVE_INFINITY;
@@ -89,9 +90,11 @@ export function formatAuthChoiceChoicesForCli(params?: {
     }).map((contribution) => contribution.option.value),
   ];
 
+  // Provider manifests can repeat core or legacy values; CLI enums need each value once for help and validation.
   return uniqueStrings(values).join("|");
 }
 
+/** Builds the flat auth-choice list consumed by prompts, preserving dynamic provider overrides by value. */
 export function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
@@ -105,6 +108,7 @@ export function buildAuthChoiceOptions(params: {
   for (const option of CORE_AUTH_CHOICE_OPTIONS) {
     optionByValue.set(option.value, option);
   }
+  // Dynamic providers can refine core choices by reusing the value; the latest option owns display metadata.
   for (const option of resolveProviderChoiceOptions({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -126,6 +130,7 @@ export function buildAuthChoiceOptions(params: {
   return options;
 }
 
+/** Builds grouped assistant-facing auth choices, returning the skip action separately from provider groups. */
 export function buildAuthChoiceGroups(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
@@ -149,6 +154,7 @@ export function buildAuthChoiceGroups(params: {
     }
     const existing = groupsById.get(option.groupId);
     if (existing) {
+      // Same group id can collect options from multiple plugins; first group metadata remains canonical.
       existing.options.push(option);
       continue;
     }

@@ -14,6 +14,7 @@ export type ChannelEntryMatch<T> = {
   matchSource?: ChannelMatchSource;
 };
 
+/** Attach the winning channel key/source to a resolved config payload. */
 export function applyChannelMatchMeta<
   TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
 >(result: TResult, match: ChannelEntryMatch<unknown>): TResult {
@@ -24,6 +25,7 @@ export function applyChannelMatchMeta<
   return result;
 }
 
+/** Resolve a matched channel config entry and preserve where the match came from. */
 export function resolveChannelMatchConfig<
   TEntry,
   TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
@@ -34,6 +36,7 @@ export function resolveChannelMatchConfig<
   return applyChannelMatchMeta(resolveEntry(match.entry), match);
 }
 
+/** Convert user/channel labels into stable config keys. */
 export function normalizeChannelSlug(value: string): string {
   return normalizeLowercaseStringOrEmpty(value)
     .replace(/^#/, "")
@@ -41,10 +44,12 @@ export function normalizeChannelSlug(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/** Normalize candidate config keys while preserving caller priority order. */
 export function buildChannelKeyCandidates(...keys: Array<string | undefined | null>): string[] {
   return normalizeUniqueSingleOrTrimmedStringList(keys);
 }
 
+/** Find direct and wildcard entries without choosing fallback precedence yet. */
 export function resolveChannelEntryMatch<T>(params: {
   entries?: Record<string, T>;
   keys: string[];
@@ -67,6 +72,10 @@ export function resolveChannelEntryMatch<T>(params: {
   return match;
 }
 
+/**
+ * Resolve a channel entry using direct, normalized direct, parent, normalized
+ * parent, then wildcard precedence.
+ */
 export function resolveChannelEntryMatchWithFallback<T>(params: {
   entries?: Record<string, T>;
   keys: string[];
@@ -151,6 +160,10 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
   return direct;
 }
 
+/**
+ * Apply nested allowlist semantics: an unconfigured outer or inner list does
+ * not constrain access, but configured lists must match at each configured level.
+ */
 export function resolveNestedAllowlistDecision(params: {
   outerConfigured: boolean;
   outerMatched: boolean;

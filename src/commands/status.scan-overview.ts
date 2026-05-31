@@ -101,6 +101,7 @@ async function resolveStatusChannelsStatus(params: {
   }).catch(() => null);
 }
 
+/** Shared status scan facts used by text and JSON status paths. */
 export type StatusScanOverviewResult = {
   coldStart: boolean;
   hasConfiguredChannels: boolean;
@@ -131,6 +132,12 @@ export type StatusScanOverviewResult = {
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
 };
 
+/**
+ * Collects the common status overview in dependency-light stages.
+ *
+ * Optional live channel probes and fallback runtimes are controlled by callers
+ * so fast JSON, text status, and deep status can share the same scan shape.
+ */
 export async function collectStatusScanOverview(params: {
   commandName: string;
   opts: { timeoutMs?: number; all?: boolean };
@@ -298,6 +305,8 @@ export async function collectStatusScanOverview(params: {
         return { channelsStatus, channelIssues, channels };
       })()
     : {
+        // Fast callers can skip channel table construction entirely but still
+        // receive the same overview shape as the full scan path.
         channelsStatus: null,
         channelIssues: [],
         channels: { rows: [], details: [] },
@@ -323,6 +332,10 @@ export async function collectStatusScanOverview(params: {
   };
 }
 
+/**
+ * Resolves the full status summary unless cold-start mode deliberately skipped
+ * network and store checks.
+ */
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
   includeChannelSummary?: boolean;

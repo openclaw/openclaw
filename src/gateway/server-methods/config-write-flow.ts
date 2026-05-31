@@ -50,7 +50,7 @@ function normalizeTrustedProxyAuthForCompare(auth: ReturnType<typeof resolveGate
   };
 }
 
-/** Compares the effective shared Gateway auth surface that active clients use. */
+/** Compares the effective shared Gateway auth surface that active clients use after env expansion. */
 export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
   const prevResolvedAuth = resolveGatewayAuth({
     authConfig: prev.gateway?.auth,
@@ -94,7 +94,7 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
   return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
 }
 
-/** Compares against the active secrets-expanded config when one is available. */
+/** Compares against the active secrets-expanded config when one is available in the gateway. */
 export function didActiveSharedGatewayAuthChange(params: {
   fallbackPrev: OpenClawConfig;
   next: OpenClawConfig;
@@ -225,6 +225,8 @@ export async function commitGatewayConfigWrite(params: {
       ...params.writeOptions,
       runtimeRefresh: {
         ...params.writeOptions.runtimeRefresh,
+        // Config writes already refresh runtime state; keep auth-store refs out
+        // so secret-backed auth is compared against the active expanded snapshot.
         includeAuthStoreRefs: false,
       },
     },
@@ -269,6 +271,8 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     note,
   });
   const sentinelPath = await tryWriteRestartSentinelPayload(payload);
+  // Hot reload handles reloadable paths itself. Direct restarts are reserved
+  // for disabled reload mode or gateway-owned paths that cannot be hot-applied.
   const restart = shouldScheduleDirectConfigRestart({
     changedPaths: params.changedPaths,
     nextConfig: params.nextConfig,

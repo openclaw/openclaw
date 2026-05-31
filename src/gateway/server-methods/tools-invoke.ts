@@ -29,6 +29,7 @@ function resolveRpcErrorCode(params: {
   return "internal_error";
 }
 
+/** Gateway method for invoking registered tools through the shared tool dispatcher. */
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
   "tools.invoke": async ({ params, respond, context }) => {
     if (!validateToolsInvokeParams(params)) {

@@ -2,6 +2,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 
 export const ACCESS_GROUP_ALLOW_FROM_PREFIX = "accessGroup:";
 
+/** Extracts the access-group name from an allowFrom entry, or null for direct sender ids. */
 export function parseAccessGroupAllowFromEntry(entry: string): string | null {
   const trimmed = entry.trim();
   if (!trimmed.startsWith(ACCESS_GROUP_ALLOW_FROM_PREFIX)) {
@@ -16,6 +17,8 @@ export function mergeDmAllowFromSources(params: {
   storeAllowFrom?: Array<string | number>;
   dmPolicy?: string;
 }): string[] {
+  // Explicit open/allowlist DM policy owns access; legacy store allowFrom values
+  // are only merged when policy falls back to stored sender allowlists.
   const storeEntries =
     params.dmPolicy === "allowlist" || params.dmPolicy === "open"
       ? []
@@ -40,6 +43,7 @@ export function resolveGroupAllowFromSources(params: {
   return normalizeStringEntries(scoped);
 }
 
+/** Returns the first argument that was supplied, preserving false/null values. */
 export function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
     if (value !== undefined) {

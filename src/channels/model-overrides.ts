@@ -58,6 +58,10 @@ function resolveProviderEntry(
   );
 }
 
+/**
+ * Build candidate keys for group/channel overrides from live message metadata
+ * and parent session bindings.
+ */
 function buildChannelCandidates(
   params: Pick<
     ChannelModelOverrideParams,
@@ -123,6 +127,10 @@ function buildGenericParentOverrideCandidates(sessionKey: string | null | undefi
   return buildChannelKeyCandidates(threadId ? baseSessionKey : raw.rawId);
 }
 
+/**
+ * Resolve legacy direct/group override keys before richer conversation binding
+ * candidates so existing config keeps precedence.
+ */
 function resolveDirectChannelModelMatch(params: {
   channel: string;
   providerEntries: Record<string, string>;
@@ -154,6 +162,7 @@ function resolveDirectChannelModelMatch(params: {
   return { model, matchKey: match.matchKey, matchSource: match.matchSource };
 }
 
+/** Resolve the configured model override for an inbound channel conversation. */
 export function resolveChannelModelOverride(
   params: ChannelModelOverrideParams,
 ): ChannelModelOverride | null {

@@ -35,6 +35,7 @@ function formatCoords(latitude: number, longitude: number): string {
   return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
 }
 
+/** Format inbound location metadata into the compact text shown to agents. */
 export function formatLocationText(location: NormalizedLocation): string {
   const resolved = resolveLocation(location);
   const coords = formatCoords(resolved.latitude, resolved.longitude);
@@ -47,6 +48,7 @@ export function formatLocationText(location: NormalizedLocation): string {
   return `📍 ${coords}${accuracy}`;
 }
 
+/** Convert inbound location metadata into stable template/context fields. */
 export function toLocationContext(location: NormalizedLocation): {
   LocationLat: number;
   LocationLon: number;

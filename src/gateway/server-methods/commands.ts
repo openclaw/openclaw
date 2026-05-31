@@ -78,6 +78,8 @@ function resolveNativeName(cmd: ChatCommandDefinition, provider?: string): strin
   if (!provider || !cmd.nativeName) {
     return baseName;
   }
+  // Channel plugins may remap native slash-command names per provider while
+  // the command key remains the stable registry identity.
   return (
     getChannelPlugin(provider)?.commands?.resolveNativeCommandName?.({
       commandKey: cmd.key,
@@ -158,6 +160,8 @@ function mapCommand(
 ): CommandEntry {
   const shouldIncludeArgs = includeArgs && cmd.acceptsArgs && cmd.args?.length;
   const nativeName = cmd.scope === "text" ? undefined : resolveNativeName(cmd, provider);
+  // Text views expose slash-less primary names plus aliases; native views use
+  // provider-specific command names so control UIs can mirror platform menus.
   return {
     name: clampString(
       nameSurface === "text" ? resolvePrimaryTextName(cmd) : (nativeName ?? cmd.key),
@@ -245,6 +249,8 @@ export function buildCommandsListResult(params: {
 
   commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));
 
+  // The protocol caps response size; keep discovery deterministic by truncating
+  // only after all native, skill, and plugin command sources are merged.
   return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }
 

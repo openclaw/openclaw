@@ -12,6 +12,9 @@ export type LinkChannelContext = {
   plugin: ChannelPlugin;
 };
 
+/**
+ * Finds the first read-only channel plugin that can report linked-account state.
+ */
 export async function resolveLinkChannelContext(
   cfg: OpenClawConfig,
   options: { sourceConfig?: OpenClawConfig } = {},
@@ -42,6 +45,8 @@ export async function resolveLinkChannelContext(
         })
       : undefined;
     const summaryRecord = summary;
+    // Only summaries that explicitly expose a linked boolean are usable here;
+    // setup-capable plugins without that contract should not affect status.
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     if (linked === null) {

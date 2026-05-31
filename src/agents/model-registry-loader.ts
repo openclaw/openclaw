@@ -12,6 +12,7 @@ export type LoadAgentModelRegistryOptions = {
   workspaceDir?: string;
 };
 
+/** Builds the agent model registry using the same auth store and plugin metadata view as runtime model selection. */
 export function loadAgentModelRegistry(
   config: OpenClawConfig,
   options: LoadAgentModelRegistryOptions = {},

@@ -30,6 +30,7 @@ function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
 }
 
+/** Runs the lightweight security audit used by status reports. */
 export async function resolveStatusSecurityAudit(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
@@ -61,6 +62,7 @@ type StatusUsageSummaryOptions = {
   agentDir?: string;
 };
 
+/** Loads provider usage data for status without importing the usage module up front. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
   return await loadProviderUsageSummary({
@@ -70,10 +72,12 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
   });
 }
 
+/** Exposes the lazy provider-usage module for tests and JSON status callers. */
 export async function loadStatusProviderUsageModule() {
   return await loadProviderUsage();
 }
 
+/** Calls the gateway health probe and lets errors surface to the caller. */
 export async function resolveStatusGatewayHealth(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -87,6 +91,7 @@ export async function resolveStatusGatewayHealth(params: {
   });
 }
 
+/** Calls gateway health for diagnostics, converting unreachable/errors into payloads. */
 export async function resolveStatusGatewayHealthSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -111,6 +116,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
   }).catch((err) => ({ error: String(err) }));
 }
 
+/** Reads gateway delivery diagnostics when reachable, returning null on failure. */
 export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -134,6 +140,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   }).catch(() => null);
 }
 
+/** Reads the latest heartbeat event in deep status mode. */
 export async function resolveStatusLastHeartbeat(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -151,6 +158,7 @@ export async function resolveStatusLastHeartbeat(params: {
   }).catch(() => null);
 }
 
+/** Reads managed gateway and node service summaries in parallel. */
 export async function resolveStatusServiceSummaries() {
   return await Promise.all([getDaemonStatusSummary(), getNodeDaemonStatusSummary()]);
 }
@@ -162,6 +170,10 @@ type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSumm
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
+/**
+ * Resolves optional runtime details for status commands, gating expensive probes
+ * behind `usage` and `deep` so default status remains fast.
+ */
 export async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -218,6 +230,10 @@ export async function resolveStatusRuntimeDetails(params: {
   };
 }
 
+/**
+ * Resolves the full runtime snapshot shared by text and JSON status commands,
+ * optionally adding the security audit before the common runtime details.
+ */
 export async function resolveStatusRuntimeSnapshot(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;

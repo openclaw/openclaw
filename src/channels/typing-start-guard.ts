@@ -4,6 +4,10 @@ type TypingStartGuard = {
   isTripped: () => boolean;
 };
 
+/**
+ * Guard repeated typing-start attempts so sealed replies and failing channel
+ * APIs stop scheduling more typing work.
+ */
 export function createTypingStartGuard(params: {
   isSealed: () => boolean;
   shouldBlock?: () => boolean;
@@ -19,6 +23,8 @@ export function createTypingStartGuard(params: {
   let consecutiveFailures = 0;
   let tripped = false;
 
+  // The sealed/tripped checks are intentionally evaluated at each start call;
+  // typing indicators may be scheduled after the reply has already completed.
   const isBlocked = () => {
     if (params.isSealed()) {
       return true;
@@ -43,6 +49,8 @@ export function createTypingStartGuard(params: {
       if (params.rethrowOnError) {
         throw err;
       }
+      // A tripped guard is sticky until reset so noisy channel failures do not
+      // keep producing errors for the same reply lifecycle.
       if (maxConsecutiveFailures && consecutiveFailures >= maxConsecutiveFailures) {
         tripped = true;
         params.onTrip?.();

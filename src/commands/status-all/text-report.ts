@@ -3,6 +3,7 @@ import type { RenderTableOptions, TableColumn } from "../../../packages/terminal
 type HeadingFn = (text: string) => string;
 type TableRenderer = (input: RenderTableOptions) => string;
 
+/** Render-ready section model used by `status --all` text assembly. */
 export type StatusReportSection =
   | {
       kind: "lines";
@@ -26,6 +27,7 @@ export type StatusReportSection =
       skipIfEmpty?: boolean;
     };
 
+/** Appends a styled section heading, inserting the blank separator when needed. */
 export function appendStatusSectionHeading(params: {
   lines: string[];
   heading: HeadingFn;
@@ -68,6 +70,10 @@ function appendStatusTableSection<Row extends Record<string, string>>(params: {
   );
 }
 
+/**
+ * Appends mixed raw, line, and table sections in order, honoring `skipIfEmpty`
+ * before headings so optional sections do not leave blank output gaps.
+ */
 export function appendStatusReportSections(params: {
   lines: string[];
   heading: HeadingFn;
@@ -78,6 +84,8 @@ export function appendStatusReportSections(params: {
       if (section.skipIfEmpty && section.body.length === 0) {
         continue;
       }
+      // Raw sections are already formatted by their caller, so they bypass the
+      // heading/separator path used by named sections.
       params.lines.push(...section.body);
       continue;
     }
@@ -106,6 +114,8 @@ export function appendStatusReportSections(params: {
       rows: section.rows,
     });
     if (section.trailer) {
+      // Table trailers belong directly under their table, before the next
+      // section heading inserts a separator.
       params.lines.push(section.trailer);
     }
   }

@@ -36,16 +36,19 @@ function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
 }
 
+/** Memory provider status annotated with the agent it was resolved for. */
 export type MemoryStatusSnapshot = MemoryProviderStatus & {
   agentId: string;
 };
 
+/** Resolved memory plugin enablement and slot state for status scans. */
 export type MemoryPluginStatus = {
   enabled: boolean;
   slot: string | null;
   reason?: string;
 };
 
+/** Gateway connection/probe/auth snapshot shared by text and JSON status scans. */
 export type GatewayProbeSnapshot = {
   gatewayConnection: ReturnType<typeof buildGatewayConnectionDetailsWithResolvers>;
   remoteUrlMissing: boolean;
@@ -131,6 +134,8 @@ async function applyLocalStatusRpcFallback(params: {
   if (!shouldTryLocalStatusRpcFallback(params)) {
     return params.gatewayProbe;
   }
+  // Presence probes can time out on local startup while the gateway status RPC
+  // is already usable; keep this fallback short so status stays responsive.
   const boundedFallbackTimeoutMs = Math.min(2000, Math.max(1000, params.timeoutMs));
   const status = await loadGatewayCallModule()
     .then(({ callGateway }) =>
@@ -177,6 +182,7 @@ function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): bo
   return agents.some((agent) => agent?.id === agentId && Object.hasOwn(agent, "memorySearch"));
 }
 
+/** Resolves whether status should inspect memory and which slot owns it. */
 export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
@@ -189,6 +195,10 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
   return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
 }
 
+/**
+ * Resolves gateway target, auth, reachability, optional presence, and fallback
+ * call overrides in one snapshot for all status surfaces.
+ */
 export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
   opts: {
@@ -250,6 +260,8 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbeAuthWarning &&
     gatewayProbe?.ok === false
   ) {
+    // Auth warnings are most actionable beside the failed probe error; merge
+    // them unless the caller wants a separate warning field.
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
       : gatewayProbeAuthWarning;
@@ -280,6 +292,7 @@ export async function resolveGatewayProbeSnapshot(params: {
   };
 }
 
+/** Builds the Control UI HTTPS URL advertised through Tailscale MagicDNS. */
 export function buildTailscaleHttpsUrl(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
@@ -290,6 +303,10 @@ export function buildTailscaleHttpsUrl(params: {
     : null;
 }
 
+/**
+ * Resolves memory status while avoiding implicit creation/inspection of the
+ * default builtin store when the user has not configured memory search.
+ */
 export async function resolveSharedMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: { defaultId?: string | null };

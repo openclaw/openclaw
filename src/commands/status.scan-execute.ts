@@ -9,6 +9,10 @@ import {
   type MemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
+/**
+ * Completes a status scan from the shared overview result by resolving memory
+ * and summary data, then packaging the legacy scan result shape.
+ */
 export async function executeStatusScanFromOverview(params: {
   overview: StatusScanOverviewResult;
   runtime?: RuntimeEnv;
@@ -26,6 +30,8 @@ export async function executeStatusScanFromOverview(params: {
   pluginCompatibility: PluginCompatibilityNotice[];
 }) {
   const memoryPlugin = resolveMemoryPluginStatus(params.overview.cfg);
+  // Memory and summary collection are independent; keep them parallel so deep
+  // status does not serialize disk-backed memory work with summary assembly.
   const [memory, summary] = await Promise.all([
     params.resolveMemory({
       cfg: params.overview.cfg,

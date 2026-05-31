@@ -38,8 +38,10 @@ function readModelPricingDegradedDetail(health: unknown): string | null {
     : "pricing bootstrap or refresh failed";
 }
 
+/** Chooses the target whose details should anchor gateway-status summaries and JSON primaryTargetId. */
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
+  // Explicit and SSH targets reflect the operator's intent, so they outrank auto-discovered config targets.
   return (
     reachable.find((entry) => entry.target.kind === "explicit") ??
     reachable.find((entry) => entry.target.kind === "sshTunnel") ??
@@ -49,6 +51,7 @@ export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   );
 }
 
+/** Converts probe, tunnel, TLS, and degraded health states into user-facing gateway warnings. */
 export function buildGatewayStatusWarnings(params: {
   probed: GatewayStatusProbedTarget[];
   sshTarget: string | null;
@@ -137,6 +140,7 @@ export function buildGatewayStatusWarnings(params: {
   return warnings;
 }
 
+/** Emits the machine-readable gateway-status payload and exits nonzero when no target is reachable. */
 export function writeGatewayStatusJson(params: {
   runtime: RuntimeEnv;
   startedAt: number;
@@ -193,6 +197,7 @@ export function writeGatewayStatusJson(params: {
   }
 }
 
+/** Emits the terminal gateway-status report with discovery, target, config, and warning sections. */
 export function writeGatewayStatusText(params: {
   runtime: RuntimeEnv;
   rich: boolean;

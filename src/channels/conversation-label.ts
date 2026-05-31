@@ -24,6 +24,12 @@ function shouldAppendId(id: string): boolean {
   return false;
 }
 
+/**
+ * Resolve a stable human-readable conversation label for transcript/session UI.
+ *
+ * Group labels append numeric/email-like ids only when the visible name does
+ * not already carry the unique identifier.
+ */
 export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   const explicit = normalizeOptionalString(ctx.ConversationLabel);
   if (explicit) {

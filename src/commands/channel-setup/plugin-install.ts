@@ -39,6 +39,7 @@ function toOnboardingPluginInstallEntry(
   };
 }
 
+/** Installs the plugin behind a channel setup catalog entry using the shared onboarding installer. */
 export async function ensureChannelSetupPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
@@ -67,6 +68,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
   };
 }
 
+/** Reloads channel setup plugins from config so newly installed setup wizards become available. */
 export function reloadChannelSetupPluginRegistry(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -121,6 +123,7 @@ function resolveScopedChannelPluginId(params: {
   if (explicitPluginId) {
     return explicitPluginId;
   }
+  // Prefer trusted catalog plugin ids; manifest discovery is a fallback only when exactly one plugin owns the channel.
   return (
     getTrustedChannelPluginCatalogEntry(params.channel, {
       cfg: params.cfg,
@@ -143,6 +146,7 @@ function resolveUniqueManifestScopedChannelPluginId(params: {
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/** Reloads the registry for a single channel, narrowing activation when a unique plugin owner is known. */
 export function reloadChannelSetupPluginRegistryForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -162,6 +166,7 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
   });
 }
 
+/** Loads an inactive setup registry snapshot for one channel so setup status can be inspected without activation. */
 export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;

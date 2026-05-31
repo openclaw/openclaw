@@ -13,11 +13,13 @@ import type { StatusSummary } from "./status.types.js";
 type StatusCommandOverviewRowsParams = Parameters<typeof buildStatusCommandOverviewRows>[0];
 type StatusCommandReportDataParams = Parameters<typeof buildStatusCommandReportData>[0];
 
+/** Minimal config fixture shared by status overview/report tests. */
 export const baseStatusCfg = {
   update: { channel: "stable" },
   gateway: { bind: "loopback" },
 } as const;
 
+/** Update fixture with both git and registry data populated. */
 export const baseStatusUpdate = {
   installKind: "git",
   git: {
@@ -46,6 +48,7 @@ export const baseStatusExpectedUpdateChannelInfo = isBetaTag(VERSION)
 
 export const baseStatusExpectedUpdateChannelLabel = baseStatusExpectedUpdateChannelInfo.label;
 
+/** Gateway probe fixture used by tests that need a reachable remote gateway. */
 export const baseStatusGatewaySnapshot = {
   gatewayMode: "remote",
   remoteUrlMissing: false,
@@ -91,6 +94,7 @@ export const baseStatusServices = {
   nodeOnlyGateway: null,
 };
 
+/** Fully assembled status overview fixture with services attached. */
 export const baseStatusOverviewSurface = {
   ...baseStatusOverviewScanFields,
   ...baseStatusServices,
@@ -217,6 +221,12 @@ const statusTestTheme = {
   error: (value: string) => `error(${value})`,
 };
 
+/**
+ * Creates render params for status overview row tests.
+ *
+ * Callers override only the fields under test so fixtures stay aligned with the
+ * production report shape.
+ */
 export function createStatusCommandOverviewRowsParams(
   overrides: Partial<StatusCommandOverviewRowsParams> = {},
 ): StatusCommandOverviewRowsParams {
@@ -239,6 +249,9 @@ export function createStatusCommandOverviewRowsParams(
   };
 }
 
+/**
+ * Creates render-ready status report data params for section-level tests.
+ */
 export function createStatusCommandReportDataParams(
   overrides: Partial<StatusCommandReportDataParams> = {},
 ): StatusCommandReportDataParams {

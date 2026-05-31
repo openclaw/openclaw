@@ -14,6 +14,7 @@ export type ListRowModel = {
 
 export type ModelAuthAvailabilityResolver = (provider: string) => boolean;
 
+/** Projects a registry/configured model into the stable row shape used by model-list renderers. */
 export function toModelRow(params: {
   model?: ListRowModel;
   key: string;

@@ -15,6 +15,7 @@ import type { ChannelId } from "./plugins/types.public.js";
 export type { AccessGroupMembershipResolver } from "../plugin-sdk/access-groups.js";
 
 export type DirectDmCommandAuthorizationRuntime = {
+  /** Returns true only for messages that should run command authorization. */
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
   /** @deprecated Command authorization is resolved by channel ingress. Kept for runtime injection compatibility. */
   resolveCommandAuthorizedFromAuthorizers?: (params: {
@@ -80,6 +81,8 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
         })
       : [];
   const [allowFrom, effectiveStoreAllowFrom] = await Promise.all([
+    // Expand config and persisted pairing allowlists separately so the access
+    // result can preserve which source made the DM reachable.
     expandAllowFromWithAccessGroups({
       cfg: params.cfg,
       allowFrom: params.allowFrom,
@@ -158,6 +161,8 @@ export function createPreCryptoDirectDmAuthorizer(params: {
     reply: (text: string) => Promise<void>;
   }): Promise<"allow" | "block" | "pairing"> => {
     const resolved = await params.resolveAccess(input.senderId);
+    // Older callers may return either the whole legacy result or just the
+    // nested access object; accept both while this compatibility helper exists.
     const access = "access" in resolved ? resolved.access : resolved;
     if (access.decision === "allow") {
       return "allow";

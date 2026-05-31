@@ -30,6 +30,7 @@ import {
 } from "./channels-token-summary.js";
 import { formatTimeAgo } from "./format.js";
 
+/** Summary row emitted by the generic `status --all` channel collector. */
 export type ChannelRow = {
   id: ChannelId;
   label: string;
@@ -91,6 +92,11 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
   return base;
 };
 
+/**
+ * Formats per-account notes for the detail section without re-deciding channel
+ * readiness; the summary row owns state precedence, this keeps row notes
+ * diagnostic and account-local.
+ */
 const buildAccountNotes = (params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -177,6 +183,10 @@ function resolveLinkFields(summary: unknown): {
   return { statusState, linked, authAgeMs, selfE164 };
 }
 
+/**
+ * Checks configured file-backed channel inputs after account normalization so
+ * plugin-projected snapshots and raw config fields share one warning path.
+ */
 function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
   const missing: string[] = [];
   for (const entry of accounts) {
@@ -214,8 +224,13 @@ function formatLoadFailureDetail(message: string): string {
   return `plugin load failed: ${reason}; run openclaw doctor --fix`;
 }
 
-// `status --all` channels table.
-// Keep this generic: channel-specific rules belong in the channel plugin.
+/**
+ * Builds the generic `status --all` channel table and account detail sections.
+ *
+ * Keep this boundary generic: channel-specific readiness rules belong in the
+ * channel plugin's status/config hooks, while this layer only merges plugin
+ * snapshots, live gateway credential proof, and configured-plugin fallbacks.
+ */
 export async function buildChannelsTable(
   cfg: OpenClawConfig,
   opts?: {
@@ -282,6 +297,8 @@ export async function buildChannelsTable(
         !credentialResolutionSkipped &&
         !hasRuntimeCredentialAvailable({ liveAccounts, accountId: a.accountId }),
     );
+    // Fast status paths may not read secrets, while a live gateway snapshot can
+    // still prove that configured credentials are available in the runtime.
     const accountsForTokenSummary = accounts.map((entry) =>
       hasConfiguredUnavailableCredentialStatus(entry.account) &&
       (credentialResolutionSkipped ||
@@ -318,6 +335,8 @@ export async function buildChannelsTable(
     const label = plugin.meta.label ?? plugin.id;
 
     const state = (() => {
+      // Hard failures win over token/link success so missing files or plugin
+      // issues stay visible even when another source reports the account ready.
       if (!anyEnabled) {
         return "off";
       }
@@ -349,6 +368,8 @@ export async function buildChannelsTable(
     })();
 
     const detail = (() => {
+      // Match the state precedence above; the detail explains the first
+      // actionable condition rather than appending every lower-priority hint.
       if (!anyEnabled) {
         if (!defaultEntry) {
           return "disabled";

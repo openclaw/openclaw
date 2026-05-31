@@ -141,6 +141,7 @@ function stripTrailingEllipsis(text: string): string {
   return text.replace(/(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
 }
 
+/** Detects final messages that look clipped by a trailing ellipsis. */
 export function isPotentialTruncatedFinal(finalText: string): boolean {
   const trimmedFinal = finalText.trimEnd();
   const untruncatedFinal = stripTrailingEllipsis(trimmedFinal);
@@ -149,6 +150,7 @@ export function isPotentialTruncatedFinal(finalText: string): boolean {
   );
 }
 
+/** Selects a longer transcript-backed final when it is a clear continuation of the emitted text. */
 export function selectLongerFinalText(params: {
   finalText: string;
   candidateTexts: readonly (string | undefined)[];
@@ -170,6 +172,8 @@ export function selectLongerFinalText(params: {
     const continuation = candidateText.slice(untruncatedFinal.length).trimStart();
     if (
       continuation.length >= MIN_TRUNCATED_FINAL_CONTINUATION_CHARS &&
+      // Require an alphanumeric continuation so decorative punctuation does not
+      // turn an intentionally shortened final into a transcript replacement.
       /^[\p{L}\p{N}]/u.test(continuation)
     ) {
       return candidateText;
@@ -178,6 +182,7 @@ export function selectLongerFinalText(params: {
   return undefined;
 }
 
+/** Replaces a possibly truncated final with a transcript candidate when the candidate is safer. */
 export async function resolveTranscriptBackedChannelFinalText(params: {
   finalText: string;
   resolveCandidateText: () => Promise<string | undefined>;
@@ -204,6 +209,7 @@ export type ChannelProgressDraftRenderMode = "text" | "rich";
 
 const EMOJI_PREFIX_RE = /^\p{Extended_Pictographic}/u;
 
+/** Structured progress event accepted by channel progress draft renderers. */
 export type ChannelProgressDraftLineInput =
   | {
       event: "tool";
@@ -265,6 +271,7 @@ export type ChannelProgressDraftLineInput =
 
 export type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
 
+/** Normalized progress line used by text and rich channel draft renderers. */
 export type ChannelProgressDraftLine = {
   id?: string;
   kind: ChannelProgressDraftLineKind;
@@ -373,6 +380,7 @@ function shouldPrefixProgressLine(line: string): boolean {
   return !EMOJI_PREFIX_RE.test(line);
 }
 
+/** Formats one progress event into display text, dropping events that should stay silent. */
 export function formatChannelProgressDraftLine(
   input: ChannelProgressDraftLineInput,
   options?: ChannelProgressLineOptions,
@@ -380,6 +388,7 @@ export function formatChannelProgressDraftLine(
   return buildChannelProgressDraftLine(input, options)?.text;
 }
 
+/** Resolves line-formatting options from channel streaming config plus caller overrides. */
 export function resolveChannelProgressDraftLineOptions(
   entry: StreamingCompatEntry | null | undefined,
   options?: ChannelProgressLineOptions,
@@ -390,6 +399,7 @@ export function resolveChannelProgressDraftLineOptions(
   };
 }
 
+/** Builds a normalized progress line using channel config for command text handling. */
 export function buildChannelProgressDraftLineForEntry(
   entry: StreamingCompatEntry | null | undefined,
   input: ChannelProgressDraftLineInput,
@@ -401,6 +411,7 @@ export function buildChannelProgressDraftLineForEntry(
   );
 }
 
+/** Formats one progress event using channel config for command text handling. */
 export function formatChannelProgressDraftLineForEntry(
   entry: StreamingCompatEntry | null | undefined,
   input: ChannelProgressDraftLineInput,
@@ -409,6 +420,7 @@ export function formatChannelProgressDraftLineForEntry(
   return buildChannelProgressDraftLineForEntry(entry, input, options)?.text;
 }
 
+/** Converts a structured progress event into a normalized progress draft line. */
 export function buildChannelProgressDraftLine(
   input: ChannelProgressDraftLineInput,
   options?: ChannelProgressLineOptions,
@@ -571,6 +583,8 @@ export function createChannelProgressDraftGate(params: {
         return true;
       }
       if (workEvents > 1) {
+        // Start immediately on the second work event; sustained work should not
+        // wait for the initial quiet-period timer.
         await start();
         return true;
       }
@@ -705,6 +719,8 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
     return true;
   }
   if (options?.draftStreamActive === true) {
+    // Active draft streams own tool progress so channels do not emit duplicate
+    // default progress messages beside the draft.
     return true;
   }
   return options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry);
@@ -733,11 +749,14 @@ export function resolveChannelPreviewStreamMode(
     return legacy;
   }
   if (typeof entry?.streaming === "boolean") {
+    // Boolean streaming predates mode strings: true means partial preview,
+    // false keeps streaming fully disabled.
     return entry.streaming ? "partial" : "off";
   }
   return defaultMode;
 }
 
+/** Returns the progress-draft config object, tolerating absent or malformed config. */
 export function resolveChannelProgressDraftConfig(
   entry: StreamingCompatEntry | null | undefined,
 ): ChannelStreamingProgressConfig {
@@ -778,7 +797,8 @@ export function resolveChannelProgressDraftLabel(params: {
   const labels = normalizeProgressLabels(progress.labels);
   const index =
     typeof params.seed === "string" && params.seed.length > 0
-      ? hashProgressSeed(params.seed) % labels.length
+      ? // Seeded labels keep a session's draft header stable across rerenders.
+        hashProgressSeed(params.seed) % labels.length
       : Math.floor(Math.max(0, Math.min(0.999999, params.random?.() ?? 0)) * labels.length);
   return labels[index] ?? labels[0];
 }
@@ -926,6 +946,7 @@ export function normalizeChannelProgressDraftLineIdentity(
   return text?.replace(/\s+/g, " ").trim() ?? "";
 }
 
+/** Merges a progress line by id or content while keeping the newest bounded window. */
 export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
   lines: TLine[],
   line: TLine,
@@ -945,6 +966,8 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === normalized) {
         return lines;
       }
+      // Same id means update in place, preserving the existing ordering instead
+      // of appending noisy duplicates for one running item/tool call.
       const next = [...lines];
       next[existingIndex] = line;
       return next.slice(-maxLines);
@@ -957,6 +980,7 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
   return [...lines, line].slice(-maxLines);
 }
 
+/** Formats a bounded progress draft body with optional label, bullets, and line compaction. */
 export function formatChannelProgressDraftText(params: {
   entry?: StreamingCompatEntry | null;
   lines: Array<string | ChannelProgressDraftLine>;

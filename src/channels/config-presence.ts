@@ -36,6 +36,7 @@ type ChannelPresenceSignal = {
   source: ChannelPresenceSignalSource;
 };
 
+/** Returns true when a channel config has settings beyond an enabled/disabled marker. */
 export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
@@ -43,6 +44,7 @@ export function hasMeaningfulChannelConfig(value: unknown): boolean {
   return Object.keys(value).some((key) => key !== "enabled");
 }
 
+/** Lists channels explicitly disabled in config, normalized for channel-id comparisons. */
 export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (!channels) {
@@ -102,6 +104,7 @@ function hasPersistedAuthState(params: {
   });
 }
 
+/** Lists potentially configured channel ids from config, env, and persisted auth state. */
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -114,6 +117,7 @@ export function listPotentialConfiguredChannelIds(
   );
 }
 
+/** Lists channel presence signals with source provenance for setup/startup decisions. */
 export function listPotentialConfiguredChannelPresenceSignals(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -126,6 +130,8 @@ export function listPotentialConfiguredChannelPresenceSignals(
     if (seenSignals.has(key)) {
       return;
     }
+    // De-dupe per source so callers can still see that one channel was found
+    // through config and env without repeating identical provenance.
     seenSignals.add(key);
     signals.push({ channelId, source });
   };
@@ -166,6 +172,8 @@ export function listPotentialConfiguredChannelPresenceSignals(
     }
   }
 
+  // Only return signals for ids that survived the same configured-channel set
+  // used by listPotentialConfiguredChannelIds.
   return signals.filter((signal) => configuredChannelIds.has(signal.channelId));
 }
 
@@ -192,6 +200,7 @@ function hasEnvConfiguredChannel(
   );
 }
 
+/** Fast boolean check for any config/env/persisted-auth channel presence. */
 export function hasPotentialConfiguredChannels(
   cfg: OpenClawConfig | null | undefined,
   env: NodeJS.ProcessEnv = process.env,

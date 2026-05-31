@@ -20,6 +20,7 @@ export type AuthChoiceGroup = {
   options: AuthChoiceOption[];
 };
 
+/** Core auth choices that are always available before plugin/provider contributions are discovered. */
 export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "custom-api-key",
@@ -31,6 +32,7 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
 ];
 
+/** Formats the static auth-choice enum used by CLI parsers before dynamic provider metadata loads. */
 export function formatStaticAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   includeLegacyAliases?: boolean;

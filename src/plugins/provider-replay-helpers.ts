@@ -35,6 +35,8 @@ export function buildOpenAICompatibleReplayPolicy(
     modelApi === "openai-chatgpt-responses" ||
     modelApi === "azure-openai-responses";
 
+  // Responses-family transports can accept synthetic tool results during
+  // replay; legacy completions relies on stricter turn validation instead.
   return {
     ...(sanitizeToolCallIds
       ? { sanitizeToolCallIds: true, toolCallIdMode: "strict" as const }
@@ -73,6 +75,8 @@ export function buildStrictAnthropicReplayPolicy(
       ? {
           sanitizeToolCallIds: true,
           toolCallIdMode: "strict" as const,
+          // Native Anthropic providers can replay original tool_use ids, while
+          // OpenAI-compatible Anthropic shims need sanitized strict ids.
           ...(options.preserveNativeAnthropicToolUseIds
             ? { preserveNativeAnthropicToolUseIds: true }
             : {}),
@@ -165,6 +169,8 @@ function hasGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState): 
 }
 
 function markGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState): void {
+  // One marker per session is enough: it tells diagnostics that history was
+  // repaired for Google assistant-first ordering without bloating transcripts.
   sessionState.appendCustomEntry(GOOGLE_TURN_ORDERING_CUSTOM_TYPE, {
     timestamp: Date.now(),
   });
@@ -177,6 +183,8 @@ export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict",
     sanitizeThoughtSignatures: {
+      // Gemini signatures are opaque base64 blobs; preserve camelCase too
+      // because older adapters emitted thoughtSignature instead of snake_case.
       allowBase64Only: true,
       includeCamelCase: true,
     },
@@ -213,6 +221,8 @@ export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {
   const messages = sanitizeGoogleAssistantFirstOrdering(ctx.messages);
+  // Record a marker only when ordering actually changed, so session state
+  // distinguishes repaired history from already-valid Gemini transcripts.
   if (
     messages !== ctx.messages &&
     ctx.sessionState &&

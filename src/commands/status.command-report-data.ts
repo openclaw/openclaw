@@ -29,6 +29,12 @@ import {
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 import type { SessionStatus, StatusSummary } from "./status.types.js";
 
+/**
+ * Builds the render-ready data model for the text `openclaw status` report.
+ *
+ * Runtime probes, scan results, and color/table helpers stay injected so tests
+ * can verify section decisions without touching live gateway state.
+ */
 export async function buildStatusCommandReportData(
   params: {
     opts: {
@@ -117,6 +123,8 @@ export async function buildStatusCommandReportData(
     updateRestartValue: params.updateRestartValue,
   });
 
+  // The optional cache column is intentionally verbose-only; keeping the default
+  // table narrower preserves readable status output on small terminals.
   const sessionsColumns = [
     { key: "Key", header: "Key", minWidth: 20, flex: true },
     { key: "Kind", header: "Kind", minWidth: 6 },
@@ -134,6 +142,8 @@ export async function buildStatusCommandReportData(
         formatCliCommand: params.formatCliCommand,
       })
     : [
+        // Fast status skips the expensive audit but must still tell operators
+        // which command produces the authoritative security report.
         params.theme.muted(
           `Skipped in fast status. Full report: ${params.formatCliCommand("openclaw security audit")}`,
         ),

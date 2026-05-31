@@ -5,6 +5,7 @@ import { projectSafeChannelAccountSnapshotFields } from "./account-snapshot-fiel
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
+/** Build the safe status snapshot for one channel account. */
 export function buildChannelAccountSnapshot(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -23,6 +24,7 @@ export function buildChannelAccountSnapshot(params: {
   };
 }
 
+/** Format allowFrom entries through plugin-specific display rules when present. */
 export function formatChannelAllowFrom(params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -39,6 +41,7 @@ export function formatChannelAllowFrom(params: {
   return normalizeStringEntries(params.allowFrom);
 }
 
+/** Resolve account enabled state, defaulting absent flags to enabled. */
 export function resolveChannelAccountEnabled(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -51,6 +54,7 @@ export function resolveChannelAccountEnabled(params: {
   return enabled !== false;
 }
 
+/** Resolve account configured state through plugin hooks or conservative defaults. */
 export async function resolveChannelAccountConfigured(params: {
   plugin: ChannelPlugin;
   account: unknown;

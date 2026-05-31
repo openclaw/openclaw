@@ -53,6 +53,10 @@ function loadStatusNodeModeModule() {
   return statusNodeModeModuleLoader.load();
 }
 
+/**
+ * Normalizes pairing-required connection failures into the compact recovery
+ * payload shown by `openclaw status`.
+ */
 export function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
@@ -72,6 +76,8 @@ export function resolvePairingRecoveryContext(params: {
         : null,
     };
   }
+  // Older gateway/client combinations only carried pairing failures in text.
+  // Keep the fallback narrow so unrelated connection errors stay unclassified.
   const source = [params.error, params.closeReason]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(" ");
@@ -86,6 +92,10 @@ export function resolvePairingRecoveryContext(params: {
   };
 }
 
+/**
+ * Runs the status command entrypoint, routing JSON/all modes through their
+ * specialized scanners while keeping the default text report on the rich path.
+ */
 export async function statusCommand(
   opts: {
     json?: boolean;

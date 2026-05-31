@@ -61,6 +61,12 @@ function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawC
   return buildEnvSecretRef(envVar);
 }
 
+/**
+ * Build the auth-profile credential for API-key providers.
+ *
+ * Ref mode stores a trusted env ref instead of plaintext; plaintext mode keeps
+ * `${ENV_VAR}`-looking input literal so explicit user input is not reinterpreted.
+ */
 function resolveApiKeySecretInput(
   provider: string,
   input: SecretInput,
@@ -84,6 +90,7 @@ function resolveApiKeySecretInput(
   return normalized;
 }
 
+/** Convert setup/onboarding API-key input into an auth-profile credential. */
 export function buildApiKeyCredential(
   provider: string,
   input: SecretInput,
@@ -113,6 +120,7 @@ export function buildApiKeyCredential(
   };
 }
 
+/** Store or replace an API-key auth profile and return the selected profile id. */
 export function upsertApiKeyProfile(params: {
   provider: string;
   input: SecretInput;
@@ -144,6 +152,12 @@ async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams)
   }
 }
 
+/**
+ * Add an auth profile entry to config and keep provider auth order stable.
+ *
+ * Existing `auth.order` wins; new mixed-mode provider configs derive an order so
+ * the freshly configured profile is preferred without discarding older profiles.
+ */
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {
@@ -244,6 +258,7 @@ function safeRealpathSync(dir: string): string | null {
   }
 }
 
+/** Discover sibling agent profile stores that should receive OAuth credentials. */
 function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   const normalized = path.resolve(primaryAgentDir);
   const parentOfAgent = path.dirname(normalized);
@@ -278,6 +293,10 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   return result;
 }
 
+/**
+ * Persist OAuth credentials for one provider and optionally mirror them to
+ * sibling agent dirs created by the standard multi-agent layout.
+ */
 export async function writeOAuthCredentials(
   provider: string,
   creds: OAuthCredentials,
@@ -316,6 +335,8 @@ export async function writeOAuthCredentials(
         continue;
       }
       try {
+        // Mirroring keeps sibling agents usable after OAuth setup, but the
+        // primary credential already succeeded and must remain the source of truth.
         await upsertAuthProfileWithLock({
           profileId,
           credential,

@@ -8,6 +8,9 @@ import {
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
 
+/**
+ * Resolves the current install root and checks git/registry update state.
+ */
 export async function getUpdateCheckResult(params: {
   timeoutMs: number;
   fetchGit: boolean;
@@ -40,6 +43,9 @@ export type UpdateAvailability = {
   gitBehind: number | null;
 };
 
+/**
+ * Collapses git and registry update checks into a single availability summary.
+ */
 export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
@@ -59,6 +65,9 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
   };
 }
 
+/**
+ * Formats a short update hint for status footer output.
+ */
 export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
   const availability = resolveUpdateAvailability(update);
   if (!availability.available) {
@@ -76,6 +85,9 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
   return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
 }
 
+/**
+ * Builds the one-line update summary shown in status and update commands.
+ */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   const parts: string[] = [];
 

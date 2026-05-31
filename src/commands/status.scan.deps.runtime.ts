@@ -12,6 +12,12 @@ type StatusMemoryManager = {
   close?(): Promise<void>;
 };
 
+/**
+ * Returns a narrow memory manager adapter for status probes.
+ *
+ * The adapter exposes only read/status methods so scan code cannot accidentally
+ * depend on broader memory runtime capabilities.
+ */
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -21,6 +27,8 @@ export async function getMemorySearchManager(params: {
   if (!manager) {
     return { manager: null };
   }
+  // Older memory runtimes may not expose the store-level probe; keep that
+  // optional so status can still report provider availability.
   const probeVectorStoreAvailability = manager.probeVectorStoreAvailability
     ? async () => await manager.probeVectorStoreAvailability!()
     : undefined;

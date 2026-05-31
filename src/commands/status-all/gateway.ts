@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 
+/**
+ * Reads a best-effort non-empty log tail for status diagnostics; unreadable
+ * files are treated as absent so `status --all` stays read-only and resilient.
+ */
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
   if (!raw.trim()) {
@@ -49,6 +53,8 @@ function consumeJsonBlock(
   const parts: string[] = [startLine.slice(braceAt)];
   let depth = countMatches(parts[0] ?? "", "{") - countMatches(parts[0] ?? "", "}");
   let i = startIndex;
+  // Log tails may start after the opening line of a pretty-printed JSON error;
+  // depth tracking keeps multi-line OAuth payloads grouped before redaction.
   while (depth > 0 && i + 1 < lines.length) {
     i += 1;
     const next = lines[i] ?? "";
@@ -58,6 +64,12 @@ function consumeJsonBlock(
   return { json: parts.join("\n"), endIndex: i };
 }
 
+/**
+ * Compacts noisy gateway log tails into stable diagnostic lines for humans.
+ *
+ * Repeated OAuth refresh and GWS failure shapes are grouped before the final
+ * head/tail trim so one failure storm does not hide unrelated nearby evidence.
+ */
 export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number }): string[] {
   const maxLines = Math.max(6, opts?.maxLines ?? 26);
 
@@ -99,7 +111,8 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       continue;
     }
 
-    // "[openai] Token refresh failed: 401 { ...json... }"
+    // OAuth refresh failures span JSON blocks in provider logs; consume the
+    // whole block so the raw credential error body does not leak line-by-line.
     const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
@@ -126,7 +139,8 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       }
     }
 
-    // "Embedded agent failed before reply: OAuth token refresh failed for openai: ..."
+    // Embedded-agent failures repeat the same provider-level OAuth symptom
+    // without useful per-run details, so collapse them by provider.
     const embedded = line.match(
       /^Embedded agent failed before reply:\s+OAuth token refresh failed for ([^:]+):/,
     );
@@ -136,7 +150,8 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       continue;
     }
 
-    // "[gws] ⇄ res ✗ agent ... errorCode=UNAVAILABLE errorMessage=Error: OAuth token refresh failed ... runId=..."
+    // Gateway websocket traces include volatile ids; normalize before grouping
+    // so repeated refresh failures collapse to one actionable line.
     if (
       line.startsWith("[gws]") &&
       line.includes("errorCode=UNAVAILABLE") &&
@@ -171,6 +186,8 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
 
   const head = Math.min(6, Math.floor(maxLines / 3));
   const tail = Math.max(1, maxLines - head - 1);
+  // Keep the earliest grouped symptom and the newest tail evidence; both are
+  // usually needed to explain a recent gateway failure from a compact paste.
   const kept = [
     ...deduped.slice(0, head),
     `… ${deduped.length - head - tail} lines omitted …`,

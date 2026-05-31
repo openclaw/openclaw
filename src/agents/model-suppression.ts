@@ -1,11 +1,11 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshotMemoEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 
 type ManifestSuppressionResolver = ReturnType<typeof buildManifestBuiltInModelSuppressionResolver>;
 
@@ -21,6 +21,7 @@ type CachedManifestSuppressionResolver = {
 
 let cachedManifestSuppressionResolver: CachedManifestSuppressionResolver | undefined;
 
+/** Clears the process-local manifest suppression resolver cache for tests and metadata lifecycle resets. */
 export function clearModelSuppressionResolverCacheForTest(): void {
   cachedManifestSuppressionResolver = undefined;
 }
@@ -117,6 +118,7 @@ function resolveBuiltInModelSuppression(params: {
   return undefined;
 }
 
+/** Checks manifest-declared built-in model suppression without deprecated runtime suppression hooks. */
 export function shouldSuppressBuiltInModelFromManifest(params: {
   provider?: string | null;
   id?: string | null;
@@ -126,6 +128,7 @@ export function shouldSuppressBuiltInModelFromManifest(params: {
   return resolveBuiltInModelSuppressionFromManifest(params)?.suppress ?? false;
 }
 
+/** Checks whether a built-in model should be hidden from runtime/catalog use. */
 export function shouldSuppressBuiltInModel(params: {
   provider?: string | null;
   id?: string | null;
@@ -151,6 +154,7 @@ export function shouldUnconditionallySuppress(params: {
   );
 }
 
+/** Builds the configured suppression error text for a blocked built-in model, when one applies. */
 export function buildSuppressedBuiltInModelError(params: {
   provider?: string | null;
   id?: string | null;
@@ -161,6 +165,7 @@ export function buildSuppressedBuiltInModelError(params: {
   return resolveBuiltInModelSuppression(params)?.errorMessage;
 }
 
+/** Builds a reusable predicate for repeated model suppression checks in one config/workspace scope. */
 export function buildShouldSuppressBuiltInModel(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;

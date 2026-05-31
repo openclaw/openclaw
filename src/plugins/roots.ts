@@ -14,6 +14,7 @@ export type PluginCacheInputs = {
   loadPaths: string[];
 };
 
+/** Resolves stock, global, and workspace plugin roots for a runtime environment. */
 export function resolvePluginSourceRoots(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -26,7 +27,7 @@ export function resolvePluginSourceRoots(params: {
   return { stock, global, workspace };
 }
 
-// Shared env-aware key inputs for plugin loader registry reuse.
+/** Resolves normalized roots and load paths used as plugin loader cache inputs. */
 export function resolvePluginCacheInputs(params: {
   workspaceDir?: string;
   loadPaths?: string[];

@@ -44,6 +44,7 @@ type ProviderWizardProvidersResolver = (params: {
 
 let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
 
+/** Installs a temporary provider resolver so wizard tests can avoid loading real plugins. */
 export function setProviderWizardProvidersResolverForTest(
   resolver: ProviderWizardProvidersResolver | undefined,
 ): () => void {
@@ -124,6 +125,7 @@ function buildSetupOptionForMethod(params: {
   };
 }
 
+/** Encodes a provider+auth-method pair into the stable wizard choice value. */
 export function buildProviderPluginMethodChoice(providerId: string, methodId: string): string {
   return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${normalizeOptionalString(providerId) ?? ""}:${normalizeOptionalString(methodId) ?? ""}`;
 }
@@ -186,6 +188,8 @@ export function resolveProviderWizardOptions(params: {
       continue;
     }
 
+    // Provider-level setup without a method id expands across every auth
+    // method, keeping multi-method providers selectable in non-interactive flows.
     for (const method of provider.auth) {
       options.push(
         buildSetupOptionForMethod({
@@ -252,6 +256,8 @@ export function resolveProviderPluginChoice(params: {
   }
 
   if (choice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)) {
+    // Encoded choices are the canonical path for generated wizard options;
+    // legacy custom choice ids below stay supported for provider-owned labels.
     const payload = choice.slice(PROVIDER_PLUGIN_CHOICE_PREFIX.length);
     const separator = payload.indexOf(":");
     const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
@@ -317,6 +323,8 @@ export async function runProviderModelSelectedHook(params: {
     return;
   }
 
+  // Prefer setup-provider resolution because some providers expose setup hooks
+  // before they are active runtime providers in the current config.
   const setupProvider = resolvePluginSetupProvider({
     provider: selectedProviderId,
     config: params.config,
