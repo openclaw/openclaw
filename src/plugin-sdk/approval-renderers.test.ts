@@ -23,16 +23,28 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 allow-once",
+                },
                 value: "/approve plugin:approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 allow-always",
+                },
                 value: "/approve plugin:approval-123 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin:approval-123 deny",
+                },
                 value: "/approve plugin:approval-123 deny",
                 style: "danger",
               },
@@ -70,16 +82,28 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-once",
+                },
                 value: "/approve plugin-approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Allow Always",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-always",
+                },
                 value: "/approve plugin-approval-123 allow-always",
                 style: "primary",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 deny",
+                },
                 value: "/approve plugin-approval-123 deny",
                 style: "danger",
               },
@@ -126,11 +150,19 @@ describe("plugin-sdk/approval-renderers", () => {
             buttons: [
               {
                 label: "Allow Once",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 allow-once",
+                },
                 value: "/approve plugin-approval-123 allow-once",
                 style: "success",
               },
               {
                 label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 deny",
+                },
                 value: "/approve plugin-approval-123 deny",
                 style: "danger",
               },
