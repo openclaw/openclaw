@@ -166,6 +166,24 @@ describe("agent defaults schema", () => {
     expect(result.experimental?.localModelLean).toBe(true);
   });
 
+  it("accepts experimental.localModelLeanProfile", () => {
+    const result = AgentDefaultsSchema.parse({
+      experimental: {
+        localModelLean: true,
+        localModelLeanProfile: "strict",
+      },
+    })!;
+    expect(result.experimental?.localModelLeanProfile).toBe("strict");
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        experimental: {
+          localModelLeanProfile: "wide",
+        },
+      }),
+      "experimental.localModelLeanProfile",
+    );
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");

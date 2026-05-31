@@ -182,9 +182,25 @@ describe("config schema regressions", () => {
             id: "gemma",
             experimental: {
               localModelLean: true,
+              localModelLeanProfile: "strict",
             },
           },
         ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.defaults experimental localModelLeanProfile", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+            localModelLeanProfile: "basic",
+          },
+        },
       },
     });
 

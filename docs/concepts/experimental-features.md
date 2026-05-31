@@ -21,16 +21,18 @@ Treat them differently from normal config:
 
 ## Currently documented flags
 
-| Surface                  | Key                                                                                        | Use it when                                                                                                                       | More                                                                                          |
-| ------------------------ | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Local model runtime      | `agents.defaults.experimental.localModelLean`, `agents.list[].experimental.localModelLean` | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                                                | [Local Models](/gateway/local-models)                                                         |
-| Memory search            | `agents.defaults.memorySearch.experimental.sessionMemory`                                  | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost                            | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
-| Codex harness            | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer`                    | You want native Codex app-server 0.132.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution)        |
-| Structured planning tool | `tools.experimental.planTool`                                                              | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs                    | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
+| Surface                  | Key                                                                                                                                                                                                  | Use it when                                                                                                                       | More                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Local model runtime      | `agents.defaults.experimental.localModelLean`, `agents.list[].experimental.localModelLean`, `agents.defaults.experimental.localModelLeanProfile`, `agents.list[].experimental.localModelLeanProfile` | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                                                | [Local Models](/gateway/local-models)                                                         |
+| Memory search            | `agents.defaults.memorySearch.experimental.sessionMemory`                                                                                                                                            | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost                            | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
+| Codex harness            | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer`                                                                                                                              | You want native Codex app-server 0.132.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution)        |
+| Structured planning tool | `tools.experimental.planTool`                                                                                                                                                                        | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs                    | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
+`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. By default it uses the `basic` profile and drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
+
+If that is not enough, set `localModelLeanProfile: "strict"` with `localModelLean: true`. The strict profile keeps only the minimal coding/status tools: `read`, `write`, `edit`, `exec`, `wait`, `apply_patch`, `process`, `session_status`, and `update_plan`. Use it as a stronger fallback, not as the new default.
 
 ### Why these three tools
 
@@ -48,7 +50,7 @@ Enable lean mode when you have already proved the model can talk to the Gateway 
 
 1. `openclaw infer model run --gateway --model <ref> --prompt "Reply with exactly: pong"` succeeds.
 2. A normal agent turn fails with malformed tool calls, oversized prompts, or the model ignoring its tools.
-3. Toggling `localModelLean: true` clears the failure.
+3. Toggling `localModelLean: true` clears the failure, or `localModelLeanProfile: "strict"` clears it when basic lean mode is still too wide.
 
 ### When to leave it off
 
@@ -88,13 +90,31 @@ For one agent only:
 }
 ```
 
+Use the stricter profile only when the basic trim is not enough:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "local",
+        experimental: {
+          localModelLean: true,
+          localModelLeanProfile: "strict",
+        },
+      },
+    ],
+  },
+}
+```
+
 Restart the Gateway after changing the flag, then confirm the trimmed tool list with:
 
 ```bash
 openclaw status --deep
 ```
 
-The deep status output lists the active agent tools; `browser`, `cron`, and `message` should be absent when lean mode is on.
+The deep status output lists the active agent tools. `browser`, `cron`, and `message` should be absent when lean mode is on. With the strict profile, only the minimal coding/status tools should remain.
 
 ## Experimental does not mean hidden
 

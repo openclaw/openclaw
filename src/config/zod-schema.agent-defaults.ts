@@ -90,6 +90,7 @@ export const AgentDefaultsSchema = z
     experimental: z
       .object({
         localModelLean: z.boolean().optional(),
+        localModelLeanProfile: z.enum(["basic", "strict"]).optional(),
       })
       .strict()
       .optional(),

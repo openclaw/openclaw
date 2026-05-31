@@ -664,6 +664,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
             id: "local",
             experimental: {
               localModelLean: true,
+              localModelLeanProfile: "strict",
             },
             model: { primary: "ollama/gemma4" },
           },
@@ -682,7 +683,6 @@ Use these as starting points and replace model IDs with the exact names from `ol
                 name: "gemma4",
                 input: ["text"],
                 params: { num_ctx: 32768 },
-                compat: { supportsTools: false },
               },
             ],
           },
@@ -691,8 +691,19 @@ Use these as starting points and replace model IDs with the exact names from `ol
     }
     ```
 
-    Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas. It trades agent capability for stability.
-    `localModelLean` removes the browser, cron, and message tools from the agent surface, but it does not change Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
+    `localModelLean` defaults to the `basic` profile, which removes the browser, cron, and message tools from the agent surface. `localModelLeanProfile: "strict"` keeps only the minimal coding/status tools. Neither profile changes Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
+
+    Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas even after lean mode. It disables the agent tool loop entirely, so keep it separate from strict lean mode unless you want plain chat behavior:
+
+    ```json5
+    {
+      id: "gemma4",
+      name: "gemma4",
+      input: ["text"],
+      params: { num_ctx: 32768 },
+      compat: { supportsTools: false },
+    }
+    ```
 
   </Accordion>
 </AccordionGroup>

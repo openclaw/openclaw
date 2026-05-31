@@ -18,6 +18,7 @@ export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" |
 export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
+export type LocalModelLeanProfile = "basic" | "strict";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -271,6 +272,12 @@ export type AgentDefaultsConfig = {
      * model backends. Experimental preview only.
      */
     localModelLean?: boolean;
+    /**
+     * Select how aggressively localModelLean trims the tool surface.
+     * "basic" preserves the original three-tool trim; "strict" keeps only
+     * the minimal coding/status tools.
+     */
+    localModelLeanProfile?: LocalModelLeanProfile;
   };
   /**
    * Agent-visible bootstrap truncation warning mode:

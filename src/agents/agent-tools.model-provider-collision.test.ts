@@ -164,6 +164,58 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   });
 
+  it("drops broader optional tools when the strict lean local-model profile is enabled", () => {
+    const filtered = testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "write" },
+        { name: "edit" },
+        { name: "exec" },
+        { name: "apply_patch" },
+        { name: "process" },
+        { name: "session_status" },
+        { name: "update_plan" },
+        { name: "get_goal" },
+        { name: "agents_list" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "sessions_send" },
+        { name: "sessions_spawn" },
+        { name: "sessions_yield" },
+        { name: "web_fetch" },
+        { name: "web_search" },
+        { name: "transcripts" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+                localModelLeanProfile: "strict",
+              },
+            },
+          },
+        },
+        modelProvider: "ollama",
+        modelApi: "ollama",
+        modelId: "qwen3.5:9b",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual([
+      "read",
+      "write",
+      "edit",
+      "exec",
+      "apply_patch",
+      "process",
+      "session_status",
+      "update_plan",
+    ]);
+  });
+
   it("drops heavyweight tools when lean local-model mode is enabled for the current agent", () => {
     const filtered = testing.applyModelProviderToolPolicy(
       [
