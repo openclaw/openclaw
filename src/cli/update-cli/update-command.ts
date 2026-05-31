@@ -71,6 +71,7 @@ import {
   fetchNpmPackageTargetStatus,
   resolveNpmChannelTag,
   checkUpdateStatus,
+  type PackageManager,
 } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
@@ -1046,6 +1047,27 @@ function readNpmRegistryEnv(env: NodeJS.ProcessEnv): string | null {
   return normalizeOptionalString(env.npm_config_registry ?? env.NPM_CONFIG_REGISTRY) ?? null;
 }
 
+function resolvePackageManagerRegistryConfigArgs(params: {
+  manager?: PackageManager | null;
+  prefix?: string | null;
+}): string[] | null {
+  const manager = params.manager && params.manager !== "unknown" ? params.manager : "npm";
+  if (manager === "pnpm") {
+    return ["pnpm", "config", "get", "registry"];
+  }
+  if (manager !== "npm") {
+    return null;
+  }
+  return [
+    "npm",
+    "config",
+    "get",
+    "registry",
+    "--global",
+    ...(params.prefix ? ["--prefix", params.prefix] : []),
+  ];
+}
+
 function resolveNpmConfigPrefixFromPackageRoot(root: string | undefined | null): string | null {
   const normalized = normalizeOptionalString(root);
   if (!normalized) {
@@ -1071,21 +1093,19 @@ async function resolveEffectiveNpmRegistry(params: {
   root?: string | null;
   invocationCwd?: string;
   timeoutMs?: number;
+  manager?: PackageManager | null;
 }): Promise<string | null> {
   const registryEnv = readNpmRegistryEnv(params.env);
   if (registryEnv) {
     return registryEnv;
   }
   const prefix = resolveNpmConfigPrefixFromPackageRoot(params.root);
+  const argv = resolvePackageManagerRegistryConfigArgs({ manager: params.manager, prefix });
+  if (!argv) {
+    return null;
+  }
   const result = await runCommandWithTimeout(
-    [
-      "npm",
-      "config",
-      "get",
-      "registry",
-      "--global",
-      ...(prefix ? ["--prefix", prefix] : []),
-    ],
+    argv,
     {
       cwd: params.invocationCwd,
       env: params.env,
@@ -1106,6 +1126,7 @@ async function hasCustomNpmRegistryOverride(params: {
   root?: string | null;
   invocationCwd?: string;
   timeoutMs?: number;
+  manager?: PackageManager | null;
 }): Promise<boolean> {
   const env = params.env ?? process.env;
   const registry = await resolveEffectiveNpmRegistry({
@@ -1113,6 +1134,7 @@ async function hasCustomNpmRegistryOverride(params: {
     root: params.root,
     invocationCwd: params.invocationCwd,
     timeoutMs: params.timeoutMs,
+    manager: params.manager,
   });
   return registry ? !isPublicNpmRegistry(registry) : false;
 }
@@ -1200,6 +1222,7 @@ async function resolvePackageTargetAvailabilityPreflightError(params: {
   env?: NodeJS.ProcessEnv;
   root?: string | null;
   invocationCwd?: string;
+  manager?: PackageManager | null;
 }): Promise<string | null> {
   const target = resolvePackageRegistryTargetFromInstallSpec(params.installSpec);
   if (!target) {
@@ -1211,6 +1234,7 @@ async function resolvePackageTargetAvailabilityPreflightError(params: {
       root: params.root,
       invocationCwd: params.invocationCwd,
       timeoutMs: params.timeoutMs,
+      manager: params.manager,
     })
   ) {
     return null;
@@ -3424,6 +3448,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       env: process.env,
       root,
       invocationCwd,
+      manager: updateStatus.packageManager,
     });
     if (targetAvailabilityError) {
       defaultRuntime.error(targetAvailabilityError);
