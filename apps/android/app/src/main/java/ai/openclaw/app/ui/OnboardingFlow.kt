@@ -113,6 +113,7 @@ private enum class OnboardingStep {
 
 private const val GATEWAY_CONNECT_SETTLING_MS = 2_500L
 
+/** First-run Android onboarding flow for gateway pairing and permission setup. */
 @Composable
 fun OnboardingFlow(
   viewModel: MainViewModel,
@@ -273,6 +274,8 @@ fun OnboardingFlow(
             setupError = null
             attemptedConnect = true
             connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
+            // Setup-code pairing replaces any stale shared credentials before
+            // the bootstrap token is stored for the first authenticated connect.
             viewModel.resetGatewaySetupAuth()
             viewModel.setManualEnabled(true)
             viewModel.setManualHost(config.host)
@@ -905,6 +908,7 @@ internal enum class GatewayRecoveryUiState(
   ),
 }
 
+/** Derives recovery screen state from gateway/node readiness and transient status text. */
 internal fun gatewayRecoveryUiState(
   ready: Boolean,
   statusText: String,
@@ -918,6 +922,7 @@ internal fun gatewayRecoveryUiState(
     else -> GatewayRecoveryUiState.Failed
   }
 
+/** Detects gateway-approved states where the Android node is still coming online. */
 internal fun gatewayStatusLooksLikePartialConnect(statusText: String): Boolean {
   val lower = gatewayStatusForDisplay(statusText).lowercase()
   return lower.contains("operator offline") || lower.contains("node offline")
@@ -944,6 +949,8 @@ private fun resolveGatewayConfig(
   if (setup != null) {
     val endpoint = parseGatewayEndpointResult(setup.url).config ?: return null
     val bootstrapToken = setup.bootstrapToken?.trim().orEmpty()
+    // Bootstrap setup codes own first-pairing auth; fall back to typed token or
+    // password only for non-bootstrap setup payloads.
     return GatewayConfig(
       host = endpoint.host,
       port = endpoint.port,
@@ -1024,11 +1031,13 @@ private class PermissionState(
   val applyToViewModel: () -> Unit,
 )
 
+/** Onboarding can finish only after gateway and node channels are both ready. */
 internal fun canFinishOnboarding(
   isConnected: Boolean,
   isNodeConnected: Boolean,
 ): Boolean = isConnected && isNodeConnected
 
+/** Builds permission rows and applies granted feature toggles after onboarding. */
 @Composable
 private fun rememberPermissionState(
   context: Context,
