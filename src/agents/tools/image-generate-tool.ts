@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
@@ -847,6 +848,7 @@ export function createImageGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): AnyAgentTool | null {
   const cfg = options?.config ?? getRuntimeConfig();
   if (
@@ -1038,6 +1040,7 @@ export function createImageGenerateTool(options?: {
           scheduleBackgroundWork,
           progressSummary: "Generating image",
           config: effectiveCfg,
+          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
           toolName: "Image generation",
           onWakeFailure: (message, meta) => log.warn(message, meta),
           run: () =>

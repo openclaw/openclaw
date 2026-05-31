@@ -1,4 +1,5 @@
 import { Type, type TSchema } from "typebox";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -928,6 +929,7 @@ export function createVideoGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
   if (
@@ -1192,6 +1194,7 @@ export function createVideoGenerateTool(options?: {
           scheduleBackgroundWork,
           progressSummary: "Generating video",
           config: effectiveCfg,
+          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
           toolName: "Video generation",
           onWakeFailure: (message, meta) => log.warn(message, meta),
           run: () =>

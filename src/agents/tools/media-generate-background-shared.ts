@@ -387,6 +387,7 @@ export function scheduleMediaGenerationTaskCompletion<
   scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
   progressSummary: string;
   config?: OpenClawConfig;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   toolName: string;
   run: () => Promise<T>;
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
@@ -410,6 +411,7 @@ export function scheduleMediaGenerationTaskCompletion<
         status: "error",
         statusLabel: "failed",
         result: formatErrorMessage(error),
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       });
       return;
     }
@@ -436,6 +438,7 @@ export function scheduleMediaGenerationTaskCompletion<
         result: executed.wakeResult,
         attachments: executed.attachments,
         mediaUrls: executed.mediaUrls,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       });
       if (!completionDelivered) {
         terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(

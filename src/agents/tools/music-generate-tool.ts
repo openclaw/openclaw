@@ -1,5 +1,6 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -579,6 +580,7 @@ export function createMusicGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
   if (
@@ -747,6 +749,7 @@ export function createMusicGenerateTool(options?: {
           scheduleBackgroundWork,
           progressSummary: "Generating music",
           config: effectiveCfg,
+          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
           toolName: "Music generation",
           onWakeFailure: (message, meta) => log.warn(message, meta),
           run: () =>

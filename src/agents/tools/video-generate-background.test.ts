@@ -24,6 +24,25 @@ const {
 } = await import("./video-generate-background.js");
 const { withMediaGenerationTaskKeepalive } = await import("./media-generate-background-shared.js");
 
+function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
+  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
+    | { internalEvents?: unknown }
+    | undefined;
+  if (!Array.isArray(params?.internalEvents)) {
+    throw new Error("Expected delivered internal events");
+  }
+  return params.internalEvents as Array<Record<string, unknown>>;
+}
+
+function expectReplyInstructionContains(text: string) {
+  const event = getDeliveredInternalEvents().find(
+    (item) => typeof item.replyInstruction === "string" && item.replyInstruction.includes(text),
+  );
+  if (!event) {
+    throw new Error(`Expected reply instruction containing ${text}`);
+  }
+}
+
 describe("video generate background helpers", () => {
   beforeEach(() => {
     resetAgentRunContextForTest();
@@ -201,6 +220,27 @@ describe("video generate background helpers", () => {
       resultMediaPath: "MEDIA:/tmp/generated-lobster.mp4",
       mediaUrls: ["/tmp/generated-lobster.mp4"],
     });
+  });
+
+  it("tells forced message-tool-only completion agents to send with the message tool", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "direct",
+    });
+
+    await wakeVideoGenerationTaskCompletion({
+      ...createMediaCompletionFixture({
+        runId: "tool:video_generate:message-tool-only",
+        taskLabel: "friendly lobster surfing",
+        result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
+        mediaUrls: ["/tmp/generated-lobster.mp4"],
+      }),
+      config: { messages: {} } as any,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expectReplyInstructionContains('message(action="send")');
+    expectReplyInstructionContains("Do NOT use MEDIA: lines");
   });
 
   it("delivers video generation failures directly instead of relying on the model handoff", async () => {

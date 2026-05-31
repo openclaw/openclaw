@@ -85,6 +85,88 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     );
   });
 
+  it("preserves forced message-tool-only delivery mode through scheduler wakes", async () => {
+    const successScheduled: Array<() => Promise<void>> = [];
+    const successLifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => true),
+    };
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle: successLifecycle,
+      handle: {
+        taskId: "task-image-forced-mode",
+        runId: "tool:image_generate:forced-mode",
+        requesterSessionKey: "agent:main:discord:dm:123",
+        taskLabel: "proof image",
+      },
+      scheduleBackgroundWork: (work) => {
+        successScheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      sourceReplyDeliveryMode: "message_tool_only",
+      onWakeFailure: vi.fn(),
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+      }),
+    });
+
+    await successScheduled[0]?.();
+
+    expect(successLifecycle.wakeTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "ok",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
+
+    const failureScheduled: Array<() => Promise<void>> = [];
+    const failureLifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => true),
+    };
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle: failureLifecycle,
+      handle: {
+        taskId: "task-image-forced-mode-error",
+        runId: "tool:image_generate:forced-mode-error",
+        requesterSessionKey: "agent:main:discord:dm:123",
+        taskLabel: "proof image",
+      },
+      scheduleBackgroundWork: (work) => {
+        failureScheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      sourceReplyDeliveryMode: "message_tool_only",
+      onWakeFailure: vi.fn(),
+      run: async () => {
+        throw new Error("provider failed");
+      },
+    });
+
+    await failureScheduled[0]?.();
+
+    expect(failureLifecycle.wakeTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "error",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
+  });
+
   it("completes a generated media task when completion delivery cannot be confirmed", async () => {
     const scheduled: Array<() => Promise<void>> = [];
     const onWakeFailure = vi.fn();

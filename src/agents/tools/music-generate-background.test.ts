@@ -141,6 +141,28 @@ describe("music generate background helpers", () => {
     expectReplyInstructionContains("Do NOT use the message tool");
   });
 
+  it("tells forced message-tool-only completion agents to send with the message tool", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "direct",
+    });
+    const completion = createMediaCompletionFixture({
+      runId: "tool:music_generate:message-tool-only",
+      taskLabel: "night-drive synthwave",
+      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+      mediaUrls: ["/tmp/generated-night-drive.mp3"],
+    });
+
+    await wakeMusicGenerationTaskCompletion({
+      ...completion,
+      config: { messages: {} } as any,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expectReplyInstructionContains('message(action="send")');
+    expectReplyInstructionContains("Do NOT use MEDIA: lines");
+  });
+
   it("delivers failure completion notices directly", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
@@ -189,7 +211,10 @@ describe("music generate background helpers", () => {
         handle: {
           ...completion.handle,
           requesterSessionKey,
-          requesterOrigin: { channel: requesterSessionKey.split(":")[1], to: requesterSessionKey.split(":").slice(2).join(":") },
+          requesterOrigin: {
+            channel: requesterSessionKey.split(":")[1],
+            to: requesterSessionKey.split(":").slice(2).join(":"),
+          },
         },
       });
 

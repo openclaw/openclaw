@@ -124,6 +124,27 @@ describe("image generate background helpers", () => {
     });
   });
 
+  it("tells forced message-tool-only completion agents to send with the message tool", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "direct",
+    });
+
+    await wakeImageGenerationTaskCompletion({
+      ...createMediaCompletionFixture({
+        runId: "tool:image_generate:message-tool-only",
+        taskLabel: "small watercolor robot",
+        result: "Generated 1 image.\nMEDIA:/tmp/generated-robot.png",
+        mediaUrls: ["/tmp/generated-robot.png"],
+      }),
+      config: { messages: {} } as any,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expectReplyInstructionContains('message(action="send")');
+    expectReplyInstructionContains("Do NOT use MEDIA: lines");
+  });
+
   it("delivers failure completion notices directly", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
