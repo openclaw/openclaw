@@ -31,12 +31,14 @@ function createHarness(params?: {
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,
+      activeChunkIndex: 0,
     },
     reasoning: {
       stream: reasoning,
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,
+      activeChunkIndex: 0,
     },
   };
   const sendPayload = vi.fn().mockResolvedValue(true);

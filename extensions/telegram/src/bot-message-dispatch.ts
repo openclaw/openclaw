@@ -916,6 +916,7 @@ export const dispatchTelegramMessage = async ({
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,
+      activeChunkIndex: 0,
     };
   };
   const lanes: Record<LaneName, DraftLaneState> = {
@@ -1075,6 +1076,7 @@ export const dispatchTelegramMessage = async ({
     }
     lane.hasStreamedMessage = false;
     lane.finalized = false;
+    lane.activeChunkIndex += 1;
     if (lane === answerLane) {
       resetAnswerToolProgressDraft();
     }
@@ -1760,6 +1762,18 @@ export const dispatchTelegramMessage = async ({
                         }
                         await prepareAnswerLaneForToolProgress();
                       }
+
+                      const skipTextOnlyBlock =
+                        streamMode === "partial" &&
+                        info.kind === "block" &&
+                        !reply.hasMedia &&
+                        !hasExecApprovalPayload(effectivePayload);
+
+                      if (skipTextOnlyBlock) {
+                        blockDelivered = true;
+                        continue;
+                      }
+
                       const result =
                         segment.lane === "answer" && info.kind === "final"
                           ? await deliverFinalAnswerText(
