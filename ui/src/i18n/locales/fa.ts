@@ -416,6 +416,7 @@ export const fa: TranslationMap = {
     communications: "ارتباطات",
     appearance: "ظاهر",
     automation: "اتوماسیون",
+    mcp: "MCP",
     infrastructure: "زیرساخت",
     aiAgents: "هوش مصنوعی و عامل‌ها",
     debug: "اشکال‌زدایی",
@@ -439,6 +440,7 @@ export const fa: TranslationMap = {
     communications: "کانال‌ها، پیام‌ها و تنظیمات صوتی.",
     appearance: "تنظیمات پوسته، UI و جادوگر راه‌اندازی.",
     automation: "فرمان‌ها، قلاب‌ها، cron و پلاگین‌ها.",
+    mcp: "سرورهای MCP، احراز هویت، ابزارها و عیب‌یابی.",
     infrastructure: "تنظیمات Gateway، وب، مرورگر و رسانه.",
     aiAgents: "عامل‌ها، مدل‌ها، مهارت‌ها، ابزارها، حافظه، نشست.",
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
@@ -1291,7 +1293,7 @@ export const fa: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "خطای ابزار",
     },
   },
   languages: {
