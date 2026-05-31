@@ -33,6 +33,9 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Identity advertised during gateway connect; these fields become the device row users approve.
+ */
 data class GatewayClientInfo(
   val id: String,
   val displayName: String?,
@@ -44,6 +47,9 @@ data class GatewayClientInfo(
   val modelIdentifier: String?,
 )
 
+/**
+ * Role, scopes, commands, and permission snapshot sent with the connect frame.
+ */
 data class GatewayConnectOptions(
   val role: String,
   val scopes: List<String>,
@@ -62,6 +68,9 @@ private enum class GatewayConnectAuthSource {
   NONE,
 }
 
+/**
+ * Structured auth failure guidance from the gateway, preserved for reconnect and UI decisions.
+ */
 data class GatewayConnectErrorDetails(
   val code: String?,
   val canRetryWithDeviceToken: Boolean,
@@ -70,6 +79,9 @@ data class GatewayConnectErrorDetails(
   val reason: String? = null,
 )
 
+/**
+ * Server hello fields cached by the Android runtime after a successful connect.
+ */
 data class GatewayHelloSummary(
   val serverName: String?,
   val remoteAddress: String?,
@@ -174,8 +186,10 @@ class GatewaySession(
 
   @Volatile private var currentConnection: Connection? = null
 
+  // One reconnect can retry a shared-token mismatch by pairing the shared token with the stored device token.
   @Volatile private var pendingDeviceTokenRetry = false
 
+  // Keep the mismatch retry single-shot so an invalid stored token cannot create an auth loop.
   @Volatile private var deviceTokenRetryBudgetUsed = false
 
   @Volatile private var reconnectPausedForAuthFailure = false
@@ -319,6 +333,7 @@ class GatewaySession(
   ): JsonObject =
     buildJsonObject {
       put("event", JsonPrimitive(event))
+      // Gateway node events carry payloadJSON as a string for compatibility with non-JSON payload producers.
       put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
     }
 
@@ -705,6 +720,7 @@ class GatewaySession(
         persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
       }
       if (shouldPersistBootstrapHandoffTokens(authSource)) {
+        // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.
         authObj
           ?.get("deviceTokens")
           .asArrayOrNull()
@@ -725,6 +741,7 @@ class GatewaySession(
       val rawPluginSurfaceUrls = obj["pluginSurfaceUrls"].asObjectOrNull()
       val normalizedPluginSurfaceUrls =
         rawPluginSurfaceUrls?.mapNotNull { (surface, value) ->
+          // Canvas URLs may be loopback gateway metadata; normalize them to the reachable Android endpoint.
           normalizeCanvasHostUrl(value.asStringOrNull(), endpoint, isTlsConnection = tls != null)
             ?.let { normalized -> surface to normalized }
         } ?: emptyList()
@@ -797,6 +814,7 @@ class GatewaySession(
 
       val connectScopes = resolveConnectScopes(selectedAuth)
       val signedAtMs = System.currentTimeMillis()
+      // V3 signatures bind the auth token, nonce, role, and scopes so replayed connect frames fail.
       val payload =
         DeviceAuthPayload.buildV3(
           deviceId = identity.deviceId,
@@ -966,6 +984,7 @@ class GatewaySession(
           if (parsedPayload != null) {
             put("payload", parsedPayload)
           } else if (result.payloadJson != null) {
+            // Preserve malformed/non-object payloads as payloadJSON so the gateway can report handler output.
             put("payloadJSON", JsonPrimitive(result.payloadJson))
           }
           result.error?.let { err ->
@@ -1189,6 +1208,7 @@ class GatewaySession(
     if (!isTrustedDeviceRetryEndpoint(endpoint, tls)) return false
     val detailCode = error.details?.code
     val recommendedNextStep = error.details?.recommendedNextStep
+    // New gateways set canRetryWithDeviceToken; older builds expose equivalent string codes.
     return error.details?.canRetryWithDeviceToken == true ||
       recommendedNextStep == "retry_with_device_token" ||
       detailCode == "AUTH_TOKEN_MISMATCH"
