@@ -10,8 +10,6 @@ import {
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
-const RUNTIME_COMPARISON_PROVIDER_ALIASES = new Map<string, string>([["openai", "openai"]]);
-
 /** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
 export function isCliRuntimeProvider(
   provider: string,
@@ -57,14 +55,12 @@ function canonicalizeRuntimeAliasProvider(
 ): string {
   const normalized = normalizeProviderId(provider);
   return (
-    RUNTIME_COMPARISON_PROVIDER_ALIASES.get(normalized) ??
     listCliRuntimeModelBackendBindings({
       config: options.config,
       env: options.env,
       includeSetupRegistry:
         options.includeSetupRegistry ?? (options.config !== undefined || options.env !== undefined),
-    }).find((binding) => binding.runtime === normalized)?.provider ??
-    provider
+    }).find((binding) => binding.runtime === normalized)?.provider ?? provider
   );
 }
 

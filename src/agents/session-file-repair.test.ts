@@ -583,10 +583,9 @@ describe("repairSessionFileIfNeeded", () => {
     expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
   });
 
-  it("repairs missing tool results in legacy OpenAI ChatGPT transcripts", async () => {
+  it("repairs missing tool results in legacy OpenAI Codex transcripts", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
-    const legacyProvider = ["openai", "codex"].join("-");
     const toolCallAssistant = {
       type: "message",
       id: "msg-asst-legacy-process",
@@ -594,9 +593,9 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: legacyProvider,
+        provider: "openai-codex",
         model: "gpt-5.5",
-        api: `${legacyProvider}-responses`,
+        api: "openai-codex-responses",
         content: [{ type: "toolCall", id: "call_process|fc_1", name: "process", arguments: {} }],
         stopReason: "toolUse",
       },

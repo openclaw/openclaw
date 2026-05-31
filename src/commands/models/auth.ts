@@ -65,7 +65,6 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-const LEGACY_OPENAI_AUTH_PROVIDER_ID = ["openai", "codex"].join("-");
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -152,9 +151,7 @@ function resolveDefaultTokenProfileId(provider: string): string {
 
 function normalizeManualAuthProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
-  return normalized === "openai" || normalized === LEGACY_OPENAI_AUTH_PROVIDER_ID
-    ? "openai"
-    : normalized;
+  return normalized === "openai" ? "openai" : normalized;
 }
 
 function isOpenAIProvider(provider: string): boolean {
