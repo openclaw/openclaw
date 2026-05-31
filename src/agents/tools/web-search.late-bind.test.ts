@@ -33,18 +33,8 @@ type RunWebSearchParams = {
   };
 };
 
-type ProviderResolutionParams = {
-  value?: string;
-};
-
 function firstRunWebSearchParams(): RunWebSearchParams | undefined {
   return mocks.runWebSearch.mock.calls[0]?.[0] as RunWebSearchParams | undefined;
-}
-
-function firstProviderResolutionParams(): ProviderResolutionParams | undefined {
-  return mocks.resolveManifestContractOwnerPluginId.mock.calls[0]?.[0] as
-    | ProviderResolutionParams
-    | undefined;
 }
 
 describe("web_search late-bound runtime fallback", () => {
@@ -104,7 +94,7 @@ describe("web_search late-bound runtime fallback", () => {
 
     await tool?.execute("call-search", { query: "openclaw" }, undefined);
 
-    expect(firstProviderResolutionParams()?.value).toBe("brave");
+    expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
     expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
   });
 
@@ -120,7 +110,7 @@ describe("web_search late-bound runtime fallback", () => {
     expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
   });
 
-  it("does not prefer runtime providers when the configured provider is a bundled manifest owner", async () => {
+  it("keeps runtime provider discovery enabled when configured search provider has a manifest owner", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("openclaw-bundled-brave");
     const config = {
       tools: { web: { search: { provider: "brave" } } },
@@ -132,7 +122,8 @@ describe("web_search late-bound runtime fallback", () => {
 
     await tool?.execute("call-search", { query: "openclaw" }, undefined);
 
-    expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(false);
+    expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
+    expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
   });
 
   it("prefers active runtime metadata over options.runtimeWebSearch when present", async () => {
