@@ -13,6 +13,9 @@ function resolveExplicitConversationTargetId(target: string): string | undefined
   return undefined;
 }
 
+/**
+ * Chooses the best conversation id from an explicit thread id or outbound targets.
+ */
 export function resolveConversationIdFromTargets(params: {
   threadId?: string | number;
   targets: Array<string | undefined | null>;
