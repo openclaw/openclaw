@@ -444,6 +444,66 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(JSON.stringify(result)).not.toContain("partial error output");
   });
 
+  it("drops max-token reasoning-only transport assistant turns before replay", () => {
+    const messages: Context["messages"] = [
+      {
+        role: "assistant",
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        model: "global.anthropic.claude-sonnet-4-6",
+        stopReason: "length",
+        timestamp: Date.now(),
+        content: [
+          {
+            type: "thinking",
+            thinking: "partial hidden reasoning",
+            thinkingSignature: "partial-signature",
+          },
+        ],
+      } as Extract<Context["messages"][number], { role: "assistant" }>,
+      { role: "user", content: "retry after max token thinking", timestamp: Date.now() },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel(
+        "bedrock-converse-stream" as Api,
+        "amazon-bedrock",
+        "global.anthropic.claude-sonnet-4-6",
+      ),
+    );
+
+    expect(result.map((msg) => msg.role)).toEqual(["user"]);
+    expect(JSON.stringify(result)).not.toContain("partial-signature");
+  });
+
+  it("keeps max-token assistant turns that have visible text before replay", () => {
+    const messages: Context["messages"] = [
+      {
+        role: "assistant",
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        model: "global.anthropic.claude-sonnet-4-6",
+        stopReason: "length",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "partial visible answer" }],
+      } as Extract<Context["messages"][number], { role: "assistant" }>,
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel(
+        "bedrock-converse-stream" as Api,
+        "amazon-bedrock",
+        "global.anthropic.claude-sonnet-4-6",
+      ),
+    );
+
+    expect(result.map((msg) => msg.role)).toEqual(["assistant", "user"]);
+    expect(JSON.stringify(result)).toContain("partial visible answer");
+  });
+
   it("drops errored Anthropic transport assistant tool calls and matching results before replay", () => {
     const messages: Context["messages"] = [
       assistantToolCall("call_error", "exec", "error"),
