@@ -40,10 +40,18 @@ export {
   resetPluginToolDescriptorCache as resetPluginToolFactoryCache,
 } from "./tool-descriptor-cache.js";
 
+export type PluginToolMcpMeta = {
+  serverName: string;
+  safeServerName: string;
+  toolName: string;
+  operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+};
+
 export type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
   trustedLocalMedia?: boolean;
+  mcp?: PluginToolMcpMeta;
 };
 
 type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";

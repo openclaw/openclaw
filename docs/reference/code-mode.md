@@ -44,6 +44,8 @@ When code mode is active:
   guest program through `ALL_TOOLS` and `tools`.
 - Guest code can search the hidden catalog, describe a tool, and call a tool
   through the same OpenClaw execution path used by normal agent turns.
+- MCP tools are grouped under the `MCP` namespace. In code mode, this namespace
+  is the only supported way to call MCP tools.
 - `wait` resumes a suspended code-mode run when nested tool calls are still
   pending.
 
@@ -381,6 +383,7 @@ The guest runtime exposes a small global API:
 ```typescript
 declare const ALL_TOOLS: ToolCatalogEntry[];
 declare const tools: ToolCatalog;
+declare const MCP: Record<string, unknown>;
 declare const namespaces: Record<string, unknown>;
 
 declare function text(value: unknown): void;
@@ -430,6 +433,21 @@ const content = await tools.call(fileRead.id, { path: "README.md" });
 
 // If the hidden catalog has an unambiguous `web_search` entry:
 const hits = await tools.web_search({ query: "OpenClaw code mode" });
+```
+
+MCP catalog entries are not callable through `tools.call(...)` or convenience
+functions in code mode. Use the generated `MCP` namespace instead:
+
+```typescript
+const issue = await MCP.github.createIssue({
+  owner: "openclaw",
+  repo: "openclaw",
+  title: "Investigate gateway logs",
+});
+
+const snapshot = await MCP.chromeDevtools.takeSnapshot({ output: "markdown" });
+const resource = await MCP.docs.resources.read("memo://one");
+const prompt = await MCP.docs.prompts.get("brief", { topic: "release" });
 ```
 
 The guest runtime must not expose host objects directly. Inputs and outputs cross
@@ -613,10 +631,10 @@ Namespace changes should cover the security boundary and the guest behavior:
 - suspended namespace calls resume through `wait`
 - plugin rollback clears the owning namespace registrations
 
-Namespaces complement the generic `tools.search` / `tools.call` catalog. Use
-the catalog for arbitrary enabled tools; use namespaces for plugin-owned,
-documented domain APIs where concise code is more reliable than repeated schema
-lookups.
+Namespaces complement the generic `tools.search` / `tools.call` catalog. Use the
+catalog for arbitrary enabled OpenClaw, plugin, and client tools; use `MCP` for
+MCP tools; use other namespaces for plugin-owned, documented domain APIs where
+concise code is more reliable than repeated schema lookups.
 
 ## Output API
 
@@ -681,6 +699,12 @@ The catalog omits code-mode control tools:
 
 This prevents recursion and keeps the model-facing contract narrow.
 
+MCP entries stay in the run-scoped catalog so policy, approvals, hooks,
+telemetry, transcript projection, and exact tool ids remain shared with normal
+tool execution. The guest-facing `tools.call(...)` bridge rejects MCP entries;
+the generated `MCP.<server>.<tool>(...)` namespace resolves back to the exact
+catalog id and then dispatches through the same executor path.
+
 ## Tool Search interaction
 
 Code mode supersedes the OpenClaw Tool Search model surface for runs where it is
@@ -693,6 +717,7 @@ When `tools.codeMode.enabled` is true and code mode activates:
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives compact `ALL_TOOLS` metadata and search, describe,
   and call helpers.
+- MCP calls use the generated `MCP` namespace instead of `tools.call(...)`.
 - Nested calls dispatch through the same OpenClaw executor path that Tool Search
   uses.
 
@@ -912,6 +937,8 @@ Code mode coverage should prove:
 - all effective tools appear in `ALL_TOOLS`
 - denied tools do not appear in `ALL_TOOLS`
 - `tools.search`, `tools.describe`, and `tools.call` work for OpenClaw tools
+- MCP namespace calls work for visible MCP tools and direct MCP `tools.call`
+  attempts fail closed
 - Tool Search control tools are hidden from both the model surface and the hidden
   catalog
 - nested calls preserve approval and hook behavior
@@ -939,13 +966,16 @@ Run these as integration or end-to-end tests when changing the runtime:
 5. Send an agent turn with OpenClaw, plugin, MCP, and client test tools.
 6. Assert the model-visible tool list is exactly `exec`, `wait`.
 7. In `exec`, read `ALL_TOOLS` and assert the effective test tools are present.
-8. In `exec`, call `tools.search`, `tools.describe`, and `tools.call`.
-9. Assert denied tools are absent and cannot be called by guessed id.
-10. Start a nested tool call that resolves after `exec` returns `waiting`.
-11. Call `wait` and assert the restored VM receives the tool result.
-12. Assert the final answer contains output produced after restore.
-13. Assert timeout, abort, and snapshot expiry clean up runtime state.
-14. Export trajectory and assert nested calls are visible under the parent
+8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
+   `tools.describe`, and `tools.call`.
+9. In `exec`, call MCP tools through `MCP.<server>.<tool>(...)` and assert direct
+   MCP `tools.call(...)` attempts fail.
+10. Assert denied tools are absent and cannot be called by guessed id.
+11. Start a nested tool call that resolves after `exec` returns `waiting`.
+12. Call `wait` and assert the restored VM receives the tool result.
+13. Assert the final answer contains output produced after restore.
+14. Assert timeout, abort, and snapshot expiry clean up runtime state.
+15. Export trajectory and assert nested calls are visible under the parent
     code-mode call.
 
 Docs-only changes to this page should still run `pnpm check:docs`.
