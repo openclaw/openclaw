@@ -190,16 +190,6 @@ function buildSendSchema(options: {
         description: "Media URL/path. data: use buffer.",
       }),
     ),
-    mediaUrl: Type.Optional(
-      Type.String({
-        description: "Alias for media.",
-      }),
-    ),
-    mediaUrls: Type.Optional(
-      Type.Array(Type.String(), {
-        description: "Multiple media URLs/paths.",
-      }),
-    ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({

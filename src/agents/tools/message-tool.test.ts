@@ -1084,6 +1084,7 @@ describe("message tool path passthrough", () => {
 
     expect(properties).toHaveProperty("media");
     expect(properties).not.toHaveProperty("mediaUrl");
+    expect(properties).not.toHaveProperty("mediaUrls");
     expect(properties).not.toHaveProperty("path");
     expect(properties).not.toHaveProperty("filePath");
     expect(properties).not.toHaveProperty("fileUrl");
