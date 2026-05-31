@@ -484,7 +484,7 @@ export function createSessionsSpawnTool(
               runTimeoutSeconds: result.runTimeoutSeconds,
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
-              execution: result.execution,
+              executionPlacement: result.execution,
             });
           } catch (err) {
             // Best-effort only: the ACP turn was already started above, so deleting the
