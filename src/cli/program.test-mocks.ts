@@ -91,6 +91,7 @@ vi.mock("../tui/tui.js", () => ({ runTui: programMocks.runTui }));
 vi.mock("../crestodian/crestodian.js", () => ({ runCrestodian: programMocks.runCrestodian }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: programMocks.callGateway,
+  resolveGatewayCliScopes: () => [],
   randomIdempotencyKey: () => "idem-test",
   buildGatewayConnectionDetails: () => ({
     url: "ws://127.0.0.1:1234",

@@ -62,6 +62,7 @@ vi.mock("../globals.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  resolveGatewayCliScopes: () => [],
 }));
 
 vi.mock("./plugins-install-record-commit.js", () => ({

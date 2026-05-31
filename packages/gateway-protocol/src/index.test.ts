@@ -705,6 +705,7 @@ describe("validateNodePairRequestParams", () => {
     expect(
       validateNodePairRequestParams({
         nodeId: "ios-node-1",
+        deviceId: "device-1",
         commands: ["canvas.snapshot"],
         permissions: { camera: true, notifications: false },
       }),

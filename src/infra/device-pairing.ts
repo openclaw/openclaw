@@ -533,31 +533,59 @@ function resolveApprovedTokenScopes(params: {
   approvedScopes?: string[];
   existing?: PairedDevice;
 }): string[] {
+  const existingTokenScopes =
+    normalizePersistedDeviceTokenScopes(params.existingToken?.scopes) ?? undefined;
   const pendingScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
+  const previousApprovedBaseline = resolveRoleScopedDeviceTokenScopes(
+    params.role,
+    params.existing?.approvedScopes ?? params.existing?.scopes,
+  );
+  const nextApprovedBaseline = resolveRoleScopedDeviceTokenScopes(
+    params.role,
+    params.approvedScopes ?? params.existing?.approvedScopes ?? params.existing?.scopes,
+  );
+  const existingTokenScopesWithinBaseline =
+    existingTokenScopes &&
+    scopesWithinApprovedDeviceBaseline({
+      role: params.role,
+      scopes: existingTokenScopes,
+      approvedScopes: previousApprovedBaseline,
+    }) &&
+    scopesWithinApprovedDeviceBaseline({
+      role: params.role,
+      scopes: existingTokenScopes,
+      approvedScopes: nextApprovedBaseline,
+    });
+  const existingSafeTokenScopes = existingTokenScopesWithinBaseline
+    ? existingTokenScopes
+    : undefined;
   if (pendingScopes.length > 0) {
-    const approvedBaseline = resolveRoleScopedDeviceTokenScopes(
-      params.role,
-      params.existing?.approvedScopes ?? params.existing?.scopes,
-    );
     const requestedScopeDelta =
-      params.existingToken && approvedBaseline.length > 0
-        ? pendingScopes.filter((scope) => !approvedBaseline.includes(scope))
+      previousApprovedBaseline.length > 0
+        ? pendingScopes.filter((scope) => !previousApprovedBaseline.includes(scope))
         : pendingScopes;
-    if (requestedScopeDelta.length === 0 && params.existingToken) {
-      return resolveRoleScopedDeviceTokenScopes(params.role, params.existingToken.scopes);
+    if (requestedScopeDelta.length === 0 && existingSafeTokenScopes) {
+      return resolveRoleScopedDeviceTokenScopes(params.role, existingSafeTokenScopes);
     }
     return resolveRoleScopedDeviceTokenScopes(
       params.role,
-      mergeScopes(params.existingToken?.scopes, requestedScopeDelta),
+      mergeScopes(existingSafeTokenScopes ?? previousApprovedBaseline, requestedScopeDelta),
     );
   }
   return resolveRoleScopedDeviceTokenScopes(
     params.role,
-    params.existingToken?.scopes ??
-      params.approvedScopes ??
-      params.existing?.approvedScopes ??
-      params.existing?.scopes,
+    existingSafeTokenScopes ?? nextApprovedBaseline,
   );
+}
+
+function normalizePersistedDeviceTokenScopes(scopes: unknown): string[] | null {
+  if (!Array.isArray(scopes)) {
+    return null;
+  }
+  if (scopes.some((scope) => typeof scope !== "string")) {
+    return null;
+  }
+  return normalizeDeviceAuthScopes(scopes);
 }
 
 function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {
@@ -580,6 +608,60 @@ function scopesWithinApprovedDeviceBaseline(params: {
     role: params.role,
     requestedScopes: params.scopes,
     allowedScopes: params.approvedScopes,
+  });
+}
+
+function canReuseExistingApprovedToken(params: {
+  role: string;
+  existingToken?: DeviceAuthToken;
+  publicKeyMatches: boolean;
+  nextScopes: readonly string[];
+  previousApprovedScopes: readonly string[] | null;
+  approvedScopes: readonly string[] | undefined;
+}): boolean {
+  const { existingToken } = params;
+  if (!existingToken || existingToken.revokedAtMs) {
+    return false;
+  }
+  if (typeof existingToken.token !== "string" || existingToken.token.length === 0) {
+    return false;
+  }
+  const existingTokenScopes = normalizePersistedDeviceTokenScopes(existingToken.scopes);
+  if (!existingTokenScopes) {
+    return false;
+  }
+  const existingTokenRole = (existingToken as { role?: unknown }).role;
+  if (existingTokenRole !== undefined && existingTokenRole !== params.role) {
+    return false;
+  }
+  if (!params.publicKeyMatches) {
+    return false;
+  }
+  if (!deviceTokenIssuerMatches(existingToken, undefined)) {
+    return false;
+  }
+  if (
+    !scopesWithinApprovedDeviceBaseline({
+      role: params.role,
+      scopes: existingTokenScopes,
+      approvedScopes: params.previousApprovedScopes,
+    })
+  ) {
+    return false;
+  }
+  if (
+    !scopesWithinApprovedDeviceBaseline({
+      role: params.role,
+      scopes: existingTokenScopes,
+      approvedScopes: params.approvedScopes ?? null,
+    })
+  ) {
+    return false;
+  }
+  return roleScopesAllow({
+    role: params.role,
+    requestedScopes: params.nextScopes,
+    allowedScopes: existingToken.scopes,
   });
 }
 
@@ -717,6 +799,7 @@ export async function approveDevicePairing(
       existing?.approvedScopes ?? existing?.scopes,
       pending.scopes,
     );
+    const previousApprovedScopes = existing ? resolveApprovedDeviceScopeBaseline(existing) : null;
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     const nextTokenScopesByRole = new Map<string, string[]>();
     for (const roleForToken of requestedRoles) {
@@ -755,15 +838,26 @@ export async function approveDevicePairing(
     for (const [roleForToken, nextScopes] of nextTokenScopesByRole) {
       const existingToken = tokens[roleForToken];
       const tokenNow = Date.now();
-      tokens[roleForToken] = {
-        token: newToken(),
+      const shouldReuseExistingToken = canReuseExistingApprovedToken({
         role: roleForToken,
-        scopes: nextScopes,
-        createdAtMs: existingToken?.createdAtMs ?? tokenNow,
-        rotatedAtMs: existingToken ? tokenNow : undefined,
-        revokedAtMs: undefined,
-        lastUsedAtMs: existingToken?.lastUsedAtMs,
-      };
+        existingToken,
+        publicKeyMatches: !existing || existing.publicKey === pending.publicKey,
+        nextScopes,
+        previousApprovedScopes,
+        approvedScopes,
+      });
+      tokens[roleForToken] =
+        shouldReuseExistingToken && existingToken
+          ? { ...existingToken, role: roleForToken }
+          : {
+              token: newToken(),
+              role: roleForToken,
+              scopes: nextScopes,
+              createdAtMs: existingToken?.createdAtMs ?? tokenNow,
+              rotatedAtMs: existingToken ? tokenNow : undefined,
+              revokedAtMs: undefined,
+              lastUsedAtMs: existingToken?.lastUsedAtMs,
+            };
     }
     const device = buildApprovedPairedDevice({
       pending,

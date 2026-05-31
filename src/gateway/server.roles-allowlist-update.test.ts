@@ -184,6 +184,7 @@ const connectNodeClientWithNodePairing = async (
 
   const request = await requestNodePairing({
     nodeId,
+    deviceId: params.deviceIdentity?.deviceId,
     displayName: params.displayName,
     platform: params.platform ?? "ios",
     deviceFamily: params.deviceFamily,

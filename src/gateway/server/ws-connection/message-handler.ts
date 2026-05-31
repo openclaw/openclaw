@@ -25,6 +25,7 @@ import {
   formatValidationErrors,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  type RequestFrame,
   validateConnectParams,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -106,6 +107,11 @@ import {
 } from "../../net.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import {
+  nodePairingMatchesConnectDevice,
+  resolveConnectNodeId,
+  resolveConnectNodeIdCandidates,
+} from "../../node-identity.js";
+import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
 } from "../../node-pairing-auto-approve.js";
@@ -163,6 +169,10 @@ import {
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+type ConnectRequestFrame = RequestFrame & {
+  method: "connect";
+  params: ConnectParams;
+};
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
@@ -184,14 +194,27 @@ function isReleasedVersion(version: string): boolean {
  * Process-stable: only changes on `openclaw node install`, which requires restart.
  */
 let cachedLocalNodeId: string | null | undefined;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isConnectRequestFrame(frame: unknown): frame is ConnectRequestFrame {
+  return (
+    validateRequestFrame(frame) &&
+    frame.method === "connect" &&
+    validateConnectParams(frame.params)
+  );
+}
+
 function resolveLocalNodeId(): string | null {
   if (cachedLocalNodeId !== undefined) {
     return cachedLocalNodeId;
   }
   try {
     const raw = fs.readFileSync(path.join(resolveStateDir(), "node.json"), "utf8");
-    const parsed = JSON.parse(raw) as { nodeId?: string };
-    cachedLocalNodeId = typeof parsed.nodeId === "string" ? parsed.nodeId.trim() || null : null;
+    const parsed: unknown = JSON.parse(raw);
+    const nodeId = isRecord(parsed) ? parsed["nodeId"] : undefined;
+    cachedLocalNodeId = typeof nodeId === "string" ? nodeId.trim() || null : null;
   } catch {
     cachedLocalNodeId = null;
   }
@@ -506,25 +529,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
     const text = rawDataToString(data);
     try {
-      const parsed = JSON.parse(text);
+      const parsed: unknown = JSON.parse(text);
+      const parsedRecord = isRecord(parsed) ? parsed : undefined;
       const frameType =
-        parsed && typeof parsed === "object" && "type" in parsed
-          ? typeof (parsed as { type?: unknown }).type === "string"
-            ? String((parsed as { type?: unknown }).type)
-            : undefined
-          : undefined;
+        typeof parsedRecord?.["type"] === "string" ? parsedRecord["type"] : undefined;
       const frameMethod =
-        parsed && typeof parsed === "object" && "method" in parsed
-          ? typeof (parsed as { method?: unknown }).method === "string"
-            ? String((parsed as { method?: unknown }).method)
-            : undefined
-          : undefined;
-      const frameId =
-        parsed && typeof parsed === "object" && "id" in parsed
-          ? typeof (parsed as { id?: unknown }).id === "string"
-            ? String((parsed as { id?: unknown }).id)
-            : undefined
-          : undefined;
+        typeof parsedRecord?.["method"] === "string" ? parsedRecord["method"] : undefined;
+      const frameId = typeof parsedRecord?.["id"] === "string" ? parsedRecord["id"] : undefined;
       if (frameType || frameMethod || frameId) {
         setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
       }
@@ -534,11 +545,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         // Handshake must be a normal request:
         // { type:"req", method:"connect", params: ConnectParams }.
         const isRequestFrame = validateRequestFrame(parsed);
-        if (
-          !isRequestFrame ||
-          parsed.method !== "connect" ||
-          !validateConnectParams(parsed.params)
-        ) {
+        if (!isConnectRequestFrame(parsed)) {
           const handshakeError = isRequestFrame
             ? parsed.method === "connect"
               ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
@@ -574,7 +581,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
 
         const frame = parsed;
-        const connectParams = frame.params as ConnectParams;
+        const connectParams = frame.params;
         const resolvedAuth = getResolvedAuth();
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
         const clientMeta = {
@@ -1579,11 +1586,30 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
+        const nodePairingId = resolveConnectNodeId(connectParams);
+        let reconciledNodeId: string | undefined;
+        let matchedPairedNode = false;
+        let rejectedStablePairedNode = false;
         if (role === "node") {
+          let pairedNode = null;
+          for (const candidateNodeId of resolveConnectNodeIdCandidates(connectParams)) {
+            const candidate = await getPairedNode(candidateNodeId);
+            if (
+              candidate &&
+              nodePairingMatchesConnectDevice({ connect: connectParams, pairedNode: candidate })
+            ) {
+              pairedNode = candidate;
+              break;
+            }
+            if (candidate && candidateNodeId === nodePairingId) {
+              rejectedStablePairedNode = true;
+            }
+          }
+          matchedPairedNode = pairedNode !== null;
           const reconciliation = await reconcileNodePairingOnConnect({
             cfg: getRuntimeConfig(),
             connectParams,
-            pairedNode: await getPairedNode(connectParams.device?.id ?? connectParams.client.id),
+            pairedNode,
             reportedClientIp,
             requestPairing: async (input) => await requestNodePairing(input),
           });
@@ -1606,14 +1632,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               dropIfSlow: true,
             });
           }
-          const nodeConnectParams = connectParams as ConnectParams & {
-            declaredCaps?: string[];
-            declaredCommands?: string[];
-            declaredPermissions?: Record<string, boolean>;
-          };
-          nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
-          nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
-          nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
+          reconciledNodeId = reconciliation.nodeId;
+          Object.assign(connectParams, {
+            declaredCaps: reconciliation.declaredCaps,
+            declaredCommands: reconciliation.declaredCommands,
+            declaredPermissions: reconciliation.declaredPermissions,
+          });
           connectParams.caps = reconciliation.effectiveCaps;
           connectParams.commands = reconciliation.effectiveCommands;
           connectParams.permissions = reconciliation.effectivePermissions;
@@ -1767,14 +1791,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
         if (role === "node") {
           const context = buildRequestContext();
+          const unmatchedNodeId = connectParams.device?.id ?? connId;
           const nodeSession = context.nodeRegistry.register(nextClient, {
             remoteIp: reportedClientIp,
+            nodeId:
+              matchedPairedNode || !rejectedStablePairedNode
+                ? (reconciledNodeId ?? nodePairingId)
+                : unmatchedNodeId,
           });
-          const instanceIdRaw = connectParams.client.instanceId;
-          const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
+          const clientInstanceId = typeof instanceId === "string" ? instanceId.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-          if (instanceIdLocal) {
-            nodeIdsForPairing.add(instanceIdLocal);
+          const shouldRecordStablePairingMetadata = !rejectedStablePairedNode;
+          if (nodePairingId && shouldRecordStablePairingMetadata) {
+            nodeIdsForPairing.add(nodePairingId);
+          }
+          if (clientInstanceId && shouldRecordStablePairingMetadata) {
+            nodeIdsForPairing.add(clientInstanceId);
           }
           for (const nodeId of nodeIdsForPairing) {
             void updatePairedNodeMetadata(nodeId, {
@@ -1931,7 +1963,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       if (!validateRequestFrame(parsed)) {
         send({
           type: "res",
-          id: (parsed as { id?: unknown })?.id ?? "invalid",
+          id: isRecord(parsed) ? (parsed["id"] ?? "invalid") : "invalid",
           ok: false,
           error: errorShape(
             ErrorCodes.INVALID_REQUEST,
@@ -2067,8 +2099,8 @@ function getRawDataByteLength(data: unknown): number {
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
-  const receiver = (socket as { _receiver?: { _maxPayload?: number } })["_receiver"];
-  if (receiver) {
+  const receiver = Reflect.get(socket, "_receiver");
+  if (isRecord(receiver)) {
     receiver["_maxPayload"] = maxPayload;
   }
 }

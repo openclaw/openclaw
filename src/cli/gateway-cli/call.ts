@@ -4,7 +4,8 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway, resolveGatewayCliScopes } from "../../gateway/call.js";
+import { shouldUseDirectLoopbackGatewayAuth } from "../direct-loopback-gateway-auth.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { withProgress } from "../progress.js";
 
@@ -36,8 +37,9 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
       indeterminate: true,
       enabled: opts.json !== true,
     },
-    async () =>
-      await callGateway({
+    async () => {
+      const useDirectAuth = await shouldUseDirectLoopbackGatewayAuth(opts);
+      return await callGateway({
         config: opts.config,
         url: opts.url,
         token: opts.token,
@@ -46,7 +48,10 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
         params,
         expectFinal: Boolean(opts.expectFinal),
         timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_GATEWAY_RPC_TIMEOUT_MS),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-      }),
+        clientName: useDirectAuth ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+        mode: useDirectAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+        scopes: useDirectAuth ? resolveGatewayCliScopes(method, params) : undefined,
+        deviceIdentity: useDirectAuth ? null : undefined,
+      });
+    },
   );

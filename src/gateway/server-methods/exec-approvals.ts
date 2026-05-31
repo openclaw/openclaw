@@ -15,13 +15,14 @@ import {
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   respondUnavailableOnNodeInvokeError,
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function requireApprovalsBaseHash(
@@ -99,6 +100,42 @@ function resolveNodeIdOrRespond(nodeId: string, respond: RespondFn): string | nu
   return id;
 }
 
+function ensureNodeCommandAllowed(params: {
+  context: GatewayRequestContext;
+  nodeId: string;
+  command: string;
+  respond: RespondFn;
+}): boolean {
+  const nodeSession = params.context.nodeRegistry.get(params.nodeId);
+  if (!nodeSession) {
+    return true;
+  }
+  const allowlist = resolveNodeCommandAllowlist(params.context.getRuntimeConfig(), {
+    ...nodeSession,
+    approvedCommands: nodeSession.commands,
+  });
+  const allowed = isNodeCommandAllowed({
+    command: params.command,
+    declaredCommands: nodeSession.commands,
+    allowlist,
+  });
+  if (allowed.ok) {
+    return true;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `node command not allowed: "${params.command}" is not approved for node "${params.nodeId}"`,
+      {
+        details: { reason: allowed.reason, command: params.command },
+      },
+    ),
+  );
+  return false;
+}
+
 export const execApprovalsHandlers: GatewayRequestHandlers = {
   "exec.approvals.get": ({ params, respond }) => {
     if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
@@ -117,7 +154,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     if (!requireApprovalsBaseHash(params, snapshot, respond)) {
       return;
     }
-    const incoming = (params as { file?: unknown }).file;
+    const incoming = params.file;
     if (!incoming || typeof incoming !== "object") {
       respond(
         false,
@@ -143,9 +180,19 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const { nodeId } = params as { nodeId: string };
+    const { nodeId } = params;
     const id = resolveNodeIdOrRespond(nodeId, respond);
     if (!id) {
+      return;
+    }
+    if (
+      !ensureNodeCommandAllowed({
+        context,
+        nodeId: id,
+        command: "system.execApprovals.get",
+        respond,
+      })
+    ) {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
@@ -174,28 +221,37 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const { nodeId, file, baseHash } = params as {
-      nodeId: string;
-      file: ExecApprovalsFile;
-      baseHash?: string;
-    };
+    const { nodeId } = params;
+    const file = "file" in params ? params.file : undefined;
+    const native = "native" in params ? params.native : undefined;
+    const baseHash = "baseHash" in params ? params.baseHash : undefined;
     const id = resolveNodeIdOrRespond(nodeId, respond);
     if (!id) {
+      return;
+    }
+    if (
+      !ensureNodeCommandAllowed({
+        context,
+        nodeId: id,
+        command: "system.execApprovals.set",
+        respond,
+      })
+    ) {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
       const res = await context.nodeRegistry.invoke({
         nodeId: id,
         command: "system.execApprovals.set",
-        params: { file, baseHash },
+        params: native ? { ...native, baseHash } : { file, baseHash },
       });
       if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
-      // node.set returns JSON on the command channel; keep the gateway response
-      // shape aligned with local exec.approvals.set.
-      const payload = safeParseJson(res.payloadJSON ?? null);
-      respond(true, payload, undefined);
+      // Node transports may return structured payloads or JSON strings; keep
+      // node.set aligned with the local exec.approvals.set response shape.
+      const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
+      respond(true, payload ?? {}, undefined);
     });
   },
 };

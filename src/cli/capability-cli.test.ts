@@ -270,6 +270,7 @@ vi.mock("../commands/models/list.status-command.js", () => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,
   randomIdempotencyKey: () => "run-1",
+  resolveGatewayCliScopes: () => [],
 }));
 
 vi.mock("../gateway/connection-details.js", () => ({

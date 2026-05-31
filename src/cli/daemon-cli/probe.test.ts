@@ -6,6 +6,7 @@ const probeGatewayMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  resolveGatewayCliScopes: () => [],
 }));
 
 vi.mock("../../gateway/probe.js", () => ({

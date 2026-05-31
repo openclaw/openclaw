@@ -47,6 +47,7 @@ export const NodeEventResultSchema = Type.Object(
 export const NodePairRequestParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
+    deviceId: Type.Optional(NonEmptyString),
     displayName: Type.Optional(NonEmptyString),
     platform: Type.Optional(NonEmptyString),
     version: Type.Optional(NonEmptyString),

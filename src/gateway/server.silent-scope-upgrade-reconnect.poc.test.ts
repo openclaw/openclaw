@@ -257,6 +257,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
         token: "secret",
         method: "health",
         scopes: ["operator.admin"],
+        deviceIdentity: null,
         timeoutMs: 2_000,
       });
       expect(health.ok).toBe(true);

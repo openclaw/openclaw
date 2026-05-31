@@ -229,6 +229,72 @@ describe("cli program (nodes basics)", () => {
     expect(output).toContain("Pairing Scoped");
   });
 
+  it("hides transient commandless paired rows while a command upgrade is pending", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [
+            {
+              requestId: "upgrade-1",
+              nodeId: "node-upgrade",
+              displayName: "Windows Node",
+              commands: ["system.run", "system.which"],
+              ts: now - 1_000,
+            },
+          ],
+          paired: [
+            {
+              nodeId: "node-upgrade",
+              displayName: "Windows Node",
+              remoteIp: "192.0.2.9",
+            },
+            {
+              nodeId: "ready-node",
+              displayName: "Ready Node",
+              remoteIp: "192.0.2.10",
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [
+            {
+              nodeId: "node-upgrade",
+              displayName: "Windows Node",
+              remoteIp: "192.0.2.9",
+              paired: true,
+              connected: true,
+              commands: [],
+              caps: [],
+            },
+            {
+              nodeId: "ready-node",
+              displayName: "Ready Node",
+              remoteIp: "192.0.2.10",
+              paired: true,
+              connected: true,
+              commands: ["system.which"],
+              caps: ["system"],
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list", "--json"]);
+
+    const json = writeJsonArgAt(0) as {
+      pending?: Array<Record<string, unknown>>;
+      paired?: Array<Record<string, unknown>>;
+    };
+    expect(json.pending?.map((node) => node.nodeId)).toEqual(["node-upgrade"]);
+    expect(json.paired?.map((node) => node.nodeId)).toEqual(["ready-node"]);
+  });
+
   it("sanitizes untrusted nodes list table fields while preserving JSON values", async () => {
     const now = Date.now();
     callGateway.mockImplementation(async (...args: unknown[]) => {

@@ -113,6 +113,28 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
+  it("runs TypeScript helper steps through the repo tsx loader", () => {
+    const tsHelperLabels = [
+      "write-plugin-sdk-entry-dts",
+      "copy-hook-metadata",
+      "copy-export-html-templates",
+      "write-build-info",
+      "write-cli-startup-metadata",
+      "write-cli-compat",
+    ];
+
+    for (const label of tsHelperLabels) {
+      const step = getBuildAllStep(label);
+      const result = resolveBuildAllStep(step, {
+        nodeExecPath: "/custom/node",
+        env: {},
+      });
+
+      expect(result.command).toBe("/custom/node");
+      expect(result.args).toEqual(["--import", "tsx", expect.stringMatching(/\.ts$/u)]);
+    }
+  });
+
   it("can route pnpm script steps through direct node entrypoints", () => {
     const step = getBuildAllStep("plugins:assets:build");
 

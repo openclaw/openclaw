@@ -138,6 +138,66 @@ describe("gateway/node-catalog", () => {
     expect(node?.connected).toBe(true);
   });
 
+  it("merges stable node pairings with their underlying device pairing", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        {
+          deviceId: "device-token-id",
+          publicKey: "public-key",
+          displayName: "Windows Host",
+          clientId: "openclaw-node-host",
+          clientMode: "node",
+          role: "node",
+          roles: ["node"],
+          tokens: {
+            node: {
+              token: "current-token",
+              role: "node",
+              scopes: [],
+              createdAtMs: 1,
+            },
+          },
+          createdAtMs: 1,
+          approvedAtMs: 99,
+        },
+      ],
+      pairedNodes: [
+        {
+          nodeId: "stable-windows-node",
+          deviceId: "device-token-id",
+          token: "node-token",
+          platform: "windows",
+          caps: ["system"],
+          commands: ["system.execApprovals.set"],
+          createdAtMs: 1,
+          approvedAtMs: 100,
+        },
+      ],
+      connectedNodes: [
+        {
+          nodeId: "stable-windows-node",
+          connId: "conn-1",
+          client: {} as never,
+          displayName: "Windows Host",
+          platform: "windows",
+          declaredCaps: ["system"],
+          caps: ["system"],
+          declaredCommands: ["system.execApprovals.set"],
+          commands: ["system.execApprovals.set"],
+          connectedAtMs: 123,
+        },
+      ],
+    });
+
+    expect(listKnownNodes(catalog).map((node) => node.nodeId)).toEqual(["stable-windows-node"]);
+    expect(getKnownNode(catalog, "device-token-id")).toBeNull();
+    const entry = getKnownNodeEntry(catalog, "stable-windows-node");
+    expect(entry?.devicePairing?.nodeId).toBe("device-token-id");
+    expect(entry?.nodePairing?.nodeId).toBe("stable-windows-node");
+    expect(entry?.effective.connected).toBe(true);
+    expect(entry?.effective.clientId).toBe("openclaw-node-host");
+  });
+
   it("surfaces node-pair metadata even when the node is offline", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [

@@ -11,6 +11,7 @@ import {
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
 
 describe("gateway/node-command-policy", () => {
@@ -189,6 +190,26 @@ describe("gateway/node-command-policy", () => {
       expect(allowlist.has("system.run")).toBe(true);
       expect(allowlist.has("system.which")).toBe(true);
     }
+  });
+
+  it("requires pairing before exposing desktop exec-approval host commands", () => {
+    const cfg = {} as OpenClawConfig;
+    const node = { platform: "windows", deviceFamily: "Windows" };
+
+    const pairingAllowlist = resolveNodePairingCommandAllowlist(cfg, node);
+    expect(pairingAllowlist.has("system.execApprovals.get")).toBe(true);
+    expect(pairingAllowlist.has("system.execApprovals.set")).toBe(true);
+
+    const runtimeBeforeApproval = resolveNodeCommandAllowlist(cfg, node);
+    expect(runtimeBeforeApproval.has("system.execApprovals.get")).toBe(false);
+    expect(runtimeBeforeApproval.has("system.execApprovals.set")).toBe(false);
+
+    const runtimeAfterApproval = resolveNodeCommandAllowlist(cfg, {
+      ...node,
+      approvedCommands: ["system.execApprovals.get", "system.execApprovals.set"],
+    });
+    expect(runtimeAfterApproval.has("system.execApprovals.get")).toBe(true);
+    expect(runtimeAfterApproval.has("system.execApprovals.set")).toBe(true);
   });
 
   it("keeps approved host commands on live desktop node sessions", () => {

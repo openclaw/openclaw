@@ -190,3 +190,69 @@ describe("nodes devices pending rendering", () => {
     expect(details[1]).toBe("requested: roles: node, operator \u00b7 scopes: operator.read");
   });
 });
+
+describe("nodes exec approvals rendering", () => {
+  it("renders host-native node approval snapshots as read-only", () => {
+    const container = renderNodesContainer({
+      nodes: [
+        {
+          id: "node-1",
+          label: "Windows node",
+          commands: ["system.execApprovals.get", "system.execApprovals.set"],
+        },
+      ],
+      execApprovalsTarget: "node",
+      execApprovalsTargetNodeId: "node-1",
+      execApprovalsSnapshot: {
+        enabled: true,
+        defaultAction: "deny",
+        hash: "native-hash",
+        rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+      },
+    });
+    const card = Array.from(container.querySelectorAll(".card")).find(
+      (candidate) =>
+        candidate.querySelector(".card-title")?.textContent?.trim() === "Exec approvals",
+    );
+    expect(card).toBeInstanceOf(Element);
+    if (!(card instanceof Element)) {
+      throw new Error("Expected exec approvals card");
+    }
+
+    const titles = Array.from(card.querySelectorAll(".list-title")).map(
+      (line) => line.textContent?.trim() ?? "",
+    );
+    const save = Array.from(card.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save",
+    );
+
+    expect(titles).toContain("Host-native policy");
+    expect(titles).toContain("Default action");
+    expect(titles).toContain("echo *");
+    expect(titles).not.toContain("Security");
+    expect(card.textContent).toContain("Read-only in Control UI");
+    expect(card.textContent).toContain("deny");
+    expect(save).toBeInstanceOf(HTMLButtonElement);
+    expect(save?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("ignores malformed host-native node approval rules", () => {
+    const snapshot = {
+      enabled: true,
+      defaultAction: "deny",
+      hash: "native-hash",
+      rules: [null, { pattern: 42 }, { pattern: "echo *", action: "allow", shells: [1, "cmd"] }],
+    };
+
+    const container = renderNodesContainer({
+      execApprovalsTarget: "node",
+      execApprovalsTargetNodeId: "node-1",
+      execApprovalsSnapshot: snapshot as unknown as NodesProps["execApprovalsSnapshot"],
+    });
+
+    expect(container.textContent).toContain("Host-native policy");
+    expect(container.textContent).toContain("echo *");
+    expect(container.textContent).toContain("cmd");
+    expect(container.textContent).not.toContain("42");
+  });
+});

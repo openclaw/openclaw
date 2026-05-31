@@ -19,6 +19,7 @@ const { callGateway } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  resolveGatewayCliScopes: () => [],
 }));
 
 vi.mock("../secrets/runtime-web-tools.js", () => ({

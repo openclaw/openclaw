@@ -30,6 +30,7 @@ vi.mock("../gateway/call.js", () => {
   loaded.mark("gateway-transport-runtime");
   return {
     formatGatewayTransportErrorJson: vi.fn(() => null),
+    resolveGatewayCliScopes: vi.fn(() => []),
   };
 });
 

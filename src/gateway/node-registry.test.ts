@@ -15,6 +15,7 @@ function makeClient(
   sent: string[] = [],
   opts: {
     clientId?: string;
+    instanceId?: string;
     platform?: string;
     version?: string;
     caps?: string[];
@@ -46,6 +47,7 @@ function makeClient(
         version: opts.version ?? "1.0.0",
         platform: opts.platform ?? "darwin",
         mode: "node",
+        instanceId: opts.instanceId,
       },
       device: {
         id: nodeId,
@@ -65,6 +67,60 @@ function makeClient(
 }
 
 describe("gateway/node-registry", () => {
+  it("registers node-mode clients by stable instance id instead of rotated device id", () => {
+    const registry = new NodeRegistry();
+
+    const session = registry.register(
+      makeClient("conn-1", "device-token-id", [], {
+        clientId: "node-host",
+        instanceId: "stable-host-node",
+      }),
+      {},
+    );
+
+    expect(session.nodeId).toBe("stable-host-node");
+    expect(registry.get("stable-host-node")).toBe(session);
+    expect(registry.get("device-token-id")).toBeUndefined();
+  });
+
+  it("uses reconciled node id overrides for legacy device-id approvals", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "device-token-id", [], {
+      clientId: "node-host",
+      instanceId: "stable-host-node",
+    });
+
+    const session = registry.register(client, { nodeId: "device-token-id" });
+
+    expect(session.nodeId).toBe("device-token-id");
+    expect(registry.get("device-token-id")).toBe(session);
+    expect(registry.get("stable-host-node")).toBeUndefined();
+  });
+
+  it("adopts a quarantined device-id session under the approved stable id", () => {
+    const registry = new NodeRegistry();
+    const session = registry.register(
+      makeClient("conn-1", "device-token-id", [], {
+        commands: ["system.which"],
+        declaredCommands: ["system.which"],
+      }),
+      {},
+    );
+
+    const adopted = registry.adoptNodeId("device-token-id", "stable-host-node", {
+      caps: ["system"],
+      commands: ["system.which"],
+    });
+
+    expect(adopted).toBe(session);
+    expect(adopted?.nodeId).toBe("stable-host-node");
+    expect(adopted?.commands).toEqual(["system.which"]);
+    expect(registry.get("device-token-id")).toBeUndefined();
+    expect(registry.get("stable-host-node")).toBe(session);
+    expect(registry.getByConnId("conn-1")).toBe(session);
+    expect(registry.unregister("conn-1")).toBe("stable-host-node");
+  });
+
   it("checks node websocket connectivity with ping/pong", async () => {
     const registry = new NodeRegistry();
     const socket = new EventEmitter() as EventEmitter & {
@@ -141,6 +197,16 @@ describe("gateway/node-registry", () => {
     expect(registry.unregister("conn-old")).toBeNull();
     expect(registry.get("node-1")).toBe(newSession);
     await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
+  });
+
+  it("does not resolve an old connection to its replacement session", () => {
+    const registry = new NodeRegistry();
+
+    registry.register(makeClient("conn-old", "node-1"), {});
+    const replacement = registry.register(makeClient("conn-new", "node-1"), {});
+
+    expect(registry.getByConnId("conn-old")).toBeUndefined();
+    expect(registry.getByConnId("conn-new")).toBe(replacement);
   });
 
   it("matches pending system.run events to the issuing connection", async () => {

@@ -15,6 +15,7 @@ import {
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
+import { resolveConnectNodeId } from "./node-identity.js";
 
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;
@@ -89,6 +90,7 @@ function buildNodePairingRequestInput(params: {
 }): NodePairingRequestInput {
   return {
     nodeId: params.nodeId,
+    ...(params.connectParams.device?.id ? { deviceId: params.connectParams.device.id } : {}),
     displayName: params.connectParams.client.displayName,
     platform: params.connectParams.client.platform,
     version: params.connectParams.client.version,
@@ -108,7 +110,7 @@ export async function reconcileNodePairingOnConnect(params: {
   reportedClientIp?: string;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult>;
 }): Promise<NodeConnectPairingReconcileResult> {
-  const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
+  const nodeId = params.pairedNode?.nodeId ?? resolveConnectNodeId(params.connectParams);
   const policyNode = {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,

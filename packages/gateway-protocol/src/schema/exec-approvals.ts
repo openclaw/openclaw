@@ -52,16 +52,6 @@ export const ExecApprovalsFileSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ExecApprovalsSnapshotSchema = Type.Object(
-  {
-    path: NonEmptyString,
-    exists: Type.Boolean(),
-    hash: NonEmptyString,
-    file: ExecApprovalsFileSchema,
-  },
-  { additionalProperties: false },
-);
-
 export const ExecApprovalsGetParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const ExecApprovalsSetParamsSchema = Type.Object(
@@ -79,14 +69,81 @@ export const ExecApprovalsNodeGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ExecApprovalsNodeSetParamsSchema = Type.Object(
+export const NativeExecApprovalRuleSchema = Type.Object(
   {
-    nodeId: NonEmptyString,
-    file: ExecApprovalsFileSchema,
-    baseHash: Type.Optional(NonEmptyString),
+    pattern: NonEmptyString,
+    action: NonEmptyString,
+    shells: Type.Optional(Type.Array(Type.String())),
+    description: Type.Optional(Type.String()),
+    enabled: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
+
+export const ExecApprovalsFileSnapshotSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    exists: Type.Boolean(),
+    hash: NonEmptyString,
+    file: ExecApprovalsFileSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const NativeExecApprovalsSnapshotSchema = Type.Object(
+  {
+    hash: Type.Optional(NonEmptyString),
+    baseHash: Type.Optional(NonEmptyString),
+    enabled: Type.Optional(Type.Boolean()),
+    defaultAction: Type.Optional(NonEmptyString),
+    rules: Type.Optional(Type.Array(NativeExecApprovalRuleSchema)),
+    constraints: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalsSnapshotSchema = Type.Union([
+  ExecApprovalsFileSnapshotSchema,
+  NativeExecApprovalsSnapshotSchema,
+]);
+
+export const NativeExecApprovalPolicySchema = Type.Union([
+  Type.Object(
+    {
+      enabled: Type.Optional(Type.Boolean()),
+      defaultAction: NonEmptyString,
+      rules: Type.Optional(Type.Array(NativeExecApprovalRuleSchema)),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      enabled: Type.Optional(Type.Boolean()),
+      defaultAction: Type.Optional(NonEmptyString),
+      rules: Type.Array(NativeExecApprovalRuleSchema, { minItems: 1 }),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+export const ExecApprovalsNodeSetParamsSchema = Type.Union([
+  Type.Object(
+    {
+      nodeId: NonEmptyString,
+      file: ExecApprovalsFileSchema,
+      baseHash: Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      nodeId: NonEmptyString,
+      native: NativeExecApprovalPolicySchema,
+      baseHash: Type.Optional(NonEmptyString),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export const ExecApprovalGetParamsSchema = Type.Object(
   {

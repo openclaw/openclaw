@@ -3,6 +3,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -47,11 +48,13 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
+  ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
   ...SCREEN_COMMANDS,
 ]);
@@ -122,17 +125,18 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
 };
 
 type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "unknown";
+type CanonicalPlatformId = Exclude<PlatformId, "unknown">;
 
-const CANONICAL_PLATFORM_IDS = new Set<Exclude<PlatformId, "unknown">>([
+const CANONICAL_PLATFORM_IDS: readonly CanonicalPlatformId[] = [
   "ios",
   "android",
   "macos",
   "windows",
   "linux",
-]);
+];
 
 const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
-  id: Exclude<PlatformId, "unknown">;
+  id: CanonicalPlatformId;
   tokens: readonly string[];
 }> = [
   { id: "ios", tokens: ["iphone", "ipad", "ios"] },
@@ -142,17 +146,16 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   { id: "linux", tokens: ["linux"] },
 ] as const;
 
-function resolvePlatformIdByExactMatch(value: string): Exclude<PlatformId, "unknown"> | undefined {
-  if (CANONICAL_PLATFORM_IDS.has(value as Exclude<PlatformId, "unknown">)) {
-    return value as Exclude<PlatformId, "unknown">;
+function resolvePlatformIdByExactMatch(value: string): CanonicalPlatformId | undefined {
+  for (const id of CANONICAL_PLATFORM_IDS) {
+    if (id === value) {
+      return id;
+    }
   }
   return undefined;
 }
 
-function platformMatchesDeviceFamily(
-  platformId: Exclude<PlatformId, "unknown">,
-  family: string,
-): boolean {
+function platformMatchesDeviceFamily(platformId: CanonicalPlatformId, family: string): boolean {
   switch (platformId) {
     case "ios":
       return family === "" || /^(?:iphone|ipad|ios)$/.test(family);

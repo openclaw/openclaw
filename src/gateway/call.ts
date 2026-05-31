@@ -18,6 +18,7 @@ import {
   resolveGatewayPort as resolveGatewayPortFromPaths,
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
+import type { GatewayRemoteConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
@@ -406,11 +407,12 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
   url: string;
   token?: string;
+  tokenIsSharedAuth: boolean;
   password?: string;
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  const hasSharedAuth = Boolean(params.token || params.password);
+  const hasSharedAuth = Boolean(params.password || (params.token && params.tokenIsSharedAuth));
   return (
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
@@ -423,6 +425,7 @@ function resolveDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
   url: string;
   token?: string;
+  tokenIsSharedAuth: boolean;
   password?: string;
 }): ReturnType<typeof loadOrCreateDeviceIdentity> | null {
   if (shouldOmitDeviceIdentityForGatewayCall(params)) {
@@ -539,18 +542,11 @@ export function ensureExplicitGatewayAuth(params: {
   throw new GatewayExplicitAuthRequiredError(message);
 }
 
-type GatewayRemoteSettings = {
-  url?: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-};
-
 type ResolvedGatewayCallContext = {
   config: OpenClawConfig;
   configPath: string;
   isRemoteMode: boolean;
-  remote?: GatewayRemoteSettings;
+  remote?: GatewayRemoteConfig;
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
   remoteUrl?: string;
@@ -611,9 +607,7 @@ async function resolveGatewayCallContext(
     opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : await loadGatewayConfig());
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode
-    ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
-    : undefined;
+  const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const remoteUrl = trimToUndefined(remote?.url);
   return {
     config,
@@ -677,6 +671,56 @@ async function resolveGatewayCredentialsWithEnv(
 }
 
 export { resolveGatewayCredentialsWithSecretInputs };
+
+async function resolveConfiguredGatewayCredentialsForExplicitToken(
+  context: ResolvedGatewayCallContext,
+  opts: CallGatewayBaseOptions,
+): Promise<
+  | {
+      token?: string;
+      password?: string;
+    }
+  | undefined
+> {
+  if (!context.explicitAuth.token) {
+    return undefined;
+  }
+  const isBackendGatewayClient =
+    (opts.mode ?? GATEWAY_CLIENT_MODES.CLI) === GATEWAY_CLIENT_MODES.BACKEND &&
+    (opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI) === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
+  if (!isBackendGatewayClient) {
+    return undefined;
+  }
+  let configForProbe: OpenClawConfig | undefined;
+  if (context.config.gateway) {
+    configForProbe = context.config;
+  } else {
+    try {
+      configForProbe = await loadGatewayConfig();
+    } catch {
+      configForProbe = undefined;
+    }
+  }
+  if (!configForProbe) {
+    return undefined;
+  }
+  try {
+    return await resolveGatewayCredentialsWithEnv(
+      {
+        ...context,
+        config: configForProbe,
+        explicitAuth: {},
+        urlOverride: undefined,
+        urlOverrideSource: undefined,
+        localTokenPrecedence: "config-first",
+        localPasswordPrecedence: "config-first",
+      },
+      process.env,
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 async function resolveGatewayTlsFingerprint(params: {
   opts: CallGatewayBaseOptions;
@@ -841,17 +885,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
         clearTimeout(timer);
       }
     };
-    const stopClientThenSettle = (
-      activeClient: GatewayClient | undefined,
-      err?: Error,
-      value?: T,
-    ) => {
+    const stopClientThenSettle = (activeClient: GatewayClient | undefined, settle: () => void) => {
       const complete = () => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(value as T);
-        }
+        settle();
       };
       if (!activeClient) {
         complete();
@@ -859,13 +895,21 @@ async function executeGatewayRequestWithScopes<T>(params: {
       }
       void stopGatewayClient(activeClient).finally(complete);
     };
-    const stop = (err?: Error, value?: T) => {
+    const stopWithError = (err: Error) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      stopClientThenSettle(client, err, value);
+      stopClientThenSettle(client, () => reject(err));
+    };
+    const stopWithValue = (value: T) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      stopClientThenSettle(client, () => resolve(value));
     };
     const abortHandler: (() => void) | undefined = () => {
       if (settled) {
@@ -876,7 +920,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       cleanup();
       const err = createGatewayRequestAbortError(opts.method);
       const activeClient = client;
-      const stopAfterAbortHook = () => stopClientThenSettle(activeClient, err);
+      const stopAfterAbortHook = () => stopClientThenSettle(activeClient, () => reject(err));
       if (!activeClient || !opts.onSignalAbort || !primaryRequestStarted) {
         stopAfterAbortHook();
         return;
@@ -927,10 +971,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
               onAccepted: opts.onAccepted,
             });
             ignoreClose = true;
-            stop(undefined, result);
+            stopWithValue(result);
           } catch (err) {
             ignoreClose = true;
-            stop(err as Error);
+            stopWithError(err instanceof Error ? err : new Error(String(err)));
           }
         })();
       },
@@ -939,7 +983,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        stop(
+        stopWithError(
           createGatewayCloseTransportError({
             code,
             reason,
@@ -952,13 +996,13 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        stop(err);
+        stopWithError(err);
       },
     });
 
     const timer: NodeJS.Timeout | undefined = setTimeout(() => {
       ignoreClose = true;
-      stop(
+      stopWithError(
         createGatewayTimeoutTransportError({
           timeoutMs,
           connectionDetails: params.connectionDetails,
@@ -975,7 +1019,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        stop(
+        stopWithError(
           createGatewayTimeoutTransportError({
             timeoutMs,
             connectionDetails: params.connectionDetails,
@@ -987,7 +1031,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        stop(err instanceof Error ? err : new Error(String(err)));
+        stopWithError(err instanceof Error ? err : new Error(String(err)));
       });
   });
 }
@@ -1020,9 +1064,13 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolvedCredentials;
+  const configuredCredentials = context.explicitAuth.token
+    ? await resolveConfiguredGatewayCredentialsForExplicitToken(context, opts)
+    : resolvedCredentials;
+  const tokenIsSharedAuth = Boolean(token && configuredCredentials?.token === token);
   const deviceIdentity =
     opts.deviceIdentity === undefined
-      ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+      ? resolveDeviceIdentityForGatewayCall({ opts, url, token, tokenIsSharedAuth, password })
       : opts.deviceIdentity;
   ensureGatewayCallCanAuthenticate({
     opts,
@@ -1052,15 +1100,26 @@ export async function callGatewayScoped<T = Record<string, unknown>>(
   return await callGatewayWithScopes(opts, opts.scopes);
 }
 
+export function resolveGatewayCliScopes(method: string, params?: unknown): OperatorScope[] {
+  return isGatewayMethodClassified(method)
+    ? resolveLeastPrivilegeOperatorScopesForMethod(method, params)
+    : [...CLI_DEFAULT_OPERATOR_SCOPES];
+}
+
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
   const scopes = Array.isArray(opts.scopes)
     ? opts.scopes
-    : isGatewayMethodClassified(opts.method)
-      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
-      : CLI_DEFAULT_OPERATOR_SCOPES;
-  return await callGatewayWithScopes(opts, scopes);
+    : resolveGatewayCliScopes(opts.method, opts.params);
+  return await callGatewayWithScopes(
+    {
+      ...opts,
+      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+    },
+    scopes,
+  );
 }
 
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(

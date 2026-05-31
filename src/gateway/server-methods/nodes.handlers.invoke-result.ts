@@ -7,11 +7,10 @@ import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
 
 function normalizeNodeInvokeResultParams(params: unknown): unknown {
-  if (!params || typeof params !== "object") {
+  if (!isRecord(params)) {
     return params;
   }
-  const raw = params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = { ...raw };
+  const normalized: Record<string, unknown> = { ...params };
   if (normalized.payloadJSON === null) {
     delete normalized.payloadJSON;
   } else if (normalized.payloadJSON !== undefined && typeof normalized.payloadJSON !== "string") {
@@ -24,6 +23,10 @@ function normalizeNodeInvokeResultParams(params: unknown): unknown {
     delete normalized.error;
   }
   return normalized;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export const handleNodeInvokeResult: GatewayRequestHandler = async ({
@@ -41,15 +44,11 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
     });
     return;
   }
-  const p = normalizedParams as {
-    id: string;
-    nodeId: string;
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  };
-  const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+  const p = normalizedParams;
+  const callerNodeId =
+    context.nodeRegistry?.getByConnId?.(client?.connId)?.nodeId ??
+    client?.connect?.device?.id ??
+    client?.connect?.client?.id;
   if (callerNodeId && callerNodeId !== p.nodeId) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
     return;

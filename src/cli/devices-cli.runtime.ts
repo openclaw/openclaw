@@ -19,6 +19,7 @@ import {
   buildGatewayConnectionDetails,
   callGateway,
   formatGatewayTransportErrorJson,
+  resolveGatewayCliScopes,
 } from "../gateway/call.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -38,6 +39,7 @@ import {
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
 import { formatCliCommand } from "./command-format.js";
+import { shouldUseDirectLoopbackGatewayAuth } from "./direct-loopback-gateway-auth.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
@@ -61,9 +63,9 @@ type DeviceTokenSummary = {
   revokedAtMs?: number;
 };
 
-type PendingDevice = {
+type PendingDevice = Record<string, unknown> & {
   requestId: string;
-  deviceId: string;
+  deviceId?: string;
   publicKey?: string;
   displayName?: string;
   clientId?: string;
@@ -76,7 +78,7 @@ type PendingDevice = {
   ts?: number;
 };
 
-type PairedDevice = {
+type PairedDevice = Record<string, unknown> & {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
@@ -104,13 +106,13 @@ const FALLBACK_STATE_MISMATCH_MESSAGE =
   "Gateway requires device pairing, but local fallback pairing state does not contain the gateway request.";
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
-const KNOWN_NON_ADMIN_OPERATOR_SCOPES = new Set<OperatorScope>([
+const KNOWN_NON_ADMIN_OPERATOR_SCOPES: readonly OperatorScope[] = [
   "operator.approvals",
   "operator.pairing",
   "operator.read",
   "operator.talk.secrets",
   "operator.write",
-]);
+];
 
 const callGatewayCli = async (
   method: string,
@@ -124,18 +126,22 @@ const callGatewayCli = async (
       indeterminate: true,
       enabled: opts.json !== true,
     },
-    async () =>
-      await callGateway({
+    async () => {
+      const useDirectAuth = await shouldUseDirectLoopbackGatewayAuth(opts);
+      return await callGateway({
         url: opts.url,
         token: opts.token,
         password: opts.password,
         method,
         params,
         timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        scopes: callOpts?.scopes,
-      }),
+        clientName: useDirectAuth ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+        mode: useDirectAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+        scopes:
+          callOpts?.scopes ?? (useDirectAuth ? resolveGatewayCliScopes(method, params) : undefined),
+        deviceIdentity: useDirectAuth ? null : undefined,
+      });
+    },
   );
 
 function normalizeErrorMessage(error: unknown): string {
@@ -206,10 +212,12 @@ function assertLocalFallbackMatchesGatewayRequest(
 
 function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
   const { tokens, ...rest } = device;
-  return {
-    ...(rest as unknown as PairedDevice),
-    tokens: summarizeDeviceTokens(tokens) as DeviceTokenSummary[] | undefined,
+  const tokenSummaries: DeviceTokenSummary[] | undefined = summarizeDeviceTokens(tokens);
+  const redacted: PairedDevice = {
+    ...rest,
+    tokens: tokenSummaries,
   };
+  return redacted;
 }
 
 async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePairingList> {
@@ -334,11 +342,23 @@ async function approvePairingWithFallback(
 }
 
 function parseDevicePairingList(value: unknown): DevicePairingList {
-  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const obj = isRecord(value) ? value : {};
   return {
-    pending: Array.isArray(obj.pending) ? (obj.pending as PendingDevice[]) : [],
-    paired: Array.isArray(obj.paired) ? (obj.paired as PairedDevice[]) : [],
+    pending: Array.isArray(obj["pending"]) ? obj["pending"].filter(isPendingDevice) : [],
+    paired: Array.isArray(obj["paired"]) ? obj["paired"].filter(isPairedDevice) : [],
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPendingDevice(value: unknown): value is PendingDevice {
+  return isRecord(value) && typeof value["requestId"] === "string";
+}
+
+function isPairedDevice(value: unknown): value is PairedDevice {
+  return isRecord(value) && typeof value["deviceId"] === "string";
 }
 
 function normalizeDeviceRoles(request: PendingDevice): string[] {
@@ -498,7 +518,7 @@ function resolvePendingOperatorApprovalScopes(
 }
 
 function isKnownNonAdminOperatorScope(scope: string): scope is OperatorScope {
-  return KNOWN_NON_ADMIN_OPERATOR_SCOPES.has(scope as OperatorScope);
+  return KNOWN_NON_ADMIN_OPERATOR_SCOPES.some((knownScope) => knownScope === scope);
 }
 
 function resolveApprovePairingScopesForRequest(
@@ -754,7 +774,7 @@ export async function runDevicesListCommand(opts: DevicesRpcOpts): Promise<void>
           { key: "IP", header: "IP", minWidth: 12 },
         ],
         rows: list.paired.map((device) => ({
-          Device: sanitizeForLog(device.displayName || device.deviceId),
+          Device: sanitizeForLog(device.displayName || device.deviceId || ""),
           Roles: device.roles?.length
             ? device.roles.map((role) => sanitizeForLog(role)).join(", ")
             : "",

@@ -65,7 +65,7 @@ describe("Control UI Vite config", () => {
       typeof resolveIdHook === "function" ? resolveIdHook : resolveIdHook?.handler
     ) as ResolveIdHandler | undefined;
     if (!resolveIdHandler) {
-      throw new Error("Expected browser-only shared module alias plugin to expose resolveId");
+      throw new Error("expected resolveId hook");
     }
 
     const resolved = await resolveIdHandler.call(

@@ -174,11 +174,22 @@ export function createKnownNodeCatalog(params: {
   pairedNodes?: readonly NodePairingPairedNode[];
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {
-  const devicePairingById = new Map(
-    params.pairedDevices
-      .filter((entry) => hasEffectivePairedDeviceRole(entry, "node"))
-      .map((entry) => [entry.deviceId, buildDevicePairingSource(entry)]),
-  );
+  const stableNodeIdByDeviceId = new Map<string, string>();
+  for (const entry of params.pairedNodes ?? []) {
+    if (entry.deviceId && entry.deviceId !== entry.nodeId) {
+      stableNodeIdByDeviceId.set(entry.deviceId, entry.nodeId);
+    }
+  }
+  const devicePairingById = new Map<string, KnownNodeDevicePairingSource>();
+  for (const entry of params.pairedDevices) {
+    if (!hasEffectivePairedDeviceRole(entry, "node")) {
+      continue;
+    }
+    devicePairingById.set(
+      stableNodeIdByDeviceId.get(entry.deviceId) ?? entry.deviceId,
+      buildDevicePairingSource(entry),
+    );
+  }
   const nodePairingById = new Map(
     (params.pairedNodes ?? []).map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
   );

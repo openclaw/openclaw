@@ -3,6 +3,7 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
+  validateExecApprovalsSnapshot,
 } from "./index.js";
 
 describe("exec approvals protocol validators", () => {
@@ -35,6 +36,78 @@ describe("exec approvals protocol validators", () => {
         baseHash: "abc123",
       }),
     ).toBe(true);
+  });
+
+  it("accepts host-native node approval policy payloads", () => {
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        native: {
+          defaultAction: "deny",
+          rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+        },
+        baseHash: "native-hash-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts host-native node approval snapshot payloads", () => {
+    expect(
+      validateExecApprovalsSnapshot({
+        enabled: true,
+        defaultAction: "deny",
+        hash: "native-hash-1",
+        rules: [{ pattern: "hostname", action: "allow", enabled: true }],
+        constraints: { source: "windows-node" },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects empty host-native node approval policy payloads", () => {
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        native: {},
+        baseHash: "native-hash-1",
+      }),
+    ).toBe(false);
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        native: { enabled: true },
+        baseHash: "native-hash-1",
+      }),
+    ).toBe(false);
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        native: { rules: [] },
+        baseHash: "native-hash-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects host-native node approval rules with empty required fields", () => {
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        native: {
+          defaultAction: "deny",
+          rules: [{ pattern: "", action: "allow", enabled: true }],
+        },
+        baseHash: "native-hash-1",
+      }),
+    ).toBe(false);
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        native: {
+          defaultAction: "deny",
+          rules: [{ pattern: "echo *", action: "", enabled: true }],
+        },
+        baseHash: "native-hash-1",
+      }),
+    ).toBe(false);
   });
 
   it("rejects unknown allowlist metadata", () => {

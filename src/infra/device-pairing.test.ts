@@ -391,6 +391,7 @@ describe("device pairing tokens", () => {
   test("preserves existing operator token scopes when approving a scope upgrade", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    const before = await getPairedDevice("device-1", baseDir);
 
     const upgrade = await requestDevicePairing(
       {
@@ -412,6 +413,237 @@ describe("device pairing tokens", () => {
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.approvedScopes).toEqual(["operator.read", "operator.write"]);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.write"]);
+    expect(paired?.tokens?.operator?.token).not.toBe(before?.tokens?.operator?.token);
+    expect(paired?.tokens?.operator?.rotatedAtMs).toBeTypeOf("number");
+  });
+
+  test("does not reuse a token that was outside the previous approval baseline", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    await overwritePairedOperatorTokenScopes(baseDir, ["operator.admin"]);
+    const before = await getPairedDevice("device-1", baseDir);
+    const staleToken = requireToken(before?.tokens?.operator?.token);
+
+    await expect(
+      verifyOperatorToken({ baseDir, token: staleToken, scopes: ["operator.admin"] }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+
+    const upgrade = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.write"],
+      },
+      baseDir,
+    );
+
+    const approved = await approveDevicePairing(
+      upgrade.request.requestId,
+      { callerScopes: ["operator.read", "operator.write"] },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.approvedScopes).toEqual(["operator.read", "operator.write"]);
+    expect(paired?.tokens?.operator?.token).not.toBe(staleToken);
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.write"]);
+    await expect(
+      verifyOperatorToken({
+        baseDir,
+        token: requireToken(paired?.tokens?.operator?.token),
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    await expect(
+      verifyOperatorToken({ baseDir, token: staleToken, scopes: ["operator.admin"] }),
+    ).resolves.toEqual({ ok: false, reason: "token-mismatch" });
+  });
+
+  test("keeps same-device operator token stable when approving a metadata refresh", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    const before = await getPairedDevice("device-1", baseDir);
+    const operatorToken = requireToken(before?.tokens?.operator?.token);
+
+    const refresh = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        displayName: "Windows Node",
+        platform: "win32",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    const approved = await approveDevicePairing(
+      refresh.request.requestId,
+      { callerScopes: ["operator.read"] },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.displayName).toBe("Windows Node");
+    expect(paired?.platform).toBe("win32");
+    expect(paired?.tokens?.operator?.token).toBe(operatorToken);
+    expect(paired?.tokens?.operator?.rotatedAtMs).toBeUndefined();
+    await expect(
+      verifyOperatorToken({ baseDir, token: operatorToken, scopes: ["operator.read"] }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("keeps legacy operator tokens without role metadata stable on refresh", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    await mutatePairedDevice(baseDir, "device-1", (device) => {
+      const operatorToken = requireValue(device.tokens?.operator, "expected operator token");
+      delete (operatorToken as { role?: string }).role;
+    });
+    const before = await getPairedDevice("device-1", baseDir);
+    const operatorToken = requireToken(before?.tokens?.operator?.token);
+
+    const refresh = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        displayName: "Windows Node",
+        platform: "win32",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    const approved = await approveDevicePairing(
+      refresh.request.requestId,
+      { callerScopes: ["operator.read"] },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.tokens?.operator?.token).toBe(operatorToken);
+    expect(paired?.tokens?.operator?.role).toBe("operator");
+    expect(paired?.tokens?.operator?.rotatedAtMs).toBeUndefined();
+  });
+
+  test("rotates the operator token when a same-device repair changes public key", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    const before = await getPairedDevice("device-1", baseDir);
+    const operatorToken = requireToken(before?.tokens?.operator?.token);
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-2",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    const approved = await approveDevicePairing(
+      repair.request.requestId,
+      { callerScopes: ["operator.read"] },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.publicKey).toBe("public-key-2");
+    expect(paired?.tokens?.operator?.token).not.toBe(operatorToken);
+    expect(paired?.tokens?.operator?.rotatedAtMs).toBeTypeOf("number");
+  });
+
+  test("normalizes malformed token role metadata instead of reusing it", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    await mutatePairedDevice(baseDir, "device-1", (device) => {
+      const operatorToken = requireValue(device.tokens?.operator, "expected operator token");
+      operatorToken.role = "node";
+    });
+    const before = await getPairedDevice("device-1", baseDir);
+    const staleToken = requireToken(before?.tokens?.operator?.token);
+
+    const refresh = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    const approved = await approveDevicePairing(
+      refresh.request.requestId,
+      { callerScopes: ["operator.read"] },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.tokens?.operator?.role).toBe("operator");
+    expect(paired?.tokens?.operator?.token).not.toBe(staleToken);
+    expect(paired && listEffectivePairedDeviceRoles(paired)).toEqual(["operator"]);
+  });
+
+  test.each([
+    {
+      name: "empty token",
+      mutate: (token: NonNullable<PairedDevice["tokens"]>[string]) => {
+        token.token = "";
+      },
+    },
+    {
+      name: "non-array scopes",
+      mutate: (token: NonNullable<PairedDevice["tokens"]>[string]) => {
+        (token as unknown as { scopes: unknown }).scopes = "operator.read";
+      },
+    },
+    {
+      name: "non-string scope entry",
+      mutate: (token: NonNullable<PairedDevice["tokens"]>[string]) => {
+        (token as unknown as { scopes: unknown }).scopes = ["operator.read", 1];
+      },
+    },
+  ])("normalizes malformed token payload instead of reusing it: $name", async ({ mutate }) => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    await mutatePairedDevice(baseDir, "device-1", (device) => {
+      const operatorToken = requireValue(device.tokens?.operator, "expected operator token");
+      mutate(operatorToken);
+    });
+
+    const refresh = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    const approved = await approveDevicePairing(
+      refresh.request.requestId,
+      { callerScopes: ["operator.read"] },
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    const replacementToken = requireToken(paired?.tokens?.operator?.token);
+    expect(replacementToken).not.toBe("");
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+    await expect(
+      verifyOperatorToken({ baseDir, token: replacementToken, scopes: ["operator.read"] }),
+    ).resolves.toEqual({ ok: true });
   });
 
   test("does not widen a down-scoped operator token when approving a scope upgrade", async () => {

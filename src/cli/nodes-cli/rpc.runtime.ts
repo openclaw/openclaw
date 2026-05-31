@@ -2,8 +2,9 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway, resolveGatewayCliScopes } from "../../gateway/call.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { shouldUseDirectLoopbackGatewayAuth } from "../direct-loopback-gateway-auth.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { withProgress } from "../progress.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -27,16 +28,20 @@ export async function callGatewayCliRuntime(
       indeterminate: true,
       enabled: opts.json !== true,
     },
-    async () =>
-      await callGateway({
+    async () => {
+      const useDirectAuth = await shouldUseDirectLoopbackGatewayAuth(opts);
+      return await callGateway({
         url: opts.url,
         token: opts.token,
         method,
         params,
         timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts?.transportTimeoutMs),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-      }),
+        clientName: useDirectAuth ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+        mode: useDirectAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+        scopes: useDirectAuth ? resolveGatewayCliScopes(method, params) : undefined,
+        deviceIdentity: useDirectAuth ? null : undefined,
+      });
+    },
   );
 }
 
@@ -67,6 +72,7 @@ export async function callNodePairApprovalGatewayCliRuntime(
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         mode: GATEWAY_CLIENT_MODES.BACKEND,
         scopes: callOpts.scopes,
+        deviceIdentity: (await shouldUseDirectLoopbackGatewayAuth(opts)) ? null : undefined,
       }),
   );
 }

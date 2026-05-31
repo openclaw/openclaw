@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
@@ -217,7 +220,9 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "get", "--node", "macbook"]);
 
-    expectGatewayCall(0, "exec.approvals.node.get", { nodeId: "node-1" });
+    const call = gatewayCall(0);
+    expect(call[0]).toBe("exec.approvals.node.get");
+    expect(call[2]).toEqual({ nodeId: "node-1" });
     expectGatewayCall(1, "config.get", {});
     expect(runtimeErrors).toHaveLength(0);
   });
@@ -357,6 +362,219 @@ describe("exec approvals CLI", () => {
         source: "/tmp/node-exec-approvals.json defaults.askFallback",
       },
     );
+  });
+
+  it("keeps host-native node approvals output without local policy math", async () => {
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "config.get") {
+          return {
+            config: {
+              tools: {
+                exec: {
+                  security: "full",
+                  ask: "off",
+                },
+              },
+            },
+          };
+        }
+        if (method === "exec.approvals.node.get") {
+          return {
+            enabled: true,
+            hash: "native-hash-1",
+            baseHash: "native-hash-1",
+            defaultAction: "deny",
+            rules: [
+              { pattern: "echo *", action: "allow", enabled: true },
+              { pattern: "Start-Process *", action: "deny", enabled: true },
+            ],
+          } as never;
+        }
+        return { method, params };
+      },
+    );
+
+    await runApprovalsCommand(["approvals", "get", "--node", "macbook", "--json"]);
+
+    const output = writtenJson();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(output, 0);
+    expect(output.defaultAction).toBe("deny");
+    expect(requireArray(output.rules, "rules")).toHaveLength(2);
+    expect(effectivePolicy(output)).toEqual({
+      note: "Node exposes a host-native exec policy. The node enforces its own rules; local approvals-file effective-policy math does not apply.",
+      scopes: [],
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("sets host-native node approvals through the node-native policy shape", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-approvals-"));
+    const policyPath = path.join(dir, "policy.json");
+    fs.writeFileSync(
+      policyPath,
+      JSON.stringify({
+        defaultAction: "deny",
+        rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+      }),
+    );
+
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "exec.approvals.node.get") {
+          return {
+            enabled: true,
+            hash: "native-hash-1",
+            baseHash: "native-hash-1",
+            defaultAction: "deny",
+            rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+          } as never;
+        }
+        return { method, params } as never;
+      },
+    );
+
+    try {
+      await runApprovalsCommand([
+        "approvals",
+        "set",
+        "--node",
+        "macbook",
+        "--file",
+        policyPath,
+        "--json",
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(callGatewayFromCli.mock.calls[0]?.[0]).toBe("exec.approvals.node.get");
+    expect(callGatewayFromCli.mock.calls[0]?.[2]).toEqual({ nodeId: "node-1" });
+    expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("exec.approvals.node.set");
+    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+      nodeId: "node-1",
+      native: {
+        defaultAction: "deny",
+        rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+      },
+      baseHash: "native-hash-1",
+    });
+    expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("exec.approvals.node.get");
+    expect(callGatewayFromCli.mock.calls[2]?.[2]).toEqual({ nodeId: "node-1" });
+    expect(writtenJson().defaultAction).toBe("deny");
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("preserves explicit empty host-native node approval rules with a default action", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-approvals-"));
+    const policyPath = path.join(dir, "policy.json");
+    fs.writeFileSync(policyPath, JSON.stringify({ defaultAction: "deny", rules: [] }));
+
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "exec.approvals.node.get") {
+          return {
+            enabled: true,
+            hash: "native-hash-1",
+            baseHash: "native-hash-1",
+            defaultAction: "deny",
+            rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+          } as never;
+        }
+        return { method, params } as never;
+      },
+    );
+
+    try {
+      await runApprovalsCommand([
+        "approvals",
+        "set",
+        "--node",
+        "macbook",
+        "--file",
+        policyPath,
+        "--json",
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("exec.approvals.node.set");
+    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+      nodeId: "node-1",
+      native: {
+        defaultAction: "deny",
+        rules: [],
+      },
+      baseHash: "native-hash-1",
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("rejects empty host-native node approval rule lists without a default action", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-approvals-"));
+    const policyPath = path.join(dir, "policy.json");
+    fs.writeFileSync(policyPath, JSON.stringify({ rules: [] }));
+
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "exec.approvals.node.get") {
+        return {
+          enabled: true,
+          hash: "native-hash-1",
+          baseHash: "native-hash-1",
+          defaultAction: "deny",
+          rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+        } as never;
+      }
+      return { method } as never;
+    });
+
+    try {
+      await expect(
+        runApprovalsCommand([
+          "approvals",
+          "set",
+          "--node",
+          "macbook",
+          "--file",
+          policyPath,
+          "--json",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    expect(callGatewayFromCli.mock.calls[0]?.[0]).toBe("exec.approvals.node.get");
+    expect(runtimeErrors[0]).toContain(
+      "Host-native exec approvals JSON must include defaultAction or rules.",
+    );
+  });
+
+  it("rejects allowlist mutations for host-native node approvals", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "exec.approvals.node.get") {
+        return {
+          enabled: true,
+          hash: "native-hash-1",
+          baseHash: "native-hash-1",
+          defaultAction: "deny",
+          rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+        } as never;
+      }
+      return { method } as never;
+    });
+
+    await expect(
+      runApprovalsCommand(["approvals", "allowlist", "add", "--node", "macbook", "/usr/bin/uname"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    const call = gatewayCall(0);
+    expect(call[0]).toBe("exec.approvals.node.get");
+    expect(call[2]).toEqual({ nodeId: "node-1" });
+    expect(runtimeErrors[0]).toContain("Host-native node approvals do not support allowlist");
   });
 
   it("keeps gateway approvals output when config.get fails", async () => {

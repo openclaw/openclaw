@@ -117,6 +117,10 @@ type PendingNodeAction = {
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeBrowserProxyPath(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -141,20 +145,19 @@ function isPersistentBrowserProxyMutation(method: string, path: string): boolean
 }
 
 function isForbiddenBrowserProxyMutation(params: unknown): boolean {
-  if (!params || typeof params !== "object") {
+  if (!isRecord(params)) {
     return false;
   }
-  const candidate = params as { method?: unknown; path?: unknown };
-  const method = (normalizeOptionalString(candidate.method) ?? "").toUpperCase();
-  const path = normalizeOptionalString(candidate.path) ?? "";
+  const method = (normalizeOptionalString(params["method"]) ?? "").toUpperCase();
+  const path = normalizeOptionalString(params["path"]) ?? "";
   return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
 }
 
 function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
-  if (!params || typeof params !== "object") {
+  if (!isRecord(params)) {
     return undefined;
   }
-  const surface = normalizeOptionalString((params as { surface?: unknown }).surface);
+  const surface = normalizeOptionalString(params["surface"]);
   if (!surface) {
     return undefined;
   }
@@ -416,10 +419,7 @@ function emitTalkPttNodeEvent(params: {
   if (!TALK_PTT_COMMANDS.has(params.command)) {
     return;
   }
-  const payloadObj =
-    typeof params.payload === "object" && params.payload !== null
-      ? (params.payload as Record<string, unknown>)
-      : {};
+  const payloadObj = isRecord(params.payload) ? params.payload : {};
   const captureId = normalizeOptionalString(payloadObj.captureId) ?? randomUUID();
   const sessionId = `node:${params.nodeId}:talk:${captureId}`;
   const seq = (talkPttEventSeqBySessionId.get(sessionId) ?? 0) + 1;
@@ -706,6 +706,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const result = await requestNodePairing({
         nodeId: p.nodeId,
+        deviceId: p.deviceId,
         displayName: p.displayName,
         platform: p.platform,
         version: p.version,
@@ -797,11 +798,31 @@ export const nodeHandlers: GatewayRequestHandlers = {
         declaredCommands: approvedNode.commands ?? [],
         allowlist: currentAllowlist,
       });
-      const updatedNode = context.nodeRegistry.updateSurface(approvedNode.nodeId, {
+      const liveNode = context.nodeRegistry.get(approvedNode.nodeId);
+      const approvedDeviceId = normalizeOptionalString(approvedNode.deviceId);
+      const liveDeviceId = normalizeOptionalString(liveNode?.client.connect.device?.id);
+      const liveNodeMatchesApprovedDevice = !approvedDeviceId || liveDeviceId === approvedDeviceId;
+      if (liveNode && !liveNodeMatchesApprovedDevice) {
+        context.nodeRegistry.unregister(liveNode.connId);
+        liveNode.client.socket.close(1008, "node pairing device changed");
+      }
+      const approvedSurface = {
         caps: approvedNode.caps ?? [],
         commands: currentAllowedCommands,
         permissions: approvedNode.permissions,
-      });
+      };
+      const quarantinedNode =
+        approvedDeviceId && approvedDeviceId !== approvedNode.nodeId
+          ? context.nodeRegistry.get(approvedDeviceId)
+          : undefined;
+      const quarantinedNodeMatchesApprovedDevice =
+        normalizeOptionalString(quarantinedNode?.client.connect.device?.id) === approvedDeviceId;
+      const updatedNode =
+        quarantinedNode && approvedDeviceId && quarantinedNodeMatchesApprovedDevice
+          ? context.nodeRegistry.adoptNodeId(approvedDeviceId, approvedNode.nodeId, approvedSurface)
+          : liveNodeMatchesApprovedDevice
+            ? context.nodeRegistry.updateSurface(approvedNode.nodeId, approvedSurface)
+            : null;
       if (updatedNode) {
         refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
       }
@@ -1005,7 +1026,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const nodeId =
+      context?.nodeRegistry?.getByConnId?.(client?.connId)?.nodeId ??
+      client?.connect?.device?.id ??
+      client?.connect?.client?.id;
     const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
@@ -1031,7 +1055,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "node.pending.ack": async ({ params, respond, client }) => {
+  "node.pending.ack": async ({ params, respond, client, context }) => {
     if (!validateNodePendingAckParams(params)) {
       respondInvalidParams({
         respond,
@@ -1040,7 +1064,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const nodeId =
+      context?.nodeRegistry?.getByConnId?.(client?.connId)?.nodeId ??
+      client?.connect?.device?.id ??
+      client?.connect?.client?.id;
     const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
@@ -1380,7 +1407,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
           : null;
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
-      const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      const nodeId =
+        context.nodeRegistry.getByConnId(client?.connId)?.nodeId ??
+        client?.connect?.device?.id ??
+        client?.connect?.client?.id ??
+        "node";
       const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,

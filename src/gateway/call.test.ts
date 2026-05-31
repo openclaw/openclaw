@@ -307,6 +307,7 @@ describe("callGateway url resolution", () => {
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_STATE_DIR",
+    "LOCAL_REF_TOKEN",
   ]);
 
   beforeEach(() => {
@@ -424,8 +425,53 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
+  it("loads config to prove explicit loopback backend shared-token auth", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "token", token: "shared-token" },
+      },
+    });
+
+    await callGateway({
+      method: "health",
+      url: "ws://127.0.0.1:18800",
+      token: "shared-token",
+    });
+
+    expect(getRuntimeConfig).toHaveBeenCalled();
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+    expect(lastClientOptions?.token).toBe("shared-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps explicit loopback backend token auth usable when shared-token probe config load fails", async () => {
+    getRuntimeConfig.mockImplementation(() => {
+      throw new Error("config broken");
+    });
+
+    await callGateway({
+      method: "health",
+      url: "ws://127.0.0.1:18800",
+      token: "explicit-token",
+    });
+
+    expect(getRuntimeConfig).toHaveBeenCalled();
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
   it("keeps direct-local backend shared-token auth independent of paired device state", async () => {
     setLocalLoopbackGatewayConfig();
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "token", token: "explicit-token" },
+      },
+    });
 
     await callGateway({
       method: "health",
@@ -437,6 +483,64 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
     expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
     expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps direct-local backend SecretRef token auth independent of paired device state", async () => {
+    setLocalLoopbackGatewayConfig();
+    process.env.LOCAL_REF_TOKEN = "explicit-token";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "stale-device-token";
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "LOCAL_REF_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as never);
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps explicit backend token auth usable when configured token SecretRef is unavailable", async () => {
+    setLocalLoopbackGatewayConfig();
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as never);
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
   it("fails before opening a websocket when backend token auth has no shared or paired credential", async () => {
@@ -745,6 +849,13 @@ describe("callGateway url resolution", () => {
 
   it("uses backend client metadata for explicit scoped default calls", async () => {
     setLocalLoopbackGatewayConfig();
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "token", token: "explicit-token" },
+      },
+    });
 
     await callGateway({
       method: "sessions.delete",
@@ -1734,6 +1845,7 @@ describe("callGateway password resolution", () => {
       "OPENCLAW_GATEWAY_PASSWORD",
       "OPENCLAW_GATEWAY_TOKEN",
       "LOCAL_REMOTE_FALLBACK_TOKEN",
+      "LOCAL_REF_TOKEN",
       "LOCAL_REF_PASSWORD",
       "REMOTE_REF_TOKEN",
       "REMOTE_REF_PASSWORD",
@@ -1742,6 +1854,7 @@ describe("callGateway password resolution", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.LOCAL_REMOTE_FALLBACK_TOKEN;
+    delete process.env.LOCAL_REF_TOKEN;
     delete process.env.LOCAL_REF_PASSWORD;
     delete process.env.REMOTE_REF_TOKEN;
     delete process.env.REMOTE_REF_PASSWORD;

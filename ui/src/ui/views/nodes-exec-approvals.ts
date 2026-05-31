@@ -3,7 +3,10 @@ import { t } from "../../i18n/index.ts";
 import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsFile,
+  NativeExecApprovalPolicy,
+  NativeExecApprovalRule,
 } from "../controllers/exec-approvals.ts";
+import { isNativeExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
 import { clampText, formatRelativeTimestamp } from "../format.ts";
 import {
   resolveConfigAgents as resolveSharedConfigAgents,
@@ -37,6 +40,8 @@ type ExecApprovalsState = {
   loading: boolean;
   saving: boolean;
   form: ExecApprovalsFile | null;
+  nativePolicy: NativeExecApprovalPolicy | null;
+  nativeHash: string | null;
   defaults: ExecApprovalsResolvedDefaults;
   selectedScope: string;
   selectedAgent: Record<string, unknown> | null;
@@ -147,8 +152,13 @@ function resolveExecApprovalsScope(
 }
 
 export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState {
-  const form = props.execApprovalsForm ?? props.execApprovalsSnapshot?.file ?? null;
-  const ready = Boolean(form);
+  const nativeSnapshot = isNativeExecApprovalsSnapshot(props.execApprovalsSnapshot)
+    ? props.execApprovalsSnapshot
+    : null;
+  const form = nativeSnapshot
+    ? null
+    : (props.execApprovalsForm ?? props.execApprovalsSnapshot?.file ?? null);
+  const ready = Boolean(form) || Boolean(nativeSnapshot);
   const defaults = resolveExecApprovalsDefaults(form);
   const agents = resolveExecApprovalsAgents(props.configForm, form);
   const targetNodes = resolveExecApprovalsNodes(props.nodes);
@@ -163,9 +173,7 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
     selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
       ? (((form?.agents ?? {})[selectedScope] as Record<string, unknown> | undefined) ?? null)
       : null;
-  const allowlist = Array.isArray((selectedAgent as { allowlist?: unknown })?.allowlist)
-    ? ((selectedAgent as { allowlist?: ExecApprovalsAllowlistEntry[] }).allowlist ?? [])
-    : [];
+  const allowlist = resolveExecApprovalsAllowlist(selectedAgent);
   return {
     ready,
     disabled: props.execApprovalsSaving || props.execApprovalsLoading,
@@ -173,6 +181,8 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
     loading: props.execApprovalsLoading,
     saving: props.execApprovalsSaving,
     form,
+    nativePolicy: nativeSnapshot,
+    nativeHash: nativeSnapshot?.hash ?? nativeSnapshot?.baseHash ?? null,
     defaults,
     selectedScope,
     selectedAgent,
@@ -190,6 +200,20 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
   };
 }
 
+function resolveExecApprovalsAllowlist(
+  selectedAgent: Record<string, unknown> | null,
+): ExecApprovalsAllowlistEntry[] {
+  const allowlist = selectedAgent?.allowlist;
+  if (!Array.isArray(allowlist)) {
+    return [];
+  }
+  return allowlist.filter(isExecApprovalsAllowlistEntry);
+}
+
+function isExecApprovalsAllowlistEntry(value: unknown): value is ExecApprovalsAllowlistEntry {
+  return typeof value === "object" && value !== null && "pattern" in value;
+}
+
 export function renderExecApprovals(state: ExecApprovalsState) {
   const ready = state.ready;
   const targetReady = state.target !== "node" || Boolean(state.targetNodeId);
@@ -204,7 +228,7 @@ export function renderExecApprovals(state: ExecApprovalsState) {
         </div>
         <button
           class="btn"
-          ?disabled=${state.disabled || !state.dirty || !targetReady}
+          ?disabled=${state.disabled || !state.dirty || !targetReady || Boolean(state.nativePolicy)}
           @click=${state.onSave}
         >
           ${state.saving ? "Saving…" : "Save"}
@@ -220,13 +244,128 @@ export function renderExecApprovals(state: ExecApprovalsState) {
             </button>
           </div>`
         : html`
-            ${renderExecApprovalsTabs(state)} ${renderExecApprovalsPolicy(state)}
-            ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
-              ? nothing
-              : renderExecApprovalsAllowlist(state)}
+            ${state.nativePolicy
+              ? renderNativeExecApprovals(state)
+              : html`
+                  ${renderExecApprovalsTabs(state)} ${renderExecApprovalsPolicy(state)}
+                  ${state.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE
+                    ? nothing
+                    : renderExecApprovalsAllowlist(state)}
+                `}
           `}
     </section>
   `;
+}
+
+function renderNativeExecApprovals(state: ExecApprovalsState) {
+  const policy = state.nativePolicy;
+  if (!policy) {
+    return nothing;
+  }
+  const rules = normalizeNativeExecApprovalRules(policy.rules);
+  return html`
+    <div class="list" style="margin-top: 16px;">
+      <div class="list-item">
+        <div class="list-main">
+          <div class="list-title">Host-native policy</div>
+          <div class="list-sub">
+            Read-only in Control UI. Edit from the Windows companion or CLI.
+          </div>
+        </div>
+        <div class="list-meta">
+          <span class="badge">Native</span>
+        </div>
+      </div>
+      <div class="list-item">
+        <div class="list-main">
+          <div class="list-title">Enabled</div>
+          <div class="list-sub">${formatNativeBoolean(policy.enabled)}</div>
+        </div>
+        <div class="list-meta">
+          <span class="mono">${state.nativeHash ?? "hash unknown"}</span>
+        </div>
+      </div>
+      <div class="list-item">
+        <div class="list-main">
+          <div class="list-title">Default action</div>
+          <div class="list-sub">${policy.defaultAction ?? "unknown"}</div>
+        </div>
+        <div class="list-meta">
+          <span>${rules.length} ${rules.length === 1 ? "rule" : "rules"}</span>
+        </div>
+      </div>
+    </div>
+    <div class="list" style="margin-top: 12px;">
+      ${rules.length === 0
+        ? html` <div class="muted">No host-native rules.</div> `
+        : rules.map((rule) => renderNativeExecApprovalRule(rule))}
+    </div>
+  `;
+}
+
+function renderNativeExecApprovalRule(rule: NativeExecApprovalRule) {
+  const shells =
+    Array.isArray(rule.shells) && rule.shells.length > 0 ? rule.shells.join(", ") : "all";
+  const enabled = rule.enabled === false ? "off" : "on";
+  return html`
+    <div class="list-item">
+      <div class="list-main">
+        <div class="list-title">${rule.pattern?.trim() ? rule.pattern : "(no pattern)"}</div>
+        <div class="list-sub">
+          action: ${rule.action ?? "unknown"} · shells: ${shells} · ${enabled}
+        </div>
+        ${rule.description
+          ? html`<div class="list-sub">${clampText(rule.description, 120)}</div>`
+          : nothing}
+      </div>
+    </div>
+  `;
+}
+
+function normalizeNativeExecApprovalRules(rules: unknown): NativeExecApprovalRule[] {
+  if (!Array.isArray(rules)) {
+    return [];
+  }
+  return rules.flatMap((rule) => {
+    const normalized = normalizeNativeExecApprovalRule(rule);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function normalizeNativeExecApprovalRule(value: unknown): NativeExecApprovalRule | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const rule: NativeExecApprovalRule = {};
+  if ("pattern" in value && typeof value.pattern === "string") {
+    rule.pattern = value.pattern;
+  }
+  if ("action" in value && typeof value.action === "string") {
+    rule.action = value.action;
+  }
+  if ("description" in value && typeof value.description === "string") {
+    rule.description = value.description;
+  }
+  if ("enabled" in value && typeof value.enabled === "boolean") {
+    rule.enabled = value.enabled;
+  }
+  if ("shells" in value && Array.isArray(value.shells)) {
+    const shells = value.shells.filter((shell): shell is string => typeof shell === "string");
+    if (shells.length > 0) {
+      rule.shells = shells;
+    }
+  }
+  return Object.keys(rule).length > 0 ? rule : null;
+}
+
+function formatNativeBoolean(value: boolean | undefined): string {
+  if (value === true) {
+    return "yes";
+  }
+  if (value === false) {
+    return "no";
+  }
+  return "unknown";
 }
 
 function renderExecApprovalsTarget(state: ExecApprovalsState) {
@@ -245,7 +384,10 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
             <select
               ?disabled=${state.disabled}
               @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
+                const target = event.currentTarget;
+                if (!(target instanceof HTMLSelectElement)) {
+                  return;
+                }
                 const value = target.value;
                 if (value === "node") {
                   const first = state.targetNodes[0]?.id ?? null;
@@ -266,7 +408,10 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
                   <select
                     ?disabled=${state.disabled || !hasNodes}
                     @change=${(event: Event) => {
-                      const target = event.target as HTMLSelectElement;
+                      const target = event.currentTarget;
+                      if (!(target instanceof HTMLSelectElement)) {
+                        return;
+                      }
                       const value = target.value.trim();
                       state.onSelectTarget("node", value ? value : null);
                     }}
@@ -351,7 +496,10 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
             <select
               ?disabled=${state.disabled}
               @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
+                const target = event.currentTarget;
+                if (!(target instanceof HTMLSelectElement)) {
+                  return;
+                }
                 const value = target.value;
                 if (!isDefaults && value === "__default__") {
                   state.onRemove([...basePath, "security"]);
@@ -389,7 +537,10 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
             <select
               ?disabled=${state.disabled}
               @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
+                const target = event.currentTarget;
+                if (!(target instanceof HTMLSelectElement)) {
+                  return;
+                }
                 const value = target.value;
                 if (!isDefaults && value === "__default__") {
                   state.onRemove([...basePath, "ask"]);
@@ -429,7 +580,10 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
             <select
               ?disabled=${state.disabled}
               @change=${(event: Event) => {
-                const target = event.target as HTMLSelectElement;
+                const target = event.currentTarget;
+                if (!(target instanceof HTMLSelectElement)) {
+                  return;
+                }
                 const value = target.value;
                 if (!isDefaults && value === "__default__") {
                   state.onRemove([...basePath, "askFallback"]);
@@ -473,7 +627,10 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
               ?disabled=${state.disabled}
               .checked=${autoEffective}
               @change=${(event: Event) => {
-                const target = event.target as HTMLInputElement;
+                const target = event.currentTarget;
+                if (!(target instanceof HTMLInputElement)) {
+                  return;
+                }
                 state.onPatch([...basePath, "autoAllowSkills"], target.checked);
               }}
             />
@@ -545,7 +702,10 @@ function renderAllowlistEntry(
             .value=${entry.pattern ?? ""}
             ?disabled=${state.disabled}
             @input=${(event: Event) => {
-              const target = event.target as HTMLInputElement;
+              const target = event.currentTarget;
+              if (!(target instanceof HTMLInputElement)) {
+                return;
+              }
               state.onPatch(
                 ["agents", state.selectedScope, "allowlist", index, "pattern"],
                 target.value,

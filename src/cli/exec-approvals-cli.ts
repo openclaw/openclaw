@@ -13,6 +13,7 @@ import {
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
+  normalizeExecApprovals,
   readExecApprovalsSnapshot,
   saveExecApprovals,
   type ExecApprovalsAgent,
@@ -26,14 +27,31 @@ import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type ExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  hash: string;
-  file: ExecApprovalsFile;
+  path?: string;
+  exists?: boolean;
+  hash?: string;
+  baseHash?: string;
+  file?: ExecApprovalsFile;
+  enabled?: boolean;
+  defaultAction?: string;
+  rules?: NativeExecApprovalRule[];
+  constraints?: Record<string, unknown>;
 };
 
 type ConfigSnapshotLike = {
   config?: OpenClawConfig;
+};
+type NativeExecApprovalRule = {
+  pattern?: string;
+  action?: string;
+  shells?: string[];
+  description?: string;
+  enabled?: boolean;
+};
+type NativeExecApprovalPolicy = {
+  enabled?: boolean;
+  defaultAction?: string;
+  rules?: NativeExecApprovalRule[];
 };
 type ConfigLoadResult = {
   config: OpenClawConfig | null;
@@ -93,6 +111,92 @@ function loadSnapshotLocal(): ExecApprovalsSnapshot {
   };
 }
 
+function hasApprovalsFile(
+  snapshot: ExecApprovalsSnapshot,
+): snapshot is ExecApprovalsSnapshot & { file: ExecApprovalsFile } {
+  return (
+    Boolean(snapshot.file) && typeof snapshot.file === "object" && !Array.isArray(snapshot.file)
+  );
+}
+
+function isNativeExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): boolean {
+  return (
+    Array.isArray(snapshot.rules) ||
+    typeof snapshot.defaultAction === "string" ||
+    typeof snapshot.enabled === "boolean"
+  );
+}
+
+function normalizeNativeExecApprovalPolicyInput(value: unknown): NativeExecApprovalPolicy {
+  if (!isRecord(value)) {
+    exitWithError("Host-native exec approvals JSON must be an object.");
+  }
+  if ("version" in value || "defaults" in value || "agents" in value) {
+    exitWithError(
+      "Host-native node approvals require JSON with defaultAction and rules, not exec-approvals.json file syntax.",
+    );
+  }
+  const defaultAction = normalizeOptionalString(value["defaultAction"]) ?? undefined;
+  const rulesRaw = value["rules"];
+  if (rulesRaw !== undefined && !Array.isArray(rulesRaw)) {
+    exitWithError("Host-native exec approvals rules must be an array.");
+  }
+  const rules = Array.isArray(rulesRaw)
+    ? rulesRaw.map((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          exitWithError("Host-native exec approval rules must be objects.");
+        }
+        if (!isRecord(entry)) {
+          exitWithError("Host-native exec approval rules must be objects.");
+        }
+        const pattern = normalizeOptionalString(entry["pattern"]);
+        const action = normalizeOptionalString(entry["action"]);
+        if (!pattern || !action) {
+          exitWithError("Host-native exec approval rules require pattern and action.");
+        }
+        const shellsRaw = entry["shells"];
+        if (shellsRaw !== undefined && !Array.isArray(shellsRaw)) {
+          exitWithError("Host-native exec approval rule shells must be an array.");
+        }
+        const shells = Array.isArray(shellsRaw)
+          ? shellsRaw.map((shell) => String(shell)).filter((shell) => shell.trim().length > 0)
+          : undefined;
+        const nextRule: NativeExecApprovalRule = {
+          pattern,
+          action,
+        };
+        if (shells && shells.length > 0) {
+          nextRule.shells = shells;
+        }
+        if (typeof entry["description"] === "string") {
+          nextRule.description = entry["description"];
+        }
+        if (typeof entry["enabled"] === "boolean") {
+          nextRule.enabled = entry["enabled"];
+        }
+        return nextRule;
+      })
+    : undefined;
+  const hasRulesField = Array.isArray(rulesRaw);
+  const hasNonEmptyRules = Boolean(rules && rules.length > 0);
+  if (!defaultAction && !hasNonEmptyRules) {
+    exitWithError("Host-native exec approvals JSON must include defaultAction or rules.");
+  }
+  return {
+    ...(typeof value["enabled"] === "boolean" ? { enabled: value["enabled"] } : {}),
+    ...(defaultAction ? { defaultAction } : {}),
+    ...(hasRulesField ? { rules: rules ?? [] } : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isString(value: string | null): value is string {
+  return value !== null;
+}
+
 function saveSnapshotLocal(file: ExecApprovalsFile): ExecApprovalsSnapshot {
   saveExecApprovals(file);
   return loadSnapshotLocal();
@@ -131,31 +235,51 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   source: ApprovalsTargetSource;
   targetLabel: string;
   baseHash: string;
+  nativePolicy: boolean;
 }> {
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
   if (source === "local") {
     defaultRuntime.log(theme.muted("Writing local approvals."));
   }
   const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
-  const baseHash = snapshot.hash;
+  const baseHash = snapshot.hash ?? snapshot.baseHash;
   if (!baseHash) {
     exitWithError("Exec approvals hash missing; reload and retry.");
   }
-  return { snapshot, nodeId, source, targetLabel, baseHash };
+  if (!hasApprovalsFile(snapshot)) {
+    if (source === "node" && isNativeExecApprovalsSnapshot(snapshot)) {
+      return { snapshot, nodeId, source, targetLabel, baseHash, nativePolicy: true };
+    }
+    exitWithError(
+      "This node exposes a host-native exec policy. Editing it through approvals set/allowlist is not supported yet.",
+    );
+  }
+  return { snapshot, nodeId, source, targetLabel, baseHash, nativePolicy: false };
 }
 
 async function saveSnapshotTargeted(params: {
   opts: ExecApprovalsCliOpts;
   source: ApprovalsTargetSource;
   nodeId: string | null;
-  file: ExecApprovalsFile;
+  file?: ExecApprovalsFile;
+  native?: NativeExecApprovalPolicy;
   baseHash: string;
   targetLabel: string;
 }): Promise<void> {
-  const next =
-    params.source === "local"
-      ? saveSnapshotLocal(params.file)
-      : await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
+  let next: ExecApprovalsSnapshot;
+  if (params.source === "local") {
+    next = saveSnapshotLocal(params.file ?? { version: 1 });
+  } else if (params.native) {
+    await saveSnapshotNative(params.opts, params.nodeId, params.native, params.baseHash);
+    next = await loadSnapshot(params.opts, params.nodeId);
+  } else {
+    next = await saveSnapshot(
+      params.opts,
+      params.nodeId,
+      params.file ?? { version: 1 },
+      params.baseHash,
+    );
+  }
   if (params.opts.json) {
     defaultRuntime.writeJson(next, 0);
     return;
@@ -199,13 +323,22 @@ async function loadConfigForApprovalsTarget(params: {
 function buildEffectivePolicyReport(params: {
   configLoad: ConfigLoadResult;
   source: ApprovalsTargetSource;
-  approvals: ExecApprovalsFile;
+  approvals?: ExecApprovalsFile;
   hostPath: string;
+  nativePolicy: boolean;
 }): EffectivePolicyReport {
   const cfg = params.configLoad.config;
   const timeoutNote = params.configLoad.timedOut
     ? "Config fetch timed out. Re-run with a higher --timeout to inspect Effective Policy."
     : null;
+  if (!params.approvals) {
+    return {
+      scopes: [],
+      note: params.nativePolicy
+        ? "Node exposes a host-native exec policy. The node enforces its own rules; local approvals-file effective-policy math does not apply."
+        : "Approvals file unavailable.",
+    };
+  }
   if (params.source === "node") {
     if (!cfg) {
       return {
@@ -278,6 +411,10 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
 }
 
 function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
+  if (!hasApprovalsFile(snapshot) && isNativeExecApprovalsSnapshot(snapshot)) {
+    renderNativeExecPolicySnapshot(snapshot, targetLabel);
+    return;
+  }
   const rich = isRich();
   const heading = (text: string) => (rich ? theme.heading(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
@@ -292,7 +429,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     typeof defaults.autoAllowSkills === "boolean"
       ? `autoAllowSkills=${defaults.autoAllowSkills ? "on" : "off"}`
       : null,
-  ].filter(Boolean) as string[];
+  ].filter(isString);
   const agents = file.agents ?? {};
   const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
     [];
@@ -316,9 +453,9 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
 
   const summaryRows = [
     { Field: "Target", Value: targetLabel },
-    { Field: "Path", Value: snapshot.path },
+    { Field: "Path", Value: snapshot.path ?? "unknown" },
     { Field: "Exists", Value: snapshot.exists ? "yes" : "no" },
-    { Field: "Hash", Value: snapshot.hash },
+    { Field: "Hash", Value: snapshot.hash ?? "unknown" },
     { Field: "Version", Value: String(file.version ?? 1) },
     { Field: "Socket", Value: file.socket?.path ?? "default" },
     { Field: "Defaults", Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none" },
@@ -372,6 +509,18 @@ async function saveSnapshot(
   return snapshot;
 }
 
+async function saveSnapshotNative(
+  opts: ExecApprovalsCliOpts,
+  nodeId: string | null,
+  native: NativeExecApprovalPolicy,
+  baseHash: string,
+): Promise<void> {
+  if (!nodeId) {
+    exitWithError("Host-native exec approvals can only target a node.");
+  }
+  await callGatewayFromCli("exec.approvals.node.set", opts, { nodeId, native, baseHash });
+}
+
 function resolveAgentKey(value?: string | null): string {
   const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed ? trimmed : "*";
@@ -410,8 +559,13 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   agent: ExecApprovalsAgent;
   allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
 }> {
-  const { snapshot, nodeId, source, targetLabel, baseHash } =
+  const { snapshot, nodeId, source, targetLabel, baseHash, nativePolicy } =
     await loadWritableSnapshotTarget(opts);
+  if (nativePolicy) {
+    exitWithError(
+      "Host-native node approvals do not support allowlist mutations. Use approvals set --node with host-native JSON.",
+    );
+  }
   const file = snapshot.file ?? { version: 1 };
   file.version = 1;
 
@@ -451,6 +605,66 @@ async function runAllowlistMutation(
     defaultRuntime.error(formatCliError(err));
     defaultRuntime.exit(1);
   }
+}
+
+function renderNativeExecPolicySnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: string) {
+  const rich = isRich();
+  const heading = (text: string) => (rich ? theme.heading(text) : text);
+  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  const tableWidth = getTerminalTableWidth();
+  const rules = Array.isArray(snapshot.rules) ? snapshot.rules : [];
+  const summaryRows = [
+    { Field: "Target", Value: targetLabel },
+    { Field: "Kind", Value: "host-native" },
+    {
+      Field: "Enabled",
+      Value: typeof snapshot.enabled === "boolean" ? (snapshot.enabled ? "yes" : "no") : "unknown",
+    },
+    { Field: "Default Action", Value: snapshot.defaultAction ?? "unknown" },
+    { Field: "Hash", Value: snapshot.hash ?? snapshot.baseHash ?? "unknown" },
+    { Field: "Rules", Value: String(rules.length) },
+  ];
+
+  defaultRuntime.log(heading("Approvals"));
+  defaultRuntime.log(
+    renderTable({
+      width: tableWidth,
+      columns: [
+        { key: "Field", header: "Field", minWidth: 8 },
+        { key: "Value", header: "Value", minWidth: 24, flex: true },
+      ],
+      rows: summaryRows,
+    }).trimEnd(),
+  );
+
+  if (rules.length === 0) {
+    defaultRuntime.log("");
+    defaultRuntime.log(muted("No host-native rules."));
+    return;
+  }
+
+  defaultRuntime.log("");
+  defaultRuntime.log(heading("Host Rules"));
+  defaultRuntime.log(
+    renderTable({
+      width: tableWidth,
+      columns: [
+        { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
+        { key: "Action", header: "Action", minWidth: 8 },
+        { key: "Shells", header: "Shells", minWidth: 12 },
+        { key: "Enabled", header: "Enabled", minWidth: 8 },
+        { key: "Description", header: "Description", minWidth: 16, flex: true },
+      ],
+      rows: rules.map((rule) => ({
+        Pattern: rule.pattern ?? "",
+        Action: rule.action ?? "",
+        Shells:
+          Array.isArray(rule.shells) && rule.shells.length > 0 ? rule.shells.join(",") : "all",
+        Enabled: rule.enabled === false ? "no" : "yes",
+        Description: rule.description ?? "",
+      })),
+    }).trimEnd(),
+  );
 }
 
 function registerAllowlistMutationCommand(params: {
@@ -499,7 +713,8 @@ export function registerExecApprovalsCli(program: Command) {
           configLoad,
           source,
           approvals: snapshot.file,
-          hostPath: snapshot.path,
+          hostPath: snapshot.path ?? "node host policy",
+          nativePolicy: isNativeExecApprovalsSnapshot(snapshot),
         });
         if (opts.json) {
           defaultRuntime.writeJson({ ...snapshot, effectivePolicy }, 0);
@@ -536,14 +751,21 @@ export function registerExecApprovalsCli(program: Command) {
         if (opts.file && opts.stdin) {
           exitWithError("Use either --file or --stdin (not both).");
         }
-        const { source, nodeId, targetLabel, baseHash } = await loadWritableSnapshotTarget(opts);
+        const { source, nodeId, targetLabel, baseHash, nativePolicy } =
+          await loadWritableSnapshotTarget(opts);
         const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
-        let file: ExecApprovalsFile;
+        let parsed: unknown;
         try {
-          file = JSON5.parse(raw);
+          parsed = JSON5.parse(raw);
         } catch (err) {
           exitWithError(`Failed to parse approvals JSON: ${String(err)}`);
         }
+        if (nativePolicy) {
+          const native = normalizeNativeExecApprovalPolicyInput(parsed);
+          await saveSnapshotTargeted({ opts, source, nodeId, native, baseHash, targetLabel });
+          return;
+        }
+        const file = normalizeExecApprovals(parsed as ExecApprovalsFile);
         file.version = 1;
         await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
       } catch (err) {

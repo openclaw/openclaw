@@ -112,6 +112,7 @@ vi.mock("../../gateway/probe.js", () => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGatewayCli: (opts: unknown) => callGatewayCli(opts),
+  resolveGatewayCliScopes: () => [],
 }));
 
 vi.mock("../../config/commands.js", () => ({

@@ -5,19 +5,20 @@ import {
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
 
-type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
+type LoadHistoryMock = ReturnType<typeof vi.fn<() => Promise<void>>>;
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
-type AbortActiveMock = ReturnType<typeof vi.fn> &
-  ((params?: { preferActive?: boolean }) => Promise<void>);
+type AbortActiveMock = ReturnType<
+  typeof vi.fn<(params?: { preferActive?: boolean }) => Promise<void>>
+>;
 type SelectableOverlay = {
   items?: Array<{ value: string; label?: string; description?: string }>;
   onSelect?: (item: { value: string; label?: string; description?: string }) => void;
 };
-type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
-type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
-type SetEmptySessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
-type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
-type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
+type SetActivityStatusMock = ReturnType<typeof vi.fn<(text: string) => void>>;
+type SetSessionMock = ReturnType<typeof vi.fn<(key: string) => Promise<void>>>;
+type SetEmptySessionMock = ReturnType<typeof vi.fn<(key: string) => Promise<void>>>;
+type ConsumeCompletedRunMock = ReturnType<typeof vi.fn<(runId: string) => boolean>>;
+type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn<() => void>>;
 
 async function flushAsyncSelect() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -96,9 +97,11 @@ function createHarness(params?: {
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const runGoalCommand = params?.runGoalCommand ?? vi.fn().mockResolvedValue({ text: "Goal" });
-  const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
+  const setSession =
+    params?.setSession ?? vi.fn<(key: string) => Promise<void>>().mockResolvedValue(undefined);
   const setEmptySession =
-    params?.setEmptySession ?? (vi.fn().mockResolvedValue(undefined) as SetEmptySessionMock);
+    params?.setEmptySession ??
+    vi.fn<(key: string) => Promise<void>>().mockResolvedValue(undefined);
   const addUser = vi.fn();
   const addSystem = vi.fn();
   const clearTools = vi.fn();
@@ -107,17 +110,18 @@ function createHarness(params?: {
   const noteLocalRunId = vi.fn();
   const noteLocalBtwRunId = vi.fn();
   const loadHistory =
-    params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
+    params?.loadHistory ?? vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
   const applySessionInfoFromPatch = params?.applySessionInfoFromPatch ?? vi.fn();
   const applySessionMutationResult = params?.applySessionMutationResult ?? vi.fn();
-  const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
+  const setActivityStatus = params?.setActivityStatus ?? vi.fn<(text: string) => void>();
   const forgetLocalRunId = vi.fn();
   const openOverlay = vi.fn();
   const closeOverlay = vi.fn();
   const requestExit = vi.fn();
   const abortActive =
-    params?.abortActive ?? (vi.fn().mockResolvedValue(undefined) as AbortActiveMock);
+    params?.abortActive ??
+    vi.fn<(params?: { preferActive?: boolean }) => Promise<void>>().mockResolvedValue(undefined);
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
@@ -649,8 +653,12 @@ describe("tui command handlers", () => {
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
-    const setSessionMock = vi.fn().mockResolvedValue(undefined) as SetSessionMock;
-    const setEmptySessionMock = vi.fn().mockResolvedValue(undefined) as SetEmptySessionMock;
+    const setSessionMock: SetSessionMock = vi
+      .fn<(key: string) => Promise<void>>()
+      .mockResolvedValue(undefined);
+    const setEmptySessionMock: SetEmptySessionMock = vi
+      .fn<(key: string) => Promise<void>>()
+      .mockResolvedValue(undefined);
     const applySessionMutationResult = vi.fn().mockReturnValue(true);
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
     const resetResult = {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLI_DEFAULT_OPERATOR_SCOPES } from "../../gateway/method-scopes.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
 import { callGatewayCli, callNodePairApprovalGatewayCli } from "./rpc.js";
@@ -26,8 +27,20 @@ const { callGatewaySpy } = vi.hoisted(() => ({
 }));
 
 vi.mock("../../gateway/call.js", () => ({
+  buildGatewayConnectionDetails: () => ({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+  }),
   callGateway: callGatewaySpy,
   randomIdempotencyKey: () => "mock-key",
+  resolveGatewayCliScopes: () => [
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+    "operator.talk.secrets",
+  ],
 }));
 
 vi.mock("../progress.js", () => ({
@@ -40,6 +53,20 @@ function firstGatewayCall(): Record<string, unknown> {
     throw new Error("expected gateway call");
   }
   return callOpts;
+}
+
+async function withSharedGatewayToken<T>(token: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+  process.env.OPENCLAW_GATEWAY_TOKEN = token;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+    }
+  }
 }
 
 describe("exec approval transport timeout (#12098)", () => {
@@ -59,6 +86,79 @@ describe("exec approval transport timeout (#12098)", () => {
     const callOpts = firstGatewayCall();
     expect(callOpts.method).toBe("exec.approval.request");
     expect(callOpts.timeoutMs).toBe(35_000);
+  });
+
+  it("callGatewayCli uses backend auth for explicit loopback token calls", async () => {
+    await withSharedGatewayToken("shared-token", async () => {
+      await callGatewayCli("node.list", {
+        url: "ws://127.0.0.1:18789",
+        token: "shared-token",
+      } as never);
+    });
+
+    expect(callGatewaySpy).toHaveBeenCalledTimes(1);
+    expect(firstGatewayCall()).toMatchObject({
+      method: "node.list",
+      clientName: "gateway-client",
+      mode: "backend",
+      deviceIdentity: null,
+    });
+  });
+
+  it("callGatewayCli preserves CLI fallback scopes for unclassified direct loopback token calls", async () => {
+    await withSharedGatewayToken("shared-token", async () => {
+      await callGatewayCli("plugin.custom.unclassified", {
+        url: "ws://127.0.0.1:18789",
+        token: "shared-token",
+      } as never);
+    });
+
+    expect(callGatewaySpy).toHaveBeenCalledTimes(1);
+    expect(firstGatewayCall()).toMatchObject({
+      method: "plugin.custom.unclassified",
+      clientName: "gateway-client",
+      mode: "backend",
+      scopes: CLI_DEFAULT_OPERATOR_SCOPES,
+      deviceIdentity: null,
+    });
+  });
+
+  it("callNodePairApprovalGatewayCli omits device identity for explicit loopback token calls", async () => {
+    await withSharedGatewayToken("shared-token", async () => {
+      await callNodePairApprovalGatewayCli(
+        "node.pair.list",
+        {
+          url: "ws://127.0.0.1:18789",
+          token: "shared-token",
+        } as never,
+        {},
+        { scopes: ["operator.pairing"] },
+      );
+    });
+
+    expect(callGatewaySpy).toHaveBeenCalledTimes(1);
+    expect(firstGatewayCall()).toMatchObject({
+      method: "node.pair.list",
+      clientName: "gateway-client",
+      mode: "backend",
+      deviceIdentity: null,
+      scopes: ["operator.pairing"],
+    });
+  });
+
+  it("callGatewayCli keeps identity available when loopback token is not proven shared", async () => {
+    await callGatewayCli("node.list", {
+      url: "ws://127.0.0.1:18789",
+      token: "operator-device-token",
+    } as never);
+
+    expect(callGatewaySpy).toHaveBeenCalledTimes(1);
+    expect(firstGatewayCall()).toMatchObject({
+      method: "node.list",
+      clientName: "cli",
+      mode: "cli",
+      deviceIdentity: undefined,
+    });
   });
 
   it("callGatewayCli rejects invalid opts.timeout instead of forwarding NaN", async () => {

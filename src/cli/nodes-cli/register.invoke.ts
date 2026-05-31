@@ -38,7 +38,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
           }
           if (BLOCKED_NODE_INVOKE_COMMANDS.has(normalizeLowercaseStringOrEmpty(command))) {
             throw new Error(
-              `command "${command}" is reserved for shell execution; use the exec tool with host=node instead`,
+              `command "${command}" is reserved for shell execution; use an agent /exec host=node request instead of nodes invoke`,
             );
           }
           const params = JSON.parse(opts.params ?? "{}") as unknown;

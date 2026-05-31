@@ -8,6 +8,7 @@ vi.mock("../gateway/call.js", () => ({
   }),
   callGateway: callGatewayMock,
   formatGatewayTransportErrorJson: () => undefined,
+  resolveGatewayCliScopes: () => [],
 }));
 
 vi.mock("./progress.js", () => ({

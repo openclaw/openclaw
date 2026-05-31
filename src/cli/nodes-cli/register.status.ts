@@ -166,6 +166,17 @@ function mergePairedNodesWithEffectiveNodes(
   return rows;
 }
 
+function hasReportedNodeSurface(node: Partial<NodeListNode>): boolean {
+  return (node.commands?.length ?? 0) > 0 || (node.caps?.length ?? 0) > 0;
+}
+
+function suppressTransientCommandlessPairingRow(
+  node: PairedNodeListRow,
+  pendingNodeIds: Set<string>,
+): boolean {
+  return pendingNodeIds.has(node.nodeId) && !hasReportedNodeSurface(node);
+}
+
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
     return parseNodeList(await callGatewayCli("node.list", opts, {}));
@@ -175,9 +186,15 @@ async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | nul
 }
 
 function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNodeListRow, "token"> {
-  const copy: Record<string, unknown> = { ...node };
-  delete copy.token;
-  return copy as Omit<PairedNodeListRow, "token">;
+  const { token: _token, ...copy } = node;
+  return copy;
+}
+
+function isNodeDetailRow(value: { Field: string; Value: string } | null): value is {
+  Field: string;
+  Value: string;
+} {
+  return value !== null;
 }
 
 export function registerNodesStatusCommands(nodes: Command) {
@@ -357,7 +374,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             pathEnv ? { Field: "PATH", Value: sanitizeTerminalText(pathEnv) } : null,
             { Field: "Status", Value: status },
             { Field: "Caps", Value: caps ? sanitizeTerminalText(caps.join(", ")) : "?" },
-          ].filter(Boolean) as Array<{ Field: string; Value: string }>;
+          ].filter(isNodeDetailRow);
 
           defaultRuntime.log(heading("Node"));
           defaultRuntime.log(
@@ -403,7 +420,11 @@ export function registerNodesStatusCommands(nodes: Command) {
           const effectiveNodes = hasFilters
             ? parseNodeList(await callGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
-          const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
+          const pendingNodeIds = new Set(pendingRows.map((entry) => entry.nodeId));
+          const effectivePairedRows = mergePairedNodesWithEffectiveNodes(
+            paired,
+            effectiveNodes,
+          ).filter((node) => !suppressTransientCommandlessPairingRow(node, pendingNodeIds));
           const filteredPaired = effectivePairedRows.filter((node) => {
             if (connectedOnly) {
               if (!node.connected) {

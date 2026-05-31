@@ -66,6 +66,151 @@ describe("node pairing tokens", () => {
     await tempDirs.cleanup();
   });
 
+  test("persists the verified device id on approved stable node pairings", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const request = await requestNodePairing(
+        {
+          nodeId: "stable-node-1",
+          deviceId: "device-1",
+          platform: "windows",
+          commands: ["system.which"],
+        },
+        baseDir,
+      );
+
+      await approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      const paired = await getPairedNode("stable-node-1", baseDir);
+      expect(paired?.deviceId).toBe("device-1");
+    });
+  });
+
+  test("preserves an existing device binding when re-approving an unbound request", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const boundRequest = await requestNodePairing(
+        {
+          nodeId: "stable-node-1",
+          deviceId: "device-1",
+          platform: "windows",
+          commands: ["system.which"],
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        boundRequest.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+      const unboundRequest = await requestNodePairing(
+        {
+          nodeId: "stable-node-1",
+          platform: "windows",
+          commands: ["system.run"],
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        unboundRequest.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      const paired = await getPairedNode("stable-node-1", baseDir);
+      expect(paired?.deviceId).toBe("device-1");
+      expect(paired?.commands).toEqual(["system.run"]);
+    });
+  });
+
+  test("does not overwrite a stable node device binding through metadata updates", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const request = await requestNodePairing(
+        {
+          nodeId: "stable-node-1",
+          deviceId: "device-1",
+          platform: "windows",
+          commands: ["system.which"],
+        },
+        baseDir,
+      );
+      await approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+
+      await expect(
+        updatePairedNodeMetadata("stable-node-1", { deviceId: "device-2" }, baseDir),
+      ).resolves.toBe(false);
+      await expect(
+        updatePairedNodeMetadata("stable-node-1", { deviceId: "device-1" }, baseDir),
+      ).resolves.toBe(true);
+      const paired = await getPairedNode("stable-node-1", baseDir);
+      expect(paired?.deviceId).toBe("device-1");
+    });
+  });
+
+  test("does not refresh a pending stable node request with a different device id", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const first = await requestNodePairing(
+        {
+          nodeId: "stable-node-1",
+          deviceId: "device-1",
+          platform: "windows",
+          commands: ["system.which"],
+        },
+        baseDir,
+      );
+      const second = await requestNodePairing(
+        {
+          nodeId: "stable-node-1",
+          deviceId: "device-2",
+          platform: "windows",
+          commands: ["system.which"],
+        },
+        baseDir,
+      );
+
+      expect(second.created).toBe(true);
+      expect(second.request.requestId).not.toBe(first.request.requestId);
+      expect(second.superseded).toEqual([
+        { requestId: first.request.requestId, nodeId: "stable-node-1" },
+      ]);
+      const list = await listNodePairing(baseDir);
+      expect(list.pending).toHaveLength(1);
+      expect(list.pending[0]?.deviceId).toBe("device-2");
+    });
+  });
+
+  test("preserves the verified device id in replacement pending requests", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await requestNodePairing(
+        {
+          nodeId: "stable-node-1",
+          deviceId: "device-1",
+          platform: "windows",
+          commands: ["system.which"],
+        },
+        baseDir,
+      );
+      await requestNodePairing(
+        {
+          nodeId: "stable-node-1",
+          platform: "windows",
+          commands: ["system.which", "system.run.prepare"],
+        },
+        baseDir,
+      );
+
+      const list = await listNodePairing(baseDir);
+      expect(list.pending).toHaveLength(1);
+      expect(list.pending[0]?.deviceId).toBe("device-1");
+    });
+  });
+
   test("reuses pending requests for metadata refreshes", async () => {
     await withNodePairingDir(async (baseDir) => {
       const first = await requestNodePairing(
@@ -348,6 +493,27 @@ describe("node pairing tokens", () => {
         missingScope: "operator.admin",
       });
       await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+
+      const execApprovalsRequest = await requestNodePairing(
+        {
+          nodeId: "node-exec-approvals",
+          platform: "windows",
+          deviceFamily: "Windows",
+          commands: ["system.execApprovals.get", "system.execApprovals.set"],
+        },
+        baseDir,
+      );
+
+      await expect(
+        approveNodePairing(
+          execApprovalsRequest.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.write"] },
+          baseDir,
+        ),
+      ).resolves.toEqual({
+        status: "forbidden",
+        missingScope: "operator.admin",
+      });
 
       const commandlessRequest = await requestNodePairing(
         {

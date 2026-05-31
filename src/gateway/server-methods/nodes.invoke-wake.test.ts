@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   sendApnsAlert: vi.fn(),
   shouldClearStoredApnsRegistration: vi.fn(() => false),
   requestNodePairing: vi.fn(),
+  handleNodeEvent: vi.fn(),
 }));
 
 vi.mock("../../config/io.js", () => ({
@@ -71,6 +72,10 @@ vi.mock("../../infra/node-pairing.js", async () => {
     requestNodePairing: mocks.requestNodePairing,
   };
 });
+
+vi.mock("../server-node-events.js", () => ({
+  handleNodeEvent: mocks.handleNodeEvent,
+}));
 
 type RespondCall = [
   boolean,
@@ -341,6 +346,55 @@ function createNodeClient(nodeId: string, commands?: string[]) {
   };
 }
 
+async function sendNodeEvent(params?: { nodeId?: string; deviceId?: string; connId?: string }) {
+  const respond = vi.fn();
+  const connId = params?.connId ?? "conn-stable";
+  await nodeHandlers["node.event"]({
+    params: { event: "exec.finished", payload: { runId: "run-1" } },
+    respond: respond as never,
+    context: {
+      deps: {},
+      broadcast: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      nodeSubscribe: vi.fn(),
+      nodeUnsubscribe: vi.fn(),
+      broadcastVoiceWakeChanged: vi.fn(),
+      addChatRun: vi.fn(),
+      removeChatRun: vi.fn(),
+      chatAbortControllers: new Map(),
+      chatAbortedRuns: new Map(),
+      chatRunBuffers: new Map(),
+      chatDeltaSentAt: new Map(),
+      dedupe: new Map(),
+      agentRunSeq: new Map(),
+      getHealthCache: vi.fn(),
+      refreshHealthSnapshot: vi.fn(),
+      loadGatewayModelCatalog: vi.fn(),
+      logGateway: { warn: vi.fn() },
+      nodeRegistry: {
+        getByConnId: vi.fn(() =>
+          params?.nodeId
+            ? {
+                nodeId: params.nodeId,
+              }
+            : undefined,
+        ),
+        authorizeSystemRunEvent: vi.fn(),
+      },
+    } as never,
+    client: {
+      connId,
+      connect: {
+        device: { id: params?.deviceId ?? "device-token-id" },
+        client: { id: "node-host" },
+      },
+    } as never,
+    req: { type: "req", id: "req-node-event", method: "node.event" },
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
 async function pullPending(nodeId: string, commands?: string[]) {
   const respond = vi.fn();
   await nodeHandlers["node.pending.pull"]({
@@ -367,6 +421,22 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   return respond;
 }
 
+describe("node.event", () => {
+  it("handles stable node events under the registered node id", async () => {
+    await sendNodeEvent({
+      nodeId: "stable-windows-node",
+      deviceId: "device-token-id",
+    });
+
+    expect(mocks.handleNodeEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      "stable-windows-node",
+      expect.objectContaining({ event: "exec.finished" }),
+      expect.objectContaining({ connId: "conn-stable", deviceId: "device-token-id" }),
+    );
+  });
+});
+
 describe("node.pair.request", () => {
   it("passes permissions and resolves superseded prompts before broadcasting replacement requests", async () => {
     mocks.requestNodePairing.mockResolvedValue({
@@ -387,6 +457,7 @@ describe("node.pair.request", () => {
     await nodeHandlers["node.pair.request"]({
       params: {
         nodeId: "ios-node-1",
+        deviceId: "device-1",
         commands: ["canvas.snapshot"],
         permissions: { camera: true },
       },
@@ -399,6 +470,7 @@ describe("node.pair.request", () => {
 
     expect(mocks.requestNodePairing).toHaveBeenCalledWith({
       nodeId: "ios-node-1",
+      deviceId: "device-1",
       displayName: undefined,
       platform: undefined,
       version: undefined,

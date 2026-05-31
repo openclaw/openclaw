@@ -43,7 +43,8 @@ const { runtimeLogs, runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
-  () => ({
+  async () => ({
+    ...(await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js")),
     callGateway: (opts: unknown) => callGateway(opts),
     formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
     randomIdempotencyKey: () => "rk_test",
@@ -156,6 +157,54 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
+  });
+
+  it("uses backend auth for explicit loopback token gateway calls", async () => {
+    callGateway.mockClear();
+
+    await withEnvOverride({ OPENCLAW_GATEWAY_TOKEN: "shared-token" }, async () => {
+      await runGatewayCommand([
+        "gateway",
+        "call",
+        "health",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--token",
+        "shared-token",
+        "--json",
+      ]);
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(callGateway)).toMatchObject({
+      method: "health",
+      clientName: "gateway-client",
+      mode: "backend",
+      deviceIdentity: null,
+    });
+  });
+
+  it("keeps device identity available for unproven loopback token gateway calls", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand([
+      "gateway",
+      "call",
+      "health",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      "operator-device-token",
+      "--json",
+    ]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(callGateway)).toMatchObject({
+      method: "health",
+      clientName: "cli",
+      mode: "cli",
+      deviceIdentity: undefined,
+    });
   });
 
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {

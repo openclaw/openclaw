@@ -105,6 +105,49 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
+  it("uses node instance id for command pairing when device auth is present", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-device-token", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "windows",
+          deviceFamily: "Windows",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+          instanceId: "stable-host-node",
+        },
+        device: {
+          id: "rotated-device-identity",
+          publicKey: "public-key",
+          signature: "signature",
+          signedAt: 1,
+          nonce: "nonce",
+        },
+        caps: ["system"],
+        commands: ["system.which"],
+      }),
+      pairedNode: makePairedNode({
+        nodeId: "stable-host-node",
+        deviceId: "rotated-device-identity",
+        caps: ["system"],
+        commands: ["system.which"],
+      }),
+      requestPairing,
+    });
+
+    expect(result.nodeId).toBe("stable-host-node");
+    expect(result.effectiveCaps).toEqual(["system"]);
+    expect(result.effectiveCommands).toEqual(["system.which"]);
+    expect(requestPairing).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["conflicts with device family", { deviceFamily: "iPhone" }],
     ["omits device family", {}],

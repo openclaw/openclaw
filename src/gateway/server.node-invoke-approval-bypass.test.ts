@@ -332,6 +332,12 @@ describe("node.invoke approval bypass", () => {
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
     commands: string[] = ["system.run"],
+    resolveInvokeResult?: (payload: unknown) => {
+      ok?: boolean;
+      payload?: unknown;
+      payloadJSON?: string;
+    },
+    platform = "linux",
   ) => {
     const resolvedDeviceIdentity = deviceIdentity ?? createDeviceIdentity();
 
@@ -349,7 +355,8 @@ describe("node.invoke approval bypass", () => {
         role: "node",
         clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
         clientVersion: "1.0.0",
-        platform: "linux",
+        platform,
+        deviceFamily: platform,
         mode: GATEWAY_CLIENT_MODES.NODE,
         scopes: [],
         caps: ["system"],
@@ -370,11 +377,15 @@ describe("node.invoke approval bypass", () => {
           if (!id || !nodeId) {
             return;
           }
+          const result = resolveInvokeResult?.(evt.payload) ?? {
+            payloadJSON: JSON.stringify({ ok: true }),
+          };
           void client.request("node.invoke.result", {
             id,
             nodeId,
-            ok: true,
-            payloadJSON: JSON.stringify({ ok: true }),
+            ok: result.ok ?? true,
+            ...(result.payload !== undefined ? { payload: result.payload } : {}),
+            ...(result.payloadJSON !== undefined ? { payloadJSON: result.payloadJSON } : {}),
           });
         },
       });
@@ -461,6 +472,59 @@ describe("node.invoke approval bypass", () => {
         expect(res.error?.message ?? "", testCase.name).toContain(testCase.expectedError);
         await expectNoForwardedInvoke(() => sawInvoke);
       }
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("rejects dedicated node exec-approval mutations before forwarding when unapproved", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(() => {
+      sawInvoke = true;
+    });
+    const ws = await connectOperator(["operator.admin"]);
+    try {
+      const nodeId = await getConnectedNodeId(ws);
+      const res = await rpcReq(ws, "exec.approvals.node.set", {
+        nodeId,
+        native: { enabled: true, defaultAction: "deny", rules: [] },
+        baseHash: "stale",
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("node command not allowed");
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("returns dedicated node exec-approval set payload when node omits payloadJSON", async () => {
+    const nodePayload = {
+      enabled: true,
+      defaultAction: "deny",
+      rules: [{ pattern: "echo *", action: "allow", enabled: true }],
+    };
+    const node = await connectLinuxNode(
+      () => {},
+      undefined,
+      ["system.execApprovals.get", "system.execApprovals.set"],
+      () => ({ payload: nodePayload }),
+      "windows",
+    );
+    const ws = await connectOperator(["operator.admin"]);
+    try {
+      const nodeId = await getConnectedNodeId(ws);
+      const res = await rpcReq(ws, "exec.approvals.node.set", {
+        nodeId,
+        native: nodePayload,
+        baseHash: "hash-1",
+      });
+
+      expect(res.ok, res.error?.message ?? "").toBe(true);
+      expect(res.payload).toEqual(nodePayload);
     } finally {
       ws.close();
       node.stop();

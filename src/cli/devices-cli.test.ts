@@ -33,10 +33,23 @@ const {
   summarizeDeviceTokens,
 } = mocks;
 
+const gatewayAuthEnvSnapshot = {
+  token: process.env.OPENCLAW_GATEWAY_TOKEN,
+  password: process.env.OPENCLAW_GATEWAY_PASSWORD,
+};
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   formatGatewayTransportErrorJson: mocks.formatGatewayTransportErrorJson,
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+  resolveGatewayCliScopes: () => [
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+    "operator.talk.secrets",
+  ],
 }));
 
 vi.mock("./progress.js", () => ({
@@ -159,6 +172,103 @@ function hasGatewayMethod(method: string): boolean {
     );
   });
 }
+
+async function withSharedGatewayToken<T>(token: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+  process.env.OPENCLAW_GATEWAY_TOKEN = token;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+    }
+  }
+}
+
+describe("devices cli gateway auth", () => {
+  it("omits persisted device identity for explicit loopback token auth", async () => {
+    callGateway.mockResolvedValueOnce({ pending: [], paired: [] });
+
+    await withSharedGatewayToken("shared-token", async () => {
+      await runDevicesCommand([
+        "list",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--token",
+        "shared-token",
+        "--json",
+      ]);
+    });
+
+    expectGatewayCall(0, {
+      method: "device.pair.list",
+      token: "shared-token",
+      clientName: "gateway-client",
+      mode: "backend",
+      deviceIdentity: null,
+    });
+  });
+
+  it("omits persisted device identity for implicit local token auth", async () => {
+    callGateway.mockResolvedValueOnce({ pending: [], paired: [] });
+
+    await withSharedGatewayToken("shared-token", async () => {
+      await runDevicesCommand(["list", "--token", "shared-token", "--json"]);
+    });
+
+    expectGatewayCall(0, {
+      method: "device.pair.list",
+      token: "shared-token",
+      clientName: "gateway-client",
+      mode: "backend",
+      deviceIdentity: null,
+    });
+  });
+
+  it("keeps device identity available for explicit remote token auth", async () => {
+    callGateway.mockResolvedValueOnce({ pending: [], paired: [] });
+
+    await runDevicesCommand([
+      "list",
+      "--url",
+      "ws://192.0.2.7:18789",
+      "--token",
+      "shared-token",
+      "--json",
+    ]);
+
+    expectGatewayCall(0, {
+      method: "device.pair.list",
+      token: "shared-token",
+      clientName: "cli",
+      mode: "cli",
+      deviceIdentity: undefined,
+    });
+  });
+
+  it("keeps device identity available for unproven loopback token auth", async () => {
+    callGateway.mockResolvedValueOnce({ pending: [], paired: [] });
+
+    await runDevicesCommand([
+      "list",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      "operator-device-token",
+      "--json",
+    ]);
+
+    expectGatewayCall(0, {
+      method: "device.pair.list",
+      token: "operator-device-token",
+      clientName: "cli",
+      mode: "cli",
+      deviceIdentity: undefined,
+    });
+  });
+});
 
 describe("devices cli approve", () => {
   it("uses admin scope when approving an admin-scope request", async () => {
@@ -1408,11 +1518,23 @@ describe("devices cli list", () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   runtime.exit.mockImplementation(() => {});
   formatGatewayTransportErrorJson.mockReturnValue(null);
 });
 
 afterEach(() => {
+  if (gatewayAuthEnvSnapshot.token === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  } else {
+    process.env.OPENCLAW_GATEWAY_TOKEN = gatewayAuthEnvSnapshot.token;
+  }
+  if (gatewayAuthEnvSnapshot.password === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+  } else {
+    process.env.OPENCLAW_GATEWAY_PASSWORD = gatewayAuthEnvSnapshot.password;
+  }
   buildGatewayConnectionDetails.mockReturnValue({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",

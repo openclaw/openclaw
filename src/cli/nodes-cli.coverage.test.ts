@@ -56,6 +56,7 @@ const { runtimeErrors, defaultRuntime } = mocks;
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
   randomIdempotencyKey: () => randomIdempotencyKey(),
+  resolveGatewayCliScopes: () => [],
 }));
 
 vi.mock("../runtime.js", async () => ({
@@ -128,7 +129,9 @@ describe("nodes-cli coverage", () => {
         from: "user",
       }),
     ).rejects.toThrow("__exit__:1");
-    expect(runtimeErrors.at(-1)).toContain('command "system.run" is reserved for shell execution');
+    expect(runtimeErrors.at(-1)).toContain(
+      'command "system.run" is reserved for shell execution; use an agent /exec host=node request instead of nodes invoke',
+    );
   });
 
   it("invokes system.notify with provided fields", async () => {

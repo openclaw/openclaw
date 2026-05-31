@@ -191,6 +191,7 @@ import {
   type ExecApprovalsSetParams,
   ExecApprovalsSetParamsSchema,
   type ExecApprovalsSnapshot,
+  ExecApprovalsSnapshotSchema,
   type ExecApprovalGetParams,
   ExecApprovalGetParamsSchema,
   type ExecApprovalRequestParams,
@@ -843,6 +844,9 @@ export const validateExecApprovalsNodeGetParams = lazyCompile<ExecApprovalsNodeG
 );
 export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
+);
+export const validateExecApprovalsSnapshot = lazyCompile<ExecApprovalsSnapshot>(
+  ExecApprovalsSnapshotSchema,
 );
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);

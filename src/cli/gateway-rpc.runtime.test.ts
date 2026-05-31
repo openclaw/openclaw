@@ -2,7 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn(async () => ({ ok: true }));
 vi.mock("../gateway/call.js", () => ({
+  buildGatewayConnectionDetails: () => ({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+  }),
   callGateway: callGatewayMock,
+  resolveGatewayCliScopes: (method: string) =>
+    method === "health"
+      ? ["operator.read"]
+      : [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
 }));
 
 vi.mock("./progress.js", () => ({
@@ -10,6 +25,20 @@ vi.mock("./progress.js", () => ({
 }));
 
 const { callGatewayFromCliRuntime } = await import("./gateway-rpc.runtime.js");
+
+async function withSharedGatewayToken<T>(token: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+  process.env.OPENCLAW_GATEWAY_TOKEN = token;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+    }
+  }
+}
 
 describe("callGatewayFromCliRuntime", () => {
   beforeEach(() => {
@@ -50,6 +79,89 @@ describe("callGatewayFromCliRuntime", () => {
       expect.objectContaining({
         method: "cron.status",
         timeoutMs: 15_000,
+      }),
+    );
+  });
+
+  it("uses backend auth for explicit loopback token calls", async () => {
+    await withSharedGatewayToken("shared-token", async () => {
+      await callGatewayFromCliRuntime("health", {
+        url: "ws://127.0.0.1:18789",
+        token: "shared-token",
+      });
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "health",
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: ["operator.read"],
+        deviceIdentity: null,
+      }),
+    );
+  });
+
+  it("uses CLI fallback scopes for unclassified explicit loopback token calls", async () => {
+    await withSharedGatewayToken("shared-token", async () => {
+      await callGatewayFromCliRuntime("plugin.custom.unclassified", {
+        url: "ws://127.0.0.1:18789",
+        token: "shared-token",
+      });
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin.custom.unclassified",
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
+        deviceIdentity: null,
+      }),
+    );
+  });
+
+  it("keeps device identity available for unproven loopback token calls", async () => {
+    await callGatewayFromCliRuntime("health", {
+      url: "ws://127.0.0.1:18789",
+      token: "operator-device-token",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "health",
+        clientName: "cli",
+        mode: "cli",
+        scopes: undefined,
+        deviceIdentity: undefined,
+      }),
+    );
+  });
+
+  it("preserves explicit extra client identity overrides", async () => {
+    await callGatewayFromCliRuntime(
+      "health",
+      {
+        url: "ws://127.0.0.1:18789",
+        token: "shared-token",
+      },
+      undefined,
+      { clientName: "cli", mode: "cli", deviceIdentity: undefined },
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "health",
+        clientName: "cli",
+        mode: "cli",
+        deviceIdentity: undefined,
       }),
     );
   });
