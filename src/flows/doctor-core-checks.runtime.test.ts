@@ -877,6 +877,33 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 
+  it("reports static catalog hooks with non-function run values", async () => {
+    mocks.resolvePluginProviders.mockReturnValueOnce([
+      {
+        id: "mockplugin",
+        pluginId: "mockplugin",
+        label: "Mock",
+        auth: [],
+        staticCatalog: {
+          order: "simple",
+          run: "not-callable",
+        },
+      },
+    ]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message:
+          "Provider catalog mockplugin static catalog hook is invalid during doctor validation.",
+        requirement: "static catalog run must be a function",
+      }),
+    );
+  });
+
   it("reports revoked provider catalog result proxies without crashing doctor", async () => {
     const { proxy, revoke } = Proxy.revocable(
       {

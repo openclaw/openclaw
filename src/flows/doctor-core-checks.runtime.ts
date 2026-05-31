@@ -462,9 +462,11 @@ export async function collectProviderCatalogProjectionFindings(
   findings.push(...grouped.findings);
   for (const order of PROVIDER_CATALOG_ORDERS) {
     for (const provider of grouped.byOrder[order]) {
+      let staticCatalog: unknown;
       let staticCatalogRun: unknown;
       try {
-        staticCatalogRun = provider.staticCatalog?.run;
+        staticCatalog = provider.staticCatalog;
+        staticCatalogRun = isReadableRecord(staticCatalog) ? staticCatalog.run : undefined;
       } catch (error) {
         findings.push(
           providerCatalogProjectionFinding({
@@ -476,7 +478,18 @@ export async function collectProviderCatalogProjectionFindings(
         );
         continue;
       }
+      if (staticCatalog === undefined) {
+        continue;
+      }
       if (typeof staticCatalogRun !== "function") {
+        findings.push(
+          providerCatalogProjectionFinding({
+            providerId: provider.id,
+            pluginId: provider.pluginId,
+            message: `Provider catalog ${provider.id} static catalog hook is invalid during doctor validation.`,
+            error: new Error("static catalog run must be a function"),
+          }),
+        );
         continue;
       }
       let result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
