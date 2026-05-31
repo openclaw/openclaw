@@ -389,26 +389,42 @@ function unregisterCleanupHandlers(): void {
   cleanupState.registered = false;
 }
 
+function parseLockPayload(raw: string): LockFilePayload | null {
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const payload: LockFilePayload = {};
+  if (isValidLockNumber(parsed.pid) && parsed.pid > 0) {
+    payload.pid = parsed.pid;
+  }
+  if (typeof parsed.createdAt === "string") {
+    payload.createdAt = parsed.createdAt;
+  }
+  if (isValidLockNumber(parsed.starttime)) {
+    payload.starttime = parsed.starttime;
+  }
+  if (isValidLockNumber(parsed.maxHoldMs) && parsed.maxHoldMs > 0) {
+    payload.maxHoldMs = parsed.maxHoldMs;
+  }
+  return payload;
+}
+
 async function readLockPayload(lockPath: string): Promise<LockFilePayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const payload: LockFilePayload = {};
-    if (isValidLockNumber(parsed.pid) && parsed.pid > 0) {
-      payload.pid = parsed.pid;
-    }
-    if (typeof parsed.createdAt === "string") {
-      payload.createdAt = parsed.createdAt;
-    }
-    if (isValidLockNumber(parsed.starttime)) {
-      payload.starttime = parsed.starttime;
-    }
-    if (isValidLockNumber(parsed.maxHoldMs) && parsed.maxHoldMs > 0) {
-      payload.maxHoldMs = parsed.maxHoldMs;
-    }
-    return payload;
+    return parseLockPayload(raw);
   } catch {
     return null;
+  }
+}
+
+async function readLockPayloadForDiagnostics(
+  lockPath: string,
+): Promise<{ payload: LockFilePayload | null; missing: boolean }> {
+  try {
+    const raw = await fs.readFile(lockPath, "utf8");
+    return { payload: parseLockPayload(raw), missing: false };
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    return { payload: null, missing: code === "ENOENT" };
   }
 }
 
@@ -638,24 +654,11 @@ function resolveRemainingAcquireTimeoutMs(
   return Math.max(0, timeoutMs - elapsedMs);
 }
 
-async function lockFileExists(lockPath: string): Promise<boolean> {
-  try {
-    await fs.access(lockPath);
-    return true;
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === "ENOENT") {
-      return false;
-    }
-    return true;
-  }
-}
-
-async function shouldRetryStaleAcquireFailure(params: {
-  lockPath: string;
+function shouldRetryStaleAcquireFailure(params: {
+  lockMissingAtDiagnostics: boolean;
   inspected: LockInspectionDetails;
-}): Promise<boolean> {
-  if (!(await lockFileExists(params.lockPath))) {
+}): boolean {
+  if (params.lockMissingAtDiagnostics) {
     return true;
   }
   return !params.inspected.stale;
@@ -967,7 +970,8 @@ export async function acquireSessionWriteLock(params: {
         throw err;
       }
       const errorLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
-      const payload = await readLockPayload(errorLockPath);
+      const { payload, missing: lockMissingAtDiagnostics } =
+        await readLockPayloadForDiagnostics(errorLockPath);
       const nowMs = Date.now();
       const heldByThisProcess = sessionLockHeldByThisProcess(normalizedSessionFile);
       const inspected = inspectLockPayloadForSession({
@@ -983,10 +987,10 @@ export async function acquireSessionWriteLock(params: {
       if (isFileLockError(err, "file_lock_stale")) {
         if (
           resolveRemainingAcquireTimeoutMs(timeoutMs, startedAtMs, Date.now()) > 0 &&
-          (await shouldRetryStaleAcquireFailure({
-            lockPath: errorLockPath,
+          shouldRetryStaleAcquireFailure({
+            lockMissingAtDiagnostics,
             inspected,
-          }))
+          })
         ) {
           continue;
         }
