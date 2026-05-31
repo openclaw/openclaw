@@ -164,7 +164,6 @@ const MCPORTER_REMOTE_AUTH_KEYS = new Set(
     "authProviderEnv",
     "bearerToken",
     "bearerTokenEnv",
-    "headers",
     "oauth",
     "oauthClientId",
     "oauthClientSecret",
@@ -221,11 +220,40 @@ function isMcporterAuthLikeKey(key: string): boolean {
   );
 }
 
+function hasMcporterHeaderAuthMaterial(value: unknown): boolean {
+  const headers = asRecord(value);
+  if (!headers) {
+    return true;
+  }
+  for (const [key, headerValue] of Object.entries(headers)) {
+    const normalized = normalizeMcporterConfigKey(key);
+    if (
+      normalized === "accept" &&
+      typeof headerValue === "string" &&
+      hasRequiredMcporterAcceptTokens(headerValue)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function hasRequiredMcporterAcceptTokens(value: string): boolean {
+  const lower = value.toLowerCase();
+  return lower.includes("application/json") && lower.includes("text/event-stream");
+}
+
 function hasMcporterRemoteAuthMaterial(server: Record<string, unknown>): boolean {
   if (hasMcporterRemoteUrlCredentials(server)) {
     return true;
   }
-  return Object.keys(server).some((key) => isMcporterAuthLikeKey(key));
+  return Object.entries(server).some(([key, value]) => {
+    if (normalizeMcporterConfigKey(key) === "headers") {
+      return hasMcporterHeaderAuthMaterial(value);
+    }
+    return isMcporterAuthLikeKey(key);
+  });
 }
 
 function hasMcporterRemoteUrlCredentials(server: Record<string, unknown>): boolean {
@@ -2570,16 +2598,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (typeof server.command === "string" && server.command.length > 0) {
-      if (server.env !== undefined) {
-        return { mode: "external" };
-      }
-      server.env = this.buildMcporterQmdEnv();
-      // startDaemon=true depends on mcporter treating the configured stdio
-      // server as daemon-warm; without lifecycle, mcporter keeps it ephemeral.
-      if (server.lifecycle === undefined && this.qmd.mcporter.startDaemon) {
-        server.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
-      }
-      return { mode: "generated", server };
+      return { mode: "external" };
     }
 
     const hasRemoteEndpoint =
