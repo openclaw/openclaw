@@ -11,7 +11,7 @@ import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
-import { fetchNpmTagVersion } from "../../infra/update-check.js";
+import { fetchNpmPackageTargetStatus, fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -100,6 +100,13 @@ export async function resolveTargetVersion(
   }
   const direct = normalizeVersionTag(tag);
   if (direct) {
+    const status = await fetchNpmPackageTargetStatus({ target: direct, timeoutMs });
+    if (status.version) {
+      return status.version;
+    }
+    if (status.error === "HTTP 404") {
+      return null;
+    }
     return direct;
   }
   const res = await fetchNpmTagVersion({ tag, timeoutMs });
