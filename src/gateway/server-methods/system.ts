@@ -16,6 +16,7 @@ import { listSystemPresence, updateSystemPresence } from "../../infra/system-pre
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Gateway handlers for identity, heartbeat toggles, and system presence events. */
 export const systemHandlers: GatewayRequestHandlers = {
   "gateway.identity.get": ({ respond }) => {
     const identity = loadOrCreateDeviceIdentity();
@@ -103,6 +104,8 @@ export const systemHandlers: GatewayRequestHandlers = {
     });
     const isNodePresenceLine = text.startsWith("Node:");
     if (isNodePresenceLine) {
+      // Node presence heartbeats are noisy; only enqueue user-visible system
+      // events when routing context or meaningful node metadata changes.
       const next = presenceUpdate.next;
       const changed = new Set(presenceUpdate.changedKeys);
       const reasonValue = next.reason ?? reason;
