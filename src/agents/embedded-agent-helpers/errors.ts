@@ -1377,7 +1377,6 @@ export function isRawAssistantErrorPassthrough(params: {
     friendlyError === rawError ||
     (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
     Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
-    Boolean(parsedMessage && friendlyError.includes(parsedMessage)) ||
     Boolean(leadingStatusRest && friendlyError.includes(leadingStatusRest))
   );
 }

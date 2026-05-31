@@ -262,6 +262,7 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("30 seconds");
     expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("30 seconds");
   });
 
   it("returns generic rate limit message when no specific details are present", () => {
