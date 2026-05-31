@@ -1364,6 +1364,60 @@ describe("dispatchReplyFromConfig", () => {
     expect(typeof replyDispatchCall?.[1]).toBe("object");
   });
 
+  it("routes sessions_send internal webchat handoffs through persisted external delivery context", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      deliveryContext: {
+        channel: "feishu",
+        to: "user:ou_123",
+        accountId: "work",
+      },
+      lastChannel: "feishu",
+      lastTo: "user:ou_123",
+      lastAccountId: "work",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: "agent:main:feishu:direct:ou_123",
+      AccountId: undefined,
+      OriginatingChannel: "webchat",
+      OriginatingTo: "session:dashboard",
+      InputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        sourceChannel: "webchat",
+      },
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    const routeCall = firstRouteReplyCall() as
+      | { accountId?: unknown; channel?: unknown; to?: unknown }
+      | undefined;
+    expect(routeCall?.channel).toBe("feishu");
+    expect(routeCall?.to).toBe("user:ou_123");
+    expect(routeCall?.accountId).toBe("work");
+    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
+      | [
+          {
+            originatingChannel?: unknown;
+            originatingTo?: unknown;
+            shouldRouteToOriginating?: unknown;
+          },
+          unknown,
+        ]
+      | undefined;
+    expect(replyDispatchCall?.[0]?.shouldRouteToOriginating).toBe(true);
+    expect(replyDispatchCall?.[0]?.originatingChannel).toBe("feishu");
+    expect(replyDispatchCall?.[0]?.originatingTo).toBe("user:ou_123");
+  });
+
   it("routes exec-event replies using last route fields when delivery context is missing", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

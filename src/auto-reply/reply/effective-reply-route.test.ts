@@ -59,6 +59,93 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
+  it("uses established external route for sessions_send internal webchat handoffs", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+          AccountId: "webchat-account",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceChannel: "webchat",
+          },
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+          },
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          lastAccountId: "webchat-account",
+        }),
+      }),
+    ).toEqual({
+      channel: "feishu",
+      to: "user:ou_123",
+      accountId: "work",
+      inheritedExternalRoute: true,
+    });
+  });
+
+  it("keeps normal webchat turns on their live route", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "webchat",
+      to: "session:dashboard",
+      accountId: undefined,
+    });
+  });
+
+  it("ignores persisted webchat routes for sessions_send handoffs", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "webchat",
+            to: "session:old-dashboard",
+          },
+          lastChannel: "webchat",
+          lastTo: "session:old-dashboard",
+        }),
+      }),
+    ).toEqual({
+      channel: "webchat",
+      to: "session:dashboard",
+      accountId: undefined,
+    });
+  });
+
   it("prefers live origin context for exec-event replies", () => {
     expect(
       resolveEffectiveReplyRoute({

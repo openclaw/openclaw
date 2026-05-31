@@ -1400,10 +1400,12 @@ export async function dispatchReplyFromConfig(
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
   const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);
   const normalizedCurrentSurface = normalizedProviderChannel ?? normalizedSurfaceChannel;
+  const effectiveExplicitDeliverRoute =
+    ctx.ExplicitDeliverRoute === true || replyRoute.inheritedExternalRoute === true;
   const isInternalWebchatTurn =
     normalizedCurrentSurface === INTERNAL_MESSAGE_CHANNEL &&
     (normalizedSurfaceChannel === INTERNAL_MESSAGE_CHANNEL || !normalizedSurfaceChannel) &&
-    ctx.ExplicitDeliverRoute !== true;
+    effectiveExplicitDeliverRoute !== true;
   const hasRouteReplyCandidate = Boolean(
     !suppressAcpChildUserDelivery &&
     !isInternalWebchatTurn &&
@@ -1420,7 +1422,7 @@ export async function dispatchReplyFromConfig(
   } = resolveReplyRoutingDecision({
     provider: ctx.Provider,
     surface: ctx.Surface,
-    explicitDeliverRoute: ctx.ExplicitDeliverRoute,
+    explicitDeliverRoute: effectiveExplicitDeliverRoute,
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
     suppressDirectUserDelivery: suppressAcpChildUserDelivery,
