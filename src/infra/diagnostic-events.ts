@@ -90,6 +90,7 @@ export type DiagnosticMessageQueuedEvent = DiagnosticBaseEvent & {
   channel?: string;
   source: string;
   queueDepth?: number;
+  inputPreview?: string;
 };
 
 export type DiagnosticMessageReceivedEvent = DiagnosticBaseEvent & {
@@ -182,6 +183,8 @@ export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   state: DiagnosticSessionState;
   reason?: string;
   queueDepth?: number;
+  inputPreview?: string;
+  taskLabel?: string;
 };
 
 export type DiagnosticSessionActiveWorkKind = "embedded_run" | "model_call" | "tool_call";

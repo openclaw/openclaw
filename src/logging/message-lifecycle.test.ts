@@ -43,6 +43,7 @@ describe("createDiagnosticMessageLifecycle", () => {
       sessionKey: "cron:job",
       channel: "cron",
       source: "cron-isolated",
+      inputPreview: undefined,
     });
     expect(diagnosticMocks.logSessionStateChange.mock.calls).toEqual([
       [
@@ -51,6 +52,8 @@ describe("createDiagnosticMessageLifecycle", () => {
           sessionKey: "cron:job",
           state: "processing",
           reason: undefined,
+          inputPreview: undefined,
+          taskLabel: undefined,
         },
       ],
       [
@@ -123,5 +126,31 @@ describe("createDiagnosticMessageLifecycle", () => {
     expect(diagnosticMocks.logMessageQueued).not.toHaveBeenCalled();
     expect(diagnosticMocks.logSessionStateChange).not.toHaveBeenCalled();
     expect(diagnosticMocks.logMessageProcessed).not.toHaveBeenCalled();
+  });
+
+  it("carries preview and task label on processing lifecycle events", () => {
+    const lifecycle = createDiagnosticMessageLifecycle({
+      enabled: true,
+      channel: "telegram",
+      source: "dispatch",
+      sessionKey: "agent:main:main",
+      inputPreview: "Summarize the latest deployment",
+      taskLabel: "deployment check",
+      trackSessionState: true,
+    });
+
+    lifecycle.markProcessing();
+
+    expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputPreview: "Summarize the latest deployment",
+      }),
+    );
+    expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputPreview: "Summarize the latest deployment",
+        taskLabel: "deployment check",
+      }),
+    );
   });
 });

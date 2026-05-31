@@ -116,6 +116,24 @@ const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
 );
 
+function buildCronDiagnosticInputPreview(job: CronJob): string | undefined {
+  const raw =
+    job.payload.kind === "agentTurn"
+      ? normalizeOptionalString(job.payload.message)
+      : normalizeOptionalString(job.name);
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const maxChars = 1000;
+  return normalized.length <= maxChars
+    ? normalized
+    : `${normalized.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
 async function loadSessionStoreRuntime() {
   return await sessionStoreRuntimeLoader.load();
 }
@@ -1261,6 +1279,8 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionKey: prepared.context.runSessionKey,
     channel: "cron",
     source: "cron-isolated",
+    inputPreview: buildCronDiagnosticInputPreview(params.job),
+    taskLabel: params.job.name,
     startedAtMs: turnStartedAtMs,
     trackSessionState: true,
   });

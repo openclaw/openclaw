@@ -647,6 +647,7 @@ export function logMessageQueued(params: {
   sessionKey?: string;
   channel?: string;
   source: string;
+  inputPreview?: string;
 }) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
@@ -671,6 +672,7 @@ export function logMessageQueued(params: {
     channel: params.channel,
     source: params.source,
     queueDepth: state.queueDepth,
+    inputPreview: params.inputPreview,
   });
   markActivity();
 }
@@ -856,6 +858,8 @@ export function logSessionStateChange(
   params: SessionRef & {
     state: SessionStateValue;
     reason?: string;
+    inputPreview?: string;
+    taskLabel?: string;
   },
 ) {
   if (!areDiagnosticsEnabledForProcess()) {
@@ -893,6 +897,8 @@ export function logSessionStateChange(
     state: params.state,
     reason: params.reason,
     queueDepth: state.queueDepth,
+    inputPreview: params.inputPreview,
+    taskLabel: params.taskLabel,
   });
   markActivity();
 }

@@ -47,6 +47,8 @@ type EventRecord = {
   source?: string;
   state?: string;
   outcome?: string;
+  inputPreview?: string;
+  taskLabel?: string;
 };
 
 describe("runCronIsolatedAgentTurn diagnostic events", () => {
@@ -86,9 +88,14 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     const ofType = (type: string) => events.filter((e) => e.type === type);
     expect(ofType("message.queued")).toHaveLength(1);
     expect(ofType("message.queued")[0]?.source).toBe("cron-isolated");
+    expect(ofType("message.queued")[0]?.inputPreview).toBe("run task");
 
     const stateEvents = ofType("session.state");
     expect(stateEvents.map((e) => e.state)).toEqual(["processing", "idle"]);
+    expect(stateEvents[0]?.inputPreview).toBe("run task");
+    expect(stateEvents[0]?.taskLabel).toBe("Diag Events");
+    expect(stateEvents[1]?.inputPreview).toBeUndefined();
+    expect(stateEvents[1]?.taskLabel).toBeUndefined();
 
     const processed = ofType("message.processed");
     expect(processed).toHaveLength(1);

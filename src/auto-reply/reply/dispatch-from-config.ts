@@ -823,6 +823,25 @@ function captureDeliveredSourceReplyTranscriptMirror(params: {
   return () => deliveredMetadata;
 }
 
+function buildDiagnosticInputPreview(ctx: FinalizedMsgContext): string | undefined {
+  const raw =
+    normalizeOptionalString(ctx.BodyForCommands) ??
+    normalizeOptionalString(ctx.CommandBody) ??
+    normalizeOptionalString(ctx.RawBody) ??
+    normalizeOptionalString(ctx.Body);
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const maxChars = 1000;
+  return normalized.length <= maxChars
+    ? normalized
+    : `${normalized.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
 async function mirrorInternalSourceReplyAfterDispatcherDelivery(params: {
   dispatcher: ReplyDispatcher;
   before: { cancelled: number; failed: number };
@@ -1040,6 +1059,7 @@ export async function dispatchReplyFromConfig(
     chatId,
     messageId,
     sessionKey,
+    inputPreview: buildDiagnosticInputPreview(ctx),
     source: "dispatch",
     processingReason: "message_start",
     startedAtMs: startTime,
