@@ -1,4 +1,4 @@
-import { redactSensitiveUrl } from "@openclaw/net-policy/redact-sensitive-url";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { html, nothing, type TemplateResult } from "lit";
 
 type McpServerRow = {
@@ -52,7 +52,7 @@ function summarizeServer(name: string, value: unknown): McpServerRow {
     enabled: server.enabled !== false,
     transport,
     auth,
-    launch: url ? redactSensitiveUrl(launch) : launch,
+    launch: url ? redactSensitiveUrlLikeString(launch) : launch,
     toolFilter: Boolean(server.toolFilter),
     parallel: server.supportsParallelToolCalls === true,
     tls,

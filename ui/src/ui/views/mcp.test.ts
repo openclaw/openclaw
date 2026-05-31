@@ -105,4 +105,29 @@ describe("renderMcp", () => {
     expect(text).toContain("https://***:***@mcp.example.com/mcp?token=***&keep=visible");
     expect(text).not.toContain("secret");
   });
+
+  it("redacts sensitive malformed URL-like values in server summaries", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMcp(
+        createProps({
+          configObject: {
+            mcp: {
+              servers: {
+                docs: {
+                  url: "//user:secret@mcp.example.com/mcp?token=query-secret&keep=visible",
+                },
+              },
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const text = container.querySelector(".mcp-server-list")?.textContent ?? "";
+    expect(text).toContain("//***:***@mcp.example.com/mcp?token=***&keep=visible");
+    expect(text).not.toContain("secret");
+  });
 });
