@@ -14,10 +14,12 @@ import {
 describe("buildCleanupPlan", () => {
   test("resolves inside-state flags and workspace dirs", () => {
     const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp");
+    const defaultWorkspace = path.join(tmpRoot, "openclaw-workspace-default");
+    const opsWorkspace = path.join(tmpRoot, "openclaw-workspace-ops");
     const cfg = {
       agents: {
-        defaults: { workspace: path.join(tmpRoot, "openclaw-workspace-1") },
-        list: [{ workspace: path.join(tmpRoot, "openclaw-workspace-2") }],
+        defaults: { workspace: defaultWorkspace },
+        list: [{ id: "main" }, { id: "ops", workspace: opsWorkspace }],
       },
     };
     const plan = buildCleanupPlan({
@@ -29,12 +31,54 @@ describe("buildCleanupPlan", () => {
 
     expect(plan.configInsideState).toBe(true);
     expect(plan.oauthInsideState).toBe(false);
-    expect(new Set(plan.workspaceDirs)).toEqual(
-      new Set([
-        path.join(tmpRoot, "openclaw-workspace-1"),
-        path.join(tmpRoot, "openclaw-workspace-2"),
-      ]),
-    );
+    expect(new Set(plan.workspaceDirs)).toEqual(new Set([defaultWorkspace, opsWorkspace]));
+  });
+
+  test("includes implicit per-agent workspaces under the state dir", () => {
+    const previousHome = process.env.HOME;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousWorkspaceDir = process.env.OPENCLAW_WORKSPACE_DIR;
+    const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp", "openclaw-cleanup-plan");
+    const home = path.join(tmpRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const cfg = {
+      agents: {
+        list: [{ id: "main" }, { id: "work" }],
+      },
+    };
+
+    try {
+      process.env.HOME = home;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      delete process.env.OPENCLAW_WORKSPACE_DIR;
+
+      const plan = buildCleanupPlan({
+        cfg: cfg as unknown as OpenClawConfig,
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+        oauthDir: path.join(stateDir, "credentials"),
+      });
+
+      expect(new Set(plan.workspaceDirs)).toEqual(
+        new Set([path.join(stateDir, "workspace"), path.join(stateDir, "workspace-work")]),
+      );
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousWorkspaceDir === undefined) {
+        delete process.env.OPENCLAW_WORKSPACE_DIR;
+      } else {
+        process.env.OPENCLAW_WORKSPACE_DIR = previousWorkspaceDir;
+      }
+    }
   });
 });
 

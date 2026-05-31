@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveHomeDir, resolveUserPath, shortenHomeInString } from "../utils.js";
+import { resolveHomeDir, shortenHomeInString } from "../utils.js";
 
 type RemovalResult = {
   ok: boolean;
@@ -31,19 +32,12 @@ type StateRemovalOptions = {
 
 function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   const dirs = new Set<string>();
-  const defaults = cfg?.agents?.defaults;
-  if (typeof defaults?.workspace === "string" && defaults.workspace.trim()) {
-    dirs.add(resolveUserPath(defaults.workspace));
-  }
-  const list = Array.isArray(cfg?.agents?.list) ? cfg?.agents?.list : [];
-  for (const agent of list) {
-    const workspace = (agent as { workspace?: unknown }).workspace;
-    if (typeof workspace === "string" && workspace.trim()) {
-      dirs.add(resolveUserPath(workspace));
-    }
-  }
-  if (dirs.size === 0) {
+  if (!cfg) {
     dirs.add(resolveDefaultAgentWorkspaceDir());
+    return [...dirs];
+  }
+  for (const agentId of listAgentIds(cfg)) {
+    dirs.add(resolveAgentWorkspaceDir(cfg, agentId));
   }
   return [...dirs];
 }
