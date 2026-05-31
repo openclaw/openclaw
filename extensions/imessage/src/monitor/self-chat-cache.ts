@@ -11,11 +11,13 @@ type SelfChatCacheKeyParts = {
 type SelfChatLookup = SelfChatCacheKeyParts & {
   text?: string;
   createdAt?: number;
+  allowCreatedAtSkew?: boolean;
 };
 
 type SelfChatCacheEntry = {
   id: number;
   createdAt: number;
+  createdAtSkewToleranceMs: number;
   rememberedAt: number;
 };
 
@@ -78,6 +80,7 @@ class DefaultSelfChatCache implements SelfChatCache {
     const entry = {
       id: this.nextEntryId,
       createdAt: lookup.createdAt,
+      createdAtSkewToleranceMs: lookup.allowCreatedAtSkew ? SELF_CHAT_CREATED_AT_TOLERANCE_MS : 0,
       rememberedAt: Date.now(),
     };
     this.nextEntryId += 1;
@@ -100,11 +103,13 @@ class DefaultSelfChatCache implements SelfChatCache {
     }
     const now = Date.now();
     const createdAt = lookup.createdAt;
-    return [...entries.values()].some(
-      (entry) =>
+    return [...entries.values()].some((entry) => {
+      const createdAtDelta = Math.abs(entry.createdAt - createdAt);
+      return (
         now - entry.rememberedAt <= SELF_CHAT_TTL_MS &&
-        Math.abs(entry.createdAt - createdAt) < SELF_CHAT_CREATED_AT_TOLERANCE_MS,
-    );
+        (createdAtDelta === 0 || createdAtDelta < entry.createdAtSkewToleranceMs)
+      );
+    });
   }
 
   private maybeCleanup(): void {

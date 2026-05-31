@@ -41,6 +41,7 @@ describe("createSelfChatCache", () => {
       ...directLookup,
       text: "hello",
       createdAt: 1_774_136_400_000,
+      allowCreatedAtSkew: true,
     });
 
     expect(
@@ -61,6 +62,7 @@ describe("createSelfChatCache", () => {
       ...directLookup,
       text: "hello",
       createdAt: 1_774_136_400_000,
+      allowCreatedAtSkew: true,
     });
 
     expect(
@@ -68,6 +70,26 @@ describe("createSelfChatCache", () => {
         ...directLookup,
         text: "hello",
         createdAt: 1_774_136_401_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps timestamp matching exact unless skew is allowed by the remembered row", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
+
+    const cache = createSelfChatCache();
+    cache.remember({
+      ...directLookup,
+      text: "hello",
+      createdAt: 1_774_136_400_000,
+    });
+
+    expect(
+      cache.has({
+        ...directLookup,
+        text: "hello",
+        createdAt: 1_774_136_400_239,
       }),
     ).toBe(false);
   });

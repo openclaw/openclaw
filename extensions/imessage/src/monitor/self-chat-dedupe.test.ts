@@ -619,9 +619,9 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
         message: {
           id: 85160,
           guid: "p:0/from-me-guid",
-          sender: "+16043519505",
-          chat_identifier: "+16043519505",
-          destination_caller_id: "+16043519505",
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: "+15555550123",
           text: "Aha, neat!",
           created_at: "2026-05-10T05:34:00.000Z",
           is_from_me: true,
@@ -639,8 +639,8 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
         message: {
           id: 85161,
           guid: "p:0/reflected-guid",
-          sender: "+16043519505",
-          chat_identifier: "+16043519505",
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
           destination_caller_id: null,
           text: "Aha, neat!",
           created_at: "2026-05-10T05:34:00.239Z",
@@ -654,6 +654,54 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     );
 
     expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
+  });
+
+  it("does not apply sub-second skew matching to ambiguous normal DM rows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T05:34:00Z"));
+
+    const selfChatCache = createSelfChatCache();
+
+    const ambiguousOutbound = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 85170,
+          guid: "p:0/ambiguous-from-me-guid",
+          sender: "+15555550124",
+          chat_identifier: "+15555550124",
+          destination_caller_id: null,
+          text: "Same text",
+          created_at: "2026-05-10T05:34:00.000Z",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Same text",
+        bodyText: "Same text",
+        selfChatCache,
+      }),
+    );
+    expect(ambiguousOutbound).toEqual({ kind: "drop", reason: "from me" });
+
+    const inboundReply = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 85171,
+          guid: "p:0/real-inbound-guid",
+          sender: "+15555550124",
+          chat_identifier: "+15555550124",
+          destination_caller_id: null,
+          text: "Same text",
+          created_at: "2026-05-10T05:34:00.239Z",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "Same text",
+        bodyText: "Same text",
+        selfChatCache,
+      }),
+    );
+
+    expect(inboundReply.kind).toBe("dispatch");
   });
 
   it("drops outbound DM when sender matches chat_identifier but destination_caller_id is absent (#63980)", async () => {
