@@ -27,6 +27,9 @@ describe("npm registry spec validation", () => {
     "@openclaw/voice-call@1.2.3-beta.4",
     "@openclaw/voice-call@latest",
     "@openclaw/voice-call@beta",
+    "@openclaw/voice-call@2026q2",
+    "@openclaw/voice-call@1.x-beta",
+    "@openclaw/voice-call@x-beta",
   ])("accepts %s", (spec) => {
     expect(validateRegistryNpmSpec(spec)).toBeNull();
   });
@@ -38,6 +41,22 @@ describe("npm registry spec validation", () => {
     },
     {
       spec: "@openclaw/voice-call@~1.2.3",
+      expected: "exact version or dist-tag",
+    },
+    {
+      spec: "@openclaw/voice-call@2026.5.x",
+      expected: "exact version or dist-tag",
+    },
+    {
+      spec: "@openclaw/voice-call@1.2.x-beta",
+      expected: "exact version or dist-tag",
+    },
+    {
+      spec: "@openclaw/voice-call@v1.x.x-beta",
+      expected: "exact version or dist-tag",
+    },
+    {
+      spec: "@openclaw/voice-call@1",
       expected: "exact version or dist-tag",
     },
     {

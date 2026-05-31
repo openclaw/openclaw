@@ -52,6 +52,10 @@ import {
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
+import {
+  isExactSemverVersion,
+  isRegistryNpmDistTagSelector,
+} from "../../infra/npm-registry-spec.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
@@ -176,6 +180,8 @@ const JSON_MODE_SERVICE_STDOUT = new Writable({
     callback();
   },
 });
+const PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org/";
+const NPM_REGISTRY_CONFIG_TIMEOUT_MS = 5_000;
 
 async function createUpdateConfigSnapshot(): Promise<void> {
   await createPreUpdateConfigSnapshot({
@@ -998,6 +1004,101 @@ function tryResolveInvocationCwd(): string | undefined {
   }
 }
 
+function normalizeNpmRegistryUrl(value: string | undefined | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    url.search = "";
+    const pathname = url.pathname.replace(/\/+$/u, "");
+    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${pathname}/`;
+  } catch {
+    return `${trimmed.replace(/\/+$/u, "").toLowerCase()}/`;
+  }
+}
+
+function isPublicNpmRegistry(value: string | undefined | null): boolean {
+  return normalizeNpmRegistryUrl(value) === PUBLIC_NPM_REGISTRY;
+}
+
+function readNpmRegistryEnv(env: NodeJS.ProcessEnv): string | null {
+  return normalizeOptionalString(env.npm_config_registry ?? env.NPM_CONFIG_REGISTRY) ?? null;
+}
+
+function resolveNpmConfigPrefixFromPackageRoot(root: string | undefined | null): string | null {
+  const normalized = normalizeOptionalString(root);
+  if (!normalized) {
+    return null;
+  }
+  const packageRoot = path.resolve(normalized);
+  const nodeModulesRoot = path.dirname(packageRoot);
+  if (path.basename(nodeModulesRoot) !== "node_modules") {
+    return null;
+  }
+  const parent = path.dirname(nodeModulesRoot);
+  if (path.basename(parent) === "lib") {
+    return path.dirname(parent);
+  }
+  if (process.platform === "win32" && path.basename(parent).toLowerCase() === "npm") {
+    return parent;
+  }
+  return null;
+}
+
+async function resolveEffectiveNpmRegistry(params: {
+  env: NodeJS.ProcessEnv;
+  root?: string | null;
+  invocationCwd?: string;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  const registryEnv = readNpmRegistryEnv(params.env);
+  if (registryEnv) {
+    return registryEnv;
+  }
+  const prefix = resolveNpmConfigPrefixFromPackageRoot(params.root);
+  const result = await runCommandWithTimeout(
+    [
+      "npm",
+      "config",
+      "get",
+      "registry",
+      "--global",
+      ...(prefix ? ["--prefix", prefix] : []),
+    ],
+    {
+      cwd: params.invocationCwd,
+      env: params.env,
+      timeoutMs: Math.min(
+        params.timeoutMs ?? NPM_REGISTRY_CONFIG_TIMEOUT_MS,
+        NPM_REGISTRY_CONFIG_TIMEOUT_MS,
+      ),
+    },
+  ).catch(() => null);
+  if (!result || result.code !== 0) {
+    return null;
+  }
+  return normalizeOptionalString(result.stdout) ?? null;
+}
+
+async function hasCustomNpmRegistryOverride(params: {
+  env?: NodeJS.ProcessEnv;
+  root?: string | null;
+  invocationCwd?: string;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  const env = params.env ?? process.env;
+  const registry = await resolveEffectiveNpmRegistry({
+    env,
+    root: params.root,
+    invocationCwd: params.invocationCwd,
+    timeoutMs: params.timeoutMs,
+  });
+  return registry ? !isPublicNpmRegistry(registry) : false;
+}
+
 async function resolvePackageRuntimePreflightError(params: {
   tag: string;
   timeoutMs?: number;
@@ -1044,15 +1145,56 @@ function isNpmRegistryMissingTargetError(error: string | undefined): boolean {
   return /^HTTP 404\b/u.test(error?.trim() ?? "");
 }
 
-async function resolvePackageTargetAvailabilityPreflightError(params: {
-  tag: string;
-  timeoutMs?: number;
-}): Promise<string | null> {
-  if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
+function resolveRegistryLookupTarget(target: string): string | null {
+  const trimmed = target.trim();
+  if (!trimmed) {
     return null;
   }
-  const target = params.tag.trim();
+  if (isExactSemverVersion(trimmed)) {
+    return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
+  }
+  return isRegistryNpmDistTagSelector(trimmed) ? trimmed : null;
+}
+
+function resolvePackageRegistryTargetFromInstallSpec(installSpec: string | null): string | null {
+  const trimmed = installSpec?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const packagePrefix = `${DEFAULT_PACKAGE_NAME}@`;
+  if (!trimmed.toLowerCase().startsWith(packagePrefix)) {
+    return null;
+  }
+  const target = trimmed.slice(packagePrefix.length).trim();
+  if (!target || !canResolveRegistryVersionForPackageTarget(target)) {
+    return null;
+  }
+  return resolveRegistryLookupTarget(target);
+}
+
+function hasPackageInstallSpecOverride(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim());
+}
+
+async function resolvePackageTargetAvailabilityPreflightError(params: {
+  installSpec: string | null;
+  timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+  root?: string | null;
+  invocationCwd?: string;
+}): Promise<string | null> {
+  const target = resolvePackageRegistryTargetFromInstallSpec(params.installSpec);
   if (!target) {
+    return null;
+  }
+  if (
+    await hasCustomNpmRegistryOverride({
+      env: params.env,
+      root: params.root,
+      invocationCwd: params.invocationCwd,
+      timeoutMs: params.timeoutMs,
+    })
+  ) {
     return null;
   }
   const status = await fetchNpmPackageTargetStatus({
@@ -3259,8 +3401,11 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       env: process.env,
     });
     const targetAvailabilityError = await resolvePackageTargetAvailabilityPreflightError({
-      tag,
+      installSpec: hasPackageInstallSpecOverride(process.env) ? null : packageInstallSpec,
       timeoutMs,
+      env: process.env,
+      root,
+      invocationCwd,
     });
     if (targetAvailabilityError) {
       defaultRuntime.error(targetAvailabilityError);

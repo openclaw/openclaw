@@ -2028,6 +2028,253 @@ describe("update-cli", () => {
     );
   });
 
+  it("normalizes v-prefixed exact npm targets before checking registry availability", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
+      target,
+      version: target === "2026.5.26" ? "2026.5.26" : null,
+      nodeEngine: ">=22.19.0",
+    }));
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ dryRun: true, tag: "v2026.5.26", json: true });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
+    expect(jsonOutput?.tag).toBe("openclaw@v2026.5.26");
+    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+  });
+
+  it("checks digit-starting npm dist-tags before reporting dry-run success", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValueOnce({
+      target: "2026q2",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ dryRun: true, tag: "2026q2", json: true });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026q2",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(
+      "openclaw@2026q2 is not available on the npm registry yet.",
+    );
+  });
+
+  it("skips only the npm availability preflight when npm registry env points at a custom registry", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await withEnvAsync({ NPM_CONFIG_REGISTRY: "https://npm.internal.example/" }, async () => {
+      await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+    });
+
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
+    expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
+    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+  });
+
+  it("uses lowercase npm registry env precedence when deciding availability preflight", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await withEnvAsync(
+      {
+        NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
+        npm_config_registry: "https://npm.internal.example/",
+      },
+      async () => {
+        await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+      },
+    );
+
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("ignores the default npmrc when npm userconfig is set", async () => {
+    const home = await createTrackedTempDir("openclaw-update-home-npmrc-");
+    const configDir = await createTrackedTempDir("openclaw-update-userconfig-");
+    const userConfig = path.join(configDir, ".npmrc");
+    await fs.writeFile(path.join(home, ".npmrc"), "registry=https://npm.internal.example/\n");
+    await fs.writeFile(userConfig, "registry=https://registry.npmjs.org/\n");
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
+      expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
+      expect(options.env?.NPM_CONFIG_USERCONFIG).toBe(userConfig);
+      return {
+        stdout: "https://registry.npmjs.org/\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await withEnvAsync({ HOME: home, NPM_CONFIG_USERCONFIG: userConfig }, async () => {
+      await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+    });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("skips npm availability preflight when npm resolves a custom global registry", async () => {
+    const prefix = await createTrackedTempDir("openclaw-update-custom-registry-");
+    const root = path.join(prefix, "lib", "node_modules", "openclaw");
+    mockPackageInstallStatus(root);
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv) => {
+      expect(argv).toEqual([
+        "npm",
+        "config",
+        "get",
+        "registry",
+        "--global",
+        "--prefix",
+        prefix,
+      ]);
+      return {
+        stdout: "https://npm.internal.example/\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
+    expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
+    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+  });
+
+  it.each(["^2026.5.0", "2026.5.x"])(
+    "skips npm availability preflight for semver range package specs (%s)",
+    async (tag) => {
+      mockPackageInstallStatus(createCaseDir("openclaw-update"));
+      readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+        target: tag,
+        version: null,
+        nodeEngine: null,
+        error: "HTTP 404",
+      });
+      vi.mocked(fetchNpmPackageTargetStatus).mockClear();
+      vi.mocked(defaultRuntime.writeJson).mockClear();
+
+      await updateCommand({ dryRun: true, tag, json: true });
+
+      expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      const jsonOutput = lastWriteJsonCall() as { tag?: string } | undefined;
+      expect(jsonOutput?.tag).toBe(`openclaw@${tag}`);
+    },
+  );
+
+  it("skips npm availability preflight for explicit package spec overrides", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "latest",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
+      async () => {
+        await updateCommand({ yes: true, tag: "latest", restart: false });
+      },
+    );
+
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expectPackageInstallSpec("http://10.211.55.2:8138/openclaw-next.tgz");
+  });
+
+  it("skips npm availability preflight for registry-style package spec overrides", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
+      target,
+      version: target === "2026.5.26" ? "2026.5.26" : null,
+      nodeEngine: target === "2026.5.26" ? ">=22.19.0" : null,
+      error: target === "next" ? "HTTP 404" : undefined,
+    }));
+
+    await withEnvAsync({ OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@next" }, async () => {
+      await updateCommand({ yes: true, tag: "2026.5.26", restart: false });
+    });
+
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalledWith({
+      target: "next",
+      timeoutMs: undefined,
+    });
+    expectPackageInstallSpec("openclaw@next");
+  });
+
   it.each([
     {
       name: "table output",
@@ -2431,6 +2678,32 @@ describe("update-cli", () => {
     expect(errors.join("\n")).toContain(
       "Bare `npm i -g openclaw` can silently install an older compatible release.",
     );
+  });
+
+  it("keeps the Node runtime preflight when npm registry env points at a custom registry", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: "2026.5.26",
+      nodeEngine: ">=22.19.0",
+    });
+    nodeVersionSatisfiesEngine.mockReturnValue(false);
+
+    await withEnvAsync({ NPM_CONFIG_REGISTRY: "https://npm.internal.example/" }, async () => {
+      await updateCommand({ yes: true, tag: "2026.5.26" });
+    });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledTimes(1);
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain("Node ");
+    expect(errors.join("\n")).toContain("openclaw@2026.5.26");
   });
 
   it.each([

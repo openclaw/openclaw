@@ -11,6 +11,9 @@ const OPENCLAW_ALPHA_VERSION_RE =
 const OPENCLAW_BETA_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SIMPLE_SEMVER_RANGE_SELECTOR_RE = /^v?(?:\d+|x|\*)(?:\.(?:\d+|x|\*)){0,2}$/u;
+const WILDCARD_PRERELEASE_SEMVER_RANGE_SELECTOR_RE =
+  /^v?(?:\d+|x|\*)(?:\.(?:\d+|x|\*)){0,2}-[0-9a-z][0-9a-z.-]*(?:\+[0-9a-z.-]+)?$/u;
 
 /** Parsed date-based OpenClaw release version used for channel-aware ordering. */
 type OpenClawReleaseVersion = {
@@ -33,6 +36,36 @@ export type ParsedRegistryNpmSpec = {
   selectorKind: "none" | "exact-version" | "tag";
   selectorIsPrerelease: boolean;
 };
+
+function isSemverRangeSelector(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || isExactSemverVersion(trimmed)) {
+    return false;
+  }
+  const lowered = trimmed.toLowerCase();
+  const wildcardPrereleaseCore = lowered
+    .slice(0, lowered.indexOf("-"))
+    .replace(/^v/u, "")
+    .split(".");
+  const wildcardPrereleaseRange =
+    WILDCARD_PRERELEASE_SEMVER_RANGE_SELECTOR_RE.test(lowered) &&
+    wildcardPrereleaseCore.length === 3 &&
+    wildcardPrereleaseCore.some((part) => part === "x" || part === "*");
+  return (
+    lowered === "*" ||
+    lowered === "x" ||
+    /^(?:[~^<>]=?|=)/u.test(lowered) ||
+    lowered.includes("||") ||
+    /\s+-\s+/u.test(lowered) ||
+    SIMPLE_SEMVER_RANGE_SELECTOR_RE.test(lowered) ||
+    wildcardPrereleaseRange
+  );
+}
+
+export function isRegistryNpmDistTagSelector(value: string): boolean {
+  const trimmed = value.trim();
+  return DIST_TAG_RE.test(trimmed) && !isSemverRangeSelector(trimmed);
+}
 
 function parseRegistryNpmSpecInternal(
   rawSpec: string,
@@ -103,7 +136,7 @@ function parseRegistryNpmSpecInternal(
       },
     };
   }
-  if (!DIST_TAG_RE.test(selector)) {
+  if (!isRegistryNpmDistTagSelector(selector)) {
     return {
       ok: false,
       error: "unsupported npm spec: use an exact version or dist-tag (ranges are not allowed)",
