@@ -350,10 +350,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else {
-      if (streamingWatchdogRunId === params.runId) {
-        clearStreamingWatchdog();
-      }
+    } else if (streamingWatchdogRunId === params.runId) {
+      clearStreamingWatchdog();
     }
     void refreshSessionInfo?.();
   };

@@ -549,16 +549,15 @@ function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelO
 function createModelScopedAgentRegistry(params: {
   agentRegistry: AcpAgentRegistry;
   scope: AsyncLocalStorage<CodexAcpModelOverride | undefined>;
-  leaseCommand: (command: string | undefined) => string | undefined;
+  leaseCommand: (command: string) => string;
 }): AcpAgentRegistry {
   return {
-    resolve(agentName: string): string | undefined {
+    resolve(agentName: string): string {
       const command = params.agentRegistry.resolve(agentName);
       const override = params.scope.getStore();
       if (
         !override ||
         normalizeAgentName(agentName) !== CODEX_ACP_AGENT_ID ||
-        typeof command !== "string" ||
         !isCodexAcpCommand(command)
       ) {
         return params.leaseCommand(command);
@@ -700,9 +699,9 @@ export class AcpxRuntime implements AcpRuntime {
     });
   }
 
-  private commandWithLaunchLease(command: string | undefined): string | undefined {
+  private commandWithLaunchLease(command: string): string {
     const launch = this.launchLeaseScope.getStore();
-    if (!command || !launch) {
+    if (!launch) {
       return command;
     }
     launch.stableCommand = command;

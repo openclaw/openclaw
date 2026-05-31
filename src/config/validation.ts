@@ -309,7 +309,7 @@ function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesC
     return { values: [], incomplete: false, hasValues: false };
   }
 
-  if (Object.prototype.hasOwnProperty.call(node, "const")) {
+  if (Object.hasOwn(node, "const")) {
     return { values: [node.const], incomplete: false, hasValues: true };
   }
 
@@ -372,7 +372,7 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
   }
   const issues: ConfigValidationIssue[] = [];
   for (const [channelId, schema] of bundledChannelSchemaById) {
-    if (!Object.prototype.hasOwnProperty.call(config.channels, channelId)) {
+    if (!Object.hasOwn(config.channels, channelId)) {
       continue;
     }
     const result = validateJsonSchemaValue({
@@ -1117,8 +1117,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
-  const hasExplicitPluginsConfig =
-    isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+  const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
@@ -1873,8 +1872,7 @@ function validateConfigObjectWithPluginsBase(
 
   // The default memory slot is inferred; only a user-configured slot should block startup.
   const pluginSlots = pluginsConfig?.slots;
-  const hasExplicitMemorySlot =
-    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
+  const hasExplicitMemorySlot = pluginSlots !== undefined && Object.hasOwn(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
   if (
     hasExplicitMemorySlot &&

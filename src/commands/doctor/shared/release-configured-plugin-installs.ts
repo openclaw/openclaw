@@ -104,7 +104,9 @@ function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
   const slots = asObjectRecord(cfg.plugins?.slots);
   return ["memory", "contextEngine"]
     .map((key) => normalizeId(slots?.[key]))
-    .filter((pluginId): pluginId is string => !!pluginId && pluginId.toLowerCase() !== "none");
+    .filter(
+      (pluginId): pluginId is string => pluginId !== null && pluginId.toLowerCase() !== "none",
+    );
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {

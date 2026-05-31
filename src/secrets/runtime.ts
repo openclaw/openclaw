@@ -77,7 +77,7 @@ async function resolveLoadablePluginOrigins(params: {
 function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
   const entries = config.plugins?.entries;
   return (
-    !!entries &&
+    Boolean(entries) &&
     typeof entries === "object" &&
     !Array.isArray(entries) &&
     Object.keys(entries).length > 0
@@ -87,7 +87,7 @@ function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
 function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
   const channels = config.channels;
   return (
-    !!channels &&
+    Boolean(channels) &&
     typeof channels === "object" &&
     !Array.isArray(channels) &&
     Object.keys(channels).some((channelId) => channelId !== "defaults")

@@ -11,7 +11,7 @@ function normalizeConfiguredRuntimeId(value: unknown): string | undefined {
 
 function isSelectablePluginRuntime(runtime: string | undefined): runtime is string {
   return (
-    !!runtime &&
+    Boolean(runtime) &&
     !isDefaultAgentRuntimeId(runtime) &&
     normalizeOptionalAgentRuntimeId(runtime) !== OPENCLAW_AGENT_RUNTIME_ID
   );

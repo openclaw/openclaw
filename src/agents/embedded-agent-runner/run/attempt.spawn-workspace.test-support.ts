@@ -909,6 +909,10 @@ async function loadRunEmbeddedAttempt() {
   return await runEmbeddedAttemptPromise;
 }
 
+export async function preloadRunEmbeddedAttemptForTests(): Promise<void> {
+  await loadRunEmbeddedAttempt();
+}
+
 export function resetEmbeddedAttemptHarness(
   params: {
     includeSpawnSubagent?: boolean;

@@ -50,7 +50,7 @@ export function mockOpenAICodexTemplateModel(discoverModelsMock: DiscoverModelsM
 }
 
 export function buildOpenAICodexForwardCompatExpectation(
-  id: string = "gpt-5.3-codex",
+  id = "gpt-5.3-codex",
 ): Partial<ModelDefinitionConfig> & {
   provider: string;
   id: string;

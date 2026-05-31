@@ -1245,8 +1245,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
       },
     });
-
-    return;
   };
   const onSlackDeliveryError = (err: unknown, info: { kind: string }) => {
     runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));

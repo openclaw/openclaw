@@ -255,19 +255,14 @@ async function handleMissingSandboxImage(
     : "Build or pull it first.";
   note(`Sandbox ${params.kind} image missing: ${params.image}. ${buildHint}`, "Sandbox");
 
-  let built = false;
   if (params.buildScript) {
     const build = await prompter.confirmRuntimeRepair({
       message: `Build ${params.kind} sandbox image now?`,
       initialValue: true,
     });
     if (build) {
-      built = await runSandboxScript(params.buildScript, runtime);
+      await runSandboxScript(params.buildScript, runtime);
     }
-  }
-
-  if (built) {
-    return;
   }
 }
 

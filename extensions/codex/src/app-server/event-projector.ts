@@ -23,6 +23,7 @@ import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runti
 import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -1200,8 +1201,7 @@ export class CodexAppServerEventProjector {
     this.afterToolCallObservedItemIds.add(item.id);
     const result = itemToolResult(item).result;
     const error = itemToolError(item, status, this.toolResultOutputTextByItem);
-    const startedAt =
-      typeof item.durationMs === "number" ? Date.now() - Math.max(0, item.durationMs) : undefined;
+    const startedAt = resolveStartedAtFromDurationMs(item.durationMs);
     const hookParams = {
       toolName: name,
       toolCallId: item.id,
@@ -1729,6 +1729,13 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 function readNumber(record: JsonObject, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function resolveStartedAtFromDurationMs(durationMs: unknown): number | undefined {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs)) {
+    return undefined;
+  }
+  return asDateTimestampMs(Date.now() - Math.max(0, durationMs));
 }
 
 function readNonNegativeInteger(record: JsonObject, key: string): number | undefined {

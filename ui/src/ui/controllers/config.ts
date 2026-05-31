@@ -113,7 +113,8 @@ export function applyConfigSnapshot(
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   state.configSnapshot = snapshot;
   const editableConfig = resolveEditableSnapshotConfig(snapshot);
-  const rawAvailable = typeof snapshot.raw === "string" || !!editableConfig || !!state.configForm;
+  const rawAvailable =
+    typeof snapshot.raw === "string" || Boolean(editableConfig) || Boolean(state.configForm);
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
   }

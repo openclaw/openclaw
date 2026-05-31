@@ -451,6 +451,17 @@ type SingleRowChildSessionCandidateCacheEntry = {
   childSessionCandidatesByParentKey: Map<string, string[]>;
 };
 
+export type GatewaySessionStoreTarget = {
+  agentId: string;
+  storePath: string;
+  canonicalKey: string;
+  storeKeys: string[];
+};
+
+export type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
+  store: Record<string, SessionEntry>;
+};
+
 const singleRowChildSessionCandidateCache = new Map<
   string,
   SingleRowChildSessionCandidateCacheEntry
@@ -893,14 +904,14 @@ export function resolveDeletedAgentIdFromSessionKey(
 export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
-  const target = resolveGatewaySessionStoreTarget({
+  const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
     key,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   const storePath = target.storePath;
-  const store = loadSessionStore(storePath, opts?.clone === false ? { clone: false } : undefined);
+  const store = target.store;
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
   return {
@@ -1331,12 +1342,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   key: string;
   clone?: boolean;
   scanLegacyKeys?: boolean;
-}): {
-  agentId: string;
-  storePath: string;
-  canonicalKey: string;
-  storeKeys: string[];
-} | null {
+}): GatewaySessionStoreTargetWithStore | null {
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
   if (
@@ -1402,22 +1408,18 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     storePath: best.storePath,
     canonicalKey,
     storeKeys: Array.from(storeKeys),
+    store: best.store,
   };
 }
 
-export function resolveGatewaySessionStoreTarget(params: {
+export function resolveGatewaySessionStoreTargetWithStore(params: {
   cfg: OpenClawConfig;
   key: string;
   agentId?: string;
   clone?: boolean;
   scanLegacyKeys?: boolean;
   store?: Record<string, SessionEntry>;
-}): {
-  agentId: string;
-  storePath: string;
-  canonicalKey: string;
-  storeKeys: string[];
-} {
+}): GatewaySessionStoreTargetWithStore {
   const key = normalizeOptionalString(params.key) ?? "";
   const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainStoreTarget({
     cfg: params.cfg,
@@ -1449,7 +1451,7 @@ export function resolveGatewaySessionStoreTarget(params: {
 
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
-    return { agentId, storePath, canonicalKey, storeKeys };
+    return { agentId, storePath, canonicalKey, storeKeys, store };
   }
 
   const storeKeys = new Set<string>();
@@ -1477,7 +1479,20 @@ export function resolveGatewaySessionStoreTarget(params: {
     storePath,
     canonicalKey,
     storeKeys: Array.from(storeKeys),
+    store,
   };
+}
+
+export function resolveGatewaySessionStoreTarget(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  agentId?: string;
+  clone?: boolean;
+  scanLegacyKeys?: boolean;
+  store?: Record<string, SessionEntry>;
+}): GatewaySessionStoreTarget {
+  const { store: _store, ...target } = resolveGatewaySessionStoreTargetWithStore(params);
+  return target;
 }
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";

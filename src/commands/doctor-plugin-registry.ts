@@ -80,7 +80,7 @@ function listManagedPluginNpmRoots(params: PluginRegistryDoctorRepairParams): st
 }
 
 function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {
-  if (!Object.prototype.hasOwnProperty.call(record, key)) {
+  if (!Object.hasOwn(record, key)) {
     return false;
   }
   delete record[key];

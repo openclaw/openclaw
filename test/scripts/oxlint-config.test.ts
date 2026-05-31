@@ -22,11 +22,16 @@ const ZERO_BASELINE_RULES = [
   "eslint/no-sequences",
   "eslint/no-self-compare",
   "eslint/no-var",
+  "eslint/no-implicit-coercion",
+  "eslint/no-useless-rename",
+  "eslint/no-useless-return",
   "eslint/no-new-wrappers",
   "eslint/no-else-return",
+  "eslint/no-lonely-if",
   "eslint/no-case-declarations",
   "eslint/prefer-exponentiation-operator",
   "eslint/prefer-numeric-literals",
+  "eslint/prefer-object-has-own",
   "eslint/radix",
   "eslint/unicode-bom",
   "eslint/yoda",
@@ -37,9 +42,12 @@ const ZERO_BASELINE_RULES = [
   "promise/no-new-statics",
   "typescript/adjacent-overload-signatures",
   "typescript/ban-tslint-comment",
+  "typescript/no-import-type-side-effects",
+  "typescript/no-inferrable-types",
   "typescript/no-non-null-asserted-nullish-coalescing",
   "typescript/no-unnecessary-qualifier",
   "typescript/prefer-find",
+  "typescript/prefer-for-of",
   "typescript/prefer-function-type",
   "typescript/prefer-includes",
   "typescript/prefer-reduce-type-parameter",
@@ -52,7 +60,10 @@ const ZERO_BASELINE_RULES = [
   "unicorn/no-negation-in-equality-check",
   "unicorn/no-new-buffer",
   "unicorn/no-typeof-undefined",
+  "unicorn/no-unreadable-array-destructuring",
   "unicorn/no-useless-error-capture-stack-trace",
+  "unicorn/no-zero-fractions",
+  "unicorn/prefer-array-flat",
   "unicorn/prefer-array-some",
   "unicorn/prefer-dom-node-text-content",
   "unicorn/prefer-keyboard-event-key",
@@ -124,6 +135,7 @@ describe("oxlint config", () => {
     expect(ignorePatterns).toContain("**/.openclaw-runtime-deps-copy-*/**");
     expect(ignorePatterns).toContain("extensions/diffs/assets/viewer-runtime.js");
     expect(ignorePatterns).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
+    expect(ignorePatterns).toContain("extensions/canvas/src/host/a2ui/a2ui.bundle.js");
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

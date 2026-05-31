@@ -19,7 +19,7 @@ import type {
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
-import { type AnyAgentTool } from "./common.js";
+import type { AnyAgentTool } from "./common.js";
 
 type TranscriptsLogger = {
   warn: (message: string) => void;

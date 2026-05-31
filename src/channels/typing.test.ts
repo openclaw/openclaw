@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTypingCallbacks } from "./typing.js";
 
 type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
@@ -15,6 +16,7 @@ async function withFakeTimers(run: () => Promise<void>) {
   try {
     await run();
   } finally {
+    vi.clearAllTimers();
     vi.useRealTimers();
   }
 }
@@ -55,13 +57,26 @@ function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
 }
 
 describe("createTypingCallbacks", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
   it("invokes start on reply start", async () => {
     const { start, onStartError, callbacks } = createTypingHarness();
 
-    await callbacks.onReplyStart();
+    try {
+      await callbacks.onReplyStart();
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(onStartError).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(onStartError).not.toHaveBeenCalled();
+    } finally {
+      callbacks.onCleanup?.();
+    }
   });
 
   it("reports start errors", async () => {
@@ -69,10 +84,14 @@ describe("createTypingCallbacks", () => {
       start: vi.fn().mockRejectedValue(new Error("fail")),
     });
 
-    await callbacks.onReplyStart();
-    await flushMicrotasks();
+    try {
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
 
-    expect(onStartError).toHaveBeenCalledTimes(1);
+      expect(onStartError).toHaveBeenCalledTimes(1);
+    } finally {
+      callbacks.onCleanup?.();
+    }
   });
 
   it("does not block reply start on a pending typing request", async () => {
@@ -86,13 +105,17 @@ describe("createTypingCallbacks", () => {
       ),
     });
 
-    await callbacks.onReplyStart();
+    try {
+      await callbacks.onReplyStart();
 
-    expect(start).toHaveBeenCalledTimes(1);
-    if (!resolveStart) {
-      throw new Error("Expected typing start resolver to be initialized");
+      expect(start).toHaveBeenCalledTimes(1);
+      if (!resolveStart) {
+        throw new Error("Expected typing start resolver to be initialized");
+      }
+      resolveStart();
+    } finally {
+      callbacks.onCleanup?.();
     }
-    resolveStart();
   });
 
   it("invokes stop on idle and reports stop errors", async () => {
@@ -183,6 +206,21 @@ describe("createTypingCallbacks", () => {
 
       await vi.advanceTimersByTimeAsync(9_000);
       expect(start).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("clamps oversized keepalive intervals before arming timers", async () => {
+    await withFakeTimers(async () => {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const { callbacks } = createTypingHarness({
+        keepaliveIntervalMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      callbacks.onCleanup?.();
     });
   });
 
@@ -344,6 +382,21 @@ describe("createTypingCallbacks", () => {
         // Should not auto-stop even after long time
         await vi.advanceTimersByTimeAsync(300_000);
         expect(stop).not.toHaveBeenCalled();
+      });
+    });
+
+    it("clamps oversized TTLs before arming timers", async () => {
+      await withFakeTimers(async () => {
+        const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+        const { callbacks } = createTypingHarness({
+          maxDurationMs: Number.MAX_SAFE_INTEGER,
+        });
+
+        await callbacks.onReplyStart();
+        await flushMicrotasks();
+
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+        callbacks.onCleanup?.();
       });
     });
 

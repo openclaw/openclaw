@@ -46,7 +46,7 @@ import {
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
-import { type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export {

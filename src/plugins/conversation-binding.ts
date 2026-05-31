@@ -15,7 +15,7 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJson } from "../infra/json-files.js";
-import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
+import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {

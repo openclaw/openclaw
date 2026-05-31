@@ -465,10 +465,7 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-    const hasImmediateDecision = Object.prototype.hasOwnProperty.call(
-      requestResult ?? {},
-      "decision",
-    );
+    const hasImmediateDecision = Object.hasOwn(requestResult ?? {}, "decision");
     let decision: string | null | undefined;
     if (hasImmediateDecision) {
       decision = requestResult?.decision;

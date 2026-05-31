@@ -199,7 +199,7 @@ function formatConfigOpenError(error: unknown): string {
 }
 
 function hasOwnRecordValue(value: unknown, key: string): boolean {
-  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, key);
+  return isRecord(value) && Object.hasOwn(value, key);
 }
 
 function stripBundledProviderRuntimeDefaults(params: {

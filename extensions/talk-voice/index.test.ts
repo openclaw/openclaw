@@ -48,11 +48,7 @@ function createHarness(config: Record<string, unknown>) {
   return { command, runtime };
 }
 
-function createCommandContext(
-  args: string,
-  channel: string = "discord",
-  gatewayClientScopes?: string[],
-) {
+function createCommandContext(args: string, channel = "discord", gatewayClientScopes?: string[]) {
   return {
     args,
     channel,

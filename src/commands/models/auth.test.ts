@@ -274,7 +274,7 @@ function createRuntime(): RuntimeEnv {
 
 function withInteractiveStdin() {
   const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
-  const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+  const hadOwnIsTTY = Object.hasOwn(stdin, "isTTY");
   const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
   Object.defineProperty(stdin, "isTTY", {
     configurable: true,

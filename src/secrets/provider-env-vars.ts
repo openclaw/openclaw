@@ -438,13 +438,13 @@ export function getProviderEnvVars(
 // remain available to child bridge/runtime processes.
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
   return uniqueStrings([
-    ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
-    ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
+    ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flat(),
+    ...Object.values(resolveProviderEnvVars(params)).flat(),
   ]);
 }
 
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys));
+  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flat());
 }
 
 export function omitEnvKeysCaseInsensitive(

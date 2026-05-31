@@ -80,7 +80,7 @@ export function resolveSubagentTargetFromRuns(params: {
   const numericOrder = [
     ...deduped.filter((entry) => isActive(entry)),
     ...deduped.filter(
-      (entry) => !isActive(entry) && !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+      (entry) => !isActive(entry) && Boolean(entry.endedAt) && (entry.endedAt ?? 0) >= recentCutoff,
     ),
   ];
   if (/^\d+$/.test(trimmed)) {

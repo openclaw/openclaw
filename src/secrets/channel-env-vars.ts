@@ -59,5 +59,5 @@ export function getChannelEnvVars(channelId: string, params?: ChannelEnvVarLooku
 }
 
 export function listKnownChannelEnvVarNames(params?: ChannelEnvVarLookupParams): string[] {
-  return uniqueStrings(Object.values(resolveChannelEnvVars(params)).flatMap((keys) => keys));
+  return uniqueStrings(Object.values(resolveChannelEnvVars(params)).flat());
 }

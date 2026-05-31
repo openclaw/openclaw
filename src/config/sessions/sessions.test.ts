@@ -301,6 +301,42 @@ describe("session lifecycle timestamps", () => {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("ignores out-of-range lifecycle timestamps before header fallback", async () => {
+    const dir = await fsPromises.mkdtemp("/tmp/openclaw-lifecycle-test-");
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = path.join(dir, "legacy-session.jsonl");
+      const headerTimestamp = "2026-04-20T04:30:00.000Z";
+      await fsPromises.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "legacy-session",
+          timestamp: headerTimestamp,
+          cwd: dir,
+        })}\n`,
+        "utf8",
+      );
+
+      const timestamps = resolveSessionLifecycleTimestamps({
+        storePath,
+        entry: {
+          sessionId: "legacy-session",
+          sessionFile,
+          sessionStartedAt: Number.MAX_SAFE_INTEGER,
+          lastInteractionAt: Number.MAX_SAFE_INTEGER,
+          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+        },
+      });
+
+      expect(timestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+      expect(timestamps.lastInteractionAt).toBeUndefined();
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("session store writer queue", () => {

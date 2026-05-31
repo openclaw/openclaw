@@ -156,7 +156,7 @@ function shouldSkipScriptPreflightPathError(
     return true;
   }
   const errorCode = getNodeErrorCode(error);
-  return !!(errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode));
+  return Boolean(errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode));
 }
 
 function resolvePreflightRelativePath(params: { rootDir: string; absPath: string }): string | null {
@@ -422,8 +422,7 @@ function extractScriptTargetFromCommand(
       }
     };
 
-    for (let i = 0; i < value.length; i += 1) {
-      const ch = value[i];
+    for (const ch of value) {
       if (inSingle) {
         if (ch === "'") {
           inSingle = false;
@@ -669,8 +668,7 @@ function hasUnquotedScriptHint(raw: string): boolean {
     return false;
   };
 
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
+  for (const ch of raw) {
     if (escaped) {
       if (!inSingle && !inDouble) {
         token += ch;

@@ -1996,7 +1996,7 @@ export async function runEmbeddedAttempt(
 
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
-        sandboxEnabled: !!sandbox?.enabled,
+        sandboxEnabled: Boolean(sandbox?.enabled),
         toolHookContext: catalogToolHookContext,
       });
 

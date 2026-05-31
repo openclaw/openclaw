@@ -123,7 +123,7 @@ function saveChatQueueForSession(state: AppViewState, sessionKey: string) {
     state.chatQueueBySession = { ...queueBySession };
     return;
   }
-  if (Object.prototype.hasOwnProperty.call(queueBySession, sessionKey)) {
+  if (Object.hasOwn(queueBySession, sessionKey)) {
     delete queueBySession[sessionKey];
     state.chatQueueBySession = { ...queueBySession };
   }

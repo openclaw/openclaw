@@ -1338,8 +1338,7 @@ function resolveAffectedTestsFromTargetedImportScan(changedPath, cwd) {
   const seen = new Set(queue);
   const targets = [];
 
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index];
+  for (const current of queue) {
     const importers = findDirectImportersWithGitGrep(cwd, current, fileSet);
     if (importers === null) {
       return null;
@@ -1409,8 +1408,7 @@ function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
   const seen = new Set(queue);
   const targets = [];
 
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index];
+  for (const current of queue) {
     for (const importer of reverseImports.get(current) ?? []) {
       if (seen.has(importer)) {
         continue;

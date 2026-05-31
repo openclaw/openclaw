@@ -362,7 +362,7 @@ function asProviderConfigMap(value: unknown): Record<string, unknown> {
 }
 
 function hasOwnProperty(value: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
+  return Object.hasOwn(value, key);
 }
 
 function normalizeProviderConfigMap(

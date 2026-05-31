@@ -1029,7 +1029,7 @@ describe("describeImageWithModel", () => {
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     const firstCall = requireFirstMockCall(completeMock, "timed image completion");
-    const [, , options] = firstCall;
+    const options = firstCall[2];
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");
     }
@@ -1322,7 +1322,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(4096);
   });
 
@@ -1359,7 +1359,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(1024);
   });
 });

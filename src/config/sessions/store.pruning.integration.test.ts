@@ -678,7 +678,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     const freshReset = path.join(
       testDir,
-      `fresh-reset.jsonl.reset.${archiveTimestamp(now - 1 * DAY_MS)}`,
+      `fresh-reset.jsonl.reset.${archiveTimestamp(now - DAY_MS)}`,
     );
     await fs.writeFile(oldReset, "old", "utf-8");
     await fs.writeFile(freshReset, "fresh", "utf-8");

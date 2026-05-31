@@ -183,7 +183,7 @@ export function protectActiveAuthProfileConfig(params: {
       normalizeProviderId(afterProfileRecord?.provider) ||
       normalizeProviderId(beforeProfileRecord?.provider) ||
       extractProviderFromProfileId(profileId);
-    const protectsActiveProvider = !!provider && activeProviders.has(provider);
+    const protectsActiveProvider = provider !== null && activeProviders.has(provider);
     const protectsExplicitProfile = explicitProfileIds.has(profileId);
     if (!protectsActiveProvider && !protectsExplicitProfile) {
       continue;

@@ -1389,7 +1389,7 @@ export class GatewayClient {
       typeof rawMinInterval === "number" && Number.isFinite(rawMinInterval)
         ? Math.max(1, Math.min(30_000, rawMinInterval))
         : 1000;
-    const interval = Math.max(this.tickIntervalMs, minInterval);
+    const interval = resolveSafeTimeoutDelayMs(Math.max(this.tickIntervalMs, minInterval));
     this.tickTimer = setInterval(() => {
       if (this.closed) {
         return;

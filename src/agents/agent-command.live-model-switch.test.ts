@@ -397,7 +397,7 @@ vi.mock("./model-selection.js", () => {
               ? entry.models
                   .filter(
                     (model): model is Record<string, unknown> =>
-                      !!model && typeof model === "object",
+                      Boolean(model) && typeof model === "object",
                   )
                   .map((model) => {
                     const id = typeof model.id === "string" ? model.id : "";
@@ -487,7 +487,8 @@ vi.mock("./model-selection.js", () => {
         Array.isArray(entry?.models)
           ? entry.models
               .filter(
-                (model): model is Record<string, unknown> => !!model && typeof model === "object",
+                (model): model is Record<string, unknown> =>
+                  Boolean(model) && typeof model === "object",
               )
               .map((model) => {
                 const id = typeof model.id === "string" ? model.id : "";
