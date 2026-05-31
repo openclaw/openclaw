@@ -267,8 +267,9 @@ export async function waitForAgentRunsToDrain(params: {
 }
 
 /**
- * Default reply history limit used for post-timeout compensation reads.
- * Must match SESSIONS_SEND_REPLY_HISTORY_LIMIT in sessions-send-tool.ts.
+ * Fallback reply history limit for post-timeout compensation reads when
+ * the caller does not pass an explicit limit. The primary sessions_send
+ * call site passes SESSIONS_SEND_REPLY_HISTORY_LIMIT directly.
  */
 const COMPENSATE_REPLY_HISTORY_LIMIT = 50;
 

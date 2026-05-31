@@ -546,7 +546,10 @@ export function createSessionsSendTool(opts?: {
             status: "ok",
             reply: compensation.newReply,
             sessionKey: displayKey,
-            delivery: compensation.delivery,
+            delivery: {
+              ...delivery,
+              note: compensation.delivery.note,
+            },
           });
         }
         if (!isTerminalAgentWaitTimeout(result)) {
@@ -555,13 +558,20 @@ export function createSessionsSendTool(opts?: {
             runId,
             status: "accepted",
             sessionKey: displayKey,
-            delivery: compensation.delivery,
+            delivery: {
+              ...delivery,
+              note: compensation.delivery.note,
+            },
           });
         }
+        const timeoutError =
+          !compensation.accepted && compensation.error
+            ? `${result.error ?? "agent run timed out"}; post-timeout compensation failed: ${compensation.error}`
+            : result.error;
         return jsonResult({
           runId,
           status: "timeout",
-          error: result.error,
+          error: timeoutError,
           sessionKey: displayKey,
         });
       }

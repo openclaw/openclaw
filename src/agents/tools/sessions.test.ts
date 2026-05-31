@@ -864,4 +864,97 @@ describe("sessions_send gating", () => {
     expect(details.reply).toBeUndefined();
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
   });
+
+  it("preserves announce delivery metadata on accepted timeout compensation", async () => {
+    const tool = createMainSessionsSendTool();
+    let historyCalls = 0;
+    const staleAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "older reply" }],
+      timestamp: 20,
+    };
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-compensated", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-compensated", status: "timeout", error: "soft wait timed out" };
+      }
+      if (request.method === "chat.history") {
+        historyCalls += 1;
+        return { messages: [staleAssistantMessage] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-compensated-timeout", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(historyCalls).toBe(2);
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    expect(details.delivery).toMatchObject({
+      status: "pending",
+      mode: "announce",
+      note: "run accepted, no reply within timeout",
+    });
+  });
+
+  it("reports compensation read failures on terminal timeouts", async () => {
+    const tool = createMainSessionsSendTool();
+    let historyCalls = 0;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-terminal-timeout", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-terminal-timeout",
+          status: "timeout",
+          error: "agent wait timed out",
+          endedAt: 1_780_000_000_000,
+        };
+      }
+      if (request.method === "chat.history") {
+        historyCalls += 1;
+        if (historyCalls === 1) {
+          return { messages: [] };
+        }
+        throw new Error("history unavailable");
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-terminal-timeout", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(historyCalls).toBe(2);
+    const details = requireDetails(result);
+    expect(details.status).toBe("timeout");
+    expect(details.error).toBe(
+      "agent wait timed out; post-timeout compensation failed: history unavailable",
+    );
+  });
 });
