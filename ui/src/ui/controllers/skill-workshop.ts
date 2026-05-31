@@ -397,14 +397,14 @@ export async function requestSkillWorkshopRevision(
   state: SkillWorkshopState,
   proposalId: string,
   sendRevisionRequest: (message: string, proposal: SkillWorkshopProposal) => Promise<void>,
-): Promise<void> {
+): Promise<boolean> {
   if (state.skillWorkshopActionBusy) {
-    return;
+    return false;
   }
   const proposal = state.skillWorkshopProposals.find((item) => item.key === proposalId);
   const instructions = state.skillWorkshopRevisionDraft.trim();
   if (!proposal || !instructions) {
-    return;
+    return false;
   }
   state.skillWorkshopActionBusy = { key: proposalId, action: "revise" };
   state.skillWorkshopActionNotice = null;
@@ -417,8 +417,10 @@ export async function requestSkillWorkshopRevision(
     state.skillWorkshopRevisionKey = null;
     state.skillWorkshopRevisionDraft = "";
     showActionNotice(state, proposal, "Revision requested");
+    return true;
   } catch (err) {
     state.skillWorkshopError = getErrorMessage(err);
+    return false;
   } finally {
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&

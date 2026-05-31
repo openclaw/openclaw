@@ -448,6 +448,12 @@ export type AppViewState = {
     skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
     skillWorkshopChatHandoffActive?: boolean;
     skillWorkshopChatHandoffTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+    skillWorkshopHandoff: {
+      key: string;
+      slug: string;
+      phase: "prepare" | "landing" | "error";
+    } | null;
+    skillWorkshopHandoffDismissTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

@@ -659,6 +659,12 @@ export class OpenClawApp extends LitElement {
   skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
   @state() skillWorkshopChatHandoffActive = false;
   skillWorkshopChatHandoffTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  @state() skillWorkshopHandoff: {
+    key: string;
+    slug: string;
+    phase: "prepare" | "landing" | "error";
+  } | null = null;
+  skillWorkshopHandoffDismissTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -821,6 +827,18 @@ export class OpenClawApp extends LitElement {
     if (this.sessionSwitchFlashTimer !== null) {
       window.clearTimeout(this.sessionSwitchFlashTimer);
       this.sessionSwitchFlashTimer = null;
+    }
+    if (this.skillWorkshopActionNoticeTimer !== null) {
+      window.clearTimeout(this.skillWorkshopActionNoticeTimer);
+      this.skillWorkshopActionNoticeTimer = null;
+    }
+    if (this.skillWorkshopChatHandoffTimer !== null) {
+      window.clearTimeout(this.skillWorkshopChatHandoffTimer);
+      this.skillWorkshopChatHandoffTimer = null;
+    }
+    if (this.skillWorkshopHandoffDismissTimer !== null) {
+      window.clearTimeout(this.skillWorkshopHandoffDismissTimer);
+      this.skillWorkshopHandoffDismissTimer = null;
     }
     this.chatMobileControlsTrigger = null;
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);

@@ -951,6 +951,89 @@ function startSkillWorkshopChatHandoff(state: AppViewState): void {
   }, SKILL_WORKSHOP_CHAT_HANDOFF_MS);
 }
 
+const SKILL_WORKSHOP_HANDOFF_DISMISS_MS = 720;
+const SKILL_WORKSHOP_HANDOFF_ERROR_DISMISS_MS = 620;
+
+function startSkillWorkshopHandoffOverlay(
+  state: AppViewState,
+  proposal: { key: string; slug: string },
+): void {
+  clearSkillWorkshopHandoffOverlay(state, { immediate: true });
+  state.skillWorkshopHandoff = {
+    key: proposal.key,
+    slug: proposal.slug,
+    phase: "prepare",
+  };
+}
+
+function advanceSkillWorkshopHandoffPhase(
+  state: AppViewState,
+  phase: "prepare" | "landing" | "error",
+): void {
+  if (!state.skillWorkshopHandoff) {
+    return;
+  }
+  state.skillWorkshopHandoff = { ...state.skillWorkshopHandoff, phase };
+}
+
+function finishSkillWorkshopHandoffOverlay(state: AppViewState): void {
+  if (!state.skillWorkshopHandoff) {
+    return;
+  }
+  advanceSkillWorkshopHandoffPhase(state, "landing");
+  if (state.skillWorkshopHandoffDismissTimer) {
+    globalThis.clearTimeout(state.skillWorkshopHandoffDismissTimer);
+  }
+  state.skillWorkshopHandoffDismissTimer = globalThis.setTimeout(() => {
+    state.skillWorkshopHandoff = null;
+    state.skillWorkshopHandoffDismissTimer = null;
+  }, SKILL_WORKSHOP_HANDOFF_DISMISS_MS);
+}
+
+function failSkillWorkshopHandoffOverlay(state: AppViewState): void {
+  if (!state.skillWorkshopHandoff) {
+    return;
+  }
+  advanceSkillWorkshopHandoffPhase(state, "error");
+  if (state.skillWorkshopHandoffDismissTimer) {
+    globalThis.clearTimeout(state.skillWorkshopHandoffDismissTimer);
+  }
+  state.skillWorkshopHandoffDismissTimer = globalThis.setTimeout(() => {
+    state.skillWorkshopHandoff = null;
+    state.skillWorkshopHandoffDismissTimer = null;
+  }, SKILL_WORKSHOP_HANDOFF_ERROR_DISMISS_MS);
+}
+
+function clearSkillWorkshopHandoffOverlay(
+  state: AppViewState,
+  options?: { immediate?: boolean },
+): void {
+  if (state.skillWorkshopHandoffDismissTimer) {
+    globalThis.clearTimeout(state.skillWorkshopHandoffDismissTimer);
+    state.skillWorkshopHandoffDismissTimer = null;
+  }
+  if (options?.immediate) {
+    state.skillWorkshopHandoff = null;
+  }
+}
+
+function renderSkillWorkshopHandoffOverlay(state: AppViewState) {
+  const handoff = state.skillWorkshopHandoff;
+  if (!handoff) {
+    return nothing;
+  }
+  return html`
+    <div class="sw-handoff-veil sw-handoff-veil--${handoff.phase}" aria-hidden="true"></div>
+    <div
+      class="sw-handoff sw-handoff--${handoff.phase}"
+      role="status"
+      aria-label="Preparing chat handoff"
+    >
+      <span class="sw-handoff__spinner" aria-hidden="true"></span>
+    </div>
+  `;
+}
+
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
   try {
     const raw = getSafeLocalStorage()?.getItem(UPDATE_BANNER_DISMISS_KEY);
@@ -3369,10 +3452,23 @@ export function renderApp(state: AppViewState) {
                   if (!state.skillWorkshopRevisionDraft.trim()) {
                     return;
                   }
+                  const proposal = state.skillWorkshopProposals.find((p) => p.key === key);
+                  if (proposal) {
+                    startSkillWorkshopHandoffOverlay(state, {
+                      key: proposal.key,
+                      slug: proposal.slug,
+                    });
+                  }
                   void (async () => {
-                    await requestSkillWorkshopRevision(state, key, (message, proposal) =>
-                      sendSkillWorkshopRevisionRequest(state, message, proposal),
+                    const succeeded = await requestSkillWorkshopRevision(state, key, (message, p) =>
+                      sendSkillWorkshopRevisionRequest(state, message, p),
                     );
+                    if (succeeded) {
+                      finishSkillWorkshopHandoffOverlay(state);
+                    } else {
+                      state.skillWorkshopRevisionKey = null;
+                      failSkillWorkshopHandoffOverlay(state);
+                    }
                   })();
                 },
                 onPreviewFile: (_key, path) => {
@@ -3767,6 +3863,7 @@ export function renderApp(state: AppViewState) {
           : nothing}
       </main>
       ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)}
+      ${renderSkillWorkshopHandoffOverlay(state)}
       ${renderDreamingRestartConfirmation({
         open: state.dreamingRestartConfirmOpen,
         loading: state.dreamingRestartConfirmLoading,
