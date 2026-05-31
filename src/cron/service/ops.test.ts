@@ -6,7 +6,7 @@ import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
-import { loadCronStore, loadCronStoreWithConfigJobs } from "../store.js";
+import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { add, run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
@@ -285,7 +285,7 @@ describe("cron service ops seam coverage", () => {
       clearTimeout(state.timer);
     }
 
-    const loaded = await loadCronStoreWithConfigJobs(storePath);
+    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
     const persisted = loaded.store.jobs[0] as CronJob & { notify?: unknown };
     expect(persisted.notify).toBeUndefined();
     expect(persisted.delivery).toEqual({

@@ -4,9 +4,9 @@ import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
-  loadCronStoreWithConfigJobs,
+  loadCronJobsStoreWithConfigJobs,
   saveCronQuarantineFile,
-  saveCronStore,
+  saveCronJobsStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -99,7 +99,7 @@ export async function ensureLoaded(
   for (const job of state.store?.jobs ?? []) {
     previousJobsById.set(job.id, job);
   }
-  const loaded = await loadCronStoreWithConfigJobs(state.deps.storePath);
+  const loaded = await loadCronJobsStoreWithConfigJobs(state.deps.storePath);
   const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
@@ -163,7 +163,7 @@ export async function ensureLoaded(
     const quarantinePath = await flushPendingQuarantine(state, state.storeLoadedAtMs);
     if (quarantinePath) {
       try {
-        await saveCronStore(state.deps.storePath, state.store);
+        await saveCronJobsStore(state.deps.storePath, state.store);
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
@@ -215,7 +215,7 @@ export async function persist(state: CronServiceState, opts?: { stateOnly?: bool
     }
     flushedPendingQuarantine = true;
   }
-  await saveCronStore(
+  await saveCronJobsStore(
     state.deps.storePath,
     state.store,
     flushedPendingQuarantine ? undefined : opts,

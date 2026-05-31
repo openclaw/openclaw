@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -20,10 +19,6 @@ import type { CronJobInsert, CronJobRow } from "./schema.js";
 import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import type { LoadedCronStore } from "./types.js";
-
-export function cronStoreKey(storePath: string): string {
-  return path.resolve(storePath);
-}
 
 function bindScheduleColumns(
   schedule: CronSchedule,
