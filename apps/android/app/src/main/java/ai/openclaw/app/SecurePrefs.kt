@@ -362,6 +362,7 @@ class SecurePrefs(
     _notificationForwardingSessionKey.value = normalized
   }
 
+  /** Loads manual or instance-scoped gateway token material from encrypted preferences. */
   fun loadGatewayToken(): String? {
     val manual =
       _gatewayToken.value.trim().ifEmpty {
@@ -376,11 +377,13 @@ class SecurePrefs(
     return stored?.takeIf { it.isNotEmpty() }
   }
 
+  /** Saves the paired gateway token under the current Android instance id. */
   fun saveGatewayToken(token: String) {
     val key = "gateway.token.${_instanceId.value}"
     securePrefs.edit { putString(key, token.trim()) }
   }
 
+  /** Loads the bootstrap token used during gateway setup and device-token handoff. */
   fun loadGatewayBootstrapToken(): String? {
     val key = "gateway.bootstrapToken.${_instanceId.value}"
     val stored =
@@ -412,6 +415,7 @@ class SecurePrefs(
     securePrefs.edit { putString(key, password.trim()) }
   }
 
+  /** Clears manual/setup credentials without removing persisted role-specific device tokens. */
   fun clearGatewaySetupAuth() {
     val instanceId = _instanceId.value
     securePrefs.edit {
@@ -425,11 +429,13 @@ class SecurePrefs(
     _gatewayBootstrapToken.value = ""
   }
 
+  /** Loads the pinned gateway TLS fingerprint for a discovered/manual stable endpoint id. */
   fun loadGatewayTlsFingerprint(stableId: String): String? {
     val key = "gateway.tls.$stableId"
     return plainPrefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
+  /** Persists the gateway TLS fingerprint captured through TOFU or explicit trust. */
   fun saveGatewayTlsFingerprint(
     stableId: String,
     fingerprint: String,
@@ -484,6 +490,7 @@ class SecurePrefs(
     return resolved
   }
 
+  /** Persists sanitized voice wake triggers and updates the reactive settings flow. */
   fun setWakeWords(words: List<String>) {
     val sanitized = WakeWords.sanitize(words, defaultWakeWords)
     val encoded =
