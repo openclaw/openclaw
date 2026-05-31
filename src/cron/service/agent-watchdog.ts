@@ -25,6 +25,8 @@ type CronAgentWatchdogState =
 
 type CronAgentPhaseWatchdogStage = "pre_execution" | "execution";
 
+// Phase ordering is not strictly monotonic during fallback attempts, so each
+// emitted phase is mapped to the watchdog bucket that should keep timing it.
 const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   runner_entered: "pre_execution",
   workspace: "pre_execution",
@@ -42,6 +44,7 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   model_call_started: "execution",
 } as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
 
+/** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
 export type CronAgentWatchdog = {
   start: () => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
