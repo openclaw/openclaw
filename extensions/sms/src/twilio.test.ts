@@ -82,13 +82,14 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("sends SMS through Twilio's Messages API", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ sid: "SM456" }), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const release = vi.fn();
+    const fetchWithGuard = vi.fn(async () => ({
+      response: new Response(JSON.stringify({ sid: "SM456" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    }));
 
     await expect(
       sendSmsViaTwilio({
@@ -107,17 +108,21 @@ describe("Twilio SMS helpers", () => {
         },
         to: "+15551234567",
         text: "hello",
-        fetchImpl,
+        fetchWithGuard,
       }),
     ).resolves.toEqual({ sid: "SM456", to: "+15551234567" });
 
-    const [url, init] = fetchImpl.mock.calls[0] ?? [];
-    expect(url).toBe("https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json");
-    expect(init?.method).toBe("POST");
-    expect(init?.headers).toMatchObject({
+    const [request] = fetchWithGuard.mock.calls[0] ?? [];
+    expect(request?.url).toBe("https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json");
+    expect(request?.init?.method).toBe("POST");
+    expect(request?.init?.headers).toMatchObject({
       authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
       "content-type": "application/x-www-form-urlencoded",
     });
-    expect(String(init?.body)).toBe("From=%2B15557654321&To=%2B15551234567&Body=hello");
+    expect(String(request?.init?.body)).toBe("From=%2B15557654321&To=%2B15551234567&Body=hello");
+    expect(request?.policy).toEqual({ allowedHostnames: ["api.twilio.com"] });
+    expect(request?.timeoutMs).toBe(30_000);
+    expect(request?.auditContext).toBe("sms.twilio.api");
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,10 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
 
-const TWILIO_MESSAGES_URL = "https://api.twilio.com/2010-04-01/Accounts";
+const TWILIO_API_HOSTNAME = "api.twilio.com";
+const TWILIO_MESSAGES_URL = `https://${TWILIO_API_HOSTNAME}/2010-04-01/Accounts`;
+const TWILIO_API_TIMEOUT_MS = 30_000;
 const WEBHOOK_BODY_LIMIT_BYTES = 32 * 1024;
 const WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
@@ -96,9 +99,8 @@ export async function sendSmsViaTwilio(params: {
   account: ResolvedSmsAccount;
   to: string;
   text: string;
-  fetchImpl?: typeof fetch;
+  fetchWithGuard?: typeof fetchWithSsrFGuard;
 }): Promise<SmsSendResult> {
-  const fetcher = params.fetchImpl ?? fetch;
   const body = new URLSearchParams({
     From: params.account.fromNumber,
     To: params.to,
@@ -107,9 +109,10 @@ export async function sendSmsViaTwilio(params: {
   const auth = Buffer.from(`${params.account.accountSid}:${params.account.authToken}`).toString(
     "base64",
   );
-  const response = await fetcher(
-    `${TWILIO_MESSAGES_URL}/${encodeURIComponent(params.account.accountSid)}/Messages.json`,
-    {
+  const guardedFetch = params.fetchWithGuard ?? fetchWithSsrFGuard;
+  const { response, release } = await guardedFetch({
+    url: `${TWILIO_MESSAGES_URL}/${encodeURIComponent(params.account.accountSid)}/Messages.json`,
+    init: {
       method: "POST",
       headers: {
         authorization: `Basic ${auth}`,
@@ -117,13 +120,22 @@ export async function sendSmsViaTwilio(params: {
       },
       body,
     },
-  );
-  const payload = (await response.json().catch(() => ({}))) as { sid?: string; message?: string };
-  if (!response.ok) {
-    throw new Error(`Twilio SMS send failed (${response.status}): ${payload.message ?? "unknown"}`);
+    policy: { allowedHostnames: [TWILIO_API_HOSTNAME] },
+    timeoutMs: TWILIO_API_TIMEOUT_MS,
+    auditContext: "sms.twilio.api",
+  });
+  try {
+    const payload = (await response.json().catch(() => ({}))) as { sid?: string; message?: string };
+    if (!response.ok) {
+      throw new Error(
+        `Twilio SMS send failed (${response.status}): ${payload.message ?? "unknown"}`,
+      );
+    }
+    return {
+      sid: payload.sid ?? `sms-${Date.now()}`,
+      to: params.to,
+    };
+  } finally {
+    await release();
   }
-  return {
-    sid: payload.sid ?? `sms-${Date.now()}`,
-    to: params.to,
-  };
 }
