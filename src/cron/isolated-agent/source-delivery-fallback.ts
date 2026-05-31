@@ -52,7 +52,7 @@ export function resolveCronSourceDeliveryPlan(params: {
     requireExplicitMessageTarget: true,
     requireExplicitMessageTargetEvidence: true,
     directFallback: true,
-    skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok,
+    skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok ?? true,
   });
 }
 

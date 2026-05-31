@@ -69,6 +69,8 @@ function makeExecutor(overrides: Partial<Parameters<typeof createCronPromptExecu
     },
     cronSession: makeCronSession() as MutableCronSession,
     abortReason: () => "aborted",
+    resolvedDeliveryOk: true,
+    messageToolPromptEnabled: true,
     ...overrides,
     resolvedDelivery,
   });
@@ -158,6 +160,23 @@ describe("resolveFallbackCronSourceDeliveryPlan", () => {
     expect(plan.messageTool.force).toBe(false);
     expect(plan.fallback.directDelivery).toBe(true);
     expect(plan.fallback.skipWhenMessageToolSentToTarget).toBe(false);
+  });
+
+  it("preserves duplicate suppression when stale caller omits ok", () => {
+    const plan = resolveFallbackCronSourceDeliveryPlan(
+      makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "room-1" } }),
+      {
+        channel: "messagechat",
+        to: "room-1",
+        // ok intentionally omitted — stale caller shape
+      },
+    );
+
+    expect(plan.owner).toBe("direct_fallback");
+    expect(plan.reason).toBe("cron_announce");
+    expect(plan.fallback.directDelivery).toBe(true);
+    // When ok is absent, default to true to prevent double-posting
+    expect(plan.fallback.skipWhenMessageToolSentToTarget).toBe(true);
   });
 });
 
@@ -354,7 +373,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
-    expect(args.requireExplicitMessageTarget).toBe(false);
+    expect(args.requireExplicitMessageTarget).toBe(true);
   });
 
   it("still works with a valid sourceDelivery", async () => {
