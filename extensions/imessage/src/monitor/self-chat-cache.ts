@@ -147,13 +147,20 @@ class DefaultSelfChatCache implements SelfChatCache {
         this.cache.delete(oldest.key);
       }
     }
+    this.compactInsertionOrder();
+  }
+
+  private compactInsertionOrder(): void {
     if (
-      this.insertionOrderOffset > 1_024 &&
-      this.insertionOrderOffset * 2 > this.insertionOrder.length
+      this.insertionOrderOffset <= 1_024 &&
+      this.insertionOrder.length <= this.entryCount + 1_024
     ) {
-      this.insertionOrder = this.insertionOrder.slice(this.insertionOrderOffset);
-      this.insertionOrderOffset = 0;
+      return;
     }
+    this.insertionOrder = this.insertionOrder
+      .slice(this.insertionOrderOffset)
+      .filter((entry) => this.cache.get(entry.key)?.has(entry.id));
+    this.insertionOrderOffset = 0;
   }
 }
 
