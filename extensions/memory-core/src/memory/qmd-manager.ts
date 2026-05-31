@@ -2444,7 +2444,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return cached;
     }
     const db = this.ensureDb();
-    let rows: Array<{ collection: string; path: string }> = [];
+    let rows: Array<{ collection: string; path: string }>;
     try {
       rows = db
         .prepare("SELECT collection, path FROM documents WHERE hash = ? AND active = 1")
@@ -2506,7 +2506,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return null;
     }
     const exactPath = path.normalize(trimmedFile).replace(/\\/g, "/");
-    let rows: Array<{ path: string }> = [];
+    let rows: Array<{ path: string }>;
     try {
       const db = this.ensureDb();
       const exactRows = db

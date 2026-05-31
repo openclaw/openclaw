@@ -623,7 +623,7 @@ export async function runSetupWizard(
       nextConfig = applySkipBootstrapConfig(nextConfig);
     }
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-    nextConfig = await writeSetupConfigFile(nextConfig, {
+    await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: configResetPerformed,
     });
     logConfigUpdated(runtime);

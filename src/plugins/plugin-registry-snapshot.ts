@@ -442,7 +442,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
   const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
   const persistedReadsEnabled = !disabledByCaller && !disabledByEnv;
   const persistedInstallRecordReadsEnabled = !disabledByEnv;
-  let persistedIndex: InstalledPluginIndex | null = null;
+  let persistedIndex: InstalledPluginIndex | null;
   if (persistedInstallRecordReadsEnabled) {
     persistedIndex = readPersistedInstalledPluginIndexSync(params);
     if (persistedReadsEnabled && persistedIndex) {

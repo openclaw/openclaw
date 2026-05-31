@@ -366,7 +366,7 @@ async function deleteOrphanManagedImageFiles(params: {
 }) {
   let deletedFileCount = 0;
   for (const dir of [resolveOutgoingOriginalsDir(params.stateDir)]) {
-    let names: string[] = [];
+    let names: string[];
     try {
       names = await fs.readdir(dir);
     } catch {
@@ -413,7 +413,7 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
     sessionKeyFilter === "global" ? resolveDefaultAgentId(getRuntimeConfig()) : undefined;
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
   const recordsDir = resolveOutgoingRecordsDir(stateDir);
-  let names: string[] = [];
+  let names: string[];
   try {
     names = await fs.readdir(recordsDir);
   } catch {
@@ -464,7 +464,7 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       continue;
     }
 
-    let shouldDelete = false;
+    let shouldDelete;
     if (
       forceDeleteSessionRecords &&
       (!sessionKeyFilter || record.sessionKey === sessionKeyFilter)

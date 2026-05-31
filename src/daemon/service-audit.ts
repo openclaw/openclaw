@@ -165,7 +165,7 @@ async function auditSystemdUnit(
   issues: ServiceConfigIssue[],
 ) {
   const unitPath = resolveSystemdUserUnitPath(env);
-  let content = "";
+  let content;
   try {
     content = await fs.readFile(unitPath, "utf8");
   } catch {
@@ -214,7 +214,7 @@ async function auditLaunchdPlist(
   issues: ServiceConfigIssue[],
 ) {
   const plistPath = resolveLaunchAgentPlistPath(env);
-  let content = "";
+  let content;
   try {
     content = await fs.readFile(plistPath, "utf8");
   } catch {

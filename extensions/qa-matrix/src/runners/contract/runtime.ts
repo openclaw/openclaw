@@ -704,7 +704,7 @@ export async function runMatrixQaLive(params: {
   const syncState: { driver?: string; observer?: string } = {};
   const syncStreams: MatrixQaSyncStreams = {};
   let canaryMs: number | undefined;
-  let initialGatewayBootMs = 0;
+  let initialGatewayBootMs;
   let scenarioGatewayBootMs = 0;
   let scenarioRestartGatewayMs = 0;
   let scenarioTransportInterruptMs = 0;

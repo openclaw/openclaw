@@ -3034,7 +3034,7 @@ export async function loadOpenClawPluginCliRegistry(
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
 
-    let mod: OpenClawPluginModule | null = null;
+    let mod: OpenClawPluginModule | null;
     try {
       mod = withProfile(
         { pluginId: record.id, source: safeSource },

@@ -925,7 +925,7 @@ async function getWebSocketConstructor(): Promise<WebSocketConstructor | null> {
 
     cachedWebsocket = class extends WebSocket {
       constructor(url: string | URL, options?: string | string[] | Record<string, unknown>) {
-        let opts: Record<string, unknown> = {};
+        let opts: Record<string, unknown>;
         if (Array.isArray(options) || typeof options === "string") {
           opts = { protocols: options };
         } else {

@@ -587,7 +587,7 @@ describe("short-term promotion", () => {
   it("lets repeated dreaming-only daily signals clear the default promotion gates", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const queryDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
-      let candidateKey = "";
+      let candidateKey;
 
       for (const [index, day] of queryDays.entries()) {
         const nowMs = Date.parse(`${day}T10:00:00.000Z`);

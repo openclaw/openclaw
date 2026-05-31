@@ -83,7 +83,7 @@ vi.mock("../channels/plugins/bundled.js", async () => {
   }
 
   function detectWhatsAppLegacyStateMigrations(params: { oauthDir: string }) {
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(params.oauthDir, { withFileTypes: true });
     } catch {

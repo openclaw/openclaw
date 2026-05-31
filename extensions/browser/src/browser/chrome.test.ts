@@ -559,7 +559,7 @@ describe("browser chrome helpers", () => {
       onConnection: (wss) => {
         wss.on("connection", (ws) => {
           ws.on("message", (raw) => {
-            let message: { id?: unknown; method?: unknown } | null = null;
+            let message: { id?: unknown; method?: unknown } | null;
             try {
               const text =
                 typeof raw === "string"

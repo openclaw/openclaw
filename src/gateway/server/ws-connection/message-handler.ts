@@ -1236,7 +1236,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             let resolvedByConcurrentApproval = false;
-            let recoveryRequestId: string | undefined = pairing.request.requestId;
+            let recoveryRequestId: string | undefined;
             const resolveLivePendingRequestId = async (): Promise<string | undefined> => {
               const pendingList = await listDevicePairing();
               const exactPending = pendingList.pending.find(

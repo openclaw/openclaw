@@ -188,7 +188,6 @@ async function readOpenRouterAudioStream(
     buffer = lines.pop() ?? "";
     for (const line of lines) {
       if (processOpenRouterSseLine(line.trim(), result)) {
-        doneSeen = true;
         await reader.cancel();
         return {
           audioBuffer: Buffer.concat(result.audioBuffers),

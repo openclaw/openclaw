@@ -568,7 +568,7 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
 ): T {
   const observedIterator = () =>
     observeModelCallIterator(createIterator(), eventBase, startedAt, state)[Symbol.asyncIterator]();
-  let hasNonConfigurableIterator = false;
+  let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
       Object.getOwnPropertyDescriptor(stream, Symbol.asyncIterator)?.configurable === false;

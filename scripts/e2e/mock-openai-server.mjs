@@ -305,7 +305,7 @@ const server = http.createServer((req, res) => {
         `${JSON.stringify({ method: req.method, path: url.pathname, body: bodyText })}\n`,
       );
     }
-    let body = {};
+    let body;
     try {
       body = bodyText ? JSON.parse(bodyText) : {};
     } catch {

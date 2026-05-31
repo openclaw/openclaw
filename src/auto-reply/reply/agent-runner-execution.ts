@@ -1632,7 +1632,8 @@ export async function runAgentTurnWithFallback(params: {
   let attemptedRuntimeProvider = fallbackProvider;
   let attemptedRuntimeModel = fallbackModel;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
-  let didRetryTransientHttpError = false;
+  let transientHttpRetriesRemaining = 1;
+  const consumeTransientHttpRetry = () => transientHttpRetriesRemaining-- > 0;
   let liveModelSwitchRetries = 0;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
@@ -2820,8 +2821,7 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (isTransientHttp && !didRetryTransientHttpError) {
-        didRetryTransientHttpError = true;
+      if (isTransientHttp && consumeTransientHttpRetry()) {
         // Retry the full runWithModelFallback() cycle — transient errors
         // (502/521/etc.) typically affect the whole provider, so falling
         // back to an alternate model first would not help. Instead we wait

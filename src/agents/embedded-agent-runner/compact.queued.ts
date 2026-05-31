@@ -295,7 +295,7 @@ export async function compactEmbeddedAgentSession(
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
-      let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
+      let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null | undefined;
       let checkpointSnapshotRetained = false;
       try {
         // When the context engine owns compaction, its compact() implementation

@@ -209,7 +209,7 @@ describe("buildGuardedModelFetch", () => {
     } as unknown as Model<"anthropic-messages">;
 
     const fetcher = buildGuardedModelFetch(model, undefined, { sanitizeSse: false });
-    let response = await fetcher("https://api.anthropic.com/v1/messages", {
+    const response = await fetcher("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: '{"stream":true}',
@@ -218,8 +218,6 @@ describe("buildGuardedModelFetch", () => {
     expect(reader).toBeDefined();
     const firstChunk = await reader?.read();
     expect(firstChunk?.done).toBe(false);
-
-    response = undefined as unknown as Response;
     const registration = managedStreamCleanupRegistrations.at(-1);
     expect(registration).toBeDefined();
     await registration?.held.finalize();

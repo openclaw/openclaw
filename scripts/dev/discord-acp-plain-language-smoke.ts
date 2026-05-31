@@ -761,10 +761,10 @@ async function run(): Promise<SuccessResult | FailureResult> {
   });
 
   let readAuthHeader = "";
-  let sentMessageId = "";
+  let sentMessageId;
   let setupStage: "discord-api" | "send-message" = "discord-api";
   let senderAuthorId: string | undefined;
-  let minBindingBoundAt = startedAt - 3_000;
+  let minBindingBoundAt;
   let webhookForCleanup: WebhookForCleanup | undefined;
 
   try {

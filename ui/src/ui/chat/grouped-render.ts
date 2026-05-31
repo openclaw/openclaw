@@ -32,7 +32,7 @@ import {
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
-  resolveCollapsedToolDetail,
+  resolveCollapsedToolSummaryParts,
 } from "./tool-cards.ts";
 
 type AssistantAttachmentAvailability =
@@ -1591,20 +1591,25 @@ function renderGroupedMessage(
         detailMode: "explain",
       })
     : null;
-  const singleToolDisplayDetail =
-    !toolMessageHasError && singleToolCard && singleToolDisplay
-      ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
-      : undefined;
+  const singleToolSummary =
+    singleToolCard &&
+    singleToolDisplay &&
+    (singleToolCard.args !== undefined || singleToolCard.inputText?.trim())
+      ? resolveCollapsedToolSummaryParts({
+          card: singleToolCard,
+          displayLabel: singleToolDisplay.label,
+          displayDetail: singleToolDisplay.detail,
+          isError: toolMessageHasError,
+        })
+      : null;
   const toolSummaryLabelRaw = toolMessageHasError
     ? singleToolDisplay
       ? singleToolDisplay.label
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
-    : singleToolDisplayDetail
-      ? singleToolCard?.outputText?.trim()
-        ? "output"
-        : undefined
+    : singleToolSummary
+      ? singleToolSummary.name
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
@@ -1613,8 +1618,8 @@ function renderGroupedMessage(
     markdown && !toolSummaryLabel ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
     ? "Tool error"
-    : singleToolDisplayDetail && !markdown && !hasImages
-      ? singleToolDisplayDetail
+    : singleToolSummary && !markdown && !hasImages
+      ? singleToolSummary.label
       : singleToolDisplay && !markdown && !hasImages
         ? singleToolDisplay.label
         : "Tool output";

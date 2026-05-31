@@ -309,7 +309,7 @@ function resolveJobLastRunStatus(job: CronJob): CronJobsLastRunStatusFilter {
 function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir) {
   const dir = sortDir === "desc" ? -1 : 1;
   return jobs.toSorted((a, b) => {
-    let cmp = 0;
+    let cmp;
     if (sortBy === "name") {
       const aName = typeof a.name === "string" ? a.name : "";
       const bName = typeof b.name === "string" ? b.name : "";

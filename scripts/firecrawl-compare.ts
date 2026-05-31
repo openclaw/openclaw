@@ -91,7 +91,7 @@ async function run() {
 
   for (const url of targets) {
     console.log(`\n=== ${url}`);
-    let localStatus = "skipped";
+    let localStatus;
     let localTitle = "";
     let localText = "";
     let localError: string | undefined;

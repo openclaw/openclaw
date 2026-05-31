@@ -765,7 +765,7 @@ export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): s
   const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
   const buffer = Buffer.alloc(bytesToRead);
   const fd = fs.openSync(logPath, "r");
-  let bytesRead = 0;
+  let bytesRead;
   try {
     bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
   } finally {

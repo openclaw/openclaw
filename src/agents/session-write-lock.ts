@@ -818,7 +818,7 @@ export async function cleanStaleLockFiles(params: {
     return args;
   };
 
-  let entries: fsSync.Dirent[] = [];
+  let entries: fsSync.Dirent[];
   try {
     entries = await fs.readdir(sessionsDir, { withFileTypes: true });
   } catch (err) {

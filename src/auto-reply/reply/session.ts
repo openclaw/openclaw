@@ -297,8 +297,8 @@ export async function initSessionState(params: {
   let sessionId: string | undefined;
   let isNewSession = false;
   let bodyStripped: string | undefined;
-  let systemSent = false;
-  let abortedLastRun = false;
+  let systemSent;
+  let abortedLastRun;
   let resetTriggered = false;
 
   let persistedThinking: string | undefined;

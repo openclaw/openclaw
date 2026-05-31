@@ -1405,7 +1405,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return session;
     })();
     nativeProgressStreamStartPromise = startPromise;
-    let startedSession: SlackStreamSession | null = null;
+    let startedSession: SlackStreamSession | null;
     try {
       startedSession = await startPromise;
     } finally {

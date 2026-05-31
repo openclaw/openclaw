@@ -44,7 +44,8 @@ export function buildGoogleProvider(): ProviderPlugin {
         },
       }),
     ],
-    normalizeTransport: ({ api, baseUrl }) => resolveGoogleGenerativeAiTransport({ api, baseUrl }),
+    normalizeTransport: ({ provider, api, baseUrl }) =>
+      resolveGoogleGenerativeAiTransport({ provider, api, baseUrl }),
     normalizeConfig: ({ provider, providerConfig }) =>
       normalizeGoogleProviderConfig(provider, providerConfig),
     staticCatalog: {

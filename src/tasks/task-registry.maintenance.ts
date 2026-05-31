@@ -367,7 +367,7 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   if (cached) {
     return cached;
   }
-  let entries: CronRunLogEntry[] = [];
+  let entries: CronRunLogEntry[];
   try {
     entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync({
       storePath: context.storePath,

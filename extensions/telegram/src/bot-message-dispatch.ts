@@ -782,7 +782,7 @@ export const dispatchTelegramMessage = async ({
   let replyFenceGeneration: number | undefined;
   const replyAbortController = new AbortController();
   let replyAbortControllerQueued = false;
-  let dispatchWasSuperseded = false;
+  let dispatchWasSuperseded;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
     isTelegramReplyFenceSuperseded({

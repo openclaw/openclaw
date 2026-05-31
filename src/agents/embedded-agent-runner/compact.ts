@@ -597,7 +597,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     return fail(reason);
   }
   let runtimeModel = model;
-  let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null = null;
+  let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null;
   let hasRuntimeAuthExchange = false;
   try {
     apiKeyInfo = await getApiKeyForModel({

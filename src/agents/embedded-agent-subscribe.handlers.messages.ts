@@ -741,7 +741,7 @@ export function handleMessageUpdate(
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
 
-    let shouldEmit = false;
+    let shouldEmit;
     let deltaText = "";
     let replace = false;
     if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {

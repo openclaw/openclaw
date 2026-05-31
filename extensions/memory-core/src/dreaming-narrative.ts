@@ -819,7 +819,7 @@ async function normalizeSessionEntryPathForComparison(params: {
 async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
-  let agentEntries: Dirent[] = [];
+  let agentEntries: Dirent[];
   try {
     agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
   } catch {
@@ -894,7 +894,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       });
     }
 
-    let sessionFiles: Dirent[] = [];
+    let sessionFiles: Dirent[];
     try {
       sessionFiles = await fs.readdir(sessionsDir, { withFileTypes: true });
     } catch {
@@ -923,7 +923,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (Date.now() - stat.mtimeMs < DREAMING_ORPHAN_MIN_AGE_MS) {
         continue;
       }
-      let content = "";
+      let content;
       try {
         content = await fs.readFile(transcriptPath, "utf-8");
       } catch {

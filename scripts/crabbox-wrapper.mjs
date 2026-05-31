@@ -2025,10 +2025,9 @@ let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
 let remoteChangedGateBase = "";
-let scriptStdinPrepared = false;
 const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
 normalizedArgs = scriptBootstrap.args;
-scriptStdinPrepared = scriptBootstrap.prepared;
+const scriptStdinPrepared = scriptBootstrap.prepared;
 try {
   if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
     const runWords = runCommandArgs(normalizedArgs);

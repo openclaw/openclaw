@@ -294,7 +294,7 @@ export async function repairBrokenSessionTranscriptFile(params: {
 async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string[]> {
   const files: string[] = [];
   for (const sessionsDir of sessionDirs) {
-    let entries: Dirent[] = [];
+    let entries: Dirent[];
     try {
       entries = await fs.readdir(sessionsDir, { withFileTypes: true });
     } catch {

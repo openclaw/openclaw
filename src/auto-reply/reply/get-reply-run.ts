@@ -536,7 +536,7 @@ export async function runPreparedReply(
       defaultLevel: resolvedElevatedLevel ?? "off",
     },
   });
-  let currentSystemSent = systemSent;
+  const currentSystemSent = systemSent;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat =
@@ -846,7 +846,6 @@ export async function runPreparedReply(
           });
         });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
-  currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   let {
     prefixedCommandBody,
@@ -1112,8 +1111,8 @@ export async function runPreparedReply(
           isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
     };
   };
-  let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  let activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
+  const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const isHeartbeatRun = opts?.isHeartbeat === true;
   const shouldSteer =
     !isRoomEvent &&
@@ -1170,8 +1169,7 @@ export async function runPreparedReply(
       typing.cleanup();
       return queueState.reply;
     }
-    ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
-    activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
+    resolveActiveRunAcceptsCurrentThread({ isActive });
   }
   const runHasSessionModelOverride = Boolean(
     normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||

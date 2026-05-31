@@ -412,7 +412,6 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
 
       if (maxIdxIfNeedNewline <= start) {
-        fenceToSplit = undefined;
         breakIdx = windowEnd;
       } else {
         const minProgressIdx = Math.min(
@@ -439,7 +438,6 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
         if (!pickedNewline) {
           if (minProgressIdx > maxIdxIfAlreadyNewline) {
-            fenceToSplit = undefined;
             breakIdx = windowEnd;
           } else {
             breakIdx = Math.max(minProgressIdx, maxIdxIfNeedNewline);

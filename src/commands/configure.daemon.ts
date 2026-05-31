@@ -22,7 +22,7 @@ export async function maybeInstallDaemon(params: {
   daemonRuntime?: GatewayDaemonRuntime;
 }) {
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (error) {

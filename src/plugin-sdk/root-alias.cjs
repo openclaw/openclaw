@@ -240,7 +240,7 @@ function listPluginSdkExportedSubpaths() {
     return pluginSdkSubpathsCache.get(cacheKey);
   }
 
-  let subpaths = [];
+  let subpaths;
   try {
     const packageJsonPath = path.join(packageRoot, "package.json");
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));

@@ -1297,7 +1297,7 @@ function findDirectImportersWithGitGrep(cwd, importedFile, fileSet) {
       if (file === importedFile || !fileSet.has(file) || importers.includes(file)) {
         continue;
       }
-      let source = "";
+      let source;
       try {
         source = fs.readFileSync(path.join(cwd, file), "utf8");
       } catch {
@@ -1372,7 +1372,7 @@ function getImportGraph(cwd) {
   );
 
   for (const file of files) {
-    let source = "";
+    let source;
     try {
       source = fs.readFileSync(path.join(cwd, file), "utf8");
     } catch {

@@ -199,14 +199,19 @@ const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
 const NEW_CHAT_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
 
-export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
+export function renderTab(
+  state: AppViewState,
+  tab: Tab,
+  opts?: { collapsed?: boolean; child?: boolean },
+) {
   const href = pathForTab(tab, state.basePath);
   const isActive = tab === "config" ? isSettingsTab(state.tab) : state.tab === tab;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
+  const isChild = opts?.child === true;
   return html`
     <a
       href=${href}
-      class="nav-item ${isActive ? "nav-item--active" : ""}"
+      class="nav-item ${isActive ? "nav-item--active" : ""} ${isChild ? "nav-item--child" : ""}"
       @click=${(event: MouseEvent) => {
         if (
           event.defaultPrevented ||
@@ -277,7 +282,13 @@ function renderCronFilterIcon(hiddenCount: number) {
 }
 
 export function renderChatSessionSelect(state: AppViewState) {
-  return renderChatSessionSelectBase(state, switchChatSession, { surface: "desktop" });
+  return renderChatSessionSelectBase(
+    state,
+    (targetState, nextSessionKey) => {
+      void switchChatSession(targetState, nextSessionKey);
+    },
+    { surface: "desktop" },
+  );
 }
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -581,7 +592,13 @@ export function renderChatMobileToggle(state: AppViewState) {
         }}
       >
         <div class="chat-controls">
-          ${renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
+          ${renderChatSessionSelectBase(
+            state,
+            (targetState, nextSessionKey) => {
+              void switchChatSession(targetState, nextSessionKey);
+            },
+            { surface: "mobile" },
+          )}
           <div class="chat-controls__thinking">
             ${renderChatAutoScrollToggle(state)}
             <button
@@ -653,7 +670,11 @@ export function renderChatMobileToggle(state: AppViewState) {
   `;
 }
 
-export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+export function switchChatSession(
+  state: AppViewState,
+  nextSessionKey: string,
+  opts?: { awaitInitialLoad?: boolean },
+): Promise<void> | undefined {
   const previousSessionKey = state.sessionKey;
   const nextSessionRow =
     state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
@@ -674,11 +695,19 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     nextSessionKey,
     true,
   );
-  void syncSelectedSessionMessageSubscription(
+  const subscriptionSync = syncSelectedSessionMessageSubscription(
     state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
   );
-  void loadChatHistory(state as unknown as ChatState);
-  void refreshSessionOptions(state);
+  const historyLoad = loadChatHistory(state as unknown as ChatState);
+  const sessionsRefresh = refreshSessionOptions(state);
+  if (opts?.awaitInitialLoad) {
+    void sessionsRefresh;
+    return Promise.allSettled([subscriptionSync, historyLoad]).then(() => undefined);
+  }
+  void subscriptionSync;
+  void historyLoad;
+  void sessionsRefresh;
+  return undefined;
 }
 
 export function dismissChatError(state: AppViewState) {
@@ -754,7 +783,7 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
 
   const preservedDraft = state.chatMessage;
   const preservedAttachments = state.chatAttachments;
-  switchChatSession(state, nextSessionKey);
+  void switchChatSession(state, nextSessionKey);
   state.chatMessage = preservedDraft;
   state.chatAttachments = preservedAttachments;
   return true;

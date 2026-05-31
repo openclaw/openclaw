@@ -302,7 +302,7 @@ export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
     return { inspectedPids: [], terminatedPids: [], skippedReason: "missing-root" };
   }
 
-  let processes: AcpxProcessInfo[] = [];
+  let processes: AcpxProcessInfo[];
   try {
     processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
   } catch {

@@ -463,9 +463,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
       : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
+    const chunkText = paramsLocal.useCard
+      ? core.channel.text.chunkMarkdownTextWithMode
+      : core.channel.text.chunkTextWithMode;
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
-      core.channel.text.chunkTextWithMode(chunkSource, textChunkLimit, chunkMode),
+      chunkText(chunkSource, textChunkLimit, chunkMode),
     );
     for (const [index, chunk] of chunks.entries()) {
       await paramsLocal.sendChunk({
@@ -629,13 +632,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
             }),
           );
-        const streamingCardEnabledForReplyKind = streamingEnabled && info?.kind === "final";
-        const useCard =
+        const finalTextExceedsStreamingLimit =
+          info?.kind === "final" && hasText && text.length > textChunkLimit;
+        const useStaticCard =
           hasText &&
-          (streamingCardEnabledForReplyKind ||
-            renderMode === "card" ||
+          (renderMode === "card" ||
             (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
             (renderMode === "auto" && shouldUseCard(text)));
+        const useStreamingCard =
+          hasText &&
+          streamingEnabled &&
+          !finalTextExceedsStreamingLimit &&
+          (info?.kind === "final" || useStaticCard);
+        const finalTextWouldUseStreamingCard =
+          info?.kind === "final" && hasText && streamingEnabled;
+        const useCard = useStaticCard || useStreamingCard;
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const skipTextForClosedStreamingFinal =
@@ -643,8 +654,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           hasText &&
           streamingClosedForReply &&
           !streamingCloseErroredForReply &&
-          streamingEnabled &&
-          useCard;
+          finalTextWouldUseStreamingCard;
         const shouldDeliverText =
           hasText &&
           !hasVoiceMedia &&
@@ -652,8 +662,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           !skipTextForClosedStreamingFinal;
         const shouldDiscardStreamingPreview =
           info?.kind === "final" &&
-          hasMedia &&
-          ((hasVoiceMedia && !shouldDeliverText) || skipTextForDuplicateFinal);
+          (finalTextExceedsStreamingLimit ||
+            (hasMedia && ((hasVoiceMedia && !shouldDeliverText) || skipTextForDuplicateFinal)));
 
         if (!shouldDeliverText && !hasMedia) {
           return;
@@ -667,7 +677,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
+            if (!useStreamingCard) {
               return;
             }
             startStreaming();
@@ -676,7 +686,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
 
-          if (info?.kind === "final" && streamingEnabled && useCard) {
+          if (info?.kind === "final" && useStreamingCard) {
             startStreaming();
             if (streamingStartPromise) {
               await streamingStartPromise;

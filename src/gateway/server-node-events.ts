@@ -459,7 +459,7 @@ export const handleNodeEvent = async (
         key?: string | null;
       };
 
-      let link: AgentDeepLink | null = null;
+      let link: AgentDeepLink | null;
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
@@ -743,7 +743,7 @@ export const handleNodeEvent = async (
         (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
       );
 
-      let text = "";
+      let text;
       if (evt.event === "exec.started") {
         text = `Exec started (node=${nodeId}${runId ? ` id=${runId}` : ""})`;
         if (command) {

@@ -248,7 +248,7 @@ export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
 
 async function listSessionStorePaths(stateDir: string): Promise<string[]> {
   const agentsDir = path.join(stateDir, "agents");
-  let agentEntries: fs.Dirent[] = [];
+  let agentEntries: fs.Dirent[];
   try {
     agentEntries = await fs.promises.readdir(agentsDir, { withFileTypes: true });
   } catch {

@@ -97,7 +97,7 @@ const server = http.createServer((req, res) => {
     }
 
     const bodyText = await readBody(req);
-    let body = {};
+    let body;
     try {
       body = bodyText ? JSON.parse(bodyText) : {};
     } catch {

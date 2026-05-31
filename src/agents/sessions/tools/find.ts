@@ -337,7 +337,7 @@ export function createFindToolDefinition(
                   continue;
                 }
                 const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
-                let relativePath = line;
+                let relativePath;
                 if (line.startsWith(searchPath)) {
                   relativePath = line.slice(searchPath.length + 1);
                 } else {

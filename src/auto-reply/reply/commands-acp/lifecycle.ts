@@ -542,7 +542,7 @@ export async function handleAcpSpawnAction(
     );
   }
 
-  let initializedBackend = "";
+  let initializedBackend;
   let initializedMeta: SessionAcpMeta | undefined;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   try {
@@ -860,7 +860,7 @@ export async function handleAcpCloseAction(
     commandParams: params,
     restTokens,
     run: async ({ acpManager, sessionKey }) => {
-      let runtimeNotice = "";
+      let runtimeNotice;
       try {
         const closed = await acpManager.closeSession({
           cfg: params.cfg,

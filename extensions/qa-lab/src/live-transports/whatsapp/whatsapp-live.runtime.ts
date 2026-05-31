@@ -623,8 +623,10 @@ async function restartWhatsAppQaDriverSession(params: {
 }
 
 async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }) {
-  let attempt = 1;
-  while (true) {
+  for (const attempt of Array.from(
+    { length: WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS },
+    (_, index) => index + 1,
+  )) {
     try {
       return await startWhatsAppQaDriverSession({ authDir: params.authDir });
     } catch (error) {
@@ -634,10 +636,10 @@ async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }
       ) {
         throw error;
       }
-      attempt += 1;
       await new Promise((resolve) => setTimeout(resolve, WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS));
     }
   }
+  throw new Error("unreachable WhatsApp QA driver retry loop exit");
 }
 
 function formatApprovalResultValue(value: unknown) {

@@ -111,7 +111,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const service = resolveNodeService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {

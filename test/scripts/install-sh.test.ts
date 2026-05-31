@@ -677,7 +677,7 @@ describe("install.sh", () => {
     writeNpmFreshnessConflictFixture(join(bin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallShell(
         [
@@ -714,7 +714,7 @@ describe("install.sh", () => {
     writeNpmBeforePolicyFixture(join(bin, "npm"), argsLog);
 
     let result: ReturnType<typeof runInstallShell> | undefined;
-    let argsOutput = "";
+    let argsOutput;
     try {
       result = runInstallShell(
         [

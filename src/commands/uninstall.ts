@@ -65,7 +65,7 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
     return false;
   }
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {

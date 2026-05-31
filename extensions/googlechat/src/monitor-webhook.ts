@@ -214,8 +214,8 @@ export function createGoogleChatWebhookRequestHandler(params: {
       inFlightLimiter: params.webhookInFlightLimiter,
       handle: async ({ targets }) => {
         const headerBearer = extractBearerToken(req.headers.authorization);
-        let selectedTarget: WebhookTarget | null = null;
-        let parsedEvent: GoogleChatEvent | null = null;
+        let selectedTarget: WebhookTarget | null;
+        let parsedEvent: GoogleChatEvent | null;
         const readAndParseEvent = async (
           profile: "pre-auth" | "post-auth",
         ): Promise<ParsedGoogleChatInboundSuccess | null> => {

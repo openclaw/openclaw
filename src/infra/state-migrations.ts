@@ -1252,8 +1252,8 @@ async function runLegacyMigrationPlans(
   for (const plan of plans) {
     if (plan.kind === "plugin-state-import") {
       await withPluginStateImportEnv(plan, async () => {
-        let storeEntries: Array<{ key: string; value: unknown }> = [];
-        let pluginEntryCount = 0;
+        let storeEntries: Array<{ key: string; value: unknown }>;
+        let pluginEntryCount;
         const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
           namespace: plan.namespace,
           maxEntries: plan.maxEntries,
@@ -2021,7 +2021,7 @@ export async function autoMigrateLegacyStateDir(params: {
   const warnings: string[] = [];
   const changes: string[] = [];
 
-  let legacyStat: fs.Stats | null = null;
+  let legacyStat: fs.Stats | null;
   try {
     legacyStat = legacyDir ? fs.lstatSync(legacyDir) : null;
   } catch {

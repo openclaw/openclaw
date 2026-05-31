@@ -655,7 +655,7 @@ export class MatrixVerificationManager {
     if (!crypto) {
       throw new Error("Matrix crypto is not available");
     }
-    let request: MatrixVerificationRequestLike | null = null;
+    let request: MatrixVerificationRequestLike | null;
     if (params.ownUser) {
       request = await crypto.requestOwnUserVerification();
     } else if (params.userId && params.deviceId && crypto.requestDeviceVerification) {

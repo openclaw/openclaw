@@ -474,7 +474,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
   }
 
-  let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null = null;
+  let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null | undefined;
   try {
     const eventDispatcher = createEventDispatcher(account);
     const chatHistories = new Map<string, HistoryEntry[]>();

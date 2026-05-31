@@ -96,7 +96,7 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = deps.fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -344,7 +344,7 @@ const listBuiltBundledPluginEntries = (deps) => {
 
 const listBuiltBundledPluginRuntimeOverlayDirs = (deps) => {
   const distExtensionsRoot = path.join(resolveRuntimePostBuildDistRoot(deps), "extensions");
-  let entries = [];
+  let entries;
   try {
     entries = deps.fs.readdirSync(distExtensionsRoot, { withFileTypes: true });
   } catch {
@@ -377,7 +377,7 @@ const listRuntimeOverlaySourcePaths = (sourceDir, deps) => {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = deps.fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -452,7 +452,7 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
     return [];
   }
   const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-  let dirents = [];
+  let dirents;
   try {
     dirents = deps.fs.readdirSync(pluginSdkDir, { withFileTypes: true });
   } catch {
@@ -838,7 +838,7 @@ const parsePositiveInteger = (value) => {
 };
 
 const listRunNodeCpuProfiles = (deps, absoluteProfileDir, commandName) => {
-  let entries = [];
+  let entries;
   try {
     entries = deps.fs.readdirSync(absoluteProfileDir, { withFileTypes: true });
   } catch {
@@ -1145,7 +1145,8 @@ export const acquireRunNodeBuildLock = async (deps) => {
     DEFAULT_BUILD_LOCK_STALE_MS,
   );
   const startedAt = Date.now();
-  let loggedWait = false;
+  let waitLogBudget = 1;
+  const consumeWaitLog = () => waitLogBudget-- > 0;
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
@@ -1199,9 +1200,8 @@ export const acquireRunNodeBuildLock = async (deps) => {
       if (removeStaleBuildLock(deps, lockDir, staleMs)) {
         continue;
       }
-      if (!loggedWait) {
+      if (consumeWaitLog()) {
         logRunner("Waiting for TypeScript/runtime artifact lock.", deps);
-        loggedWait = true;
       }
       await sleep(pollMs);
     }

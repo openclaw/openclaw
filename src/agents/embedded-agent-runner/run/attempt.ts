@@ -5131,7 +5131,6 @@ export async function runEmbeddedAttempt(
       );
     }
     retainedSessionFileOwner?.release();
-    retainedSessionFileOwner = undefined;
     emitDiagnosticRunCompleted?.(
       aborted ? "aborted" : "error",
       promptError ?? new Error("run exited before diagnostic completion"),

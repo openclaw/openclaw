@@ -173,7 +173,7 @@ describe("package-openclaw-for-docker", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-timeout-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid = 0;
+    let childPid;
     try {
       const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
         "",
@@ -212,7 +212,7 @@ describe("package-openclaw-for-docker", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-descendant-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid = 0;
+    let childPid;
     try {
       const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
         "",
@@ -270,7 +270,7 @@ describe("package-openclaw-for-docker", () => {
     const childPidPath = path.join(tempDir, "child.pid");
     const scriptUrl = pathToFileURL(path.resolve("scripts/package-openclaw-for-docker.mjs")).href;
     let childPid = 0;
-    let runnerPid = 0;
+    let runnerPid;
     try {
       const childScript = "setInterval(() => {}, 1000);";
       const parentScript = [

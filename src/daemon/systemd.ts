@@ -137,7 +137,7 @@ export async function findInstalledSystemdGatewayScope(
   env: GatewayServiceEnv,
 ): Promise<InstalledSystemdGatewayScope | null> {
   const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
-  let userPath: string | null = null;
+  let userPath: string | null;
   try {
     userPath = resolveSystemdUnitPath(env);
   } catch {
@@ -970,7 +970,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     stateDir,
     environment: env,
   });
-  let existing: Record<string, string> = {};
+  let existing: Record<string, string>;
   try {
     existing = await readSystemdEnvironmentFile(envFilePath);
   } catch {

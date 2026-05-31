@@ -92,7 +92,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Helper to authenticate with retry logic
   async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
-    for (let attempt = 1; ; attempt++) {
+    for (const attempt of Array.from(
+      { length: Math.max(1, maxAttempts) },
+      (_, index) => index + 1,
+    )) {
       if (opts.abortSignal?.aborted) {
         throw new Error("Aborted while waiting to authenticate");
       }
@@ -120,6 +123,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         });
       }
     }
+    throw new Error("unreachable Tlon authentication retry loop exit");
   }
 
   let api: UrbitSSEClient | null = null;

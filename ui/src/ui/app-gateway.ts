@@ -273,7 +273,7 @@ async function verifyPendingUpdateVersion(
   }
   const deadline = Date.now() + 10_000;
   while (host.client === client && host.connected && Date.now() < deadline) {
-    let response: UpdateRestartStatusResponse | null = null;
+    let response: UpdateRestartStatusResponse | null;
     try {
       response = await client.request<UpdateRestartStatusResponse>("update.status", {});
     } catch {

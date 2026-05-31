@@ -1066,7 +1066,7 @@ async function findPageByTargetId(
   const pages = await getAllPages(browser);
   let resolvedViaCdp = false;
   for (const page of pages) {
-    let tid: string | null = null;
+    let tid: string | null;
     try {
       tid = await pageTargetId(page);
       resolvedViaCdp = true;
@@ -1170,7 +1170,7 @@ export async function getPageForTargetId(opts: {
 }
 
 function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame = false;
+  let sameMainFrame;
   try {
     sameMainFrame = request.frame() === page.mainFrame();
   } catch {
@@ -1197,7 +1197,7 @@ function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
 }
 
 function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame = false;
+  let sameMainFrame;
   try {
     sameMainFrame = request.frame() === page.mainFrame();
   } catch {

@@ -237,23 +237,21 @@ export class TwilioProvider implements VoiceCallProvider {
     twiml: string,
     operation: string,
   ): Promise<void> {
-    let retryIndex = 0;
-    while (true) {
+    for (const retryDelayMs of TWILIO_CALL_UPDATE_RETRY_DELAYS_MS) {
       try {
         await this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml });
         return;
       } catch (err) {
-        const retryDelayMs = TWILIO_CALL_UPDATE_RETRY_DELAYS_MS[retryIndex];
-        if (retryDelayMs === undefined || !isTwilioCallNotInProgressError(err)) {
+        if (!isTwilioCallNotInProgressError(err)) {
           throw err;
         }
-        retryIndex += 1;
         console.warn(
           `[voice-call] Twilio ${operation} update hit call state race (21220); retrying in ${retryDelayMs}ms`,
         );
         await sleep(retryDelayMs);
       }
     }
+    await this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml });
   }
 
   /**

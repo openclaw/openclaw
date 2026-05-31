@@ -409,8 +409,6 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       }
     } else if (line === current.delimiter) {
       pendingHeredocs.shift();
-      unquotedHeredocLogicalChunks = [];
-      unquotedHeredocLogicalLength = 0;
       if (pendingHeredocs.length === 0) {
         inHeredocBody = false;
       }

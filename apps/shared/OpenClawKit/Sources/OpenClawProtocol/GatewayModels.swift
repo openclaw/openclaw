@@ -5528,6 +5528,7 @@ public struct SkillsProposalRecordResult: Codable, Sendable {
     public let createdat: String
     public let updatedat: String
     public let createdby: AnyCodable
+    public let origin: [String: AnyCodable]?
     public let proposedversion: String
     public let draftfile: String
     public let drafthash: String
@@ -5552,6 +5553,7 @@ public struct SkillsProposalRecordResult: Codable, Sendable {
         createdat: String,
         updatedat: String,
         createdby: AnyCodable,
+        origin: [String: AnyCodable]?,
         proposedversion: String,
         draftfile: String,
         drafthash: String,
@@ -5575,6 +5577,7 @@ public struct SkillsProposalRecordResult: Codable, Sendable {
         self.createdat = createdat
         self.updatedat = updatedat
         self.createdby = createdby
+        self.origin = origin
         self.proposedversion = proposedversion
         self.draftfile = draftfile
         self.drafthash = drafthash
@@ -5600,6 +5603,7 @@ public struct SkillsProposalRecordResult: Codable, Sendable {
         case createdat = "createdAt"
         case updatedat = "updatedAt"
         case createdby = "createdBy"
+        case origin
         case proposedversion = "proposedVersion"
         case draftfile = "draftFile"
         case drafthash = "draftHash"

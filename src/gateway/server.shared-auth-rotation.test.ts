@@ -78,7 +78,7 @@ async function openDeviceTokenWsWithDetails(
   await approveDevicePairing(pending.request.requestId, {
     callerScopes: ["operator.admin"],
   });
-  let issuedDeviceToken = "";
+  let issuedDeviceToken;
   if (params.issuerGeneration) {
     const deviceToken = await ensureDeviceToken({
       deviceId: identity.deviceId,

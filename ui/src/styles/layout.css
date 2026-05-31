@@ -1009,6 +1009,46 @@
   color: var(--accent);
 }
 
+.nav-item--child {
+  position: relative;
+  margin-left: 18px;
+  min-height: 32px;
+  padding: 0 9px 0 18px;
+}
+
+.nav-item--child::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 0;
+  bottom: 50%;
+  width: 8px;
+  border-left: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-bottom-left-radius: 6px;
+  pointer-events: none;
+}
+
+.nav-item--child .nav-item__icon,
+.nav-item--child .nav-item__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.nav-item--child .nav-item__text {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.sidebar--collapsed .nav-item--child {
+  margin-left: 0;
+  padding-left: 9px;
+}
+
+.sidebar--collapsed .nav-item--child::before {
+  display: none;
+}
+
 .sidebar--collapsed .sidebar-shell {
   padding: 12px 8px 10px;
 }
@@ -1273,6 +1313,57 @@
 
 .content--chat > * + * {
   margin-top: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .content--chat-workshop-handoff .content-header {
+    animation: workshop-chat-header-enter 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .content--chat-workshop-handoff .chat-thread {
+    animation: workshop-chat-thread-enter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .content--chat-workshop-handoff .agent-chat__input {
+    animation: workshop-chat-composer-enter 520ms cubic-bezier(0.16, 1, 0.3, 1) 90ms both;
+  }
+}
+
+@keyframes workshop-chat-header-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes workshop-chat-thread-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes workshop-chat-composer-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.988);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .content--workboard {

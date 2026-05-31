@@ -1850,7 +1850,7 @@ export const registerTelegramHandlers = ({
       return;
     }
 
-    let media: Awaited<ReturnType<typeof resolveMedia>> = null;
+    let media: Awaited<ReturnType<typeof resolveMedia>>;
     try {
       media = await resolveMedia({
         ctx,

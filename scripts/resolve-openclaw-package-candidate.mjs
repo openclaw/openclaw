@@ -269,7 +269,7 @@ async function findSingleTarball(dir) {
 
 export async function readArtifactPackageCandidateMetadata(dir) {
   const metadataPath = path.join(path.resolve(ROOT_DIR, dir), "package-candidate.json");
-  let raw = "";
+  let raw;
   try {
     raw = await fs.readFile(metadataPath, "utf8");
   } catch (error) {

@@ -2754,7 +2754,7 @@ export async function writeConfigFile(
   // never touched any plugin entry.
   let canonicalSourceConfig: OpenClawConfig = nextCfg;
   const envBeforeCanonicalRead = snapshotEnv(process.env);
-  let envAfterCanonicalRead = envBeforeCanonicalRead;
+  let envAfterCanonicalRead;
   try {
     const freshSnapshot = await io.readConfigFileSnapshot();
     if (freshSnapshot.exists && freshSnapshot.valid) {

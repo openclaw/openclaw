@@ -125,9 +125,9 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   maxAttempts: number;
   baseDelayMs: number;
 }): Promise<T> {
-  let attempt = 1;
-  let delayMs = params.baseDelayMs;
-  while (true) {
+  const attempts = Math.max(1, params.maxAttempts);
+  for (const attempt of Array.from({ length: attempts }, (_, index) => index + 1)) {
+    const delayMs = params.baseDelayMs * 2 ** (attempt - 1);
     try {
       return await params.run();
     } catch (err) {
@@ -136,10 +136,9 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
         throw err;
       }
       await params.waitForRetry(delayMs);
-      delayMs *= 2;
-      attempt += 1;
     }
   }
+  throw new Error("retry loop exhausted");
 }
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {

@@ -262,7 +262,7 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
   console.error("==> Packing OpenClaw package");
   await prepareChangelog(sourceDir);
-  let packOutput = "";
+  let packOutput;
   try {
     packOutput = await runCaptureImpl(
       "npm",

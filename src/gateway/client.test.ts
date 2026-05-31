@@ -999,7 +999,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("surfaces connect assembly errors instead of waiting for the wrapper timeout", async () => {
     vi.useFakeTimers();
-    let client: GatewayClientInstance | null = null;
+    let client: GatewayClientInstance | null | undefined;
     try {
       const onClose = vi.fn();
       const onConnectError = vi.fn();

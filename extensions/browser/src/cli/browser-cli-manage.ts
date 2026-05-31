@@ -150,7 +150,7 @@ function formatDoctorLine(check: BrowserDoctorCheck): string {
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
-  let status: BrowserStatus | null = null;
+  let status: BrowserStatus | null;
 
   try {
     status = await fetchBrowserStatus(parent, profile);

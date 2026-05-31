@@ -1234,7 +1234,7 @@ function updateOrCheckPackage(packageDir, check, changedPaths = []) {
     return;
   }
 
-  let current = "";
+  let current;
   try {
     current = readFileSync(shrinkwrapPath, "utf8");
   } catch {

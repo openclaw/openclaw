@@ -245,7 +245,6 @@ async function runLoop(
           currentContext.messages.push(message);
           newMessages.push(message);
         }
-        pendingMessages = [];
       }
 
       // Stream assistant response

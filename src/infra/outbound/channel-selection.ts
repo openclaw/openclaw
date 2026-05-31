@@ -182,7 +182,7 @@ async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): P
     if (!plugin.config.isConfigured) {
       return true;
     }
-    let configured = false;
+    let configured;
     try {
       configured = await plugin.config.isConfigured(account, cfg);
     } catch (error) {

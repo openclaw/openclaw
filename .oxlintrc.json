@@ -35,6 +35,7 @@
     "eslint/no-useless-constructor": "error",
     "eslint/no-useless-rename": "error",
     "eslint/no-useless-return": "error",
+    "eslint/no-useless-assignment": "error",
     "eslint/no-unused-vars": "error",
     "eslint/no-warning-comments": "error",
     "eslint/no-unmodified-loop-condition": "error",

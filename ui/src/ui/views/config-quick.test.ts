@@ -256,7 +256,7 @@ describe("renderQuickSettings", () => {
     );
 
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "apple-touch-icon.png",
+      "/apple-touch-icon.png",
     );
     expect(expectAssistantAvatarSource(container)).toEqual({
       label: "IDENTITY.md",

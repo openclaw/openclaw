@@ -276,7 +276,7 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
 function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayload | null {
   const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
 
-  let bodyFields: Record<string, unknown> = {};
+  let bodyFields: Record<string, unknown>;
   if (contentType.includes("application/json")) {
     bodyFields = parseJsonBody(body);
   } else if (contentType.includes("application/x-www-form-urlencoded")) {
@@ -390,7 +390,7 @@ async function parseWebhookPayloadRequest(params: {
     return { ok: false };
   }
 
-  let payload: SynologyWebhookPayload | null = null;
+  let payload: SynologyWebhookPayload | null;
   try {
     payload = parsePayload(params.req, bodyResult.body);
   } catch (err) {

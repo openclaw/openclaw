@@ -2091,7 +2091,7 @@ describe("chat session controls", () => {
       ]),
     );
 
-    switchChatSession(state, "agent:ops:main");
+    void switchChatSession(state, "agent:ops:main");
     expect(state.chatSessionPickerResult).toBeNull();
     expect(state.chatSessionPickerAppliedQuery).toBe("");
 

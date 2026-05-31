@@ -198,7 +198,8 @@ async function acquirePackageLock(lockDir: string, ownerToken: string): Promise<
   const timeoutMs = readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000);
   const staleMs = readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_STALE_MS", 2 * 60 * 60_000);
   const startedAt = Date.now();
-  let announcedWait = false;
+  let waitAnnouncementBudget = 1;
+  const consumeWaitAnnouncement = () => waitAnnouncementBudget-- > 0;
   while (Date.now() - startedAt < timeoutMs) {
     try {
       await mkdir(lockDir);
@@ -210,9 +211,8 @@ async function acquirePackageLock(lockDir: string, ownerToken: string): Promise<
       }
     }
     await removeStalePackageLock(lockDir, staleMs);
-    if (!announcedWait) {
+    if (consumeWaitAnnouncement()) {
       say(`Wait for Parallels package lock: ${lockDir}`);
-      announcedWait = true;
     }
     await delay(1_000);
   }

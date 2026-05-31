@@ -52,6 +52,10 @@ import {
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
+import {
+  loadSkillWorkshopProposals,
+  type SkillWorkshopState,
+} from "./controllers/skill-workshop.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
 import { loadWorkboard } from "./controllers/workboard.ts";
@@ -152,6 +156,7 @@ type SettingsAppHost = SettingsHost &
   PresenceState &
   SessionsState &
   SkillsState &
+  SkillWorkshopState &
   ModelAuthStatusState &
   UsageState & {
     overviewLogCursor: number | null;
@@ -464,6 +469,9 @@ export async function refreshActiveTab(host: SettingsHost) {
         break;
       case "skills":
         await loadSkills(app);
+        break;
+      case "skillWorkshop":
+        await loadSkillWorkshopProposals(app, { force: true });
         break;
       case "agents":
         await refreshAgentsTab(host, app);

@@ -282,7 +282,7 @@ export abstract class MemoryManagerSyncOps {
         `sqlite-vec load timed out after ${Math.round(VECTOR_LOAD_TIMEOUT_MS / 1000)}s`,
       );
     }
-    let ready = false;
+    let ready;
     try {
       ready = (await this.vectorReady) || false;
     } catch (err) {
@@ -1667,7 +1667,7 @@ export abstract class MemoryManagerSyncOps {
     this.fts.loadError = undefined;
     this.ensureSchema();
 
-    let nextMeta: MemoryIndexMeta | null = null;
+    let nextMeta: MemoryIndexMeta | null;
 
     try {
       nextMeta = await runMemoryAtomicReindex({

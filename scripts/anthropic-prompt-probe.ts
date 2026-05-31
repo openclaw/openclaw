@@ -265,7 +265,7 @@ function extractProxyCapture(rawBody: string, req: http.IncomingMessage): ProxyC
   let parsed: {
     system?: Array<{ text?: string }>;
     messages?: Array<{ role?: string; content?: unknown }>;
-  } | null = null;
+  } | null;
   try {
     parsed = JSON.parse(rawBody) as typeof parsed;
   } catch {

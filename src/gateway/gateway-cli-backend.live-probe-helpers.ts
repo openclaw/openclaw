@@ -214,7 +214,7 @@ async function callLoopbackJsonRpc(params: {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response | undefined;
-  let text = "";
+  let text;
   try {
     response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
       method: "POST",

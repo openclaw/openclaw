@@ -86,7 +86,7 @@ function readPersistedEntries(): {
     if (!line) {
       continue;
     }
-    let parsed: Partial<IMessageReplyCacheEntry> | null = null;
+    let parsed: Partial<IMessageReplyCacheEntry> | null;
     try {
       parsed = JSON.parse(line) as Partial<IMessageReplyCacheEntry>;
     } catch {

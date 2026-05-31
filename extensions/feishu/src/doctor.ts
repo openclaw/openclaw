@@ -400,7 +400,7 @@ function inspectSessionTranscript(params: {
     return null;
   }
 
-  let raw = "";
+  let raw;
   try {
     raw = fs.readFileSync(params.transcriptPath, "utf-8");
   } catch {

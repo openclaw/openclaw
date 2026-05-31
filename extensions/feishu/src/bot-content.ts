@@ -92,7 +92,7 @@ export function resolveFeishuGroupSession(params: {
         (replyInThread ? messageId : null))
       : null;
 
-  let peerId = chatId;
+  let peerId;
   switch (groupSessionScope) {
     case "group_sender":
       peerId = buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });

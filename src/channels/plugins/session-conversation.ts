@@ -136,7 +136,7 @@ function resolveBundledSessionConversationFallback(params: {
     return null;
   }
   const dirName = normalizeResolvedChannel(params.channel);
-  let loaded: BundledSessionKeyModule | null = null;
+  let loaded: BundledSessionKeyModule | null;
   try {
     loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
       dirName,

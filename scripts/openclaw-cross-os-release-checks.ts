@@ -654,7 +654,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
       continue;
     }
     const distDir = join(packageRoot, rootEntry.name);
-    let distEntries = [];
+    let distEntries;
     try {
       distEntries = readdirSync(distDir, { withFileTypes: true });
     } catch (error) {
@@ -668,7 +668,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
         continue;
       }
       const extensionsDir = join(distDir, distEntry.name);
-      let extensionEntries = [];
+      let extensionEntries;
       try {
         extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
       } catch (error) {
@@ -683,7 +683,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
           continue;
         }
         const extensionPath = join(extensionsDir, extensionEntry.name);
-        let stagingEntries = [];
+        let stagingEntries;
         try {
           stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
         } catch (error) {
@@ -2311,7 +2311,7 @@ async function runInstalledAgentTurn(params) {
 }
 
 export function verifyDevUpdateStatus(stdout, options = {}) {
-  let payload = null;
+  let payload;
   try {
     payload = JSON.parse(stdout);
   } catch {

@@ -413,6 +413,7 @@ export const de: TranslationMap = {
     usage: "Nutzung",
     cron: "Cron-Aufgaben",
     skills: "Skills",
+    skillWorkshop: "Skill Workshop",
     nodes: "Geräte",
     chat: "Chat",
     config: "Konfiguration",
@@ -437,6 +438,8 @@ export const de: TranslationMap = {
     usage: "API-Nutzung und Kosten überwachen.",
     cron: "Aufweckzeiten und wiederkehrende Agent-Läufe planen.",
     skills: "Skill-Verfügbarkeit und API-Schlüsselinjektion verwalten.",
+    skillWorkshop:
+      "Vorschläge prüfen, verfeinern und anwenden, bevor sie zu aktiven Skills werden.",
     nodes: "Gekoppelte Geräte, Fähigkeiten und Befehlsfreigabe.",
     chat: "Direkte Gateway-Chat-Sitzung für schnelle Eingriffe.",
     config: "~/.openclaw/openclaw.json sicher bearbeiten.",

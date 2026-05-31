@@ -59,10 +59,10 @@ export async function maybeRepairLegacyCronStore(params: {
   const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
   const quarantinePath = resolveCronQuarantinePath(storePath);
   let store: Awaited<ReturnType<typeof loadCronJobsStoreWithConfigJobs>>["store"];
-  let legacyStoreDetected = false;
-  let legacyRunLogDetected = false;
+  let legacyStoreDetected;
+  let legacyRunLogDetected;
   let legacyImportCount = 0;
-  let sqliteProjectionBackfillCount = 0;
+  let sqliteProjectionBackfillCount;
   try {
     legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
     legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);

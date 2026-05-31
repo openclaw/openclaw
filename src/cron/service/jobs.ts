@@ -213,7 +213,7 @@ function shouldRepairFutureCronNextRunAtMs(params: {
   if (!isFiniteTimestamp(naturalNext)) {
     return false;
   }
-  let isScheduledSlot = false;
+  let isScheduledSlot;
   try {
     isScheduledSlot = isStaggeredCronRunAtMs(job, nextRun);
   } catch {

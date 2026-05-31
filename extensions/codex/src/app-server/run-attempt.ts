@@ -965,8 +965,19 @@ export async function runCodexAppServerAttempt(
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
   let trajectoryEndRecorded = false;
+  const markTrajectoryEndRecorded = () => {
+    trajectoryEndRecorded = true;
+  };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   let releaseSharedClientLease: (() => void) | undefined;
+  const releaseSharedClientLeaseOnce = () => {
+    const release = releaseSharedClientLease;
+    if (!release) {
+      return;
+    }
+    releaseSharedClientLease = undefined;
+    release();
+  };
   let sandboxExecEnvironmentAcquired = false;
   const releaseSandboxExecEnvironment = async () => {
     if (sandboxExecEnvironmentAcquired) {
@@ -1914,7 +1925,7 @@ export async function runCodexAppServerAttempt(
         aborted: runAbortController.signal.aborted,
         promptError: turnStartErrorMessage,
       });
-      trajectoryEndRecorded = true;
+      markTrajectoryEndRecorded();
       runAgentHarnessLlmOutputHook({
         event: {
           runId: params.runId,
@@ -1979,8 +1990,7 @@ export async function runCodexAppServerAttempt(
         },
       });
       params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-      releaseSharedClientLease?.();
-      releaseSharedClientLease = undefined;
+      releaseSharedClientLeaseOnce();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({
           params,
@@ -2000,8 +2010,7 @@ export async function runCodexAppServerAttempt(
     }
   }
   if (!turn) {
-    releaseSharedClientLease?.();
-    releaseSharedClientLease = undefined;
+    releaseSharedClientLeaseOnce();
     throw new Error("codex app-server turn/start failed without an error");
   }
   turnIdRef.current = turn.turn.id;
@@ -2250,7 +2259,7 @@ export async function runCodexAppServerAttempt(
       yieldDetected,
       promptError: normalizeCodexTrajectoryError(finalPromptError),
     });
-    trajectoryEndRecorded = true;
+    markTrajectoryEndRecorded();
     await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
@@ -2427,7 +2436,7 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    releaseSharedClientLease?.();
+    releaseSharedClientLeaseOnce();
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a

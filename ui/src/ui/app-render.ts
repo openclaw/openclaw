@@ -119,6 +119,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
+  createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
   parseSessionsFilterInteger,
@@ -126,6 +127,13 @@ import {
   restoreSessionFromCheckpoint,
   toggleSessionCompactionCheckpoints,
 } from "./controllers/sessions.ts";
+import {
+  countSkillWorkshopProposals,
+  loadSkillWorkshopProposalDetail,
+  requestSkillWorkshopRevision,
+  runSkillWorkshopLifecycleAction,
+  selectSkillWorkshopProposal,
+} from "./controllers/skill-workshop.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -153,6 +161,8 @@ import {
   pathForTab,
   SETTINGS_TABS,
   TAB_GROUPS,
+  childTabsOf,
+  isChildTab,
   subtitleForTab,
   titleForTab,
   type Tab,
@@ -174,6 +184,7 @@ import { normalizeOptionalString } from "./string-coerce.ts";
 import type { GatewaySessionRow } from "./types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
+import "./components/tooltip.ts";
 import {
   resolveAgentConfig,
   resolveConfiguredCronModelSuggestions,
@@ -203,7 +214,7 @@ let pendingUpdate: (() => void) | undefined;
 
 const notifyLazyViewChanged = () => pendingUpdate?.();
 
-function runUiTask<Args extends unknown[]>(
+function runUiTask<Args extends readonly unknown[]>(
   task: (...args: Args) => Promise<unknown>,
 ): (...args: Args) => void {
   return (...args) => {
@@ -412,7 +423,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
         }
         event.preventDefault();
         if (row.key !== state.sessionKey) {
-          switchChatSession(state, row.key);
+          void switchChatSession(state, row.key);
         }
         state.setTab("chat" as import("./navigation.ts").Tab);
       }}
@@ -444,6 +455,10 @@ const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewC
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
+const lazySkillWorkshop = createLazyView(
+  () => import("./views/skill-workshop.ts"),
+  notifyLazyViewChanged,
+);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
 export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
@@ -480,6 +495,20 @@ function resolveDreamingNextCycle(
 let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
+const SKILL_WORKSHOP_REVIEWED_KEY = "openclaw:control-ui:skill-workshop-reviewed:v1";
+const SKILL_WORKSHOP_QUEUE_WIDTH_KEY = "openclaw:control-ui:skill-workshop-queue-width:v1";
+const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
+const SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY =
+  "openclaw:control-ui:skill-workshop-current-chat-revisions:v1";
+const SKILL_WORKSHOP_REVISION_SESSIONS_KEY =
+  "openclaw:control-ui:skill-workshop-revision-sessions:v1";
+const SKILL_WORKSHOP_CHAT_HANDOFF_MS = 900;
+const SKILL_WORKSHOP_REVISION_PREPARE_MIN_MS = 700;
+const MAX_SKILL_WORKSHOP_REVIEWED_KEYS = 500;
+const MAX_SKILL_WORKSHOP_REVISION_SESSIONS = 200;
+const DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH = 360;
+const MIN_SKILL_WORKSHOP_QUEUE_WIDTH = 280;
+const MAX_SKILL_WORKSHOP_QUEUE_WIDTH = 560;
 const CRON_THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 const CRON_TIMEZONE_SUGGESTIONS = [
   "UTC",
@@ -523,6 +552,487 @@ type DismissedUpdateBanner = {
   channel: string | null;
   dismissedAtMs: number;
 };
+
+type SkillWorkshopReviewableProposal = {
+  key: string;
+  slug?: string;
+  status: string;
+  origin?: {
+    agentId?: string;
+    sessionKey?: string;
+  };
+  version: number;
+  createdAt: number;
+  updatedAt?: number;
+  isNew: boolean;
+};
+
+type SkillWorkshopRevisionSessionEntry = {
+  sessionKey: string;
+  updatedAt: number;
+};
+
+export function loadSkillWorkshopUseCurrentChatForRevisions(): boolean {
+  return getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY) === "true";
+}
+
+function setSkillWorkshopUseCurrentChatForRevisions(state: AppViewState, enabled: boolean): void {
+  state.skillWorkshopUseCurrentChatForRevisions = enabled;
+  try {
+    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY, String(enabled));
+  } catch {
+    // Storage is only for the UI preference; the current toggle state still applies.
+  }
+}
+
+export function loadSkillWorkshopRevisionSessions(): Record<
+  string,
+  SkillWorkshopRevisionSessionEntry
+> {
+  const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_REVISION_SESSIONS_KEY);
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const entries = Object.entries(parsed)
+      .flatMap(([proposalId, value]) => {
+        if (!value || typeof value !== "object") {
+          return [];
+        }
+        const record = value as { sessionKey?: unknown; updatedAt?: unknown };
+        const sessionKey = normalizeOptionalString(record.sessionKey);
+        const updatedAt =
+          typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt)
+            ? record.updatedAt
+            : 0;
+        return proposalId && sessionKey ? [[proposalId, { sessionKey, updatedAt }] as const] : [];
+      })
+      .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
+      .slice(0, MAX_SKILL_WORKSHOP_REVISION_SESSIONS);
+    return Object.fromEntries(entries);
+  } catch {
+    return {};
+  }
+}
+
+function saveSkillWorkshopRevisionSessions(
+  sessions: Record<string, SkillWorkshopRevisionSessionEntry>,
+): void {
+  try {
+    const entries = Object.entries(sessions)
+      .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
+      .slice(0, MAX_SKILL_WORKSHOP_REVISION_SESSIONS);
+    getSafeLocalStorage()?.setItem(
+      SKILL_WORKSHOP_REVISION_SESSIONS_KEY,
+      JSON.stringify(Object.fromEntries(entries)),
+    );
+  } catch {
+    // Revision session persistence is a convenience; created sessions remain usable normally.
+  }
+}
+
+export function loadSkillWorkshopReviewedKeys(): string[] {
+  const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_REVIEWED_KEY);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((value): value is string => typeof value === "string")
+      .slice(-MAX_SKILL_WORKSHOP_REVIEWED_KEYS);
+  } catch {
+    return [];
+  }
+}
+
+function saveSkillWorkshopReviewedKeys(keys: string[]): void {
+  try {
+    getSafeLocalStorage()?.setItem(
+      SKILL_WORKSHOP_REVIEWED_KEY,
+      JSON.stringify(keys.slice(-MAX_SKILL_WORKSHOP_REVIEWED_KEYS)),
+    );
+  } catch {
+    // Ignore browser storage failures; the dots still work for the current render state.
+  }
+}
+
+export function loadSkillWorkshopQueueWidth(): number {
+  const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_QUEUE_WIDTH_KEY);
+  if (!raw) {
+    return DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH;
+  }
+  return clampSkillWorkshopQueueWidth(Number(raw));
+}
+
+function clampSkillWorkshopQueueWidth(width: number): number {
+  if (!Number.isFinite(width)) {
+    return DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH;
+  }
+  return Math.min(
+    MAX_SKILL_WORKSHOP_QUEUE_WIDTH,
+    Math.max(MIN_SKILL_WORKSHOP_QUEUE_WIDTH, Math.round(width)),
+  );
+}
+
+function setSkillWorkshopQueueWidth(
+  state: AppViewState,
+  width: number,
+  options?: { persist?: boolean },
+): void {
+  const next = clampSkillWorkshopQueueWidth(width);
+  state.skillWorkshopQueueWidth = next;
+  if (options?.persist) {
+    try {
+      getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_QUEUE_WIDTH_KEY, String(next));
+    } catch {
+      // Width persistence is a convenience; the current drag state still applies.
+    }
+  }
+}
+
+export function loadSkillWorkshopMode(): "board" | "today" {
+  const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_MODE_KEY);
+  return raw === "today" ? "today" : "board";
+}
+
+function setSkillWorkshopMode(state: AppViewState, mode: "board" | "today"): void {
+  if (state.skillWorkshopMode === mode) {
+    return;
+  }
+  state.skillWorkshopMode = mode;
+  try {
+    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_MODE_KEY, mode);
+  } catch {
+    // Mode persistence is a convenience; the in-memory toggle still works.
+  }
+}
+
+function renderSkillWorkshopHeaderControls(state: AppViewState) {
+  return html`
+    <div class="sw-header-controls">
+      <openclaw-tooltip
+        .text=${"Send revision requests to the current chat session instead of the proposal's workshop session."}
+        placement="bottom"
+        align="end"
+      >
+        <label class="sw-revision-session-toggle">
+          <input
+            type="checkbox"
+            .checked=${state.skillWorkshopUseCurrentChatForRevisions}
+            @change=${(event: Event) =>
+              setSkillWorkshopUseCurrentChatForRevisions(
+                state,
+                (event.currentTarget as HTMLInputElement).checked,
+              )}
+          />
+          <span class="sw-revision-session-toggle__track" aria-hidden="true"></span>
+          <span class="sw-revision-session-toggle__label">Use current chat</span>
+        </label>
+      </openclaw-tooltip>
+      <div
+        class="sw-mode-switch"
+        role="tablist"
+        aria-label="Workshop view"
+        data-mode=${state.skillWorkshopMode}
+      >
+        <button
+          class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
+          role="tab"
+          aria-selected=${state.skillWorkshopMode === "board"}
+          title="Board view"
+          @click=${() => setSkillWorkshopMode(state, "board")}
+        >
+          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
+            <rect x="3" y="4" width="7" height="16" rx="1.5" />
+            <rect x="14" y="4" width="7" height="9" rx="1.5" />
+            <rect x="14" y="15" width="7" height="5" rx="1.5" />
+          </svg>
+          <span>Board</span>
+        </button>
+        <button
+          class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
+          role="tab"
+          aria-selected=${state.skillWorkshopMode === "today"}
+          title="Today view"
+          @click=${() => setSkillWorkshopMode(state, "today")}
+        >
+          <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path
+              d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
+            />
+          </svg>
+          <span>Today</span>
+        </button>
+        <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
+      </div>
+    </div>
+  `;
+}
+
+function skillWorkshopReviewKey(proposal: SkillWorkshopReviewableProposal): string {
+  return `${proposal.key}:${proposal.version}:${proposal.updatedAt ?? proposal.createdAt}`;
+}
+
+function applySkillWorkshopReviewState<T extends SkillWorkshopReviewableProposal>(
+  proposals: T[],
+  reviewedKeys: string[],
+): T[] {
+  const reviewed = new Set(reviewedKeys);
+  return proposals.map((proposal) => ({
+    ...proposal,
+    isNew: proposal.status === "pending" && !reviewed.has(skillWorkshopReviewKey(proposal)),
+  }));
+}
+
+function rememberSkillWorkshopProposalReviewed(
+  reviewedKeys: string[],
+  proposal: SkillWorkshopReviewableProposal,
+): string[] {
+  const key = skillWorkshopReviewKey(proposal);
+  if (reviewedKeys.includes(key)) {
+    return reviewedKeys;
+  }
+  const next = [...reviewedKeys, key].slice(-MAX_SKILL_WORKSHOP_REVIEWED_KEYS);
+  saveSkillWorkshopReviewedKeys(next);
+  return next;
+}
+
+function findSkillWorkshopRevisionSessionRow(
+  state: AppViewState,
+  sessionKey: string | undefined,
+): GatewaySessionRow | null {
+  const key = normalizeOptionalString(sessionKey);
+  if (!key) {
+    return null;
+  }
+  const current = state.sessionsResult?.sessions.find((row) => row.key === key);
+  if (current) {
+    return current;
+  }
+  for (const rows of Object.values(state.chatAgentSessionRowsByAgent ?? {})) {
+    const cached = rows.find((row) => row.key === key);
+    if (cached) {
+      return cached;
+    }
+  }
+  return null;
+}
+
+function isUsableSkillWorkshopRevisionSession(
+  row: GatewaySessionRow | null,
+): row is GatewaySessionRow {
+  return Boolean(row && !row.archived && !row.hasActiveRun);
+}
+
+function rememberSkillWorkshopRevisionSession(
+  state: AppViewState,
+  proposalId: string,
+  sessionKey: string,
+): void {
+  const key = normalizeOptionalString(proposalId);
+  const value = normalizeOptionalString(sessionKey);
+  if (!key || !value) {
+    return;
+  }
+  const next = {
+    ...state.skillWorkshopRevisionSessions,
+    [key]: { sessionKey: value, updatedAt: Date.now() },
+  };
+  state.skillWorkshopRevisionSessions = next;
+  saveSkillWorkshopRevisionSessions(next);
+}
+
+async function ensureSkillWorkshopRevisionSessionsLoaded(
+  state: AppViewState,
+  agentId: string,
+): Promise<void> {
+  const resultAgentId = normalizeOptionalString(state.sessionsResultAgentId);
+  if (resultAgentId === agentId && state.sessionsResult?.sessions.length) {
+    return;
+  }
+  await loadSessions(state, {
+    ...createChatSessionsLoadOverrides(state),
+    agentId,
+  });
+}
+
+async function resolveSkillWorkshopRevisionSessionKey(
+  state: AppViewState,
+  proposal: SkillWorkshopReviewableProposal,
+): Promise<string | null> {
+  if (state.skillWorkshopUseCurrentChatForRevisions) {
+    return normalizeOptionalString(state.sessionKey) ?? null;
+  }
+
+  const agentId = normalizeAgentId(
+    proposal.origin?.agentId ?? resolveSidebarSelectedAgentId(state),
+  );
+  await ensureSkillWorkshopRevisionSessionsLoaded(state, agentId);
+
+  const originRow = findSkillWorkshopRevisionSessionRow(state, proposal.origin?.sessionKey);
+  if (isUsableSkillWorkshopRevisionSession(originRow)) {
+    return originRow.key;
+  }
+
+  const mappedSessionKey = state.skillWorkshopRevisionSessions[proposal.key]?.sessionKey;
+  const mappedRow = findSkillWorkshopRevisionSessionRow(state, mappedSessionKey);
+  if (isUsableSkillWorkshopRevisionSession(mappedRow)) {
+    return mappedRow.key;
+  }
+
+  const labelTarget = normalizeOptionalString(proposal.slug) ?? proposal.key;
+  const created = await createSessionAndRefresh(
+    state as unknown as Parameters<typeof createSessionAndRefresh>[0],
+    {
+      agentId,
+      label: `Skill Workshop: ${labelTarget}`.slice(0, 80),
+    },
+    {
+      ...createChatSessionsLoadOverrides(state),
+      agentId,
+    },
+  );
+  if (created) {
+    rememberSkillWorkshopRevisionSession(state, proposal.key, created);
+  }
+  return created;
+}
+
+async function sendSkillWorkshopRevisionRequest(
+  state: AppViewState,
+  message: string,
+  proposal: SkillWorkshopReviewableProposal,
+): Promise<void> {
+  if (!state.client || !state.connected) {
+    throw new Error("Gateway is not connected.");
+  }
+  const startedAt = Date.now();
+  const sessionKey = await resolveSkillWorkshopRevisionSessionKey(state, proposal);
+  if (!sessionKey) {
+    throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
+  }
+  await waitForSkillWorkshopRevisionPrepare(startedAt);
+  startSkillWorkshopChatHandoff(state);
+  if (state.tab !== "chat") {
+    state.setTab("chat" as Tab);
+  }
+  if (state.sessionKey === sessionKey) {
+    await loadChatHistory(state);
+  } else {
+    await switchChatSession(state, sessionKey, { awaitInitialLoad: true });
+  }
+  await state.handleSendChat(message);
+}
+
+function waitForSkillWorkshopRevisionPrepare(startedAt: number): Promise<void> {
+  const remainingMs = SKILL_WORKSHOP_REVISION_PREPARE_MIN_MS - (Date.now() - startedAt);
+  return remainingMs > 0
+    ? new Promise((resolve) => globalThis.setTimeout(resolve, remainingMs))
+    : Promise.resolve();
+}
+
+function startSkillWorkshopChatHandoff(state: AppViewState): void {
+  if (state.skillWorkshopChatHandoffTimer) {
+    globalThis.clearTimeout(state.skillWorkshopChatHandoffTimer);
+  }
+  state.skillWorkshopChatHandoffActive = true;
+  state.skillWorkshopChatHandoffTimer = globalThis.setTimeout(() => {
+    state.skillWorkshopChatHandoffActive = false;
+    state.skillWorkshopChatHandoffTimer = null;
+  }, SKILL_WORKSHOP_CHAT_HANDOFF_MS);
+}
+
+const SKILL_WORKSHOP_HANDOFF_DISMISS_MS = 720;
+const SKILL_WORKSHOP_HANDOFF_ERROR_DISMISS_MS = 620;
+
+function startSkillWorkshopHandoffOverlay(
+  state: AppViewState,
+  proposal: { key: string; slug: string },
+): void {
+  clearSkillWorkshopHandoffOverlay(state, { immediate: true });
+  state.skillWorkshopHandoff = {
+    key: proposal.key,
+    slug: proposal.slug,
+    phase: "prepare",
+  };
+}
+
+function advanceSkillWorkshopHandoffPhase(
+  state: AppViewState,
+  phase: "prepare" | "landing" | "error",
+): void {
+  if (!state.skillWorkshopHandoff) {
+    return;
+  }
+  state.skillWorkshopHandoff = { ...state.skillWorkshopHandoff, phase };
+}
+
+function finishSkillWorkshopHandoffOverlay(state: AppViewState): void {
+  if (!state.skillWorkshopHandoff) {
+    return;
+  }
+  advanceSkillWorkshopHandoffPhase(state, "landing");
+  if (state.skillWorkshopHandoffDismissTimer) {
+    globalThis.clearTimeout(state.skillWorkshopHandoffDismissTimer);
+  }
+  state.skillWorkshopHandoffDismissTimer = globalThis.setTimeout(() => {
+    state.skillWorkshopHandoff = null;
+    state.skillWorkshopHandoffDismissTimer = null;
+  }, SKILL_WORKSHOP_HANDOFF_DISMISS_MS);
+}
+
+function failSkillWorkshopHandoffOverlay(state: AppViewState): void {
+  if (!state.skillWorkshopHandoff) {
+    return;
+  }
+  advanceSkillWorkshopHandoffPhase(state, "error");
+  if (state.skillWorkshopHandoffDismissTimer) {
+    globalThis.clearTimeout(state.skillWorkshopHandoffDismissTimer);
+  }
+  state.skillWorkshopHandoffDismissTimer = globalThis.setTimeout(() => {
+    state.skillWorkshopHandoff = null;
+    state.skillWorkshopHandoffDismissTimer = null;
+  }, SKILL_WORKSHOP_HANDOFF_ERROR_DISMISS_MS);
+}
+
+function clearSkillWorkshopHandoffOverlay(
+  state: AppViewState,
+  options?: { immediate?: boolean },
+): void {
+  if (state.skillWorkshopHandoffDismissTimer) {
+    globalThis.clearTimeout(state.skillWorkshopHandoffDismissTimer);
+    state.skillWorkshopHandoffDismissTimer = null;
+  }
+  if (options?.immediate) {
+    state.skillWorkshopHandoff = null;
+  }
+}
+
+function renderSkillWorkshopHandoffOverlay(state: AppViewState) {
+  const handoff = state.skillWorkshopHandoff;
+  if (!handoff) {
+    return nothing;
+  }
+  return html`
+    <div class="sw-handoff-veil sw-handoff-veil--${handoff.phase}" aria-hidden="true"></div>
+    <div
+      class="sw-handoff sw-handoff--${handoff.phase}"
+      role="status"
+      aria-label="Preparing chat handoff"
+    >
+      <span class="sw-handoff__spinner" aria-hidden="true"></span>
+    </div>
+  `;
+}
 
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
   try {
@@ -1911,9 +2421,19 @@ export function renderApp(state: AppViewState) {
                           `
                         : nothing}
                       <div class="nav-section__items">
-                        ${group.tabs.map((tab) =>
-                          renderTab(state, tab, { collapsed: navCollapsed }),
-                        )}
+                        ${group.tabs
+                          .filter((tab) => !isChildTab(tab))
+                          .flatMap((tab) => {
+                            const renderedTabs = [
+                              renderTab(state, tab, { collapsed: navCollapsed }),
+                            ];
+                            for (const child of childTabsOf(tab)) {
+                              renderedTabs.push(
+                                renderTab(state, child, { collapsed: navCollapsed, child: true }),
+                              );
+                            }
+                            return renderedTabs;
+                          })}
                       </div>
                     </section>
                   `;
@@ -1962,7 +2482,12 @@ export function renderApp(state: AppViewState) {
       <main
         class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
           ? "content--logs"
-          : ""} ${state.tab === "workboard" ? "content--workboard" : ""}"
+          : ""} ${isChat && state.skillWorkshopChatHandoffActive
+          ? "content--chat-workshop-handoff"
+          : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab ===
+        "skillWorkshop"
+          ? `content--skill-workshop ${state.skillWorkshopMode === "today" ? "content--skill-workshop-today" : ""}`
+          : ""}"
       >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
@@ -2012,6 +2537,9 @@ export function renderApp(state: AppViewState) {
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
               </div>
               <div class="page-meta">
+                ${state.tab === "skillWorkshop"
+                  ? renderSkillWorkshopHeaderControls(state)
+                  : nothing}
                 ${state.tab === "dreams"
                   ? html`
                       <div class="dreaming-header-controls">
@@ -2071,7 +2599,7 @@ export function renderApp(state: AppViewState) {
               onSettingsChange: (next) => state.applySettings(next),
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
-                switchChatSession(state, next);
+                void switchChatSession(state, next);
               },
               onToggleGatewayTokenVisibility: () => {
                 state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
@@ -2280,7 +2808,7 @@ export function renderApp(state: AppViewState) {
                   }
                 }),
                 onNavigateToChat: (sessionKey) => {
-                  switchChatSession(state, sessionKey);
+                  void switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
                 onAddToWorkboard:
@@ -2304,7 +2832,7 @@ export function renderApp(state: AppViewState) {
                     checkpointId,
                   );
                   if (nextKey) {
-                    switchChatSession(state, nextKey);
+                    void switchChatSession(state, nextKey);
                     state.setTab("chat" as import("./navigation.ts").Tab);
                   }
                 }),
@@ -2329,7 +2857,7 @@ export function renderApp(state: AppViewState) {
                 agentsList: state.agentsList,
                 sessions: state.sessionsResult?.sessions ?? [],
                 onOpenSession: (sessionKey) => {
-                  switchChatSession(state, sessionKey);
+                  void switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
                 onRequestUpdate: requestHostUpdate,
@@ -2463,7 +2991,7 @@ export function renderApp(state: AppViewState) {
                   await loadCronRuns(state, state.cronRunsJobId);
                 }),
                 onNavigateToChat: (sessionKey) => {
-                  switchChatSession(state, sessionKey);
+                  void switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
               }),
@@ -2846,6 +3374,129 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
+        ${state.tab === "skillWorkshop"
+          ? renderLazyView(lazySkillWorkshop, (m) => {
+              const proposals = applySkillWorkshopReviewState(
+                state.skillWorkshopProposals,
+                state.skillWorkshopReviewedKeys,
+              );
+              const counts = countSkillWorkshopProposals(proposals);
+              const selectedKey = state.skillWorkshopSelectedKey ?? proposals[0]?.key ?? null;
+              const visibleProposals = m.filterSkillWorkshopProposals(
+                proposals,
+                state.skillWorkshopStatusFilter,
+                state.skillWorkshopQuery,
+              );
+              const currentIndex = visibleProposals.findIndex((p) => p.key === selectedKey);
+              const goto = (offset: number) => {
+                if (visibleProposals.length === 0) {
+                  return;
+                }
+                const idx = Math.max(0, currentIndex);
+                const next = (idx + offset + visibleProposals.length) % visibleProposals.length;
+                const proposal = visibleProposals[next];
+                selectSkillWorkshopProposal(state, proposal.key);
+                state.skillWorkshopReviewedKeys = rememberSkillWorkshopProposalReviewed(
+                  state.skillWorkshopReviewedKeys,
+                  proposal,
+                );
+                state.skillWorkshopFilePreviewKey = null;
+                state.skillWorkshopFilePreviewQuery = "";
+              };
+              return m.renderSkillWorkshop({
+                loading: state.skillWorkshopLoading,
+                error: state.skillWorkshopError,
+                inspectingKey: state.skillWorkshopInspectingKey,
+                proposals,
+                selectedKey,
+                statusFilter: state.skillWorkshopStatusFilter,
+                query: state.skillWorkshopQuery,
+                filePreviewKey: state.skillWorkshopFilePreviewKey,
+                filePreviewQuery: state.skillWorkshopFilePreviewQuery,
+                queueWidth: state.skillWorkshopQueueWidth,
+                mode: state.skillWorkshopMode,
+                actionBusy: state.skillWorkshopActionBusy,
+                actionNotice: state.skillWorkshopActionNotice,
+                revisionKey: state.skillWorkshopRevisionKey,
+                revisionDraft: state.skillWorkshopRevisionDraft,
+                assistantName: state.assistantName,
+                counts,
+                onStatusFilterChange: (next) => (state.skillWorkshopStatusFilter = next),
+                onQueryChange: (next) => (state.skillWorkshopQuery = next),
+                onFilePreviewQueryChange: (next) => (state.skillWorkshopFilePreviewQuery = next),
+                onQueueWidthChange: (width) => setSkillWorkshopQueueWidth(state, width),
+                onQueueWidthCommit: (width) =>
+                  setSkillWorkshopQueueWidth(state, width, { persist: true }),
+                onModeChange: (mode) => setSkillWorkshopMode(state, mode),
+                onSelect: (key) => {
+                  const proposal = proposals.find((p) => p.key === key);
+                  selectSkillWorkshopProposal(state, key);
+                  if (proposal) {
+                    state.skillWorkshopReviewedKeys = rememberSkillWorkshopProposalReviewed(
+                      state.skillWorkshopReviewedKeys,
+                      proposal,
+                    );
+                  }
+                  state.skillWorkshopFilePreviewKey = null;
+                  state.skillWorkshopFilePreviewQuery = "";
+                },
+                onPrev: () => goto(-1),
+                onNext: () => goto(1),
+                onApply: (key) => {
+                  void runSkillWorkshopLifecycleAction(state, "apply", key);
+                },
+                onRevise: (key) => {
+                  state.skillWorkshopRevisionKey = key;
+                  state.skillWorkshopRevisionDraft = "";
+                  state.skillWorkshopActionNotice = null;
+                },
+                onReject: (key) => {
+                  void runSkillWorkshopLifecycleAction(state, "reject", key);
+                },
+                onRevisionDraftChange: (draft) => {
+                  state.skillWorkshopRevisionDraft = draft;
+                },
+                onRevisionCancel: () => {
+                  if (state.skillWorkshopActionBusy) {
+                    return;
+                  }
+                  state.skillWorkshopRevisionKey = null;
+                  state.skillWorkshopRevisionDraft = "";
+                },
+                onRevisionSubmit: (key) => {
+                  if (!state.skillWorkshopRevisionDraft.trim()) {
+                    return;
+                  }
+                  const proposal = state.skillWorkshopProposals.find((p) => p.key === key);
+                  if (proposal) {
+                    startSkillWorkshopHandoffOverlay(state, {
+                      key: proposal.key,
+                      slug: proposal.slug,
+                    });
+                  }
+                  void (async () => {
+                    const succeeded = await requestSkillWorkshopRevision(state, key, (message, p) =>
+                      sendSkillWorkshopRevisionRequest(state, message, p),
+                    );
+                    if (succeeded) {
+                      finishSkillWorkshopHandoffOverlay(state);
+                    } else {
+                      state.skillWorkshopRevisionKey = null;
+                      failSkillWorkshopHandoffOverlay(state);
+                    }
+                  })();
+                },
+                onPreviewFile: (_key, path) => {
+                  state.skillWorkshopFilePreviewKey = path;
+                  void loadSkillWorkshopProposalDetail(state, _key);
+                },
+                onClosePreview: () => {
+                  state.skillWorkshopFilePreviewKey = null;
+                  state.skillWorkshopFilePreviewQuery = "";
+                },
+              });
+            })
+          : nothing}
         ${state.tab === "nodes"
           ? renderLazyView(lazyNodes, (m) =>
               m.renderNodes({
@@ -2939,7 +3590,7 @@ export function renderApp(state: AppViewState) {
                 renderChat({
                   sessionKey: state.sessionKey,
                   onSessionKeyChange: (next) => {
-                    switchChatSession(state, next);
+                    void switchChatSession(state, next);
                   },
                   thinkingLevel: state.chatThinkingLevel,
                   showThinking,
@@ -3054,14 +3705,14 @@ export function renderApp(state: AppViewState) {
                   currentAgentId: resolvedAgentId ?? "main",
                   fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
                   onAgentChange: (agentId: string) => {
-                    switchChatSession(state, buildAgentMainSessionKey({ agentId }));
+                    void switchChatSession(state, buildAgentMainSessionKey({ agentId }));
                   },
                   onNavigateToAgent: () => {
                     state.agentsSelectedId = resolvedAgentId;
                     state.setTab("agents" as import("./navigation.ts").Tab);
                   },
                   onSessionSelect: (key: string) => {
-                    switchChatSession(state, key);
+                    void switchChatSession(state, key);
                   },
                   showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                   onScrollToBottom: () => state.scrollToBottom(),
@@ -3177,7 +3828,7 @@ export function renderApp(state: AppViewState) {
               onRefresh: refreshDreaming,
               onSelectAgent: (agentId: string) => {
                 state.selectedAgentId = agentId;
-                switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
+                void switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
                 void loadDreamingStatus(state);
                 void loadDreamDiary(state);
               },
@@ -3227,6 +3878,7 @@ export function renderApp(state: AppViewState) {
           : nothing}
       </main>
       ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)}
+      ${renderSkillWorkshopHandoffOverlay(state)}
       ${renderDreamingRestartConfirmation({
         open: state.dreamingRestartConfirmOpen,
         loading: state.dreamingRestartConfirmLoading,

@@ -390,7 +390,7 @@ export function createSessionsSendTool(opts?: {
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
           ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
         };
-        let resolvedKey = "";
+        let resolvedKey;
         try {
           const resolved = await gatewayCall<{ key: string }>({
             method: "sessions.resolve",

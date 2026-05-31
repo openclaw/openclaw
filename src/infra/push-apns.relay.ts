@@ -248,7 +248,7 @@ async function sendApnsRelayRequest(params: {
     };
   }
 
-  let json: unknown = null;
+  let json: unknown;
   try {
     json = (await response.json()) as unknown;
   } catch {

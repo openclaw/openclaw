@@ -109,7 +109,7 @@ function hasProtectedChild({ rootPath, protectedPaths }) {
 }
 
 function cleanOutputRootExcept(rootPath, protectedPaths, fsImpl) {
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
   } catch {
@@ -162,7 +162,7 @@ function listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }) {
 }
 
 function collectDeclarationOutputPaths(rootPath, protectedPaths, fsImpl) {
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
   } catch {
@@ -184,7 +184,7 @@ export function pruneStaleRootChunkFiles(params = {}) {
   const fsImpl = params.fs ?? fs;
   const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
-    let entries = [];
+    let entries;
     try {
       entries = fsImpl.readdirSync(root, { withFileTypes: true });
     } catch {
