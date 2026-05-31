@@ -604,7 +604,7 @@ describe("buildMediaGenerationReplyInstruction determinism", () => {
     const internalEvents = call[0].internalEvents;
     const instruction = internalEvents[0].replyInstruction;
     expect(instruction).toContain("Do NOT use the message tool for delivery");
-    expect(instruction).not.toContain("message(action=\"send\")");
+    expect(instruction).not.toContain('message(action="send")');
   });
 
   it("includes message tool instruction when sourceReplyDeliveryMode is message_tool_only", async () => {
@@ -640,7 +640,7 @@ describe("buildMediaGenerationReplyInstruction determinism", () => {
     const call = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0];
     const internalEvents = call[0].internalEvents;
     const instruction = internalEvents[0].replyInstruction;
-    expect(instruction).toContain("message(action=\"send\")");
+    expect(instruction).toContain('message(action="send")');
     expect(instruction).toContain("Do NOT use MEDIA: lines");
     expect(instruction).not.toContain("Do NOT use the message tool");
   });

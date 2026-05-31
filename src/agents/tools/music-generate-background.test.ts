@@ -115,7 +115,7 @@ describe("music generate background helpers", () => {
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
-  it("tells channel completion agents to follow the visible-reply contract", async () => {
+  it("tells channel completion agents to use MEDIA lines, not the message tool", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",
@@ -129,14 +129,16 @@ describe("music generate background helpers", () => {
 
     await wakeMusicGenerationTaskCompletion({
       ...completion,
+      config: { messages: {} } as any,
       handle: {
         ...completion.handle,
         requesterSessionKey: "agent:main:discord:channel:C123",
+        requesterOrigin: { channel: "discord", to: "channel:C123" },
       },
     });
 
-    expectReplyInstructionContains("visible-reply contract");
     expectReplyInstructionContains("final-reply MEDIA lines");
+    expectReplyInstructionContains("Do NOT use the message tool");
   });
 
   it("delivers failure completion notices directly", async () => {
@@ -168,7 +170,7 @@ describe("music generate background helpers", () => {
   });
 
   it.each(["agent:main:discord:guild-123:channel-456", "agent:main:whatsapp:123@g.us"])(
-    "warns legacy group/channel completion agents for %s",
+    "tells legacy group/channel completion agents for %s to use MEDIA lines",
     async (requesterSessionKey) => {
       announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
         delivered: true,
@@ -183,14 +185,16 @@ describe("music generate background helpers", () => {
 
       await wakeMusicGenerationTaskCompletion({
         ...completion,
+        config: { messages: {} } as any,
         handle: {
           ...completion.handle,
           requesterSessionKey,
+          requesterOrigin: { channel: requesterSessionKey.split(":")[1], to: requesterSessionKey.split(":").slice(2).join(":") },
         },
       });
 
-      expectReplyInstructionContains("visible-reply contract");
       expectReplyInstructionContains("final-reply MEDIA lines");
+      expectReplyInstructionContains("Do NOT use the message tool");
     },
   );
 

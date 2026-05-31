@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import { resolveCompletionChatType } from "../../auto-reply/reply/completion-delivery-policy.js";
+import { resolveSourceReplyDeliveryMode } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -26,9 +29,6 @@ import {
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
-import { resolveCompletionChatType } from "../../auto-reply/reply/completion-delivery-policy.js";
-import { resolveSourceReplyDeliveryMode } from "../../auto-reply/reply/source-reply-delivery-mode.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
