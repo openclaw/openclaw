@@ -83,6 +83,10 @@ describe("applyJobPatch", () => {
       to: "-100123",
       threadId: 42,
       accountId: "coordinator",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
     });
 
     applyJobPatch(job, {
@@ -93,8 +97,63 @@ describe("applyJobPatch", () => {
       mode: "webhook",
       to: "https://example.invalid/cron",
       bestEffort: undefined,
+      completionDestination: undefined,
       failureDestination: undefined,
     });
+  });
+
+  it("clears migrated completion webhook when disabling delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-disable-completion-webhook", {
+      mode: "announce",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "none" },
+    });
+
+    expect(job.delivery?.mode).toBe("none");
+    expect(job.delivery?.completionDestination).toBeUndefined();
+  });
+
+  it("rejects completion webhook on disabled delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-disable-with-completion-webhook", {
+      mode: "announce",
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: {
+          mode: "none",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/legacy-completion",
+          },
+        },
+      }),
+    ).toThrow(
+      'cron completion destination webhook is only supported with delivery.mode="announce"',
+    );
+  });
+
+  it("clears migrated completion webhook while keeping announce delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-clear-completion-webhook", {
+      mode: "announce",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
+    });
+
+    applyJobPatch(job, {
+      delivery: { completionDestination: null },
+    });
+
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.completionDestination).toBeUndefined();
   });
 
   it("clears webhook delivery targets when switching delivery to announce", () => {

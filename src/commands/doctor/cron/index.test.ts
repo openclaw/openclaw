@@ -480,7 +480,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("missing a canonical string `id`", "Cron");
   });
 
-  it("warns instead of replacing announce delivery for notify fallback jobs", async () => {
+  it("migrates notify fallback alongside announce delivery without replacing it", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(
@@ -499,7 +499,7 @@ describe("maybeRepairLegacyCronStore", () => {
               sessionTarget: "isolated",
               wakeMode: "now",
               payload: { kind: "agentTurn", message: "Status" },
-              delivery: { mode: "announce", channel: "telegram", to: "123" },
+              delivery: { to: "telegram:123" },
               state: {},
             },
           ],
@@ -523,9 +523,17 @@ describe("maybeRepairLegacyCronStore", () => {
 
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
-    expect(job.notify).toBe(true);
-    expectNoteContaining(
-      'uses legacy notify fallback alongside delivery mode "announce"',
+    expect(job.notify).toBeUndefined();
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBeUndefined();
+    expect(delivery.to).toBe("telegram:123");
+    expect(delivery.completionDestination).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+    expectNoNoteContaining(
+      "uses legacy notify fallback alongside delivery mode",
       "Doctor warnings",
     );
   });

@@ -316,7 +316,33 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("accountId" in next) {
     delete next.accountId;
   }
+  if ("completionDestination" in next) {
+    if (next.completionDestination === null) {
+      next.completionDestination = null;
+    } else {
+      const completionDestination = isRecord(next.completionDestination)
+        ? coerceCompletionDestination(next.completionDestination)
+        : null;
+      if (completionDestination) {
+        next.completionDestination = completionDestination;
+      } else {
+        delete next.completionDestination;
+      }
+    }
+  }
   return next;
+}
+
+function coerceCompletionDestination(value: UnknownRecord) {
+  const mode = normalizeOptionalLowercaseString(value.mode);
+  const to = normalizeOptionalString(value.to);
+  if (mode !== "webhook") {
+    return null;
+  }
+  return {
+    mode,
+    ...(to ? { to } : {}),
+  } satisfies UnknownRecord;
 }
 
 function inferTopLevelPayload(next: UnknownRecord) {

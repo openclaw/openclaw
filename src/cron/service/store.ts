@@ -1,3 +1,4 @@
+import { migrateLegacyNotifyFallback } from "../migrations/legacy-notify.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -101,6 +102,19 @@ export async function ensureLoaded(
   }
   const loaded = await loadCronStoreWithConfigJobs(state.deps.storePath);
   const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
+  const notifyMigration = migrateLegacyNotifyFallback({
+    jobs: loadedJobs as unknown as Array<Record<string, unknown>>,
+    legacyWebhook: state.deps.cronConfig?.webhook,
+  });
+  if (notifyMigration.warnings.length > 0) {
+    state.deps.log.warn(
+      {
+        storePath: state.deps.storePath,
+        warnings: notifyMigration.warnings,
+      },
+      "cron: legacy notify fallback jobs need cron.webhook before migration",
+    );
+  }
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, job] of loadedJobs.entries()) {
@@ -157,12 +171,14 @@ export async function ensureLoaded(
   };
   state.storeLoadedAtMs = state.deps.nowMs();
 
+  let activeStoreSaved = false;
   if (quarantinedConfigJobs.length > 0) {
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
     const quarantinePath = await flushPendingQuarantine(state, state.storeLoadedAtMs);
     if (quarantinePath) {
       try {
         await saveCronStore(state.deps.storePath, state.store);
+        activeStoreSaved = true;
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
@@ -180,6 +196,24 @@ export async function ensureLoaded(
           "cron: failed to sanitize malformed persisted jobs after quarantine; continuing with quarantined in-memory view",
         );
       }
+    }
+  }
+
+  if (notifyMigration.changed && !activeStoreSaved) {
+    try {
+      await saveCronStore(state.deps.storePath, state.store);
+      state.deps.log.info(
+        { storePath: state.deps.storePath },
+        "cron: migrated legacy notify fallback jobs before scheduler startup",
+      );
+    } catch (error) {
+      state.deps.log.warn(
+        {
+          storePath: state.deps.storePath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "cron: failed to persist legacy notify migration; using migrated in-memory jobs",
+      );
     }
   }
 

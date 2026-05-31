@@ -15,8 +15,8 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { parseCronRunLogEntriesFromJsonl } from "./run-log-jsonl.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
+import { parseCronRunLogEntryObject } from "./run-log/entry-codec.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
 
 export type { CronRunLogEntry } from "./run-log-types.js";
@@ -103,6 +103,8 @@ export function resolveCronRunLogPruneOptions(cfg?: CronConfig["runLog"]): {
     keepLines = Math.floor(cfg.keepLines);
   }
 
+  // `maxBytes` remains accepted for older file-backed config. SQLite runtime
+  // pruning uses row counts (`keepLines`) only.
   return { maxBytes, keepLines };
 }
 
@@ -183,7 +185,13 @@ function bindCronRunLogRow(params: {
 }
 
 function parseStoredRunLogEntry(row: CronRunLogRow): CronRunLogEntry | null {
-  const parsed = parseCronRunLogEntriesFromJsonl(`${row.entry_json}\n`, { jobId: row.job_id })[0];
+  let rawEntry: unknown;
+  try {
+    rawEntry = JSON.parse(row.entry_json);
+  } catch {
+    return null;
+  }
+  const parsed = parseCronRunLogEntryObject(rawEntry, { jobId: row.job_id });
   if (!parsed) {
     return null;
   }

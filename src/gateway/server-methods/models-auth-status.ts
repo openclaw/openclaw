@@ -154,11 +154,11 @@ function buildExpiry(
   remainingMs: number | undefined,
   expiresAt: number | undefined,
 ): ModelAuthExpiry | undefined {
-  const validExpiresAt = asDateTimestampMs(expiresAt);
-  if (validExpiresAt === undefined || typeof remainingMs !== "number") {
+  const normalizedExpiresAt = asDateTimestampMs(expiresAt);
+  if (normalizedExpiresAt === undefined || typeof remainingMs !== "number") {
     return undefined;
   }
-  return { at: validExpiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
+  return { at: normalizedExpiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
 }
 
 function providerDisplayName(provider: string): string {

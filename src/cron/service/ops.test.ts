@@ -214,6 +214,61 @@ describe("cron service ops seam coverage", () => {
     await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("migrates legacy notify fallback before scheduler startup", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-05-20T09:00:00.000Z");
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          id: "legacy-notify",
+          name: "legacy notify",
+          enabled: true,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "do work" },
+          delivery: { to: "telegram:chat-1" },
+          notify: true,
+          state: { nextRunAtMs: now + 3_600_000 },
+        } as CronJob & { notify: true },
+      ],
+    });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { webhook: "https://example.invalid/cron" },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await start(state);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    const loaded = await loadCronStore(storePath);
+    const persisted = loaded.jobs[0] as CronJob & { notify?: unknown };
+    expect(persisted.notify).toBeUndefined();
+    expect(persisted.delivery).toEqual({
+      mode: "announce",
+      to: "telegram:chat-1",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/cron",
+      },
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      { storePath },
+      "cron: migrated legacy notify fallback jobs before scheduler startup",
+    );
+  });
+
   it("start marks interrupted running jobs failed, persists, and arms the timer", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
