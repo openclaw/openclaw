@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { killProcessTree } from "../process/kill-tree.js";
 
 export const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
 
@@ -143,7 +144,9 @@ function buildSnapshotKey(opts: ShellSnapshotWrapOptions): string {
 function buildSafeEnvSignature(
   env: Record<string, string | undefined>,
 ): Array<[string, string | null]> {
-  return [...SAFE_ENV_NAMES].sort().map((key): [string, string | null] => [key, env[key] ?? null]);
+  return [...SAFE_ENV_NAMES]
+    .toSorted()
+    .map((key): [string, string | null] => [key, env[key] ?? null]);
 }
 
 function buildStartupSignature(
@@ -305,7 +308,7 @@ function buildAliasCaptureScript(shellName: string): string {
 }
 
 const ENV_CAPTURE_NODE_SCRIPT = `
-const safe = new Set(${JSON.stringify([...SAFE_ENV_NAMES].sort())});
+const safe = new Set(${JSON.stringify([...SAFE_ENV_NAMES].toSorted())});
 const blocked = ${SECRET_ENV_PATTERN.toString()};
 const out = {};
 for (const [key, value] of Object.entries(process.env)) {
@@ -367,7 +370,7 @@ function parseSafeEnvExports(envJson: string): string {
         !SECRET_ENV_PATTERN.test(entry[0]) &&
         typeof entry[1] === "string",
     )
-    .sort(([a], [b]) => a.localeCompare(b))
+    .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => `export ${key}=${shQuote(value)}`)
     .join("\n");
 }
@@ -409,12 +412,12 @@ async function runShell(opts: {
       }
       settled = true;
       clearTimeout(timeout);
-      killShellCaptureGroup(child.pid);
+      killProcessTree(child.pid ?? 0, { graceMs: 0 });
       child.stdout.destroy();
       resolve({ status, stdout });
     };
     const timeout = setTimeout(() => {
-      killShellCapture(child.pid);
+      killProcessTree(child.pid ?? 0, { graceMs: 250 });
       finish(null);
     }, opts.timeoutMs);
     child.stdout.setEncoding("utf8");
@@ -433,36 +436,6 @@ async function runShell(opts: {
       finish(status);
     });
   });
-}
-
-function killShellCaptureGroup(pid: number | undefined): void {
-  if (!pid || process.platform === "win32") {
-    return;
-  }
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    // The group is already gone.
-  }
-}
-
-function killShellCapture(pid: number | undefined): void {
-  if (!pid) {
-    return;
-  }
-  try {
-    if (process.platform !== "win32") {
-      process.kill(-pid, "SIGKILL");
-      return;
-    }
-  } catch {
-    // Fall back to killing the immediate shell.
-  }
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    // Best-effort timeout cleanup.
-  }
 }
 
 async function cleanupStaleSnapshots(snapshotDir: string): Promise<void> {
