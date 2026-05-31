@@ -22,10 +22,10 @@ beforeEach(() => {
 });
 
 describe("shouldDetachMediaGenerationTask", () => {
-  it("keeps run-scoped cron media inline", () => {
+  it("detaches session-backed media generation", () => {
     expect(shouldDetachMediaGenerationTask("agent:main:discord:direct:123")).toBe(true);
     expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media")).toBe(true);
-    expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media:run:run-123")).toBe(false);
+    expect(shouldDetachMediaGenerationTask("agent:main:cron:daily-media:run:run-123")).toBe(true);
     expect(shouldDetachMediaGenerationTask(undefined)).toBe(false);
   });
 });

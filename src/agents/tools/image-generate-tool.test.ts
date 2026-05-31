@@ -781,7 +781,7 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(duplicateResult).duplicateGuard).toBe(true);
   });
 
-  it("keeps run-scoped cron image generation inline", async () => {
+  it("starts run-scoped cron image generation as a tracked async task", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
@@ -837,16 +837,16 @@ describe("createImageGenerateTool", () => {
       model: "openai/gpt-image-1",
     });
 
-    expect(generateImage).toHaveBeenCalledOnce();
-    expect(scheduled).toHaveLength(0);
-    expect(onAsyncTaskStarted).not.toHaveBeenCalled();
-    expect(resultText(result)).toContain("Generated 1 image with openai/gpt-image-1.");
-    expect(resultText(result)).toContain('path="/tmp/generated-cron.png"');
-    expect(resultDetails(result).async).toBeUndefined();
-    expect(taskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(1);
+    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
+    expect(resultText(result)).toContain("Background task started for image generation");
+    expect(resultDetails(result).async).toBe(true);
+    expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: expect.stringMatching(/^tool:image_generate:/),
-        sessionKey: "agent:main:cron:daily-media:run:run-123",
+        requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
       }),
     );
   });

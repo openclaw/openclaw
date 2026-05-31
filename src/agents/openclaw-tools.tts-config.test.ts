@@ -305,11 +305,13 @@ describe("createOpenClawTools media generation session wiring", () => {
       runSessionKey: "agent:main:cron:daily-media:run:run-123",
       disableMessageTool: true,
       disablePluginTools: true,
+      onYield: vi.fn(),
     });
 
     expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+        onAsyncTaskStarted: undefined,
       }),
     );
     expect(mocks.createVideoGenerateToolOptions).toHaveBeenCalledWith(

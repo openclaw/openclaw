@@ -1473,22 +1473,21 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal || requiresMessageToolDelivery
         ? getGatewayAgentCommandDeliveryFailure(directAnnounceResponse)
         : undefined;
-    const missingExpectedMediaUrls =
-      agentMediatedCompletion && expectedMediaUrls.length > 0
-        ? resolveGeneratedMediaDirectFallbackUrls({
-            expectedMediaUrls,
-            announceResponse: directAnnounceResponse,
-            requiresMessageToolDelivery,
-            automaticDeliveryRequested: shouldDeliverAgentFinal,
-            automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
-            deliveryTarget,
-          })
-        : [];
-    if (
+    const shouldRequireGeneratedMediaDelivery =
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&
-      missingExpectedMediaUrls.length > 0
-    ) {
+      (params.requesterIsSubagent || shouldDeliverAgentFinal || requiresMessageToolDelivery);
+    const missingExpectedMediaUrls = shouldRequireGeneratedMediaDelivery
+      ? resolveGeneratedMediaDirectFallbackUrls({
+          expectedMediaUrls,
+          announceResponse: directAnnounceResponse,
+          requiresMessageToolDelivery,
+          automaticDeliveryRequested: shouldDeliverAgentFinal,
+          automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
+          deliveryTarget,
+        })
+      : [];
+    if (shouldRequireGeneratedMediaDelivery && missingExpectedMediaUrls.length > 0) {
       const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(
         directAnnounceResponse,
         missingExpectedMediaUrls,
