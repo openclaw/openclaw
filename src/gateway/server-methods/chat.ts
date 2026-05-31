@@ -158,6 +158,7 @@ import {
   buildWebchatAudioContentBlocksFromReplyPayloads,
 } from "./chat-webchat-media.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { loadOptionalSessionMetadataModelCatalog } from "./session-model-catalog.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -2513,6 +2514,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
       );
     }
+    const modelCatalog = await measureDiagnosticsTimelineSpan(
+      "gateway.chat.history.model_catalog",
+      () => loadOptionalSessionMetadataModelCatalog(context, "chat.history"),
+      {
+        config: cfg,
+        phase: "chat.history",
+      },
+    );
     const sessionInfo = buildGatewaySessionInfo({
       cfg,
       storePath,
@@ -2520,6 +2529,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       key: canonicalKey,
       entry,
       agentId: selectedAgent.agentId,
+      modelCatalog,
     });
     sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
       context,
@@ -2530,7 +2540,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         : {}),
       defaultAgentId: resolveDefaultAgentId(cfg),
     });
-    const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
+    const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
     const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     sessionInfo.thinkingLevel = thinkingLevel;

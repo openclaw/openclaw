@@ -121,6 +121,7 @@ import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { loadOptionalSessionMetadataModelCatalog } from "./session-model-catalog.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -198,44 +199,10 @@ function inheritSessionRuntimeSelection(
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
 let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
-let loggedSlowSessionsListCatalog = false;
-
-const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
   return sessionsRuntimeModulePromise;
-}
-
-async function loadOptionalSessionsListModelCatalog(
-  context: GatewayRequestContext,
-): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
-  let timeout: NodeJS.Timeout | undefined;
-  const timedOut = Symbol("sessions-list-model-catalog-timeout");
-  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = setTimeout(() => resolve(timedOut), SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-  try {
-    const result = await Promise.race([
-      context.loadGatewayModelCatalog().catch(() => undefined),
-      timeoutPromise,
-    ]);
-    if (result === timedOut) {
-      if (!loggedSlowSessionsListCatalog) {
-        loggedSlowSessionsListCatalog = true;
-        context.logGateway.debug(
-          `sessions.list continuing without model catalog after ${SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
-        );
-      }
-      return undefined;
-    }
-    return Array.isArray(result) ? result : undefined;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
 }
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -1075,7 +1042,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           : store;
         const modelCatalog = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.model_catalog",
-          () => loadOptionalSessionsListModelCatalog(context),
+          () => loadOptionalSessionMetadataModelCatalog(context, "sessions.list"),
           {
             config: cfg,
             phase: "sessions.list",
