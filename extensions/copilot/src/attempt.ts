@@ -1097,7 +1097,6 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     },
     options: {
       copilotHome: resolved.copilotHome,
-      cwd: readString(params.cwd) ?? readString(params.workspaceDir),
       gitHubToken: resolved.authMode === "gitHubToken" ? resolved.gitHubToken : undefined,
       useLoggedInUser: resolved.authMode === "useLoggedInUser",
     },

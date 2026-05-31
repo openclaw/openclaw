@@ -370,6 +370,12 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Card Chase");
+    expect(container.querySelector("workboard-3d-game")?.getAttribute("player-index")).toBe("0");
+    expect(container.querySelector("workboard-3d-game")?.getAttribute("aria-hidden")).toBe("true");
+    expect(container.querySelector('[role="grid"]')?.getAttribute("aria-label")).toBe(
+      "Card Chase board",
+    );
+    expect(container.querySelector('[role="gridcell"][aria-label="Agent 1"]')).not.toBeNull();
     const controls = container.querySelector<HTMLElement>(".workboard-game__controls");
     controls
       ?.querySelector<HTMLButtonElement>('button[aria-label="Move right"]')
@@ -377,6 +383,8 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(state.gamePlayerIndex).toBe(1);
+    expect(container.querySelector("workboard-3d-game")?.getAttribute("player-index")).toBe("1");
+    expect(container.querySelector('[role="gridcell"][aria-label="Agent 2"]')).not.toBeNull();
     expect(container.querySelector(".workboard-game__stats")?.textContent).toContain("Moves 1");
   });
 

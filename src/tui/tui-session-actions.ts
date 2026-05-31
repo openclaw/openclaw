@@ -389,6 +389,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
     state.pendingChatRunId = null;
+    state.pendingOptimisticUserMessage = false;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness

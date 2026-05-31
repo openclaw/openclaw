@@ -179,6 +179,8 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
   const configuredProvider =
     explicitProvider ?? singleConfiguredProvider ?? voiceCallRealtime.provider;
   const selectedProvider = configuredProvider ?? singleConfiguredProvider;
+  // Talk-local realtime config wins over the legacy voice-call plugin config,
+  // while the legacy config remains a bridge for existing installations.
   const providerConfigs = {
     ...voiceCallRealtime.providers,
     ...talkRealtimeProviderConfigs,
@@ -240,6 +242,8 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
 }) {
   const providers = listRealtimeTranscriptionProviders(params.config);
   const normalizedConfigured = normalizeOptionalLowercaseString(params.configuredProviderId);
+  // An explicit provider is authoritative; automatic selection is stable by
+  // provider order so the same config picks the same transcription backend.
   const orderedProviders = normalizedConfigured
     ? providers.filter(
         (provider) =>
@@ -288,6 +292,8 @@ export function buildRealtimeInstructions(configuredInstructions?: string): stri
   if (!extra) {
     return DEFAULT_REALTIME_INSTRUCTIONS;
   }
+  // Keep the tool-use contract first, then append operator customization so
+  // provider sessions preserve the same control-tool behavior.
   return `${DEFAULT_REALTIME_INSTRUCTIONS}\n\nAdditional realtime instructions:\n${extra}`;
 }
 
@@ -314,6 +320,8 @@ export function buildRealtimeVoiceLaunchOptions(params: {
   defaults: RealtimeVoiceLaunchOptions;
 }): RealtimeVoiceLaunchOptions {
   const options = pickRealtimeVoiceLaunchOptions(params.defaults);
+  // Per-request browser controls override config defaults, but only when they
+  // are valid primitive values the realtime provider can consume.
   return {
     ...options,
     ...pickRealtimeVoiceLaunchOptions(params.requested),
@@ -380,5 +388,7 @@ function pickRealtimeVoiceLaunchOptions(
 export function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {
   const provider = normalizeLowercaseStringOrEmpty(session.provider);
   const transport = (session as { transport?: string }).transport ?? "webrtc";
+  // Google browser WebRTC sessions are exposed in provider types but not usable
+  // through the current client-owned Talk flow.
   return provider === "google" && transport === "webrtc";
 }

@@ -548,15 +548,23 @@ function sanitizeMountPathHint(value?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  // Prevent prompt injection via control/newline characters in system prompt hints.
-  // eslint-disable-next-line no-control-regex
-  if (/[\r\n\u0000-\u001F\u007F\u0085\u2028\u2029]/.test(trimmed)) {
+  if (hasPromptUnsafeControlCharacter(trimmed)) {
     return undefined;
   }
   if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
     return undefined;
   }
   return trimmed;
+}
+
+function hasPromptUnsafeControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function cleanupProvisionalSession(

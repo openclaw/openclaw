@@ -1114,6 +1114,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const clientAccessMetadata = {
             displayName: connectParams.client.displayName,
             remoteIp: reportedClientIp,
+            lastSeenAtMs: Date.now(),
+            lastSeenReason: "connect",
           };
           const requirePairing = async (
             reason: ConnectPairingRequiredReason,
@@ -1249,9 +1251,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   ? await approveBootstrapDevicePairing(
                       pairing.request.requestId,
                       boundBootstrapProfile,
+                      { accessMetadata: clientAccessMetadata },
                     )
                   : await approveDevicePairing(pairing.request.requestId, {
                       callerScopes: scopes,
+                      accessMetadata: clientAccessMetadata,
                     });
               if (approved?.status === "approved") {
                 if (allowSilentBootstrapPairing && boundBootstrapProfile) {

@@ -966,6 +966,11 @@ async function waitForSlackNoReply(params: {
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
+  const observedKeys = new Set(
+    params.observedMessages
+      .map((message) => `${message.channelId ?? params.channelId}:${message.ts ?? ""}`)
+      .filter((key) => !key.endsWith(":")),
+  );
   let elapsedMs = Date.now() - startedAt;
   while (elapsedMs < params.timeoutMs) {
     const messages = await listSlackMessages({
@@ -983,19 +988,23 @@ async function waitForSlackNoReply(params: {
         continue;
       }
       const matchedScenario = text.includes(params.matchText);
-      params.observedMessages.push({
-        actionValues: collectSlackActionValues(message.blocks),
-        blockText: collectSlackBlockText(message.blocks),
-        botId: message.bot_id,
-        channelId: params.channelId,
-        matchedScenario,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        text,
-        threadTs: message.thread_ts,
-        ts: message.ts,
-        userId: message.user,
-      });
+      const observedKey = `${params.channelId}:${message.ts}`;
+      if (!observedKeys.has(observedKey)) {
+        observedKeys.add(observedKey);
+        params.observedMessages.push({
+          actionValues: collectSlackActionValues(message.blocks),
+          blockText: collectSlackBlockText(message.blocks),
+          botId: message.bot_id,
+          channelId: params.channelId,
+          matchedScenario,
+          scenarioId: params.observationScenarioId,
+          scenarioTitle: params.observationScenarioTitle,
+          text,
+          threadTs: message.thread_ts,
+          ts: message.ts,
+          userId: message.user,
+        });
+      }
       if (matchedScenario) {
         throw new Error("unexpected Slack SUT reply observed");
       }

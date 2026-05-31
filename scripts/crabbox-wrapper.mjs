@@ -140,6 +140,11 @@ const shellControlCommandPrefixes = new Set([
 ]);
 const shellCommandExecutionPrefixes = new Set(["exec"]);
 const shellInlineCommandInterpreters = new Set(["bash", "dash", "ksh", "sh", "zsh"]);
+const remoteChangedGateEnv = [
+  "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+  "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+  "CI=1",
+];
 const shellInlineCommandOptionsWithNextValue = new Set([
   "+O",
   "+o",
@@ -175,9 +180,12 @@ function checkedOutput(command, commandArgs) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    timeout: 5_000,
+    killSignal: "SIGKILL",
   });
+  const timedOut = result.error?.name === "Error" && result.signal === "SIGKILL";
   return {
-    status: result.status ?? 1,
+    status: timedOut ? 124 : (result.status ?? 1),
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
   };
@@ -1434,6 +1442,82 @@ function remoteGitBootstrapForChangedGate(changedGateBase) {
   ].join(" ");
 }
 
+function injectRemoteChangedGateEnvironment(commandArgs) {
+  if (commandArgs[0] !== "run" || isWindowsRemoteTarget(commandArgs)) {
+    return commandArgs;
+  }
+
+  const { start } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const remoteCommand = commandArgs.slice(start);
+  if (!isChangedGateCommand(remoteCommand)) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const markedRemoteCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? [markShellChangedGateAsRemoteChild(remoteCommand[0])]
+      : markDirectChangedGateAsRemoteChild(remoteCommand);
+  normalizedArgs.splice(start, normalizedArgs.length - start, ...markedRemoteCommand);
+  return normalizedArgs;
+}
+
+function markShellChangedGateAsRemoteChild(command) {
+  const missingEnv = remoteChangedGateEnv.filter((assignment) => !command.includes(assignment));
+  if (missingEnv.length === 0) {
+    return command;
+  }
+  return `export ${missingEnv.join(" ")}; ${command}`;
+}
+
+function markDirectChangedGateAsRemoteChild(commandArgs) {
+  const missingEnv = remoteChangedGateEnv.filter((assignment) => !commandArgs.includes(assignment));
+  if (missingEnv.length === 0) {
+    return commandArgs;
+  }
+
+  const markedCommandArgs = [...commandArgs];
+  if (shellWordBasename(markedCommandArgs[0]) !== "env") {
+    return ["env", ...missingEnv, ...markedCommandArgs];
+  }
+
+  markedCommandArgs.splice(envAssignmentInsertIndex(markedCommandArgs), 0, ...missingEnv);
+  return markedCommandArgs;
+}
+
+function envAssignmentInsertIndex(words) {
+  let index = 1;
+  for (;;) {
+    const word = words[index] ?? "";
+    if (!word) {
+      return 1;
+    }
+    if (word === "--") {
+      return index + 1;
+    }
+    if (word === "-S" || word === "--split-string" || (word.startsWith("-S") && word !== "-S")) {
+      return index;
+    }
+    if (word === "-u" || word === "--unset" || word === "-C" || word === "--chdir") {
+      index += 2;
+      continue;
+    }
+    if (word.startsWith("--unset=") || word.startsWith("--chdir=")) {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      index += 1;
+      continue;
+    }
+    return index;
+  }
+}
+
 function isWindowsRemoteTarget(commandArgs) {
   return (
     optionValue(commandArgs, "--target") === "windows" || hasOption(commandArgs, "--windows-mode")
@@ -2021,11 +2105,12 @@ if (
   );
 }
 
+const remoteMarkedArgs = injectRemoteChangedGateEnvironment(normalizedArgs);
 const childArgs =
   childCwd === repoRoot
-    ? injectRemoteAwsMacosJsBootstrap(normalizedArgs, provider)
+    ? injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider)
     : injectRemoteChangedGateGitBootstrap(
-        injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(normalizedArgs), provider),
+        injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
         remoteChangedGateBase,
       );
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);

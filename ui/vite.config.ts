@@ -134,6 +134,31 @@ function resolveTsconfigPathAlias(key: string, target: string): ControlUiViteAli
   };
 }
 
+function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteAlias {
+  return {
+    find: `@openclaw/${packageId}${subpath ? `/${subpath}` : ""}`,
+    replacement: path.join(
+      repoRoot,
+      "packages",
+      packageId,
+      "src",
+      ...(subpath ? subpath.split("/") : ["index"]).map((part, index, parts) =>
+        index === parts.length - 1 ? `${part}.ts` : part,
+      ),
+    ),
+  };
+}
+
+export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
+  return [
+    sourcePackageAlias("normalization-core", "number-coercion"),
+    sourcePackageAlias("normalization-core", "record-coerce"),
+    sourcePackageAlias("normalization-core", "string-coerce"),
+    sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core"),
+  ];
+}
+
 export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   const raw = fs.readFileSync(path.join(repoRoot, "tsconfig.json"), "utf8");
   const parsed = JSON.parse(raw) as {
@@ -191,7 +216,11 @@ export default defineConfig(() => {
       ],
     },
     resolve: {
-      alias: [{ find: "json5", replacement: json5EsmPath }, ...resolveTsconfigPathAliasesForVite()],
+      alias: [
+        { find: "json5", replacement: json5EsmPath },
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
     },
     build: {
       outDir,

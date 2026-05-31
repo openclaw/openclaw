@@ -7,6 +7,10 @@ import type { Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import {
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../../vite.config.ts";
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
@@ -108,20 +112,11 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     },
     publicDir: path.join(uiRoot, "public"),
     resolve: {
-      alias: {
-        "@openclaw/net-policy/ip": path.join(repoRoot, "packages/net-policy/src/ip.ts"),
-        "@openclaw/net-policy/ipv4": path.join(repoRoot, "packages/net-policy/src/ipv4.ts"),
-        "@openclaw/net-policy/redact-sensitive-url": path.join(
-          repoRoot,
-          "packages/net-policy/src/redact-sensitive-url.ts",
-        ),
-        "@openclaw/net-policy/url-userinfo": path.join(
-          repoRoot,
-          "packages/net-policy/src/url-userinfo.ts",
-        ),
-        "@openclaw/net-policy": path.join(repoRoot, "packages/net-policy/src/index.ts"),
-        json5: json5EsmPath,
-      },
+      alias: [
+        { find: "json5", replacement: json5EsmPath },
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
     },
     root: uiRoot,
     server: {

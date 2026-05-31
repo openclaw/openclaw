@@ -11,7 +11,7 @@ import type {
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getTelegramRuntime } from "./runtime.js";
+import { getOptionalTelegramRuntime } from "./runtime.js";
 
 const TELEGRAM_MESSAGE_DISPATCH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE = "telegram.message-dispatch-dedupe";
@@ -53,14 +53,14 @@ export type TelegramMessageDispatchClaim =
   | { kind: "duplicate" }
   | { kind: "invalid" };
 
-function openDispatchDedupeStore(): TelegramMessageDispatchDedupeStore {
-  return (
-    dispatchDedupeStoreForTest ??
-    getTelegramRuntime().state.openKeyedStore<TelegramMessageDispatchDedupeRecord>({
+function openDispatchDedupeStore(): TelegramMessageDispatchDedupeStore | undefined {
+  if (dispatchDedupeStoreForTest) {
+    return dispatchDedupeStoreForTest;
+  }
+  return getOptionalTelegramRuntime()?.state.openKeyedStore<TelegramMessageDispatchDedupeRecord>({
       namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
       maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MAX_ENTRIES,
-    })
-  );
+    });
 }
 
 function resolveDispatchScopeKey(storePath: string): string {

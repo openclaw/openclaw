@@ -1,7 +1,9 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
+  resolveDefaultVitestNoOutputTimeoutMs,
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
   resolveImplicitVitestArgs,
@@ -341,6 +343,39 @@ describe("scripts/run-vitest", () => {
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
       PATH: "/usr/bin",
     });
+  });
+
+  it("uses a longer default stall watchdog for broad e2e configs", () => {
+    const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+
+    expect(
+      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
+        "run",
+        "--config",
+        "test/vitest/vitest.e2e.config.ts",
+      ]),
+    ).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+    });
+    expect(
+      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
+        "run",
+        "--config=./test/vitest/vitest.ui-e2e.config.ts",
+      ]),
+    ).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+    });
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "-c",
+        "/repo/test/vitest/vitest.e2e.config.ts",
+      ]),
+    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
   });
 
   it("does not default implicit interactive runs to the stall watchdog", () => {

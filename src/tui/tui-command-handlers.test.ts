@@ -15,6 +15,8 @@ type SelectableOverlay = {
 };
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
+type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
+type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
 
 async function flushAsyncSelect() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -81,6 +83,8 @@ function createHarness(params?: {
   currentAgentId?: string;
   currentSessionKey?: string;
   abortActive?: AbortActiveMock;
+  consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
+  flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
@@ -101,6 +105,7 @@ function createHarness(params?: {
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
   const applySessionInfoFromPatch = params?.applySessionInfoFromPatch ?? vi.fn();
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
+  const forgetLocalRunId = vi.fn();
   const openOverlay = vi.fn();
   const closeOverlay = vi.fn();
   const requestExit = vi.fn();
@@ -150,8 +155,10 @@ function createHarness(params?: {
     applySessionInfoFromPatch: applySessionInfoFromPatch as never,
     noteLocalRunId,
     noteLocalBtwRunId,
-    forgetLocalRunId: vi.fn(),
+    forgetLocalRunId,
     forgetLocalBtwRunId: vi.fn(),
+    consumeCompletedRunForPendingSend: params?.consumeCompletedRunForPendingSend,
+    flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
   });
@@ -180,6 +187,7 @@ function createHarness(params?: {
     setActivityStatus,
     noteLocalRunId,
     noteLocalBtwRunId,
+    forgetLocalRunId,
     requestExit,
     abortActive,
     state,
@@ -508,18 +516,21 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("agent set to work; use /crestodian to return");
   });
 
-  it("defers local run binding until gateway events provide a real run id", async () => {
-    const { handleCommand, noteLocalRunId, state } = createHarness();
+  it("marks the generated runId as local before gateway events arrive", async () => {
+    const { handleCommand, sendChat, noteLocalRunId, state } = createHarness();
 
     await handleCommand("/context detail");
 
-    expect(noteLocalRunId).not.toHaveBeenCalled();
+    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(noteLocalRunId).toHaveBeenCalledWith(sentRunId);
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingOptimisticUserMessage).toBe(true);
   });
 
   it("tracks the in-flight runId so escape can abort during the wait", async () => {
-    const sendChat = vi.fn().mockResolvedValue({ runId: "ignored" });
+    const sendChat = vi.fn().mockImplementation(async (opts: { runId: string }) => ({
+      runId: opts.runId,
+    }));
     const { handleCommand, state } = createHarness({ sendChat });
 
     await handleCommand("hello");
@@ -529,6 +540,55 @@ describe("tui command handlers", () => {
     expect(sentRunId.length).toBeGreaterThan(0);
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingChatRunId).toBe(sentRunId);
+  });
+
+  it("does not reintroduce the pending runId when an early event already consumed it", async () => {
+    const sendChat = vi.fn();
+    const { handleCommand, state } = createHarness({ sendChat });
+    sendChat.mockImplementation(async (opts: { runId: string }) => {
+      state.pendingOptimisticUserMessage = false;
+      return { runId: opts.runId };
+    });
+
+    await handleCommand("hello");
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+  });
+
+  it("tracks the backend-accepted runId when it differs from the generated runId", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "run-accepted" });
+    const { handleCommand, state, noteLocalRunId, forgetLocalRunId } = createHarness({ sendChat });
+
+    await handleCommand("hello");
+
+    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(state.pendingChatRunId).toBe("run-accepted");
+    expect(forgetLocalRunId).toHaveBeenCalledWith(sentRunId);
+    expect(noteLocalRunId).toHaveBeenCalledWith("run-accepted");
+  });
+
+  it("does not reintroduce a backend-accepted runId after an early terminal event", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "run-accepted" });
+    const consumeCompletedRunForPendingSend = vi.fn((runId: string) => runId === "run-accepted");
+    const flushPendingHistoryRefreshIfIdle = vi.fn();
+    const { handleCommand, state, noteLocalRunId, forgetLocalRunId, setActivityStatus } =
+      createHarness({
+        sendChat,
+        consumeCompletedRunForPendingSend,
+        flushPendingHistoryRefreshIfIdle,
+      });
+
+    await handleCommand("hello");
+
+    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(consumeCompletedRunForPendingSend).toHaveBeenCalledWith("run-accepted");
+    expect(forgetLocalRunId).toHaveBeenCalledWith(sentRunId);
+    expect(noteLocalRunId).not.toHaveBeenCalledWith("run-accepted");
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(flushPendingHistoryRefreshIfIdle).toHaveBeenCalledTimes(1);
   });
 
   it("clears the pending runId if sendChat fails", async () => {

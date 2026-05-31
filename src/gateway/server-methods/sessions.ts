@@ -150,6 +150,7 @@ function filterSessionStoreToConfiguredAgents(
       if (isConfiguredSessionKey(key)) {
         return true;
       }
+      // Keep spawned child sessions visible when their parent belongs to a configured agent.
       return (
         isConfiguredSessionKey(entry?.spawnedBy) || isConfiguredSessionKey(entry?.parentSessionKey)
       );
@@ -799,6 +800,7 @@ function resolveSessionMessageSubscriptionKey(params: {
     : params.canonicalKey === "global" && params.defaultAgentId
       ? normalizeAgentId(params.defaultAgentId)
       : undefined;
+  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
   return params.canonicalKey === "global" && agentId
     ? `agent:${agentId}:global`
     : params.canonicalKey;
@@ -923,6 +925,7 @@ async function interruptSessionRunIfActive(params: {
     abortEmbeddedAgentRun(params.sessionId);
   }
 
+  // Clear queued follow-up work for both requested aliases and the canonical session id.
   clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
 
   if (hasEmbeddedRun && params.sessionId) {
@@ -988,6 +991,7 @@ async function handleSessionSend(params: {
     return;
   }
   if (!entry?.sessionId && !params.interruptIfActive && isAgentMainSessionKey(cfg, canonicalKey)) {
+    // Sending to an empty agent main session should create it; steering still requires an active row.
     const created = await createAgentMainSessionForSend({
       req: params.req,
       canonicalKey,

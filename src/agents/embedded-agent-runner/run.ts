@@ -3208,6 +3208,7 @@ export async function runEmbeddedAgent(
             : resolveIncompleteTurnPayloadText({
                 payloadCount,
                 aborted,
+                externalAbort,
                 timedOut,
                 attempt,
               });
@@ -3315,6 +3316,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
+                modelId,
               });
             }
             return {
@@ -3434,6 +3436,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
+                modelId,
               });
             }
 

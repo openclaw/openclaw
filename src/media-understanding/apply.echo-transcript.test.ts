@@ -160,13 +160,20 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     vi.doMock("../agents/model-auth.js", () => ({
       resolveApiKeyForProvider: resolveApiKeyForProviderMock,
       hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
+      isProviderAuthError: (err: unknown, code?: string) =>
+        err instanceof Error &&
+        "code" in err &&
+        (code === undefined || (err as { code?: unknown }).code === code),
       requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
         if (auth?.apiKey) {
           return auth.apiKey;
         }
-        throw new Error(
+        const err = new Error(
           `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
         );
+        (err as { code?: string; provider?: string }).code = "missing-api-key";
+        (err as { code?: string; provider?: string }).provider = provider;
+        throw err;
       },
       resolveAwsSdkEnvVarName: vi.fn(() => undefined),
       resolveEnvApiKey: vi.fn(() => null),

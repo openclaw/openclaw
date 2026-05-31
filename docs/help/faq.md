@@ -175,14 +175,39 @@ lives on the [First-run FAQ](/help/faq-first-run).
     Yes. Add extra directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence). Default precedence is `<workspace>/skills` → `<workspace>/.agents/skills` → `~/.agents/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`. `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session. If the skill should only be visible to certain agents, pair that with `agents.defaults.skills` or `agents.list[].skills`.
   </Accordion>
 
-  <Accordion title="How can I use different models for different tasks?">
+  <Accordion title="How can I use different models or settings for different tasks?">
     Today the supported patterns are:
 
     - **Cron jobs**: isolated jobs can set a `model` override per job.
-    - **Sub-agents**: route tasks to separate agents with different default models.
+    - **Agents**: route tasks to separate agents with different default models, thinking levels, and stream params.
     - **On-demand switch**: use `/model` to switch the current session model at any time.
 
-    See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), and [Slash commands](/tools/slash-commands).
+    For example, use the same model with different per-agent settings:
+
+    ```json5
+    {
+      agents: {
+        list: [
+          {
+            id: "coder",
+            model: "xiaomi/mimo-v2.5-pro",
+            thinkingDefault: "high",
+            params: { temperature: 0.1 },
+          },
+          {
+            id: "chat",
+            model: "xiaomi/mimo-v2.5-pro",
+            thinkingDefault: "off",
+            params: { temperature: 0.8 },
+          },
+        ],
+      },
+    }
+    ```
+
+    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`, then put agent-specific overrides in flat `agents.list[].params`. Do not define separate nested `agents.list[].models["provider/model"].params` entries for the same model; `agents.list[].models` is for per-agent model catalog and runtime overrides.
+
+    See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), [Configuration](/gateway/config-agents), and [Slash commands](/tools/slash-commands).
 
   </Accordion>
 

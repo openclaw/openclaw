@@ -8,8 +8,10 @@ const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
+const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
+  process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
-  `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=4096`.trim();
+  `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
 
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
@@ -17,11 +19,13 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "src/auto-reply",
   "packages/llm-core/src",
   "packages/markdown-core/src",
+  "packages/media-core/src",
   "packages/model-catalog-core/src",
   "packages/memory-host-sdk/src",
   "packages/media-generation-core/src",
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
+  "packages/acp-core/src",
   "packages/terminal-core/src",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
@@ -52,6 +56,21 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/media-generation-core/src/index.d.ts",
   "dist/plugin-sdk/packages/media-generation-core/src/model-ref.d.ts",
   "dist/plugin-sdk/packages/media-generation-core/src/normalization.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/base64.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/constants.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/content-length.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/file-name.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/inbound-path-policy.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/inline-image-data-url.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/mime.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts",
+  "dist/plugin-sdk/packages/acp-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/acp-core/src/normalize-text.d.ts",
+  "dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts",
+  "dist/plugin-sdk/packages/acp-core/src/runtime/errors.d.ts",
+  "dist/plugin-sdk/packages/acp-core/src/runtime/types.d.ts",
   "dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts",
   "dist/plugin-sdk/packages/terminal-core/src/decorative-emoji.d.ts",
   "dist/plugin-sdk/packages/terminal-core/src/health-style.d.ts",
@@ -99,6 +118,21 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/media-generation-core/src/index.d.ts",
   "packages/plugin-sdk/dist/packages/media-generation-core/src/model-ref.d.ts",
   "packages/plugin-sdk/dist/packages/media-generation-core/src/normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/base64.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/constants.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/content-length.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/file-name.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/inbound-path-policy.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/inline-image-data-url.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/media-source-url.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/mime.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/read-response-with-limit.d.ts",
+  "packages/plugin-sdk/dist/packages/acp-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/acp-core/src/normalize-text.d.ts",
+  "packages/plugin-sdk/dist/packages/acp-core/src/record-shared.d.ts",
+  "packages/plugin-sdk/dist/packages/acp-core/src/runtime/errors.d.ts",
+  "packages/plugin-sdk/dist/packages/acp-core/src/runtime/types.d.ts",
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/configured-model-refs.d.ts",
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-refs.d.ts",

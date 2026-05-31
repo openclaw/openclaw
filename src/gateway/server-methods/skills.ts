@@ -67,6 +67,8 @@ function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestCon
       : undefined;
   const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
   if (agentIdRaw) {
+    // Explicit agent routing must name a configured agent; otherwise a typo
+    // could create or inspect skills under an unintended workspace.
     const knownAgents = listAgentIds(cfg);
     if (!knownAgents.includes(agentId)) {
       return {
@@ -89,6 +91,8 @@ type ResolvedSkillsWorkspace = Extract<
 >;
 
 function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace) {
+  // Remote skill availability depends on the agent's executable-node surface,
+  // not only the workspace contents, so status reports include live eligibility.
   return buildWorkspaceSkillStatus(resolved.workspaceDir, {
     config: resolved.cfg,
     eligibility: {
@@ -493,6 +497,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     const cfg = context.getRuntimeConfig();
     const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    // Skill installs are intentionally routed by source; each source owns its
+    // validation, provenance checks, and result payload shape.
     if (params && typeof params === "object" && "source" in params && params.source === "clawhub") {
       const p = params as {
         source: "clawhub";

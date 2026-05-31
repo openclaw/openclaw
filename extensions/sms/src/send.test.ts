@@ -1,12 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
-import { sendSmsTextChunks, toSmsPlainText } from "./send.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSmsAccount } from "./types.js";
+
+type SendModule = typeof import("./send.js");
+
+let sendSmsTextChunks: SendModule["sendSmsTextChunks"];
+let toSmsPlainText: SendModule["toSmsPlainText"];
 
 const sendSmsViaTwilio = vi.hoisted(() => vi.fn(async ({ to }) => ({ sid: `SM-${to}`, to })));
 
-vi.mock("./twilio.js", () => ({
-  sendSmsViaTwilio,
-}));
+beforeEach(async () => {
+  vi.resetModules();
+  sendSmsViaTwilio.mockClear();
+  vi.doMock("./twilio.js", () => ({
+    sendSmsViaTwilio,
+  }));
+  ({ sendSmsTextChunks, toSmsPlainText } = await import("./send.js"));
+});
+
+afterEach(() => {
+  vi.doUnmock("./twilio.js");
+});
 
 function createAccount(textChunkLimit: number): ResolvedSmsAccount {
   return {

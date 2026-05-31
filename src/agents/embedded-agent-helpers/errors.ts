@@ -356,6 +356,8 @@ const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
+const THINKING_SIGNATURE_ERROR_RE =
+  /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
 const NO_BODY_HTTP_WRAPPER_RE =
@@ -471,7 +473,11 @@ function isDnsTransportErrorMessage(raw: string): boolean {
 }
 
 function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw);
+  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
+}
+
+function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
+  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
 }
 
 function isSandboxBlockedErrorMessage(raw: string): boolean {

@@ -46,6 +46,8 @@ function assertConfiguredAnnounceChannel(params: {
   channel?: string;
   field: "delivery.channel" | "delivery.failureDestination.channel";
 }) {
+  // `last` defers channel selection to runtime session context; every concrete
+  // announce channel must be one the gateway can actually deliver through.
   if (params.channel === "last") {
     return;
   }
@@ -76,6 +78,8 @@ function resolveAnnounceValidationChannel(params: {
   channel?: string;
   to?: string;
 }): string | undefined {
+  // A target like `telegram:...` is enough to validate the announce channel
+  // even when the explicit channel field is omitted.
   if (params.channel && params.channel !== "last") {
     return params.channel;
   }
@@ -151,6 +155,8 @@ function assertValidCronUpdateDelivery(params: {
     return;
   }
 
+  // Validate the post-patch job, not just the sparse patch, because delivery
+  // fields can be split across the existing job and the update payload.
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
     defaultAgentId: params.defaultAgentId,
@@ -181,6 +187,8 @@ export const cronHandlers: GatewayRequestHandlers = {
     };
     const sessionKey = p.sessionKey?.trim() || undefined;
     if (sessionKey && isSubagentSessionKey(sessionKey)) {
+      // Wake requests resume user-visible sessions only; subagent sessions are
+      // internal task execution targets and should not receive operator wakes.
       respond(
         false,
         undefined,

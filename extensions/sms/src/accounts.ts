@@ -24,13 +24,16 @@ function getChannelConfig(cfg: OpenClawConfig): SmsChannelConfig | undefined {
   return cfg?.channels?.[CHANNEL_ID] as SmsChannelConfig | undefined;
 }
 
-function parseList(raw: string | string[] | undefined): string[] {
+function parseList(raw: unknown): string[] {
   if (!raw) {
     return [];
   }
-  return (Array.isArray(raw) ? raw : normalizeStringEntries(raw.split(",")))
-    .map((entry) => normalizeSmsAllowFrom(String(entry)))
-    .filter(Boolean);
+  const entries = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? normalizeStringEntries(raw.split(","))
+      : [raw];
+  return entries.map((entry) => normalizeSmsAllowFrom(String(entry))).filter(Boolean);
 }
 
 function parseTextChunkLimit(raw: unknown): number {
@@ -83,17 +86,21 @@ export function resolveSmsAccount(
 ): ResolvedSmsAccount {
   const channelCfg = getChannelConfig(cfg) ?? {};
   const id = normalizeOptionalAccountId(accountId) ?? resolveDefaultSmsAccountId(cfg);
-  const accountConfig = resolveAccountEntry(
-    channelCfg.accounts as
-      | Record<string, Partial<Record<string, unknown> & SmsChannelConfig>>
-      | undefined,
-    id,
-  );
+  const accountConfig = resolveAccountEntry(channelCfg.accounts, id);
+  const channelConfig: Record<string, unknown> & SmsChannelConfig = { ...channelCfg };
+  const accountEntries:
+    | Record<string, Partial<Record<string, unknown> & SmsChannelConfig>>
+    | undefined = channelCfg.accounts
+    ? Object.fromEntries(
+        Object.entries(channelCfg.accounts).map(([accountKey, account]) => [
+          accountKey,
+          { ...account },
+        ]),
+      )
+    : undefined;
   const merged = resolveMergedAccountConfig<Record<string, unknown> & SmsChannelConfig>({
-    channelConfig: channelCfg as Record<string, unknown> & SmsChannelConfig,
-    accounts: channelCfg.accounts as
-      | Record<string, Partial<Record<string, unknown> & SmsChannelConfig>>
-      | undefined,
+    channelConfig,
+    accounts: accountEntries,
     accountId: id,
     omitKeys: ["defaultAccount"],
   });
@@ -115,8 +122,8 @@ export function resolveSmsAccount(
     ? process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION
     : undefined;
 
-  const webhookPath = String(merged.webhookPath ?? envWebhookPath ?? DEFAULT_WEBHOOK_PATH).trim();
-  const publicWebhookUrl = String(merged.publicWebhookUrl ?? envPublicWebhookUrl ?? "").trim();
+  const webhookPath = (merged.webhookPath ?? envWebhookPath ?? DEFAULT_WEBHOOK_PATH).trim();
+  const publicWebhookUrl = (merged.publicWebhookUrl ?? envPublicWebhookUrl ?? "").trim();
   const authToken =
     normalizeResolvedSecretInputString({
       value: merged.authToken ?? envAuthToken,
@@ -128,11 +135,11 @@ export function resolveSmsAccount(
   return {
     accountId: id,
     enabled: channelCfg.enabled !== false && accountConfig?.enabled !== false,
-    accountSid: String(merged.accountSid ?? envAccountSid ?? "").trim(),
+    accountSid: (merged.accountSid ?? envAccountSid ?? "").trim(),
     authToken,
-    fromNumber: normalizeSmsPhoneNumber(String(merged.fromNumber ?? envFromNumber ?? "")),
-    messagingServiceSid: String(merged.messagingServiceSid ?? envMessagingServiceSid ?? "").trim(),
-    defaultTo: normalizeSmsPhoneNumber(String(merged.defaultTo ?? "")),
+    fromNumber: normalizeSmsPhoneNumber(merged.fromNumber ?? envFromNumber ?? ""),
+    messagingServiceSid: (merged.messagingServiceSid ?? envMessagingServiceSid ?? "").trim(),
+    defaultTo: normalizeSmsPhoneNumber(merged.defaultTo ?? ""),
     webhookPath: webhookPath || DEFAULT_WEBHOOK_PATH,
     publicWebhookUrl,
     dangerouslyDisableSignatureValidation:

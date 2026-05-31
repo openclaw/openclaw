@@ -14,14 +14,14 @@ import type {
   ModelCatalogSuppression,
   ModelCatalogTieredCost,
 } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
@@ -485,6 +485,7 @@ export type PluginManifestCapabilityProviderModeConfigSignal = {
 export type PluginManifestCapabilityProviderConfigSignal = {
   rootPath: string;
   overlayPath?: string;
+  overlayMapPath?: string;
   required?: string[];
   requiredAny?: string[];
   mode?: PluginManifestCapabilityProviderModeConfigSignal;
@@ -770,12 +771,14 @@ function normalizeCapabilityProviderConfigSignals(
       continue;
     }
     const overlayPath = normalizeOptionalString(rawSignal.overlayPath);
+    const overlayMapPath = normalizeOptionalString(rawSignal.overlayMapPath);
     const required = normalizeTrimmedStringList(rawSignal.required);
     const requiredAny = normalizeTrimmedStringList(rawSignal.requiredAny);
     const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
     const signal = {
       rootPath,
       ...(overlayPath ? { overlayPath } : {}),
+      ...(overlayMapPath ? { overlayMapPath } : {}),
       ...(required.length > 0 ? { required } : {}),
       ...(requiredAny.length > 0 ? { requiredAny } : {}),
       ...(mode ? { mode } : {}),

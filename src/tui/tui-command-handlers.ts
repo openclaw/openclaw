@@ -59,6 +59,8 @@ type CommandHandlerContext = {
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
+  consumeCompletedRunForPendingSend?: (runId: string) => boolean;
+  flushPendingHistoryRefreshIfIdle?: () => void;
   runAuthFlow?: (params: {
     provider?: string;
   }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
@@ -107,9 +109,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     setActivityStatus,
     formatSessionKey,
     applySessionInfoFromPatch,
+    noteLocalRunId,
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
+    consumeCompletedRunForPendingSend,
+    flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
   } = context;
@@ -730,13 +735,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.reserveAssistantSlot(state.activeChatRunId);
         }
         chatLog.addUser(text);
+        noteLocalRunId?.(runId);
         state.pendingOptimisticUserMessage = true;
         setActivityStatus("sending");
       } else {
         noteLocalBtwRunId?.(runId);
       }
       tui.requestRender();
-      await client.sendChat({
+      const sendResult = await client.sendChat({
         sessionKey: state.currentSessionKey,
         ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
         sessionId: state.currentSessionId,
@@ -747,9 +753,27 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
-        state.pendingChatRunId = runId;
-        setActivityStatus("waiting");
-        tui.requestRender();
+        const acceptedRunId = sendResult.runId || runId;
+        const acceptedRunAlreadyCompleted =
+          acceptedRunId !== runId && (consumeCompletedRunForPendingSend?.(acceptedRunId) ?? false);
+        if (acceptedRunId !== runId) {
+          forgetLocalRunId?.(runId);
+          if (!acceptedRunAlreadyCompleted) {
+            noteLocalRunId?.(acceptedRunId);
+          }
+        }
+        if (state.pendingOptimisticUserMessage) {
+          if (acceptedRunAlreadyCompleted) {
+            state.pendingOptimisticUserMessage = false;
+            state.pendingChatRunId = null;
+            setActivityStatus("idle");
+            flushPendingHistoryRefreshIfIdle?.();
+          } else {
+            state.pendingChatRunId = acceptedRunId;
+            setActivityStatus("waiting");
+          }
+          tui.requestRender();
+        }
       }
     } catch (err) {
       if (isBtw) {
@@ -757,6 +781,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       if (!isBtw && state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
+      }
+      if (!isBtw) {
+        forgetLocalRunId?.(runId);
       }
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;

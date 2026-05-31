@@ -162,6 +162,19 @@ describe("resolveVitestIsolation", () => {
     }
   });
 
+  it("aliases private core packages to source for clean checkout tests", () => {
+    expect(findAlias(sharedVitestConfig.resolve.alias, "@openclaw/media-core/mime")).toEqual({
+      find: "@openclaw/media-core/mime",
+      replacement: path.join(process.cwd(), "packages", "media-core", "src", "mime.ts"),
+    });
+    expect(findAlias(sharedVitestConfig.resolve.alias, "@openclaw/acp-core/runtime/types")).toEqual(
+      {
+        find: "@openclaw/acp-core/runtime/types",
+        replacement: path.join(process.cwd(), "packages", "acp-core", "src", "runtime", "types.ts"),
+      },
+    );
+  });
+
   it("defaults shared scoped configs to the non-isolated runner", () => {
     expect(resolveVitestIsolation({})).toBe(false);
   });

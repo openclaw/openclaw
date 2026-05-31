@@ -480,7 +480,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("missing a canonical string `id`", "Cron");
   });
 
-  it("warns instead of replacing announce delivery for notify fallback jobs", async () => {
+  it("migrates notify fallback alongside announce delivery without replacing it", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(
@@ -499,7 +499,7 @@ describe("maybeRepairLegacyCronStore", () => {
               sessionTarget: "isolated",
               wakeMode: "now",
               payload: { kind: "agentTurn", message: "Status" },
-              delivery: { mode: "announce", channel: "telegram", to: "123" },
+              delivery: { to: "telegram:123" },
               state: {},
             },
           ],
@@ -523,9 +523,17 @@ describe("maybeRepairLegacyCronStore", () => {
 
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
-    expect(job.notify).toBe(true);
-    expectNoteContaining(
-      'uses legacy notify fallback alongside delivery mode "announce"',
+    expect(job.notify).toBeUndefined();
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBeUndefined();
+    expect(delivery.to).toBe("telegram:123");
+    expect(delivery.completionDestination).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+    expectNoNoteContaining(
+      "uses legacy notify fallback alongside delivery mode",
       "Doctor warnings",
     );
   });
@@ -605,6 +613,87 @@ describe("maybeRepairLegacyCronStore", () => {
     const delivery = requireRecord(job.delivery, "cron delivery");
     expect(delivery.mode).toBe("webhook");
     expect(delivery.to).toBe("https://example.invalid/cron-finished");
+  });
+
+  it("migrates invalid legacy notify webhook delivery jobs to cron.webhook", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "notify-invalid-webhook",
+              name: "Notify invalid webhook",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "every", everyMs: 60_000 },
+              payload: {
+                kind: "systemEvent",
+                text: "Status",
+              },
+              delivery: { mode: "webhook", to: "ftp://example.invalid/cron" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "https://example.invalid/cron-finished",
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.notify).toBeUndefined();
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.to).toBe("https://example.invalid/cron-finished");
+  });
+
+  it("keeps notify fallback when cron.webhook is invalid", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: "notify-invalid-config",
+        jobId: undefined,
+        delivery: undefined,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "ftp://example.invalid/cron-finished",
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.notify).toBe(true);
+    expect(job.delivery).toBeUndefined();
+    expectNoteContaining(
+      "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
+      "Doctor warnings",
+    );
   });
 
   it("repairs legacy root delivery threadId hints into delivery", async () => {

@@ -1367,7 +1367,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("posts webhooks for delivery mode and legacy notify fallback only when summary exists", async () => {
+  test("posts webhooks for delivery and completion destinations only when summary exists", async () => {
     const legacyNotifyJob = {
       id: "legacy-notify-job",
       name: "legacy notify job",
@@ -1439,13 +1439,27 @@ describe("gateway server cron", () => {
       expect(legacyRunRes.ok).toBe(true);
       expectEnqueuedRunPayload(legacyRunRes.payload);
       await legacyFinished;
-      const legacyCall = getWebhookCall(1);
-      expect(legacyCall.url).toBe("https://legacy.example.invalid/cron-finished");
-      expect(legacyCall.init.method).toBe("POST");
-      expect(legacyCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
-      const legacyBody = legacyCall.body;
-      expect(legacyBody.action).toBe("finished");
-      expect(legacyBody.jobId).toBe("legacy-notify-job");
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+
+      const completionJobId = await addWebhookCronJob({
+        ws,
+        name: "announce plus completion webhook",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/completion-destination",
+          },
+        },
+      });
+      await runCronJobAndWaitForFinished(ws, completionJobId);
+      const completionCall = getWebhookCall(1);
+      expect(completionCall.url).toBe("https://example.invalid/completion-destination");
+      expect(completionCall.init.method).toBe("POST");
+      expect(completionCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(completionCall.body.action).toBe("finished");
+      expect(completionCall.body.jobId).toBe(completionJobId);
 
       const silentRes = await rpcReq(ws, "cron.add", {
         name: "webhook disabled",

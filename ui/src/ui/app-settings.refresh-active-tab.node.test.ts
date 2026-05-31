@@ -364,7 +364,7 @@ describe("refreshActiveTab", () => {
     const host = createHost();
     host.tab = "overview";
     const pendingReload = vi.fn();
-    host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+    host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
 
     setTab(host as never, "nodes");
 

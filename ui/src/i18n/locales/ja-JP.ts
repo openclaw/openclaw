@@ -418,6 +418,7 @@ export const ja_JP: TranslationMap = {
     communications: "通信",
     appearance: "表示",
     automation: "自動化",
+    mcp: "MCP",
     infrastructure: "インフラストラクチャ",
     aiAgents: "AI とエージェント",
     debug: "デバッグ",
@@ -441,6 +442,7 @@ export const ja_JP: TranslationMap = {
     communications: "チャンネル、メッセージ、音声設定。",
     appearance: "テーマ、UI、セットアップウィザードの設定。",
     automation: "コマンド、フック、cron、プラグイン。",
+    mcp: "MCP サーバー、認証、ツール、診断。",
     infrastructure: "Gateway、Web、ブラウザー、メディアの設定。",
     aiAgents: "エージェント、モデル、Skills、ツール、メモリ、セッション。",
     debug: "スナップショット、イベント、RPC。",
@@ -1293,7 +1295,7 @@ export const ja_JP: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "ツールエラー",
     },
   },
   languages: {

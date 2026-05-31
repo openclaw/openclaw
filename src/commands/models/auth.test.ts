@@ -771,21 +771,6 @@ describe("modelsAuthLoginCommand", () => {
     ).toBe("/tmp/openclaw/agents/coder");
   });
 
-  it("normalizes legacy OpenAI auth provider requests to the OpenAI plugin", async () => {
-    const runtime = createRuntime();
-    const legacyProvider = ["openai", "codex"].join("-");
-
-    await modelsAuthLoginCommand({ provider: legacyProvider }, runtime);
-
-    const providerResolutionCall = readMockCallArg(
-      mocks.resolvePluginProviders,
-    ) as ResolvePluginProvidersCall;
-    expect(providerResolutionCall.providerRefs).toEqual(["openai"]);
-    expect(runProviderAuth).toHaveBeenCalledOnce();
-    const upsertCall = readMockCallArg(mocks.upsertAuthProfileWithLock) as UpsertAuthProfileCall;
-    expect(upsertCall.credential?.provider).toBe("openai");
-  });
-
   it("loads the owning plugin for an explicit provider even in a clean config", async () => {
     const runtime = createRuntime();
     const runClaudeCliMigration = vi.fn().mockResolvedValue({

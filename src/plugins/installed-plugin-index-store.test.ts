@@ -54,7 +54,10 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
   };
 }
 
-function createCandidate(rootDir: string, options: { id?: string } = {}): PluginCandidate {
+function createCandidate(
+  rootDir: string,
+  options: { id?: string; configPaths?: readonly string[] } = {},
+): PluginCandidate {
   const id = options.id ?? "demo";
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
@@ -68,6 +71,7 @@ function createCandidate(rootDir: string, options: { id?: string } = {}): Plugin
       name: id === "demo" ? "Demo" : "Next Demo",
       configSchema: { type: "object" },
       providers: [id],
+      ...(options.configPaths ? { activation: { onConfigPaths: options.configPaths } } : {}),
     }),
     "utf8",
   );
@@ -118,6 +122,21 @@ function expectInstallRecord(
   }
 }
 
+function dropStartupConfigPaths(
+  plugin: InstalledPluginIndex["plugins"][number],
+): InstalledPluginIndex["plugins"][number] {
+  return {
+    ...plugin,
+    startup: {
+      sidecar: plugin.startup.sidecar,
+      memory: plugin.startup.memory,
+      deferConfiguredChannelFullLoadUntilAfterListen:
+        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
+      agentHarnesses: plugin.startup.agentHarnesses,
+    },
+  };
+}
+
 async function expectPersistedIndex(
   stateDir: string,
   expected: {
@@ -165,6 +184,135 @@ describe("installed plugin index persistence", () => {
     expect(persisted.version).toBe(index.version);
     expect(persisted.policyHash).toBe(index.policyHash);
     expectPluginIds(persisted, ["demo"]);
+  });
+
+  it("preserves startup config paths across persisted index roundtrips", async () => {
+    const stateDir = makeTempDir();
+    const index = createIndex({
+      plugins: [
+        {
+          pluginId: "browser",
+          manifestPath: "/plugins/browser/openclaw.plugin.json",
+          manifestHash: "browser-manifest-hash",
+          rootDir: "/plugins/browser",
+          origin: "bundled",
+          enabled: true,
+          enabledByDefault: true,
+          startup: {
+            sidecar: true,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+            configPaths: ["browser"],
+          },
+          compat: ["activation-config-path-hint"],
+        },
+      ],
+    });
+
+    await writePersistedInstalledPluginIndex(index, { stateDir });
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.plugins[0]?.startup.configPaths).toEqual(["browser"]);
+    expect(persisted.plugins[0]?.compat).toEqual(["activation-config-path-hint"]);
+  });
+
+  it("preserves contribution metadata across persisted index roundtrips", async () => {
+    const stateDir = makeTempDir();
+    const index = createIndex({
+      plugins: [
+        {
+          pluginId: "provider-owner",
+          manifestPath: "/plugins/provider-owner/openclaw.plugin.json",
+          manifestHash: "provider-owner-manifest-hash",
+          rootDir: "/plugins/provider-owner",
+          origin: "bundled",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          contributions: {
+            channels: ["demo-channel"],
+            channelConfigs: ["demo-channel"],
+            providers: ["demo-provider"],
+            modelCatalogProviders: ["demo-provider"],
+            modelSupportPrefixes: ["demo-"],
+            modelSupportPatterns: ["^demo-[0-9]+$"],
+            autoEnableProviderIds: ["demo-auth"],
+            commandAliases: ["demo-command"],
+            contracts: {
+              webSearchProviders: ["demo-search"],
+            },
+          },
+          compat: [],
+        },
+      ],
+    });
+
+    await writePersistedInstalledPluginIndex(index, { stateDir });
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.plugins[0]?.contributions).toEqual({
+      channels: ["demo-channel"],
+      channelConfigs: ["demo-channel"],
+      providers: ["demo-provider"],
+      modelCatalogProviders: ["demo-provider"],
+      modelSupportPrefixes: ["demo-"],
+      modelSupportPatterns: ["^demo-[0-9]+$"],
+      autoEnableProviderIds: ["demo-auth"],
+      commandAliases: ["demo-command"],
+      contracts: {
+        webSearchProviders: ["demo-search"],
+      },
+    });
+  });
+
+  it("marks legacy config-path startup indexes stale so update rebuilds them", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const candidate = createCandidate(pluginDir, { configPaths: ["browser"] });
+    const current = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    const legacy = {
+      ...current,
+      plugins: current.plugins.map(dropStartupConfigPaths),
+    };
+    fs.writeFileSync(
+      resolveInstalledPluginIndexStorePath({ stateDir }),
+      JSON.stringify(legacy),
+      "utf8",
+    );
+
+    const inspection = await inspectPersistedInstalledPluginIndex({
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    expect(inspection.state).toBe("stale");
+    expect(inspection.refreshReasons).toEqual(["migration"]);
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    expect(refreshed.plugins[0]?.startup.configPaths).toEqual(["browser"]);
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.plugins[0]?.startup.configPaths).toEqual(["browser"]);
   });
 
   it("does not preserve prototype poison keys from persisted index JSON", async () => {

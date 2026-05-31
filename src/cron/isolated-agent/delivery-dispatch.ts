@@ -1,3 +1,4 @@
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -31,7 +32,6 @@ import {
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { isAudioFileName } from "../../media/mime.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   isCronSessionKey,

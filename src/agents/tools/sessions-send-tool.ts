@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
+import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

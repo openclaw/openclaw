@@ -1225,6 +1225,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleBtwEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
+    consumeCompletedRunForPendingSend,
+    flushPendingHistoryRefreshIfIdle,
   } = createEventHandlers({
     chatLog,
     btw,
@@ -1314,6 +1316,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       noteLocalBtwRunId,
       forgetLocalRunId,
       forgetLocalBtwRunId,
+      consumeCompletedRunForPendingSend,
+      flushPendingHistoryRefreshIfIdle,
       runAuthFlow,
       requestExit,
     });

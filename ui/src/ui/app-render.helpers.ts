@@ -156,6 +156,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStream = null;
   state.chatSideResult = null;
   state.lastError = null;
+  state.chatError = null;
   state.chatAvatarUrl = null;
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
@@ -683,6 +684,7 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
 export function dismissChatError(state: AppViewState) {
   state.lastError = null;
   state.lastErrorCode = null;
+  state.chatError = null;
   if (state.realtimeTalkStatus === "error") {
     const talkHost = state as unknown as {
       realtimeTalkSession?: { stop(): void } | null;
@@ -703,14 +705,17 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
   }
   if (!canSwitchToNewChatSession(state)) {
     state.lastError = NEW_CHAT_ACTIVE_RUN_MESSAGE;
+    state.chatError = state.lastError;
     return false;
   }
   if (state.sessionsLoading) {
     state.lastError = NEW_CHAT_SESSIONS_LOADING_MESSAGE;
+    state.chatError = state.lastError;
     return false;
   }
 
   state.lastError = null;
+  state.chatError = null;
   const previousSessionKey = state.sessionKey;
   const parentSessionKey = state.sessionsResult?.sessions.some(
     (row) => row.key === previousSessionKey,
@@ -742,6 +747,7 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
         (state.sessionsLoading
           ? NEW_CHAT_SESSIONS_LOADING_MESSAGE
           : NEW_CHAT_CREATE_FAILED_MESSAGE);
+      state.chatError = state.lastError;
     }
     return false;
   }

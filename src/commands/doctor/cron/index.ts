@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { migrateLegacyNotifyFallback } from "../../../cron/migrations/legacy-notify.js";
 import {
   loadCronQuarantineFile,
   loadCronStore,
@@ -12,10 +14,6 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../../../packages/normalization-core/src/string-coerce.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import {
@@ -32,11 +30,6 @@ import {
   loadLegacyCronStoreForMigration,
 } from "./legacy-store-migration.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
-
-type CronDoctorOutcome = {
-  changed: boolean;
-  warnings: string[];
-};
 
 type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
 
@@ -243,66 +236,6 @@ function noteCronModelOverrides(params: {
   );
 
   note(lines.join("\n"), "Cron");
-}
-
-function migrateLegacyNotifyFallback(params: {
-  jobs: Array<Record<string, unknown>>;
-  legacyWebhook?: string;
-}): CronDoctorOutcome {
-  let changed = false;
-  const warnings: string[] = [];
-
-  for (const raw of params.jobs) {
-    if (!("notify" in raw)) {
-      continue;
-    }
-
-    const jobName =
-      normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id) ?? "<unnamed>";
-    const notify = raw.notify === true;
-    if (!notify) {
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    const delivery =
-      raw.delivery && typeof raw.delivery === "object" && !Array.isArray(raw.delivery)
-        ? (raw.delivery as Record<string, unknown>)
-        : null;
-    const mode = normalizeOptionalLowercaseString(delivery?.mode);
-    const to = normalizeOptionalString(delivery?.to);
-
-    if (mode === "webhook" && to) {
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    if ((mode === undefined || mode === "none" || mode === "webhook") && params.legacyWebhook) {
-      raw.delivery = {
-        ...delivery,
-        mode: "webhook",
-        to: mode === "none" ? params.legacyWebhook : (to ?? params.legacyWebhook),
-      };
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    if (!params.legacyWebhook) {
-      warnings.push(
-        `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
-      );
-      continue;
-    }
-
-    warnings.push(
-      `Cron job "${jobName}" uses legacy notify fallback alongside delivery mode "${mode}". Migrate it manually so webhook delivery does not replace existing announce behavior.`,
-    );
-  }
-
-  return { changed, warnings };
 }
 
 async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {

@@ -217,6 +217,10 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
+    id === "@openclaw/media-core" ||
+    id.startsWith("@openclaw/media-core/") ||
+    id === "@openclaw/acp-core" ||
+    id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
   );
@@ -437,6 +441,42 @@ function buildNormalizationCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildMediaCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-core/src/index.ts",
+    base64: "packages/media-core/src/base64.ts",
+    constants: "packages/media-core/src/constants.ts",
+    "content-length": "packages/media-core/src/content-length.ts",
+    "file-name": "packages/media-core/src/file-name.ts",
+    "inbound-path-policy": "packages/media-core/src/inbound-path-policy.ts",
+    "inline-image-data-url": "packages/media-core/src/inline-image-data-url.ts",
+    "media-source-url": "packages/media-core/src/media-source-url.ts",
+    mime: "packages/media-core/src/mime.ts",
+    "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
+    "read-response-with-limit": "packages/media-core/src/read-response-with-limit.ts",
+  };
+}
+
+function buildAcpCoreDistEntries(): Record<string, string> {
+  return {
+    "error-format": "packages/acp-core/src/error-format.ts",
+    index: "packages/acp-core/src/index.ts",
+    meta: "packages/acp-core/src/meta.ts",
+    "normalize-text": "packages/acp-core/src/normalize-text.ts",
+    "numeric-options": "packages/acp-core/src/numeric-options.ts",
+    "record-shared": "packages/acp-core/src/record-shared.ts",
+    session: "packages/acp-core/src/session.ts",
+    "session-interaction-mode": "packages/acp-core/src/session-interaction-mode.ts",
+    "session-lineage-meta": "packages/acp-core/src/session-lineage-meta.ts",
+    types: "packages/acp-core/src/types.ts",
+    "runtime/error-text": "packages/acp-core/src/runtime/error-text.ts",
+    "runtime/errors": "packages/acp-core/src/runtime/errors.ts",
+    "runtime/session-identifiers": "packages/acp-core/src/runtime/session-identifiers.ts",
+    "runtime/session-identity": "packages/acp-core/src/runtime/session-identity.ts",
+    "runtime/types": "packages/acp-core/src/runtime/types.ts",
+  };
+}
+
 function buildTerminalCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/terminal-core/src/index.ts",
@@ -578,6 +618,18 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ]),
     ),
     ...Object.fromEntries(
+      Object.entries(buildMediaCoreDistEntries()).map(([entry, source]) => [
+        `media-core/${entry}`,
+        source,
+      ]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(buildAcpCoreDistEntries()).map(([entry, source]) => [
+        `acp-core/${entry}`,
+        source,
+      ]),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildTerminalCoreDistEntries()).map(([entry, source]) => [
         `terminal-core/${entry}`,
         source,
@@ -668,6 +720,18 @@ export default defineConfig([
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildNormalizationCoreDistEntries(),
     outDir: tsdownPackageOutputRoot("normalization-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("media-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildAcpCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("acp-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

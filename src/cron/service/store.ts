@@ -104,8 +104,9 @@ export async function ensureLoaded(
   const jobs: CronJob[] = [];
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, job] of loadedJobs.entries()) {
-    const raw = job as unknown as Record<string, unknown>;
-    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
+    const decodedRaw = job as unknown as Record<string, unknown>;
+    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(decodedRaw);
+    const raw = decodedRaw;
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
     normalizeCronJobIdentityFields(raw);

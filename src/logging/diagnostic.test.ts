@@ -1487,6 +1487,91 @@ describe("stuck session diagnostics threshold", () => {
     }
   });
 
+  it("does not re-emit session.recovery.requested when generation bumps mid-flight (idle-queued stall)", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    // Pin recover() to an unresolved Promise so the in-flight window spans two
+    // heartbeat ticks (production awaits abort/drain, settleMs up to 15s). Same
+    // seam as the already_in_flight dedup test above.
+    let resolveRecovery:
+      | ((outcome: {
+          status: "skipped";
+          action: "observe_only";
+          reason: "already_in_flight";
+          sessionId: string;
+          sessionKey: string;
+        }) => void)
+      | undefined;
+    const recoverStuckSession = vi.fn(
+      () =>
+        new Promise<{
+          status: "skipped";
+          action: "observe_only";
+          reason: "already_in_flight";
+          sessionId: string;
+          sessionKey: string;
+        }>((resolve) => {
+          resolveRecovery = resolve;
+        }),
+    );
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 60_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      // idle-queued-recoverable-stall setup: embedded run ownership + idle + queued.
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+      // T1 tick: lastProgressAgeMs > staleMs -> recoveryEligible -> coordinator key
+      // add, requested #1 emitted, recover() in-flight (pending).
+      vi.advanceTimersByTime(59_000);
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "t1" });
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+
+      // New message queued during the in-flight window -> state.generation +1 (but
+      // lastProgressAt not refreshed). Next tick the coordinator key becomes S:G+1.
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "t2-followup" });
+
+      // T2 tick (30s later): same session still idle-queued-stall -> re-classified.
+      vi.advanceTimersByTime(30_000);
+      await Promise.resolve();
+    } finally {
+      resolveRecovery?.({
+        status: "skipped",
+        action: "observe_only",
+        reason: "already_in_flight",
+        sessionId: "s1",
+        sessionKey: "main",
+      });
+      await Promise.resolve();
+      unsubscribe();
+    }
+
+    const requestedEvents = events.filter(
+      (event) => event.type === "session.recovery.requested",
+    );
+    // Before the fix (RED): coordinator key = `${ref}:${generation}`, so S:G and
+    //   S:G+1 are distinct -> a second requested event is emitted ->
+    //   requestedEvents.length === 2. The runtime sees the same ref and skips the
+    //   actual recovery as already_in_flight, leaving only a duplicate event.
+    // After the fix (GREEN): coordinator key is ref-only -> S:G+1 collides with the
+    //   in-flight S -> the coordinator also absorbs it as already_in_flight ->
+    //   requestedEvents.length === 1 (both dedup layers share granularity).
+    expect(requestedEvents).toHaveLength(1);
+  });
+
   it("reports long-running sessions separately when active work is making progress", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

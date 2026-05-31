@@ -69,7 +69,7 @@ describe("handleDisconnected", () => {
     });
     const host = createHost();
     const pendingReload = vi.fn();
-    host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+    host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
 
     handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
 

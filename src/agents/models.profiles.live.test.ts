@@ -581,7 +581,7 @@ describe("resolveLiveSystemPrompt", () => {
   it("keeps other providers unchanged", () => {
     expect(
       resolveLiveSystemPrompt({
-        provider: "openai",
+        provider: "anthropic",
       } as Model),
     ).toBeUndefined();
   });

@@ -94,6 +94,7 @@ export const testing = {
 
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME] as const;
 
+// Gateway file mutations are intentionally capped to the workspace files the UI owns.
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
 
 function resolveAgentWorkspaceFileOrRespondError(
@@ -142,6 +143,7 @@ function isRegularWorkspaceFileStat(stat: {
   const isFile = typeof stat.isFile === "function" ? stat.isFile() : stat.isFile;
   const isSymbolicLink =
     typeof stat.isSymbolicLink === "function" ? stat.isSymbolicLink() : stat.isSymbolicLink;
+  // Reject links even after path-root containment so workspace reads cannot follow shared files.
   return isFile && !isSymbolicLink && stat.nlink <= 1;
 }
 
@@ -166,6 +168,7 @@ async function statWorkspaceFileSafely(
       return null;
     }
     try {
+      // fs-safe roots can reject fixtures that are still valid regular files for listing metadata.
       const stat = await fs.lstat(path.join(workspaceDir, name));
       if (!isRegularWorkspaceFileStat(stat)) {
         return null;
@@ -199,6 +202,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
 
   const workspaceRoot = await openWorkspaceRootSafely(workspaceDir);
   if (!workspaceRoot) {
+    // Keep the UI shape stable when the workspace path is missing or unsafe.
     const missingNames = [
       ...(options?.hideBootstrap ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING : BOOTSTRAP_FILE_NAMES),
       DEFAULT_MEMORY_FILENAME,
@@ -407,6 +411,7 @@ async function buildIdentityMarkdownForWrite(params: {
 }): Promise<string> {
   let baseContent: string | undefined;
   if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
+    // Workspace moves may create a blank identity file; merge into the previous user-edited file.
     baseContent = await readWorkspaceFileContent(
       params.fallbackWorkspaceDir,
       DEFAULT_IDENTITY_FILENAME,

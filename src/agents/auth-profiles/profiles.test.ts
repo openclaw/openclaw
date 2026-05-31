@@ -241,7 +241,7 @@ describe("promoteAuthProfileInOrder", () => {
     try {
       fs.mkdirSync(agentDir, { recursive: true });
       const authPath = resolveAuthStorePath(agentDir);
-      const legacyProvider = ["openai", "codex"].join("-");
+      const legacyProvider = "retired-oauth-provider";
       fs.writeFileSync(
         authPath,
         JSON.stringify({
@@ -302,7 +302,7 @@ describe("promoteAuthProfileInOrder", () => {
               refresh: "old-refresh-token",
               oauthRef: {
                 source: "openclaw-credentials",
-                provider: ["openai", "codex"].join("-"),
+                provider: "retired-oauth-provider",
                 id: "legacy-profile",
               },
             },
