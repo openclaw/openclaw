@@ -1367,9 +1367,13 @@ export function isRawAssistantErrorPassthrough(params: {
   if (!friendlyError || !rawError) {
     return false;
   }
+  const parsedMessage = parseApiErrorInfo(rawError)?.message?.trim();
+  const leadingStatusRest = extractLeadingHttpStatus(rawError)?.rest?.trim();
   return (
     friendlyError === rawError ||
-    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`)
+    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
+    Boolean(parsedMessage && friendlyError.includes(parsedMessage)) ||
+    Boolean(leadingStatusRest && friendlyError.includes(leadingStatusRest))
   );
 }
 
