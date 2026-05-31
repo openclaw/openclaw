@@ -1650,8 +1650,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           );
         }
         const alreadyStarted = progressDraftGate.hasStarted;
-        await progressDraftGate.noteWork();
-        if (alreadyStarted && progressDraftGate.hasStarted) {
+        const progressActive = await progressDraftGate.noteWork();
+        if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
           renderProgressDraft();
         }
       };

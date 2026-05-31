@@ -1046,17 +1046,16 @@ export const dispatchTelegramMessage = async ({
     }
     streamToolProgressLines = nextLines;
     if (options?.startImmediately) {
-      const alreadyStarted = progressDraftGate.hasStarted;
       await progressDraftGate.startNow();
-      if (alreadyStarted && progressDraftGate.hasStarted) {
+      if (progressDraftGate.hasStarted) {
         await renderProgressDraft();
         return true;
       }
       return progressDraftGate.hasStarted;
     }
     const alreadyStarted = progressDraftGate.hasStarted;
-    await progressDraftGate.noteWork();
-    if (alreadyStarted && progressDraftGate.hasStarted) {
+    const progressActive = await progressDraftGate.noteWork();
+    if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
       await renderProgressDraft();
       return true;
     }
