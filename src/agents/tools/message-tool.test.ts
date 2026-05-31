@@ -2104,6 +2104,24 @@ describe("message tool boot-echo guard", () => {
     expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
   });
 
+  it("sanitizes boot echo text and still sends when structured attachments remain", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: echoedText,
+        attachments: [{ media: "file:///tmp/status.png" }],
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.message).toBe("");
+    expect(call?.params?.attachments).toEqual([{ media: "file:///tmp/status.png" }]);
+  });
+
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
     setBootEchoContextForSession("agent:main", longBootPrompt);
     mockSendResult({ channel: "telegram", to: "telegram:123" });
@@ -2201,6 +2219,14 @@ describe("message tool internal-runtime-context sanitization", () => {
       input:
         "Here is the boot info:\\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\\nBOOT.md:\\nWake up and report.\\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\\nDone.",
       expected: "Here is the boot info:\n\nDone.",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "SendMessage",
+      input:
+        "Alias\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nDone.",
+      expected: "Alias\n\nDone.",
       target: "telegram:123",
       channel: "telegram",
     },

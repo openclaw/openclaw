@@ -188,16 +188,40 @@ function readStringArrayParamRaw(value: unknown): string[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
+function readStructuredAttachmentMediaParams(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const values: string[] = [];
+  for (const attachment of value) {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+      continue;
+    }
+    const record = attachment as Record<string, unknown>;
+    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim()) {
+        values.push(candidate);
+      }
+    }
+  }
+  return values;
+}
+
 function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolean {
-  const text = ["message", "text", "content", "caption"]
+  const text = ["message", "text", "content", "caption", "SendMessage"]
     .map((field) => (typeof params[field] === "string" ? params[field] : ""))
     .filter((value) => value.trim())
     .join("\n");
+  const mediaUrls = [
+    ...(readStringArrayParamRaw(params.mediaUrls) ?? []),
+    ...readStructuredAttachmentMediaParams(params.attachments),
+  ];
   return hasReplyPayloadContent(
     {
       text,
       mediaUrl: readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]),
-      mediaUrls: readStringArrayParamRaw(params.mediaUrls),
+      mediaUrls,
       presentation: params.presentation,
       interactive: params.interactive,
     },
@@ -1052,7 +1076,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       //    substantial chunk of the boot prompt content. Refs #53732.
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayload = false;
-      for (const field of ["text", "content", "message", "caption"]) {
+      for (const field of ["text", "content", "message", "caption", "SendMessage"]) {
         if (typeof params[field] === "string") {
           const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPromptForSession);
           params[field] = sanitized.text;
