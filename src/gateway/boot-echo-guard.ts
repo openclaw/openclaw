@@ -12,22 +12,54 @@
 
 const MIN_ECHO_CHARS = 80;
 
-const bootContextBySessionKey = new Map<string, string>();
+type BootEchoContext = {
+  bootPrompt: string;
+  normalizedBootPrompt: string;
+};
+
+const bootContextBySessionKey = new Map<string, BootEchoContext>();
+const bootChunksByNormalizedPrompt = new Map<string, Map<number, Set<string>>>();
 
 function normalizeEchoComparisonText(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
+}
+
+function getBootPromptChunks(normalizedBootPrompt: string, minLen: number): Set<string> {
+  let chunksByLength = bootChunksByNormalizedPrompt.get(normalizedBootPrompt);
+  if (!chunksByLength) {
+    chunksByLength = new Map();
+    bootChunksByNormalizedPrompt.set(normalizedBootPrompt, chunksByLength);
+  }
+  const cached = chunksByLength.get(minLen);
+  if (cached) {
+    return cached;
+  }
+  const chunks = new Set<string>();
+  for (let i = 0; i <= normalizedBootPrompt.length - minLen; i += 1) {
+    chunks.add(normalizedBootPrompt.slice(i, i + minLen));
+  }
+  chunksByLength.set(minLen, chunks);
+  return chunks;
 }
 
 export function setBootEchoContextForSession(sessionKey: string, bootPrompt: string): void {
   if (!sessionKey || !bootPrompt) {
     return;
   }
-  bootContextBySessionKey.set(sessionKey, bootPrompt);
+  const normalizedBootPrompt = normalizeEchoComparisonText(bootPrompt);
+  if (normalizedBootPrompt.length >= MIN_ECHO_CHARS) {
+    getBootPromptChunks(normalizedBootPrompt, MIN_ECHO_CHARS);
+  }
+  bootContextBySessionKey.set(sessionKey, { bootPrompt, normalizedBootPrompt });
 }
 
 export function clearBootEchoContextForSession(sessionKey: string): void {
   if (!sessionKey) {
     return;
+  }
+  const context = bootContextBySessionKey.get(sessionKey);
+  if (context) {
+    bootChunksByNormalizedPrompt.delete(context.normalizedBootPrompt);
   }
   bootContextBySessionKey.delete(sessionKey);
 }
@@ -36,7 +68,7 @@ export function getBootEchoContextForSession(sessionKey: string | undefined): st
   if (!sessionKey) {
     return undefined;
   }
-  return bootContextBySessionKey.get(sessionKey);
+  return bootContextBySessionKey.get(sessionKey)?.bootPrompt;
 }
 
 /**
@@ -56,9 +88,9 @@ export function containsSubstantialBootEcho(
   if (haystack.length < minLen || needle.length < minLen) {
     return false;
   }
-  for (let i = 0; i <= needle.length - minLen; i += 1) {
-    const chunk = needle.slice(i, i + minLen);
-    if (haystack.includes(chunk)) {
+  const bootChunks = getBootPromptChunks(needle, minLen);
+  for (let i = 0; i <= haystack.length - minLen; i += 1) {
+    if (bootChunks.has(haystack.slice(i, i + minLen))) {
       return true;
     }
   }
@@ -83,4 +115,5 @@ export function stripBootEchoFromOutboundText(
 
 export function resetBootEchoContextForTests(): void {
   bootContextBySessionKey.clear();
+  bootChunksByNormalizedPrompt.clear();
 }
