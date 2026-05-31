@@ -2904,7 +2904,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
-      "text": "Push Notifications"
+      "text": "Push notifications"
     },
     {
       "count": 1,
@@ -2932,14 +2932,14 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
-      "text": "Roundness"
+      "text": "Receive browser push notifications from your gateway."
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
-      "text": "Send test"
+      "text": "Roundness"
     },
     {
       "count": 2,
@@ -2947,13 +2947,6 @@
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
       "text": "Status"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/config.ts",
-      "text": "Subscribe to receive browser push notifications from your gateway."
     },
     {
       "count": 1,
@@ -2988,7 +2981,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
-      "text": "Unsubscribe"
+      "text": "Unavailable"
     },
     {
       "count": 1,
@@ -3269,6 +3262,13 @@
       "name": "label",
       "path": "ui/src/ui/views/config.ts",
       "text": "NodeHost"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config.ts",
+      "text": "Notifications"
     },
     {
       "count": 1,
