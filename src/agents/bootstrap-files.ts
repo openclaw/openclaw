@@ -300,6 +300,12 @@ export async function resolveBootstrapFilesForRun(params: {
   const skipBootstrap = params.config?.agents?.defaults?.skipBootstrap === true;
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
+  // Resolved once so both the workspace-load branch and the post-hooks filter
+  // below see the same value. When skipBootstrap is true the workspace files
+  // are dropped entirely, but the post-hooks `filterCompletedWorkspaceBootstrapFile`
+  // call still needs a sensible setup-completed signal to apply to anything
+  // an `agent:bootstrap` hook injects.
+  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(params.workspaceDir);
   let bootstrapFiles: WorkspaceBootstrapFile[];
   if (skipBootstrap) {
     // Honor skipBootstrap (#75184): drop existing workspace files so they do
@@ -307,9 +313,6 @@ export async function resolveBootstrapFilesForRun(params: {
     // that rely on hook-injected context retain those files.
     bootstrapFiles = [];
   } else {
-    const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
-      params.workspaceDir,
-    );
     const rawFiles = params.sessionKey
       ? await getOrLoadBootstrapFiles({
           workspaceDir: params.workspaceDir,
