@@ -128,6 +128,7 @@ Current source-of-truth:
     - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; in that case `/new` resets the main session in place. Typed `/reset` still runs the Gateway's in-place reset.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
+    - `/name <title>` names or renames the current session so parallel sessions stay easy to tell apart; the label shows up everywhere `sessions.list` is surfaced (TUI, web, CLI, MCP) and mirrors the session manager's rename. Run `/name` with no argument to see the current name plus a locally derived suggestion without changing anything. Only authorized senders can rename.
     - `/stop` aborts the current run.
     - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
     - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
