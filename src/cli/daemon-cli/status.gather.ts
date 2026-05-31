@@ -553,7 +553,9 @@ export async function gatherDaemonStatus(
   const staleUpdateLaunchdJobs =
     opts.deep && process.platform === "darwin"
       ? await loadLaunchdModule()
-          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) =>
+            findStaleOpenClawUpdateLaunchdJobs(serviceEnv),
+          )
           .catch(() => [])
       : [];
 

@@ -128,6 +128,10 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
         label: "ai.openclaw.update.2026.5.12",
         lastExitStatus: 127,
       },
+      {
+        label: "ai.openclaw.manual-update.1717168800",
+        lastExitStatus: 0,
+      },
     ]);
 
     const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
@@ -138,6 +142,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
     expect(findJobs).toHaveBeenCalledTimes(1);
     expect(warning).toContain("Stale OpenClaw updater launchd job(s) detected");
     expect(warning).toContain("ai.openclaw.update.2026.5.12");
+    expect(warning).toContain("ai.openclaw.manual-update.1717168800");
     expect(warning).toContain("launchctl remove <label>");
     expect(warning).toContain("openclaw gateway restart");
   });
@@ -148,6 +153,10 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
       {
         label: "ai.openclaw.update.2026.5.12",
         lastExitStatus: 127,
+      },
+      {
+        label: "ai.openclaw.manual-update.1717168800",
+        lastExitStatus: 0,
       },
     ]);
 
@@ -162,6 +171,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
     expect(title).toBe("Gateway (macOS)");
     expect(message).toContain("Stale OpenClaw updater launchd job(s) detected");
     expect(message).toContain("ai.openclaw.update.2026.5.12");
+    expect(message).toContain("ai.openclaw.manual-update.1717168800");
     expect(message).toContain("launchctl remove <label>");
     expect(message).toContain("openclaw gateway restart");
   });

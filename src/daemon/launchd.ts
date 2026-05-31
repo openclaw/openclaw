@@ -46,7 +46,10 @@ const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
-const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
+const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIXES = [
+  "ai.openclaw.update.",
+  "ai.openclaw.manual-update.",
+];
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -59,7 +62,9 @@ function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
     return null;
   }
   const trimmed = label.trim();
-  return trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX) ? trimmed : null;
+  return OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+    ? trimmed
+    : null;
 }
 
 function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): boolean {
@@ -300,8 +305,8 @@ export function parseLaunchctlListOpenClawUpdateJobs(
     }
     const parts = line.split(/\s+/);
     const [pidRaw, statusRaw, ...labelParts] = parts;
-    const label = labelParts.join(" ");
-    if (!label.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
+    const label = normalizeOpenClawUpdateLaunchdLabel(labelParts.join(" "));
+    if (!label) {
       continue;
     }
     const pid = pidRaw === "-" ? undefined : parseStrictPositiveInteger(pidRaw ?? "");
@@ -315,9 +320,9 @@ export function parseLaunchctlListOpenClawUpdateJobs(
   return jobs.toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
-export async function findStaleOpenClawUpdateLaunchdJobs(): Promise<
-  StaleOpenClawUpdateLaunchdJob[]
-> {
+export async function findStaleOpenClawUpdateLaunchdJobs(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StaleOpenClawUpdateLaunchdJob[]> {
   if (process.platform !== "darwin") {
     return [];
   }
@@ -325,7 +330,9 @@ export async function findStaleOpenClawUpdateLaunchdJobs(): Promise<
   if (result.code !== 0) {
     return [];
   }
-  return parseLaunchctlListOpenClawUpdateJobs(result.stdout);
+  return parseLaunchctlListOpenClawUpdateJobs(result.stdout).filter(
+    (job) => !isCurrentGatewayLaunchdLabel(job.label, env),
+  );
 }
 
 export async function removeOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
