@@ -47,6 +47,7 @@ class DeviceIdentityStore(
     return fresh
   }
 
+  /** Signs gateway connect payload text with the persisted Ed25519 private key. */
   fun signPayload(
     payload: String,
     identity: DeviceIdentity,
@@ -77,6 +78,7 @@ class DeviceIdentityStore(
       null
     }
 
+  /** Verifies a signature against the persisted public key for debug diagnostics. */
   fun verifySelfSignature(
     payload: String,
     signatureBase64Url: String,
@@ -100,6 +102,7 @@ class DeviceIdentityStore(
       false
     }
 
+  /** Decodes gateway URL-safe base64 signatures, accepting unpadded input. */
   private fun base64UrlDecode(input: String): ByteArray {
     val normalized = input.replace('-', '+').replace('_', '/')
     // Android Base64 expects padded input; gateway signatures are URL-safe
@@ -175,6 +178,7 @@ class DeviceIdentityStore(
     )
   }
 
+  /** Re-derives the stable device id from the raw Ed25519 public key bytes. */
   private fun deriveDeviceId(publicKeyRawBase64: String): String? =
     try {
       val raw = Base64.decode(publicKeyRawBase64, Base64.DEFAULT)
