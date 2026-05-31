@@ -159,10 +159,10 @@ function shouldLogDiscordGatewayTransportClose(params: {
   lastError?: DiscordGatewayTransportErrorDetails;
 }): boolean {
   return (
+    params.code === DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE ||
     (params.code !== 1000 && params.code !== 1001) ||
     params.reason.length > 0 ||
-    params.lastError !== undefined ||
-    params.code === DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE
+    params.lastError !== undefined
   );
 }
 

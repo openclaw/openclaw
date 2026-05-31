@@ -515,7 +515,7 @@ function describeMcpNamespaceForPrompt(
   if (!scope) {
     return [];
   }
-  const servers = Object.keys(scope).sort();
+  const servers = Object.keys(scope).toSorted();
   if (servers.length === 0) {
     return [];
   }

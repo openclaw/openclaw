@@ -1125,10 +1125,11 @@ export class ToolSearchRuntime {
 
   namespaceEntries = () => {
     const catalog = resolveCatalog(this.ctx);
-    return catalog.entries.map((entry) => ({
-      ...compactEntry(entry),
-      parameters: entry.parameters ?? {},
-    }));
+    return catalog.entries.map((entry) =>
+      Object.assign(compactEntry(entry), {
+        parameters: entry.parameters ?? {},
+      }),
+    );
   };
 
   describe = async (id: string) => {
