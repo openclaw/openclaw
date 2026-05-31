@@ -18,6 +18,10 @@ describe("formatAssistantErrorText", () => {
       errorMessage,
       content: [{ type: "text", text: errorMessage }],
     });
+  const authInvalidTokenCopy =
+    "Authentication failed (provider returned HTTP 401). " +
+    "Your provider token may have expired — try the request again in a moment. " +
+    "If the failure persists, re-authenticate this provider.";
 
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
@@ -423,29 +427,13 @@ describe("formatAssistantErrorText", () => {
   });
 
   it("sanitizes raw HTTP 401 / Invalid token errors into a re-auth hint (#56197)", () => {
-    // The exact payload reported in #56197: a Z.AI/AutoGLM JWT expired
-    // mid-session and the embedded agent surfaced the raw provider error
-    // verbatim ("HTTP 401: Invalid token") to the Feishu user. The fix
-    // classifies plain HTTP 401 / "Invalid token" / "Unauthorized" responses
-    // as `auth_invalid_token` and replaces the raw text with a sanitized
-    // re-authentication hint. This pin protects the user-visible behavior;
-    // the broader retry-with-refresh path is a separate provider-level
-    // follow-up explicitly out of scope per clawsweeper-bot's review.
     const reportedPayload = makeAssistantError('HTTP 401: "Invalid token"');
     const friendly = formatAssistantErrorText(reportedPayload);
-    expect(friendly).toBe(
-      "Authentication failed (provider returned HTTP 401). " +
-        "Your provider token may have expired — try the request again in a moment. " +
-        "If the failure persists, re-authenticate this provider.",
-    );
-    // Defensive: the raw provider phrase must not leak into the friendly text.
+    expect(friendly).toBe(authInvalidTokenCopy);
     expect(friendly).not.toContain("Invalid token");
   });
 
   it("sanitizes Unauthorized / token-expired variants under HTTP 401", () => {
-    // Different providers spell their 401s differently. Pin a few real-world
-    // shapes so a future tightening of the classifier does not regress one
-    // form back into the raw-error fall-through.
     const variants = [
       "401 Unauthorized",
       "HTTP 401 Unauthorized: token expired",
@@ -453,75 +441,32 @@ describe("formatAssistantErrorText", () => {
     ];
     for (const raw of variants) {
       const friendly = formatAssistantErrorText(makeAssistantError(raw));
-      expect(friendly, raw).toBe(
-        "Authentication failed (provider returned HTTP 401). " +
-          "Your provider token may have expired — try the request again in a moment. " +
-          "If the failure persists, re-authenticate this provider.",
-      );
+      expect(friendly, raw).toBe(authInvalidTokenCopy);
     }
   });
 
   it("does not collapse 401 billing / permanent-auth errors into the generic re-auth hint", () => {
-    // The 401/403 path in `classifyFailoverSignal` already gives billing and
-    // `auth_permanent` precedence over generic `auth`. Pin that contract:
-    // billing copy stays billing copy, permanent-auth stays raw, and only
-    // ordinary 401s become the new generic re-auth hint.
     const billing = makeAssistantError(
       '{"error":{"code":401,"message":"Key limit exceeded","metadata":{"raw":"insufficient credits"}}}',
     );
     const billingFriendly = formatAssistantErrorText(billing);
-    expect(billingFriendly).not.toBe(
-      "Authentication failed (provider returned HTTP 401). " +
-        "Your provider token may have expired — try the request again in a moment. " +
-        "If the failure persists, re-authenticate this provider.",
-    );
+    expect(billingFriendly).not.toBe(authInvalidTokenCopy);
   });
 
   it("does not claim HTTP 401 for plain 403 errors that fall through to the generic auth reason (#77394 review)", () => {
-    // `classifyFailoverClassificationFromHttpStatus` returns the same
-    // `auth` reason for both `status === 401` AND `status === 403` after
-    // the billing/`auth_permanent` precedence at line 661 of errors.ts.
-    // A real 403 (key revoked, scope-missing) without an HTML body or
-    // `permission_error` JSON falls through to that generic `auth` branch.
-    // Before the 401-evidence gate, my new `auth_invalid_token` branch
-    // would pick those up and tell the user "HTTP 401" when the provider
-    // actually returned 403. The gate now requires `status === 401` or
-    // (status unknown AND message embeds 401 but not 403); a plain 403
-    // satisfies neither leg and falls through to the existing copy.
-    // Pin both directions: the 403 must NOT get the new "HTTP 401" copy,
-    // and it must still produce a non-empty user-facing message.
     const plain403 = makeAssistantError("403 Forbidden");
     const friendly = formatAssistantErrorText(plain403);
     expect(friendly).toBeDefined();
     expect(friendly).not.toContain("HTTP 401");
-    expect(friendly).not.toBe(
-      "Authentication failed (provider returned HTTP 401). " +
-        "Your provider token may have expired — try the request again in a moment. " +
-        "If the failure persists, re-authenticate this provider.",
-    );
+    expect(friendly).not.toBe(authInvalidTokenCopy);
   });
 
   it("does not claim HTTP 401 for message-only auth errors with no HTTP status prefix (#77394 review)", () => {
-    // `classifyFailoverSignal`'s message-only path at line 848 of errors.ts
-    // returns the `auth` reason via `isAuthErrorMessage(raw)` for payloads
-    // that have no leading HTTP status at all — for example a plain
-    // `{"error":{"code":"invalid_api_key"}}` envelope. Before the 401-
-    // evidence gate, the new `auth_invalid_token` branch would catch those
-    // too and surface "HTTP 401" copy when no HTTP status was ever present.
-    // `status` is `undefined` here and the message contains no `401`, so
-    // the second leg of the gate (`messageMentions401 && !messageMentions403`)
-    // is false and the gate falls through. Pin the negative behavior so a
-    // future widening that drops the gate fails this test rather than
-    // silently shipping the regression.
     const messageOnly = makeAssistantError('{"error":{"code":"invalid_api_key"}}');
     const friendly = formatAssistantErrorText(messageOnly);
     expect(friendly).toBeDefined();
     expect(friendly).not.toContain("HTTP 401");
-    expect(friendly).not.toBe(
-      "Authentication failed (provider returned HTTP 401). " +
-        "Your provider token may have expired — try the request again in a moment. " +
-        "If the failure persists, re-authenticate this provider.",
-    );
+    expect(friendly).not.toBe(authInvalidTokenCopy);
   });
 
   it("returns a proxy-specific message for proxy misroutes", () => {
