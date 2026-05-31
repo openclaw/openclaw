@@ -421,6 +421,28 @@ describe("exec host env validation", () => {
     expect(nodeHostMocks.executeNodeHostCommand).not.toHaveBeenCalled();
   });
 
+  it("still denies a deny target when shell tokenization fails (unbalanced quote)", async () => {
+    // #74379: when splitShellArgs returns null (e.g. an unterminated quote),
+    // denyArgv is empty and the gate falls back to tokenizing the raw command
+    // string as shellPayload. The deny gate must fail TOWARD checking the raw
+    // payload, never fail open on malformed input.
+    const tool = createExecTool({
+      host: "node",
+      security: "full",
+      ask: "off",
+      denyPathPatterns: ["**/.ssh/*"],
+    });
+
+    await expect(
+      tool.execute("call-deny-malformed-quote", {
+        command: `cat ~/.ssh/id_rsa "unterminated`,
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      }),
+    ).rejects.toThrow(/SYSTEM_RUN_DENIED: argument matches tools\.exec\.denyPathPatterns/);
+
+    expect(nodeHostMocks.executeNodeHostCommand).not.toHaveBeenCalled();
+  });
+
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
     const tool = createExecTool({ host: "sandbox", security: "full", ask: "off" });
 

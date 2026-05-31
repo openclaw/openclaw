@@ -7,7 +7,12 @@ import {
   tokenizeShellPayload,
 } from "./exec-deny-path.js";
 
-const fakeHome = "/Users/hani";
+// Build an absolute fake home that is valid on every CI runner (POSIX + win32):
+// path.resolve yields a rooted, platform-correct path, and resolveEffectiveHomeDir
+// applies the same path.resolve, so the env-driven home matches what the matcher
+// expands `~` to. Avoids hardcoded POSIX `/...` literals that are not absolute on
+// Windows.
+const fakeHome = path.resolve(path.sep, "fake-openclaw-home");
 
 describe("evaluateExecDenyPathMatch", () => {
   it("returns null when no patterns are configured", () => {
@@ -164,6 +169,19 @@ describe("evaluateExecDenyPathMatch (cross-platform shape)", () => {
     });
     expect(match?.pattern).toBe("**/secrets/**");
   });
+
+  it("matches a Windows-style argv path token against a POSIX deny pattern", () => {
+    // A discrete argv token carrying backslashes (e.g. forwarded from a Windows
+    // node) is normalized `\`->`/` and caught by a POSIX-style pattern even when
+    // this code runs on a POSIX host. Argv tokens skip the shell tokenizer, so
+    // the backslashes are never consumed as escapes (#74379 P1).
+    const match = evaluateExecDenyPathMatch({
+      patterns: ["**/.ssh/*"],
+      argv: ["type", "C:\\Users\\alice\\.ssh\\id_rsa"],
+      homeDir: "/c/users/alice",
+    });
+    expect(match?.pattern).toBe("**/.ssh/*");
+  });
 });
 
 describe("formatExecDenyPathMessage", () => {
@@ -229,21 +247,26 @@ describe("tokenizeShellPayload", () => {
 
 // Smoke checks for the home-dir resolver integration.
 describe("evaluateExecDenyPathMatch (home dir resolution)", () => {
+  // resolveEffectiveHomeDir runs path.resolve on the env value, so the argv
+  // candidate is built with path.join from the same resolved base. This stays
+  // cross-platform (the home is an absolute, rooted path on POSIX and win32)
+  // without touching the filesystem — resolveEffectiveHomeDir honors the env
+  // var without any fs existence check.
+  const isolatedHome = path.resolve(path.sep, "fake-openclaw-home-12345");
+
   it("resolves env.HOME via the shared home-dir resolver", () => {
-    const isolatedHome = "/tmp/fake-openclaw-home-12345";
     const match = evaluateExecDenyPathMatch({
       patterns: ["~/openclaw-deny-test-marker/**"],
-      argv: ["cat", `${isolatedHome}/openclaw-deny-test-marker/x`],
+      argv: ["cat", path.join(isolatedHome, "openclaw-deny-test-marker", "x")],
       env: { HOME: isolatedHome } as NodeJS.ProcessEnv,
     });
     expect(match?.pattern).toBe("~/openclaw-deny-test-marker/**");
   });
 
   it("honors OPENCLAW_HOME via the shared home-dir resolver", () => {
-    const isolatedHome = "/tmp/fake-openclaw-home-12345";
     const match = evaluateExecDenyPathMatch({
       patterns: ["~/.openclaw/secrets/**"],
-      argv: ["cat", `${isolatedHome}/.openclaw/secrets/foo.env`],
+      argv: ["cat", path.join(isolatedHome, ".openclaw", "secrets", "foo.env")],
       env: { OPENCLAW_HOME: isolatedHome } as NodeJS.ProcessEnv,
     });
     expect(match?.pattern).toBe("~/.openclaw/secrets/**");
