@@ -1,6 +1,6 @@
+import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { MAX_VIDEO_BYTES } from "../../media/constants.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import {

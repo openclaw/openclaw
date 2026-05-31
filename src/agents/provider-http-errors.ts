@@ -1,7 +1,7 @@
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 

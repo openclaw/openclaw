@@ -41,7 +41,13 @@ export {
   matchesMentionPatterns,
   matchesMentionWithExplicit,
   normalizeMentionText,
+  type BuildMentionRegexesOptions,
 } from "../auto-reply/reply/mentions.js";
+export {
+  resolveMentionPatternPolicy,
+  type ResolveMentionPatternPolicyParams,
+  type ResolvedMentionPatternPolicy,
+} from "../channels/mention-pattern-policy.js";
 export {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
@@ -178,4 +184,4 @@ export {
   isTextSlashCommandTurn,
 } from "../auto-reply/command-turn-context.js";
 export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
-export { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
+export { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";

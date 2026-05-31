@@ -1,7 +1,7 @@
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { canonicalizeBase64 } from "../media/base64.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,

@@ -1,5 +1,15 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
+import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
+import {
+  detectMime,
+  extensionForMime,
+  getFileExtension,
+  kindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -9,9 +19,7 @@ import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
-import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
 import {
   assertLocalMediaAllowed,
   getDefaultLocalRoots,
@@ -24,14 +32,6 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
-import {
-  detectMime,
-  extensionForMime,
-  getFileExtension,
-  kindFromMime,
-  mimeTypeFromFilePath,
-  normalizeMimeType,
-} from "./mime.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };

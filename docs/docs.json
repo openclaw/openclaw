@@ -1701,7 +1701,13 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/path", "cli/policy", "cli/skills"]
+                    "pages": [
+                      "cli/plugins",
+                      "cli/path",
+                      "cli/policy",
+                      "cli/skills",
+                      "cli/workboard"
+                    ]
                   },
                   {
                     "group": "Interfaces",

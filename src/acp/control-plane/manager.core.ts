@@ -1,3 +1,10 @@
+import type {
+  AcpRuntime,
+  AcpRuntimeCapabilities,
+  AcpRuntimeHandle,
+  AcpRuntimeSessionMode,
+  AcpRuntimeStatus,
+} from "@openclaw/acp-core/runtime/types";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -32,13 +39,6 @@ import {
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
 } from "../runtime/session-identity.js";
-import type {
-  AcpRuntime,
-  AcpRuntimeCapabilities,
-  AcpRuntimeHandle,
-  AcpRuntimeSessionMode,
-  AcpRuntimeStatus,
-} from "../runtime/types.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import {
   applyManagerRuntimeControls,

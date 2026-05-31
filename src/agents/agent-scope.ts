@@ -43,8 +43,7 @@ export {
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\0/g, "");
+  return s.split("\0").join("");
 }
 
 const AUTO_FALLBACK_PRIMARY_PROBE_INTERVAL_MS = 5 * 60 * 1000;

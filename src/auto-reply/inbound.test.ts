@@ -973,6 +973,81 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("global: hi", regexes)).toBe(false);
   });
 
+  it("scopes configured mention patterns by provider conversation policy", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        slack: {
+          mentionPatterns: {
+            mode: "deny",
+            allowIn: ["C123"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const allowed = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C123",
+    });
+    const denied = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C999",
+    });
+
+    expect(matchesMentionPatterns("openclaw: hi", allowed)).toBe(true);
+    expect(matchesMentionPatterns("openclaw: hi", denied)).toBe(false);
+  });
+
+  it("preserves mention patterns for callers without scoped policy facts", () => {
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+    });
+
+    expect(matchesMentionPatterns("openclaw", regexes)).toBe(true);
+  });
+
+  it("lets provider deny lists override globally allowed mention patterns", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        telegram: {
+          mentionPatterns: {
+            denyIn: ["-100:topic:7"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      buildMentionRegexes(cfg, undefined, {
+        provider: "telegram",
+        conversationId: "-100:topic:7",
+      }),
+    ).toEqual([]);
+    expect(
+      matchesMentionPatterns(
+        "openclaw",
+        buildMentionRegexes(cfg, undefined, {
+          provider: "telegram",
+          conversationId: "-100:topic:8",
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("strips safe mention patterns and ignores unsafe ones", () => {
     const stripped = stripMentions("openclaw " + "a".repeat(28) + "!", {} as MsgContext, {
       messages: {

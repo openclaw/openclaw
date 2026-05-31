@@ -144,6 +144,7 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        "file-type",
         "playwright-core",
         "sqlite-vec",
         "tree-sitter-bash",
@@ -181,6 +182,14 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/markdown-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/media-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/acp-core": {
       entry: ["src/*.ts!"],
       project: ["src/**/*.ts!"],
     },

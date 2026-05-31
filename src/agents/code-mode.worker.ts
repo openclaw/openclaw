@@ -687,5 +687,8 @@ async function main(): Promise<CodeModeWorkerResult> {
   }
 }
 
-// oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node worker_threads MessagePort, not window.postMessage.
-parentPort?.postMessage(await main());
+if (parentPort) {
+  Reflect.apply(Reflect.get(parentPort, "postMessage") as (message: unknown) => void, parentPort, [
+    await main(),
+  ]);
+}

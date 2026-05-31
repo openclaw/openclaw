@@ -1,0 +1,39 @@
+{
+  "name": "@openclaw/acp-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./normalize-text": {
+      "types": "./dist/normalize-text.d.mts",
+      "import": "./dist/normalize-text.mjs",
+      "default": "./dist/normalize-text.mjs"
+    },
+    "./record-shared": {
+      "types": "./dist/record-shared.d.mts",
+      "import": "./dist/record-shared.mjs",
+      "default": "./dist/record-shared.mjs"
+    },
+    "./runtime/types": {
+      "types": "./dist/runtime/types.d.mts",
+      "import": "./dist/runtime/types.mjs",
+      "default": "./dist/runtime/types.mjs"
+    }
+  },
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/normalize-text.ts src/record-shared.ts src/runtime/types.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  }
+}

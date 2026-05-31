@@ -965,7 +965,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           resolveAgentRoute: core.channel.routing.resolveAgentRoute,
         });
         const hasExplicitSessionBinding = _configuredBinding !== null || _runtimeBindingId !== null;
-        const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId);
+        const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId, {
+          provider: "matrix",
+          conversationId: roomId,
+          providerPolicy: accountConfig?.mentionPatterns,
+        });
         const selfDisplayName = content.formatted_body
           ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
           : undefined;

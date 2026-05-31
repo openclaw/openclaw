@@ -66,7 +66,6 @@ function makeOptions(overrides: Partial<ClientCreateOptions> = {}): ClientCreate
     copilotHome: overrides.copilotHome ?? "copilot-home",
     useLoggedInUser: overrides.useLoggedInUser ?? true,
     gitHubToken: overrides.gitHubToken,
-    cwd: overrides.cwd,
   };
 }
 

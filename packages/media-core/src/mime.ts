@@ -1,6 +1,6 @@
 import path from "node:path";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
+import { createLazyImportLoader } from "./lazy-import.js";
 
 /** @internal */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;

@@ -57,6 +57,33 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["string-normalization", "string-normalization.ts"],
     ],
   },
+  {
+    packageName: "@openclaw/media-core",
+    packageDir: "media-core",
+    subpaths: [
+      ["", "index.ts"],
+      ["base64", "base64.ts"],
+      ["constants", "constants.ts"],
+      ["content-length", "content-length.ts"],
+      ["file-name", "file-name.ts"],
+      ["inbound-path-policy", "inbound-path-policy.ts"],
+      ["inline-image-data-url", "inline-image-data-url.ts"],
+      ["media-source-url", "media-source-url.ts"],
+      ["mime", "mime.ts"],
+      ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
+      ["read-response-with-limit", "read-response-with-limit.ts"],
+    ],
+  },
+  {
+    packageName: "@openclaw/acp-core",
+    packageDir: "acp-core",
+    subpaths: [
+      ["", "index.ts"],
+      ["normalize-text", "normalize-text.ts"],
+      ["record-shared", "record-shared.ts"],
+      ["runtime/types", path.join("runtime", "types.ts")],
+    ],
+  },
 ] as const;
 const pluginSdkNativeAliases = new Map<string, NativeAliasEntry[]>();
 let installed = false;

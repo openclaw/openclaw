@@ -3208,6 +3208,7 @@ export async function runEmbeddedAgent(
             : resolveIncompleteTurnPayloadText({
                 payloadCount,
                 aborted,
+                externalAbort,
                 timedOut,
                 attempt,
               });

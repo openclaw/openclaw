@@ -382,6 +382,34 @@ function createXaiToolManifest() {
   };
 }
 
+function createFeishuToolManifest() {
+  return {
+    id: "feishu",
+    origin: "bundled",
+    enabledByDefault: true,
+    channels: ["feishu"],
+    providers: [],
+    contracts: {
+      tools: ["feishu_doc"],
+    },
+    toolMetadata: {
+      feishu_doc: {
+        configSignals: [
+          {
+            rootPath: "channels.feishu",
+            required: ["appId", "appSecret"],
+          },
+          {
+            rootPath: "channels.feishu",
+            overlayMapPath: "accounts",
+            required: ["appId", "appSecret"],
+          },
+        ],
+      },
+    },
+  };
+}
+
 function expectResolvedToolNames(
   tools: ReturnType<typeof resolvePluginTools>,
   expectedToolNames: readonly string[],
@@ -511,6 +539,179 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolvePluginTools({
       context: {
         ...createContext(),
+        config,
+      } as never,
+      env: {},
+    });
+
+    expect(tools).toStrictEqual([]);
+    expect(factory).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("loads manifest-gated tools when a named account supplies required config", () => {
+    const context = createContext();
+    const config = {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: [...context.config.plugins.allow, "feishu"],
+      },
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              appId: "cli_main",
+              appSecret: "secret",
+            },
+          },
+        },
+      },
+    };
+    const factory = vi.fn(() => makeTool("feishu_doc"));
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: createFeishuToolManifest(),
+    });
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "feishu",
+          optional: false,
+          source: "/tmp/feishu.js",
+          names: ["feishu_doc"],
+          factory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools({
+      context: {
+        ...context,
+        config,
+      } as never,
+      env: {},
+    });
+
+    expectResolvedToolNames(tools, ["feishu_doc"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectLoaderSelectedOnlyPluginIds(["feishu"]);
+  });
+
+  it("applies capability overlays before named account config maps", () => {
+    const context = createContext();
+    const config = {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: [...context.config.plugins.allow, "account-demo"],
+        entries: {
+          "account-demo": {
+            config: {
+              image: {
+                accounts: {
+                  main: {
+                    apiKey: "secret",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const factory = vi.fn(() => makeTool("account_demo_image"));
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: {
+        id: "account-demo",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: {
+          tools: ["account_demo_image"],
+        },
+        toolMetadata: {
+          account_demo_image: {
+            configSignals: [
+              {
+                rootPath: "plugins.entries.account-demo.config",
+                overlayPath: "image",
+                overlayMapPath: "accounts",
+                required: ["apiKey"],
+              },
+            ],
+          },
+        },
+      },
+    });
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "account-demo",
+          optional: false,
+          source: "/tmp/account-demo.js",
+          names: ["account_demo_image"],
+          factory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools({
+      context: {
+        ...context,
+        config,
+      } as never,
+      env: {},
+    });
+
+    expectResolvedToolNames(tools, ["account_demo_image"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectLoaderSelectedOnlyPluginIds(["account-demo"]);
+  });
+
+  it("does not load manifest-gated tools when named accounts lack required config", () => {
+    const context = createContext();
+    const config = {
+      ...context.config,
+      plugins: {
+        ...context.config.plugins,
+        allow: [...context.config.plugins.allow, "feishu"],
+      },
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              appId: "cli_main",
+            },
+          },
+        },
+      },
+    };
+    const factory = vi.fn(() => makeTool("feishu_doc"));
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: createFeishuToolManifest(),
+    });
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "feishu",
+          optional: false,
+          source: "/tmp/feishu.js",
+          names: ["feishu_doc"],
+          factory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools({
+      context: {
+        ...context,
         config,
       } as never,
       env: {},

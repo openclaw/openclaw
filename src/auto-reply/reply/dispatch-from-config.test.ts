@@ -5427,7 +5427,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it("keeps unauthorized plugin-owned binding slash text routed to the bound plugin", async () => {
+  it("keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -5436,7 +5436,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
     hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
       status: "handled",
-      result: { handled: true },
+      result: { handled: true, reply: { text: "do not leak slash reply" } },
     });
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-command-escape-denied",
@@ -5467,6 +5467,7 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
+      ChatType: "channel",
       CommandSource: "text",
       CommandAuthorized: false,
       WasMentioned: false,
@@ -5480,7 +5481,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-denied");
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
@@ -5491,6 +5496,7 @@ describe("dispatchReplyFromConfig", () => {
     );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("delivers plugin-owned binding replies returned by the owning inbound claim hook", async () => {
@@ -7049,7 +7055,100 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("routes plugin-owned bindings under message-tool-only source delivery", async () => {
+  it.each(
+    [
+      {
+        name: "handled without a plugin reply",
+        bindingId: "binding-message-tool-only",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1001234567890:topic:11",
+          parentConversationId: "-1001234567890",
+        },
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:-1001234567890",
+          To: "telegram:-1001234567890",
+          AccountId: "default",
+          MessageThreadId: 11,
+          ChatType: "group",
+          GroupSubject: "Dev",
+          Body: "observed message",
+        },
+        cfg: emptyConfig,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only" as const,
+        },
+        expectedClaim: { channel: "telegram", threadId: 11 },
+      },
+      {
+        name: "handled with a plugin reply",
+        bindingId: "binding-message-tool-reply",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:reply-test",
+        },
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "discord:channel:reply-test",
+          To: "discord:channel:reply-test",
+          AccountId: "default",
+          ChatType: "channel",
+          Body: "observed message",
+          SessionKey: "agent:main:discord:channel:reply-test",
+        },
+        cfg: {
+          messages: {
+            groupChat: { visibleReplies: "message_tool" },
+          },
+        } as OpenClawConfig,
+        expectedClaim: { channel: "discord" },
+        pluginReply: { text: "Codex native reply" },
+        expectPluginReplyDelivered: true,
+      },
+      {
+        name: "suppresses ambient room_event plugin reply",
+        bindingId: "binding-message-tool-room-event",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:room-event-test",
+        },
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "discord:channel:room-event-test",
+          To: "discord:channel:room-event-test",
+          AccountId: "default",
+          ChatType: "group",
+          InboundEventKind: "room_event",
+          Body: "observed message",
+          SessionKey: "agent:main:discord:channel:room-event-test",
+        },
+        cfg: emptyConfig,
+        expectedClaim: { channel: "discord" },
+        pluginReply: { text: "Codex ambient room event reply" },
+        expectPluginReplyDelivered: false,
+      },
+    ] satisfies Array<{
+      name: string;
+      bindingId: string;
+      conversation: SessionBindingRecord["conversation"];
+      ctx: Partial<MsgContext>;
+      cfg: OpenClawConfig;
+      replyOptions?: { sourceReplyDeliveryMode: "message_tool_only" };
+      expectedClaim: Record<string, unknown>;
+      pluginReply?: ReplyPayload;
+      expectPluginReplyDelivered?: boolean;
+    }>,
+  )("routes plugin-owned bindings under message-tool-only source delivery: $name", async (params) => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -7058,18 +7157,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
     hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
       status: "handled",
-      result: { handled: true },
+      result: params.pluginReply
+        ? { handled: true, reply: params.pluginReply }
+        : { handled: true },
     });
     sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-message-tool-only",
+      bindingId: params.bindingId,
       targetSessionKey: "plugin-binding:codex:abc123",
       targetKind: "session",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:11",
-        parentConversationId: "-1001234567890",
-      },
+      conversation: params.conversation,
       status: "active",
       boundAt: 1710000000000,
       metadata: {
@@ -7085,27 +7181,13 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:-1001234567890",
-      To: "telegram:-1001234567890",
-      AccountId: "default",
-      MessageThreadId: 11,
-      ChatType: "group",
-      GroupSubject: "Dev",
-      Body: "observed message",
-    });
 
     const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
+      ctx: buildTestCtx(params.ctx),
+      cfg: params.cfg,
       dispatcher,
       replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
+      replyOptions: params.replyOptions,
     });
 
     expect(result).toEqual({
@@ -7113,21 +7195,23 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       counts: { tool: 0, block: 0, final: 0 },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-message-tool-only");
-    const claimCall = firstMockCall(
-      hookMocks.runner.runInboundClaimForPluginOutcome,
-      "plugin inbound claim",
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({
+        content: "observed message",
+        ...params.expectedClaim,
+      }),
+      expect.objectContaining({
+        pluginBinding: expect.objectContaining({ bindingId: params.bindingId }),
+      }),
     );
-    expect(claimCall[0]).toBe("openclaw-codex-app-server");
-    expect(claimCall[1]).toMatchObject({
-      channel: "telegram",
-      content: "observed message",
-      threadId: 11,
-    });
-    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
-    expect(claimContext.pluginBinding).toMatchObject({ bindingId: "binding-message-tool-only" });
     expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    if (params.expectPluginReplyDelivered) {
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(params.pluginReply);
+    } else {
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps unmentioned plugin-bound fallback from ordinary group agent dispatch", async () => {

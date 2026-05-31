@@ -218,6 +218,10 @@ Target-side auth-required installs are reported on the affected plugin item with
 Their explicit config entries are written disabled until you reauthorize and
 enable them. Other install failures are item-scoped `error` results.
 
+The native Codex plugin config also accepts first-party `openai-bundled` and
+`openai-primary-runtime` marketplace identities, but migration does not
+auto-discover or install them from source state.
+
 If Codex app-server plugin inventory is unavailable during planning, migration
 falls back to cached bundle advisory items instead of failing the whole
 migration.

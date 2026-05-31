@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -14,7 +15,6 @@ import {
   getImageMetadata,
   readImageProbeFromHeader,
 } from "../media/media-services.js";
-import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
 import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { resolveUserPath } from "../utils.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";

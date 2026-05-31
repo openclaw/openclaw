@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -21,7 +22,6 @@ import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
   DEFAULT_INPUT_IMAGE_MIMES,

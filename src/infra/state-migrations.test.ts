@@ -279,4 +279,88 @@ describe("state migrations", () => {
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "default"));
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
   });
+
+  it("preserves a corrupt target session store instead of overwriting it with legacy-only data", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    // target sessions.json is corrupt (trailing garbage → JSON5.parse fails) and
+    // holds a target-only key that has no legacy counterpart.
+    const corruptBytes = `${JSON.stringify({
+      "agent:worker-1:desk:target-only": { sessionId: "target-only-session", updatedAt: 99 },
+    })}\n<<<corrupt trailing garbage>>>`;
+    await fs.writeFile(targetStorePath, corruptBytes, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    // The corrupt bytes must survive on disk (parse still fails after migration).
+    const afterRaw = await fs.readFile(targetStorePath, "utf8");
+    expect(afterRaw).toContain("corrupt trailing garbage");
+    expect(afterRaw).toBe(corruptBytes);
+
+    // No "Merged sessions store" change was committed against the corrupt target.
+    expect(result.changes.some((c) => c.startsWith("Merged sessions store"))).toBe(false);
+
+    // And no direct-chat migration is reported either: the legacy direct entry was
+    // not saved (the target was left untouched), so doctor/startup logs must not
+    // claim a session migration happened on this skip path.
+    expect(result.changes.some((c) => c.startsWith("Migrated latest direct-chat session"))).toBe(
+      false,
+    );
+
+    // The user is warned that the target store was left untouched because it is unreadable.
+    expect(result.warnings.some((w) => /unreadable|corrupt/i.test(w))).toBe(true);
+
+    // Legacy store is NOT deleted or renamed, so a later explicit doctor --fix
+    // can retry the migration from the detector's normal legacy path.
+    await expect(
+      fs.readFile(path.join(stateDir, "sessions", "sessions.json"), "utf8"),
+    ).resolves.toContain("legacy-direct");
+    await expect(fs.readFile(path.join(stateDir, "sessions", "trace.jsonl"), "utf8")).resolves.toBe(
+      "{}\n",
+    );
+  });
+
+  it("archives a corrupt target session store before explicit recovery", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const corruptBytes = `${JSON.stringify({
+      "agent:worker-1:desk:target-only": { sessionId: "target-only-session", updatedAt: 99 },
+    })}\n<<<corrupt trailing garbage>>>`;
+    await fs.writeFile(targetStorePath, corruptBytes, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+      recoverCorruptTargetStore: true,
+    });
+
+    const archivedPath = `${targetStorePath}.corrupt-1234`;
+    await expect(fs.readFile(archivedPath, "utf8")).resolves.toBe(corruptBytes);
+
+    const recoveredStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(recoveredStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
+    expect(recoveredStore["agent:worker-1:desk:target-only"]).toBeUndefined();
+    expect(result.changes).toContain(`Archived corrupt target sessions store → ${archivedPath}`);
+    expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
+    expect(result.warnings).toStrictEqual([]);
+    await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
+  });
 });
