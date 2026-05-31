@@ -401,6 +401,23 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
   });
 
+  it("returns the caption message id when captioned attachment only has a placeholder id", async () => {
+    const client = createClient({ guid: "p:0/caption-guid" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ success: true });
+
+    const result = await sendMessageIMessage("+15550004567", "caption", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("p:0/caption-guid");
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/caption-guid"]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["text"]);
+  });
+
   it("sends explicit chat media captions as attachment plus follow-up text", async () => {
     const client = createClient({ guid: "p:0/caption-guid" });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/chat-media-guid" });

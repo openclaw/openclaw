@@ -512,6 +512,11 @@ function createIMessageSendReceipt(params: {
   return createMessageReceiptFromOutboundResults(receiptParams);
 }
 
+function isConcreteIMessageMessageId(messageId: string | undefined): boolean {
+  const trimmed = messageId?.trim();
+  return Boolean(trimmed && trimmed !== "unknown" && trimmed !== "ok");
+}
+
 function resolveOutboundEchoScope(params: {
   accountId: string;
   target: ReturnType<typeof parseIMessageTarget>;
@@ -693,8 +698,7 @@ async function resolveAttachmentChatTarget(params: {
     if (!normalizedHandle) {
       return null;
     }
-    const service =
-      params.target.service !== "auto" ? params.target.service : params.service;
+    const service = params.target.service !== "auto" ? params.target.service : params.service;
     if (service === "sms") {
       return `SMS;-;${normalizedHandle}`;
     }
@@ -907,8 +911,11 @@ export async function sendMessageIMessage(
         ...(opts.client ? { client: opts.client } : {}),
         mediaUrl: undefined,
       });
+      const messageId = isConcreteIMessageMessageId(attachmentResult.messageId)
+        ? attachmentResult.messageId
+        : captionResult.messageId;
       return {
-        messageId: attachmentResult.messageId,
+        messageId,
         ...((captionResult.guid ?? attachmentResult.guid)
           ? { guid: captionResult.guid ?? attachmentResult.guid }
           : {}),
