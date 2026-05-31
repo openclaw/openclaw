@@ -2005,6 +2005,9 @@ export async function runEmbeddedAttempt(
           activeAgentId: sessionAgentId,
           contextEnginePluginId: resolveActiveContextEnginePluginId(),
         }),
+        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        providerId: params.provider,
+        modelId: params.modelId,
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
             contextEngine: contextParams.contextEngine as never,
@@ -2014,6 +2017,7 @@ export async function runEmbeddedAttempt(
             reason: contextParams.reason,
             sessionManager: contextParams.sessionManager as never,
             runtimeContext: contextParams.runtimeContext,
+            runtimeSettings: contextParams.runtimeSettings,
             config: params.config,
             agentId: sessionAgentId,
           }),
@@ -2939,6 +2943,8 @@ export async function runEmbeddedAttempt(
               availableTools: new Set(effectiveTools.map((tool) => tool.name)),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
+              contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+              providerId: params.provider,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });
             if (!assembled) {
@@ -4536,6 +4542,9 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
+            contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+            providerId: params.provider,
+            modelId: params.modelId,
             runMaintenance: async (contextParams) =>
               await runContextEngineMaintenance({
                 contextEngine: contextParams.contextEngine as never,
@@ -4547,6 +4556,7 @@ export async function runEmbeddedAttempt(
                 withSessionManagerRewriteLock: async (operation) =>
                   await sessionLockController.withSessionWriteLock(operation),
                 runtimeContext: contextParams.runtimeContext,
+                runtimeSettings: contextParams.runtimeSettings,
                 config: params.config,
                 agentId: sessionAgentId,
               }),

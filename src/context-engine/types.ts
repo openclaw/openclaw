@@ -46,6 +46,8 @@ export type ContextEngineProjection = {
 
 export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
 
+export type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
+
 export type ContextEngineHostCapability =
   | "bootstrap"
   | "assemble-before-prompt"
@@ -61,6 +63,44 @@ export type ContextEngineHostRequirements = {
   /** Optional engine-authored guidance appended to the host compatibility error. */
   unsupportedMessage?: string;
 };
+
+export type ContextEngineRuntimeSettings = {
+  schemaVersion: 1;
+  runtime: {
+    host: "openclaw";
+    mode: ContextEngineRuntimeMode;
+    harnessId: string | null;
+    runtimeId: string | null;
+  };
+  model: {
+    requested: string | null;
+    resolved: string | null;
+    provider: string | null;
+    family: string | null;
+    fallbackActive: boolean;
+  };
+  contextEngine: {
+    hostId: string;
+    hostLabel: string | null;
+    capabilities: ContextEngineHostCapability[];
+  };
+  limits: {
+    tokenBudget: number | null;
+    maxOutputTokens: number | null;
+  };
+  diagnostics: {
+    fallbackReason: string | null;
+    degradedReason: string | null;
+  };
+};
+
+export class ContextEngineRuntimeSettingsUnavailableError extends Error {
+  readonly code = "context_engine_runtime_settings_unavailable";
+}
+
+export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
+  readonly code = "context_engine_runtime_settings_unsupported";
+}
 
 export type CompactResult = {
   ok: boolean;
@@ -245,6 +285,7 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     sessionFile: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
   }): Promise<BootstrapResult>;
 
   /**
@@ -257,6 +298,7 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     sessionFile: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<ContextEngineMaintenanceResult>;
 
@@ -301,6 +343,7 @@ export interface ContextEngine {
     /** Optional model context token budget for proactive compaction. */
     tokenBudget?: number;
     /** Optional runtime-owned context for engines that need caller state. */
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void>;
 
@@ -322,6 +365,7 @@ export interface ContextEngine {
     model?: string;
     /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
     prompt?: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
   }): Promise<AssembleResult>;
 
   /**
@@ -347,6 +391,7 @@ export interface ContextEngine {
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
     /** Optional runtime-owned context for engines that need caller state. */
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
     /**
      * Optional abort signal honored before and during compaction. The host

@@ -1,5 +1,6 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
@@ -66,6 +67,45 @@ describe("harness context engine lifecycle", () => {
 
     const assembleParams = assemble.mock.calls.at(0)?.[0];
     expect(assembleParams?.messages).toEqual([visibleUser, visibleAssistant]);
+  });
+
+  it("passes declared runtime settings into assemble hooks", async () => {
+    const visibleUser = textMessage("user", "visible ask", 1);
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages: [visibleUser],
+      tokenBudget: 4096,
+      modelId: "gpt-5.5",
+      providerId: "openai",
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+    });
+
+    const assembleParams = assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams?.runtimeSettings).toMatchObject({
+      schemaVersion: 1,
+      runtime: {
+        host: "openclaw",
+        mode: "normal",
+      },
+      model: {
+        resolved: "gpt-5.5",
+        provider: "openai",
+        fallbackActive: false,
+      },
+      contextEngine: {
+        hostId: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST.id,
+      },
+      limits: {
+        tokenBudget: 4096,
+      },
+    });
   });
 
   it("keeps hidden runtime-context custom messages out of afterTurn hooks", async () => {
