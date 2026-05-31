@@ -41,6 +41,9 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToInt
 
+/**
+ * CameraX-backed capture service used by gateway camera commands.
+ */
 class CameraCaptureManager(
   private val context: Context,
 ) {
@@ -66,10 +69,12 @@ class CameraCaptureManager(
   @Volatile private var permissionRequester: PermissionRequester? = null
 
   fun attachLifecycleOwner(owner: LifecycleOwner) {
+    // CameraX binds use cases to an Activity lifecycle; background services cannot capture alone.
     lifecycleOwner = owner
   }
 
   fun attachPermissionRequester(requester: PermissionRequester) {
+    // Permission prompts must be launched by the Activity that owns the ActivityResult registry.
     permissionRequester = requester
   }
 
@@ -122,6 +127,7 @@ class CameraCaptureManager(
       val selector = resolveCameraSelector(provider, facing, deviceId)
 
       provider.unbindAll()
+      // Bind only the still capture use case; CameraX owns camera open/close through the lifecycle owner.
       provider.bindToLifecycle(owner, selector, capture)
 
       val (bytes, orientation) = capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
@@ -303,6 +309,7 @@ class CameraCaptureManager(
     orientation: Int,
   ): Bitmap {
     val matrix = Matrix()
+    // CameraX JPEG bytes keep sensor orientation in EXIF; normalize before resizing/encoding.
     when (orientation) {
       ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
       ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
@@ -365,6 +372,7 @@ class CameraCaptureManager(
     }
     return CameraSelector
       .Builder()
+      // CameraX selectors are filters over CameraInfo; pin by Camera2 id for stable device selection.
       .addCameraFilter { infos -> infos.filter { cameraIdOrNull(it) == deviceId } }
       .build()
   }
@@ -419,7 +427,9 @@ private suspend fun Context.cameraProvider(): ProcessCameraProvider =
     )
   }
 
-/** Returns (jpegBytes, exifOrientation) so caller can rotate the decoded bitmap. */
+/**
+ * Returns JPEG bytes plus EXIF orientation so callers can normalize the decoded bitmap.
+ */
 private suspend fun ImageCapture.takeJpegWithExif(
   executor: Executor,
   tempDir: File,
