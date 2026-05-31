@@ -203,8 +203,8 @@ function createConfig(params: {
           maxSpawnDepth: 2,
           ...(params.subagentModel ? { model: params.subagentModel } : {}),
         },
-        models: {
-          ...(params.subagentModel && params.thinking
+        models:
+          params.subagentModel && params.thinking
             ? {
                 [params.subagentModel]: {
                   params: {
@@ -212,8 +212,7 @@ function createConfig(params: {
                   },
                 },
               }
-            : {}),
-        },
+            : {},
       },
     },
     gateway: {

@@ -8,6 +8,7 @@ import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const FOREGROUND_TEST_YIELD_MS = 120_000;
+const ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL", "SSLKEYLOGFILE"] as const;
 type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
 const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
@@ -144,7 +145,8 @@ describe("exec PATH login shell merge", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
+    envSnapshot = captureEnv([...ENV_KEYS]);
+    process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
@@ -289,6 +291,17 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([...ENV_KEYS]);
+    process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
