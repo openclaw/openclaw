@@ -37,6 +37,7 @@ data class TalkDirectiveParseResult(
 )
 
 object TalkDirectiveParser {
+  /** Parses optional first-line JSON directives while preserving normal speech text. */
   fun parse(text: String): TalkDirectiveParseResult {
     val normalized = text.replace("\r\n", "\n")
     val lines = normalized.split("\n").toMutableList()
@@ -224,6 +225,7 @@ private fun JsonElement?.asLongOrNull(): Long? {
 private fun JsonElement?.asBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null
   val content = primitive.content.trim().lowercase()
+  // Accept dictated/config-style booleans in addition to strict JSON literals.
   return when (content) {
     "true", "yes", "1" -> true
     "false", "no", "0" -> false

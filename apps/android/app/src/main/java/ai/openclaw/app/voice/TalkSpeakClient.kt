@@ -14,6 +14,7 @@ internal data class TalkSpeakAudio(
   val fileExtension: String?,
 )
 
+/** Result of requesting remote speech synthesis through the gateway. */
 internal sealed interface TalkSpeakResult {
   data class Success(
     val audio: TalkSpeakAudio,
@@ -29,12 +30,14 @@ internal sealed interface TalkSpeakResult {
 }
 
 internal interface TalkSpeechSynthesizing {
+  /** Synthesizes assistant text using optional per-utterance talk directives. */
   suspend fun synthesize(
     text: String,
     directive: TalkDirective?,
   ): TalkSpeakResult
 }
 
+/** Gateway RPC client for talk.speak with local-TTS fallback classification. */
 internal class TalkSpeakClient(
   private val session: GatewaySession? = null,
   private val json: Json = Json { ignoreUnknownKeys = true },
@@ -93,6 +96,8 @@ internal class TalkSpeakClient(
   private fun isFallbackEligible(error: GatewaySession.ErrorShape?): Boolean {
     val reason = error?.details?.reason
     if (reason == null) return true
+    // Only provider/config absence should fall back to Android TTS; payload and
+    // transport errors should stay visible to the caller.
     return reason == "talk_unconfigured" ||
       reason == "talk_provider_unsupported" ||
       reason == "method_unavailable"
@@ -109,6 +114,7 @@ internal class TalkSpeakClient(
   }
 }
 
+/** Gateway talk.speak request payload assembled from text plus directive overrides. */
 @Serializable
 internal data class TalkSpeakRequest(
   val text: String,

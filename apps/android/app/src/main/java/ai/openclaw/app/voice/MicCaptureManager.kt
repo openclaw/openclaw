@@ -34,6 +34,7 @@ enum class VoiceConversationRole {
   Assistant,
 }
 
+/** UI transcript entry retained for recent voice turns. */
 data class VoiceConversationEntry(
   val id: String,
   val role: VoiceConversationRole,
@@ -41,6 +42,7 @@ data class VoiceConversationEntry(
   val isStreaming: Boolean = false,
 )
 
+/** Coordinates live mic transcription, queued sends, and assistant audio replies. */
 class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
@@ -615,6 +617,8 @@ class MicCaptureManager(
         capacity = 4,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
       )
+    // Drop oldest frames under network backpressure so the live transcription
+    // session stays close to real time instead of replaying stale audio.
     transcriptionAppendJob =
       scope.launch(Dispatchers.IO) {
         for (frame in audioFrames) {
