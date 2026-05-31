@@ -1328,12 +1328,14 @@ describe("gateway server chat", () => {
         },
       });
 
-      const historyRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
-        sessionKey: "agent:alpha:main",
-      });
+      const historyRes = await rpcReq<{
+        thinkingLevel?: string;
+        sessionInfo?: { thinkingLevel?: string };
+      }>(ws, "chat.history", { sessionKey: "agent:alpha:main" });
 
       expect(historyRes.ok).toBe(true);
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
+      expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;

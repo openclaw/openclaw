@@ -2543,7 +2543,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
     const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
-    sessionInfo.thinkingLevel = thinkingLevel;
     sessionInfo.verboseLevel = verboseLevel;
     respond(true, {
       sessionKey,
