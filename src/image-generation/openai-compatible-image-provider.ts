@@ -1,3 +1,5 @@
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -12,6 +14,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveConfiguredMediaMaxBytes } from "../media/configured-max-bytes.js";
 import { parseOpenAiCompatibleImageResponseAsync } from "./image-assets.js";
 import type {
   ImageGenerationProvider,
@@ -98,18 +101,33 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
+function hasSameUrlOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
+}
+
+function createSameOriginDownloadHeaders(headers: Headers): Headers {
+  const downloadHeaders = new Headers(headers);
+  downloadHeaders.delete("Content-Type");
+  return downloadHeaders;
+}
+
 function appendImagesPath(baseUrl: string, mode: OpenAiCompatibleImageRequestMode): string {
   return `${trimTrailingSlash(baseUrl)}/images/${mode === "edit" ? "edits" : "generations"}`;
 }
 
-function resolveRequestTimeoutMs(params: {
+function createRequestTimeoutResolver(params: {
   options: OpenAiCompatibleImageProviderOptions;
   req: ImageGenerationRequest;
   mode: OpenAiCompatibleImageRequestMode;
-}): number | undefined {
+}): () => number | undefined {
   if (params.options.defaultTimeoutMs === undefined) {
-    return params.req.timeoutMs;
+    return () => params.req.timeoutMs;
   }
+  const defaultTimeoutMs = params.options.defaultTimeoutMs;
   const label =
     params.mode === "edit"
       ? (params.options.failureLabels?.edit ?? `${params.options.label} image edit`)
@@ -118,10 +136,11 @@ function resolveRequestTimeoutMs(params: {
     timeoutMs: params.req.timeoutMs,
     label,
   });
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: params.options.defaultTimeoutMs,
-  });
+  return () =>
+    resolveProviderOperationTimeoutMs({
+      deadline,
+      defaultTimeoutMs,
+    });
 }
 
 export function createOpenAiCompatibleImageGenerationProvider(
@@ -221,11 +240,13 @@ export function createOpenAiCompatibleImageGenerationProvider(
         mode === "edit"
           ? options.buildEditRequest({ ...requestParams, mode })
           : options.buildGenerateRequest({ ...requestParams, mode });
-      const timeoutMs = resolveRequestTimeoutMs({ options, req, mode });
+      const resolveTimeoutMs = createRequestTimeoutResolver({ options, req, mode });
+      const timeoutMs = resolveTimeoutMs();
+      const requestUrl = appendImagesPath(baseUrl, mode);
       const request =
         requestBody.kind === "multipart"
           ? postMultipartRequest({
-              url: appendImagesPath(baseUrl, mode),
+              url: requestUrl,
               headers: (() => {
                 const multipartHeaders = new Headers(headers);
                 multipartHeaders.delete("Content-Type");
@@ -239,7 +260,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
               dispatcherPolicy,
             })
           : postJsonRequest({
-              url: appendImagesPath(baseUrl, mode),
+              url: requestUrl,
               headers: (() => {
                 const jsonHeaders = new Headers(headers);
                 jsonHeaders.set("Content-Type", "application/json");
@@ -269,21 +290,29 @@ export function createOpenAiCompatibleImageGenerationProvider(
           ...options.response,
           malformedResponseError,
           downloadUrl: async ({ url }) => {
+            const useProviderTransport = hasSameUrlOrigin(requestUrl, url);
             const download = await fetchWithTimeoutGuarded(
               url,
-              { method: "GET" },
-              timeoutMs,
+              {
+                method: "GET",
+                ...(useProviderTransport
+                  ? { headers: createSameOriginDownloadHeaders(headers) }
+                  : {}),
+              },
+              resolveTimeoutMs(),
               fetch,
               {
-                ...(req.ssrfPolicy || resolvedAllowPrivateNetwork
+                ...(req.ssrfPolicy || (useProviderTransport && resolvedAllowPrivateNetwork)
                   ? {
                       ssrfPolicy: {
                         ...req.ssrfPolicy,
-                        ...(resolvedAllowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+                        ...(useProviderTransport && resolvedAllowPrivateNetwork
+                          ? { allowPrivateNetwork: true }
+                          : {}),
                       },
                     }
                   : {}),
-                ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+                ...(useProviderTransport && dispatcherPolicy ? { dispatcherPolicy } : {}),
                 auditContext: `${options.id}-image-download`,
               },
             );
@@ -293,7 +322,14 @@ export function createOpenAiCompatibleImageGenerationProvider(
                 `${options.label} image URL download failed`,
               );
               return {
-                buffer: Buffer.from(await download.response.arrayBuffer()),
+                buffer: await readResponseWithLimit(
+                  download.response,
+                  resolveConfiguredMediaMaxBytes(req.cfg) ?? MAX_IMAGE_BYTES,
+                  {
+                    onOverflow: ({ maxBytes }) =>
+                      new Error(`${options.label} image URL download exceeded ${maxBytes} bytes`),
+                  },
+                ),
                 mimeType: download.response.headers.get("content-type") ?? undefined,
               };
             } finally {

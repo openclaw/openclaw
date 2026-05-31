@@ -171,6 +171,20 @@ describe("image asset helpers", () => {
     expect(images[0]?.buffer).toEqual(jpegBytes);
   });
 
+  it("rejects OpenAI-compatible URL image responses that are not images", async () => {
+    await expect(
+      parseOpenAiCompatibleImageResponseAsync(
+        { data: [{ url: "https://example.test/not-image" }] },
+        {
+          downloadUrl: async () => ({
+            buffer: Buffer.from("<html></html>"),
+            mimeType: "text/html",
+          }),
+        },
+      ),
+    ).rejects.toThrow("OpenAI-compatible image URL download did not return an image");
+  });
+
   it("resolves source upload filenames from explicit names or MIME types", () => {
     expect(
       imageSourceUploadFileName({
