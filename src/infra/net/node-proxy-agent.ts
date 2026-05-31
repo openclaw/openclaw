@@ -58,8 +58,8 @@ function formatNoProxyTargetUrl(targetUrl: string | URL): string | undefined {
     return undefined;
   }
   const parsed = new URL(target.href);
-  // NO_PROXY matching is HTTP-oriented. Map WebSocket schemes to their HTTP
-  // equivalents so default ports and host rules match browser-style targets.
+  // Bypass matching uses web request semantics. Map WebSocket schemes to the
+  // equivalent request schemes so default ports and host rules line up.
   if (parsed.protocol === "ws:") {
     parsed.protocol = "http:";
   } else if (parsed.protocol === "wss:") {
@@ -87,8 +87,8 @@ function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol
 
 function fixedProxyEnv(proxyUrl: URL): ProxylineEnvSnapshot {
   const href = proxyUrl.href;
-  // Proxyline's ambient agent only reads env-shaped input. Pin both HTTP and
-  // HTTPS to the explicit URL and blank NO_PROXY so callers get a fixed agent.
+  // Proxyline's ambient agent only reads env-shaped input. Pin both request
+  // scheme slots to the explicit URL and clear bypass rules for a fixed agent.
   return {
     HTTP_PROXY: href,
     HTTPS_PROXY: href,

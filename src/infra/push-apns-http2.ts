@@ -83,8 +83,8 @@ async function openProxiedApnsHttp2Session(params: {
     timeoutMs: params.timeoutMs,
   });
 
-  // The CONNECT helper already completed the target TLS handshake; hand that
-  // socket to http2.connect so Node does not open a separate direct connection.
+  // The CONNECT helper already completed the target TLS handshake; reuse that
+  // socket so the session cannot open a separate direct route.
   return http2.connect(params.authority, {
     createConnection: () => tlsSocket,
   });
