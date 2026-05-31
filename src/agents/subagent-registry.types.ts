@@ -56,9 +56,9 @@ export type SubagentCompletionDeliveryState = {
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;
-  handoffLeaseId?: string;
-  handoffLeasedAt?: number;
-  handoffInjectedAt?: number;
+  steeringLeaseId?: string;
+  steeringLeasedAt?: number;
+  steeringInjectedAt?: number;
   suspendedAt?: number;
   suspendedReason?: "retry-limit" | "expiry";
   discardedAt?: number;

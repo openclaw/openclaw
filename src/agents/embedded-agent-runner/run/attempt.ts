@@ -179,10 +179,10 @@ import {
   resolveSubagentCapabilityStore,
 } from "../../subagent-capabilities.js";
 import {
-  ackPendingSubagentCompletionHandoffs,
-  leasePendingSubagentCompletionHandoffs,
-  prependSubagentHandoffPrompt,
-  releasePendingSubagentCompletionHandoffs,
+  ackPendingAgentSteeringItems,
+  leasePendingAgentSteeringItems,
+  prependAgentSteeringPrompt,
+  releasePendingAgentSteeringItems,
 } from "../../subagent-registry.js";
 import { ensureSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
@@ -3329,22 +3329,22 @@ export async function runEmbeddedAttempt(
         }
       };
       let skipPromptSubmission = false;
-      let leasedSubagentHandoff:
+      let leasedSteering:
         | {
             leaseId: string;
             runIds: readonly string[];
           }
         | undefined;
-      const releaseLeasedSubagentHandoff = (error?: unknown) => {
-        if (!leasedSubagentHandoff) {
+      const releaseLeasedSteering = (error?: unknown) => {
+        if (!leasedSteering) {
           return;
         }
-        releasePendingSubagentCompletionHandoffs({
-          runIds: leasedSubagentHandoff.runIds,
-          leaseId: leasedSubagentHandoff.leaseId,
+        releasePendingAgentSteeringItems({
+          runIds: leasedSteering.runIds,
+          leaseId: leasedSteering.leaseId,
           error: error ? formatErrorMessage(error) : undefined,
         });
-        leasedSubagentHandoff = undefined;
+        leasedSteering = undefined;
       };
       try {
         const promptStartedAt = Date.now();
@@ -3545,32 +3545,32 @@ export async function runEmbeddedAttempt(
           }
         }
         if (params.sessionKey && !isRawModelRun) {
-          const leaseId = `${params.runId}:subagent-next-turn-handoff`;
-          const leased = leasePendingSubagentCompletionHandoffs({
+          const leaseId = `${params.runId}:agent-steering`;
+          const leased = leasePendingAgentSteeringItems({
             requesterSessionKey: params.sessionKey,
             leaseId,
           });
           if (leased) {
-            leasedSubagentHandoff = {
+            leasedSteering = {
               leaseId,
               runIds: leased.runIds,
             };
-            effectivePrompt = prependSubagentHandoffPrompt({
-              handoffPrompt: leased.prompt,
+            effectivePrompt = prependAgentSteeringPrompt({
+              steeringPrompt: leased.prompt,
               prompt: effectivePrompt,
             });
-            promptForRuntimeContextSplit = prependSubagentHandoffPrompt({
-              handoffPrompt: leased.prompt,
+            promptForRuntimeContextSplit = prependAgentSteeringPrompt({
+              steeringPrompt: leased.prompt,
               prompt: promptForRuntimeContextSplit,
             });
             if (transcriptPromptForRuntimeSplit !== undefined) {
-              transcriptPromptForRuntimeSplit = prependSubagentHandoffPrompt({
-                handoffPrompt: leased.prompt,
+              transcriptPromptForRuntimeSplit = prependAgentSteeringPrompt({
+                steeringPrompt: leased.prompt,
                 prompt: transcriptPromptForRuntimeSplit,
               });
             }
             log.debug(
-              `subagent handoff: injected ${leased.runIds.length} completion(s) into parent turn ` +
+              `agent steering: injected ${leased.runIds.length} queued item(s) into parent turn ` +
                 `runId=${params.runId} sessionKey=${params.sessionKey}`,
             );
           }
@@ -4164,22 +4164,22 @@ export async function runEmbeddedAttempt(
                   cleanupRuntimeContextMessage();
                 }
               }
-              if (leasedSubagentHandoff) {
-                ackPendingSubagentCompletionHandoffs({
-                  runIds: leasedSubagentHandoff.runIds,
-                  leaseId: leasedSubagentHandoff.leaseId,
+              if (leasedSteering) {
+                ackPendingAgentSteeringItems({
+                  runIds: leasedSteering.runIds,
+                  leaseId: leasedSteering.leaseId,
                 });
-                leasedSubagentHandoff = undefined;
+                leasedSteering = undefined;
               }
             } finally {
               cleanupProviderPromptHistoryTransform();
               cleanupModelPromptTransform();
             }
           } else {
-            releaseLeasedSubagentHandoff(promptError ?? "prompt submission skipped");
+            releaseLeasedSteering(promptError ?? "prompt submission skipped");
           }
         } catch (err) {
-          releaseLeasedSubagentHandoff(err);
+          releaseLeasedSteering(err);
           yieldAborted =
             yieldDetected &&
             isRunnerAbortError(err) &&

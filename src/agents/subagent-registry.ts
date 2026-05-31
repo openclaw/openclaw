@@ -11,6 +11,12 @@ import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import {
+  ackLeasedAgentSteeringItemsFromSubagentRuns,
+  leasePendingAgentSteeringItemsFromSubagentRuns,
+  prependAgentSteeringPrompt,
+  releaseLeasedAgentSteeringItemsFromSubagentRuns,
+} from "./agent-steering-queue.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
@@ -23,12 +29,6 @@ import {
   getDeliveryLastError,
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
-import {
-  ackLeasedSubagentHandoffsFromRuns,
-  leasePendingSubagentHandoffsFromRuns,
-  prependSubagentHandoffPrompt,
-  releaseLeasedSubagentHandoffsFromRuns,
-} from "./subagent-handoff-queue.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -1381,13 +1381,13 @@ export function listSubagentRunsForRequester(
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
-export function leasePendingSubagentCompletionHandoffs(params: {
+export function leasePendingAgentSteeringItems(params: {
   requesterSessionKey: string;
   leaseId: string;
   now?: number;
 }) {
   restoreSubagentRunsOnce();
-  const leased = leasePendingSubagentHandoffsFromRuns({
+  const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
     runs: subagentRuns,
     requesterSessionKey: params.requesterSessionKey,
     leaseId: params.leaseId,
@@ -1399,12 +1399,12 @@ export function leasePendingSubagentCompletionHandoffs(params: {
   return leased;
 }
 
-export function ackPendingSubagentCompletionHandoffs(params: {
+export function ackPendingAgentSteeringItems(params: {
   runIds: readonly string[];
   leaseId: string;
   now?: number;
 }): number {
-  const updated = ackLeasedSubagentHandoffsFromRuns({
+  const updated = ackLeasedAgentSteeringItemsFromSubagentRuns({
     runs: subagentRuns,
     runIds: params.runIds,
     leaseId: params.leaseId,
@@ -1424,12 +1424,12 @@ export function ackPendingSubagentCompletionHandoffs(params: {
   return updated;
 }
 
-export function releasePendingSubagentCompletionHandoffs(params: {
+export function releasePendingAgentSteeringItems(params: {
   runIds: readonly string[];
   leaseId: string;
   error?: string;
 }): number {
-  const updated = releaseLeasedSubagentHandoffsFromRuns({
+  const updated = releaseLeasedAgentSteeringItemsFromSubagentRuns({
     runs: subagentRuns,
     runIds: params.runIds,
     leaseId: params.leaseId,
@@ -1441,7 +1441,7 @@ export function releasePendingSubagentCompletionHandoffs(params: {
   return updated;
 }
 
-export { prependSubagentHandoffPrompt };
+export { prependAgentSteeringPrompt };
 
 export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(
