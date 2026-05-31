@@ -136,8 +136,127 @@ describe("backupVerifyCommand", () => {
       expect(verified.ok).toBe(true);
       expect(verified.archiveRoot).toBe(archiveRoot);
       expect(verified.assetCount).toBeGreaterThan(0);
+      expect(verified.sessionTranscriptSnapshotCount).toBe(0);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies manifest-declared session transcript snapshots", async () => {
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-session-"));
+    try {
+      const runtime = createBackupVerifyRuntime();
+      const nowMs = Date.UTC(2026, 2, 9, 0, 30, 0);
+      const archiveRoot = buildBackupArchiveRoot(nowMs);
+      const archivePath = path.join(archiveDir, "backup.tar.gz");
+      const manifestPath = path.join(archiveDir, "manifest.json");
+      const payloadPath = path.join(archiveDir, "state.txt");
+      const transcriptPath = path.join(archiveDir, "session.jsonl");
+      const payloadArchivePath = `${archiveRoot}/payload/posix/tmp/.openclaw/state.txt`;
+      const transcriptArchivePath = `${archiveRoot}/payload/posix/tmp/.openclaw/agents/main/sessions/session.jsonl`;
+      await fs.writeFile(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            ...createBackupManifest(payloadArchivePath, archiveRoot),
+            options: {
+              includeWorkspace: true,
+              includeSessionTranscripts: true,
+              onlyConfig: false,
+            },
+            sessionTranscriptSnapshots: [
+              {
+                sourcePath: "/tmp/.openclaw/agents/main/sessions/session.jsonl",
+                archivePath: transcriptArchivePath,
+              },
+            ],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.writeFile(payloadPath, "state\n", "utf8");
+      await fs.writeFile(transcriptPath, '{"role":"user","content":"keep me"}\n', "utf8");
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            if (entry.path === manifestPath) {
+              entry.path = `${archiveRoot}/manifest.json`;
+              return;
+            }
+            if (entry.path === payloadPath) {
+              entry.path = payloadArchivePath;
+              return;
+            }
+            if (entry.path === transcriptPath) {
+              entry.path = transcriptArchivePath;
+            }
+          },
+        },
+        [manifestPath, payloadPath, transcriptPath],
+      );
+
+      const verified = await backupVerifyCommand(runtime, { archive: archivePath });
+
+      expect(verified.ok).toBe(true);
+      expect(verified.sessionTranscriptSnapshotCount).toBe(1);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the manifest references a missing session transcript snapshot", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-missing-session-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      await fs.mkdir(root, { recursive: true });
+      const manifest = {
+        schemaVersion: 1,
+        createdAt: "2026-03-09T00:00:00.000Z",
+        archiveRoot: rootName,
+        runtimeVersion: "test",
+        platform: process.platform,
+        nodeVersion: process.version,
+        assets: [
+          {
+            kind: "state",
+            sourcePath: "/tmp/.openclaw",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw`,
+          },
+        ],
+        sessionTranscriptSnapshots: [
+          {
+            sourcePath: "/tmp/.openclaw/agents/main/sessions/session.jsonl",
+            archivePath: `${rootName}/payload/posix/tmp/.openclaw/agents/main/sessions/session.jsonl`,
+          },
+        ],
+      };
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+      );
+      await fs.mkdir(path.join(root, "payload", "posix", "tmp", ".openclaw"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(root, "payload", "posix", "tmp", ".openclaw", "state.txt"),
+        "state\n",
+      );
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = createBackupVerifyRuntime();
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /missing session transcript snapshot payload/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
