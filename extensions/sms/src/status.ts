@@ -1,7 +1,9 @@
 import {
   listTwilioIncomingPhoneNumbers,
   listTwilioMessages,
+  retrieveTwilioMessagingService,
   type TwilioIncomingPhoneNumber,
+  type TwilioMessagingService,
   type TwilioMessageLogEntry,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -16,6 +18,10 @@ type ChannelCapabilitiesDisplayLine = {
 export type SmsTwilioWebhookProbe =
   | {
       status: "skipped";
+      reason: string;
+    }
+  | {
+      status: "unavailable";
       reason: string;
     }
   | {
@@ -49,6 +55,33 @@ export type SmsTwilioWebhookProbe =
       configuredUrl: string;
       configuredMethod: string;
       voiceUrl: string;
+    }
+  | {
+      status: "messaging-service-missing";
+      serviceSid: string;
+      expectedUrl: string;
+      configuredMethod: string;
+    }
+  | {
+      status: "messaging-service-method-mismatch";
+      serviceSid: string;
+      expectedUrl: string;
+      configuredUrl: string;
+      configuredMethod: string;
+    }
+  | {
+      status: "messaging-service-url-mismatch";
+      serviceSid: string;
+      expectedUrl: string;
+      configuredUrl: string;
+      configuredMethod: string;
+    }
+  | {
+      status: "messaging-service-matches";
+      serviceSid: string;
+      expectedUrl: string;
+      configuredUrl: string;
+      configuredMethod: string;
     };
 
 export type SmsProbe = {
@@ -131,6 +164,53 @@ function compareTwilioWebhook(
   };
 }
 
+function compareTwilioMessagingService(
+  account: ResolvedSmsAccount,
+  service: TwilioMessagingService,
+): SmsTwilioWebhookProbe {
+  if (service.useInboundWebhookOnNumber) {
+    return {
+      status: "unavailable",
+      reason:
+        "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before probing.",
+    };
+  }
+  const configuredMethod = service.inboundMethod.toUpperCase();
+  if (!service.inboundRequestUrl) {
+    return {
+      status: "messaging-service-missing",
+      serviceSid: service.sid || account.messagingServiceSid,
+      expectedUrl: account.publicWebhookUrl,
+      configuredMethod,
+    };
+  }
+  if (configuredMethod && configuredMethod !== "POST") {
+    return {
+      status: "messaging-service-method-mismatch",
+      serviceSid: service.sid || account.messagingServiceSid,
+      expectedUrl: account.publicWebhookUrl,
+      configuredUrl: service.inboundRequestUrl,
+      configuredMethod,
+    };
+  }
+  if (service.inboundRequestUrl !== account.publicWebhookUrl) {
+    return {
+      status: "messaging-service-url-mismatch",
+      serviceSid: service.sid || account.messagingServiceSid,
+      expectedUrl: account.publicWebhookUrl,
+      configuredUrl: service.inboundRequestUrl,
+      configuredMethod,
+    };
+  }
+  return {
+    status: "messaging-service-matches",
+    serviceSid: service.sid || account.messagingServiceSid,
+    expectedUrl: account.publicWebhookUrl,
+    configuredUrl: service.inboundRequestUrl,
+    configuredMethod,
+  };
+}
+
 function recentInboundSummary(
   messages: TwilioMessageLogEntry[],
 ): SmsProbe["recentInbound"] | undefined {
@@ -153,6 +233,8 @@ function webhookError(probe: SmsTwilioWebhookProbe): string | undefined {
     case "matches":
     case "skipped":
       return undefined;
+    case "unavailable":
+      return probe.reason;
     case "number-not-found":
       return `Twilio account does not list ${probe.expectedNumber} as an incoming phone number.`;
     case "missing":
@@ -161,6 +243,14 @@ function webhookError(probe: SmsTwilioWebhookProbe): string | undefined {
       return `Twilio number ${probe.phoneNumber} uses ${probe.configuredMethod || "an unknown method"} for SMS webhooks; use POST.`;
     case "url-mismatch":
       return `Twilio number ${probe.phoneNumber} points SMS webhooks at ${probe.configuredUrl}; expected ${probe.expectedUrl}.`;
+    case "messaging-service-missing":
+      return `Twilio Messaging Service ${probe.serviceSid} has no inbound request URL configured.`;
+    case "messaging-service-method-mismatch":
+      return `Twilio Messaging Service ${probe.serviceSid} uses ${probe.configuredMethod || "an unknown method"} for inbound webhooks; use POST.`;
+    case "messaging-service-url-mismatch":
+      return `Twilio Messaging Service ${probe.serviceSid} points inbound webhooks at ${probe.configuredUrl}; expected ${probe.expectedUrl}.`;
+    case "messaging-service-matches":
+      return undefined;
   }
   return undefined;
 }
@@ -172,15 +262,32 @@ export async function probeSmsAccount(params: {
 }): Promise<SmsProbe> {
   const hints: string[] = [];
   addTailscaleHint(params.account, hints);
-  const phoneNumbers = params.account.fromNumber
-    ? await listTwilioIncomingPhoneNumbers({
-        account: params.account,
-        phoneNumber: params.account.fromNumber,
-        fetchImpl: params.options?.fetchImpl,
-        timeoutMs: params.timeoutMs,
-      })
-    : [];
-  const webhook = compareTwilioWebhook(params.account, phoneNumbers[0]);
+  const webhook: SmsTwilioWebhookProbe = params.account.fromNumber
+    ? compareTwilioWebhook(
+        params.account,
+        (
+          await listTwilioIncomingPhoneNumbers({
+            account: params.account,
+            phoneNumber: params.account.fromNumber,
+            fetchImpl: params.options?.fetchImpl,
+            timeoutMs: params.timeoutMs,
+          })
+        )[0],
+      )
+    : params.account.messagingServiceSid
+      ? compareTwilioMessagingService(
+          params.account,
+          await retrieveTwilioMessagingService({
+            account: params.account,
+            serviceSid: params.account.messagingServiceSid,
+            fetchImpl: params.options?.fetchImpl,
+            timeoutMs: params.timeoutMs,
+          }),
+        )
+      : {
+          status: "unavailable",
+          reason: "Twilio SMS probe requires fromNumber or messagingServiceSid.",
+        };
   const messages = params.account.fromNumber
     ? await listTwilioMessages({
         account: params.account,
@@ -224,7 +331,10 @@ export function formatSmsProbeLines(probe: unknown): ChannelCapabilitiesDisplayL
       tone: "error",
     });
   }
-  if (smsProbe.webhook?.status === "matches") {
+  if (
+    smsProbe.webhook?.status === "matches" ||
+    smsProbe.webhook?.status === "messaging-service-matches"
+  ) {
     lines.push({ text: `Twilio SMS webhook: ${smsProbe.webhook.configuredUrl}` });
   } else if (smsProbe.webhook?.status && smsProbe.webhook.status !== "skipped") {
     lines.push({ text: `Twilio SMS webhook: ${smsProbe.webhook.status}`, tone: "warn" });

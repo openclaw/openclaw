@@ -6,6 +6,7 @@ import {
   listTwilioMessages,
   parseTwilioFormBody,
   resolveTwilioWebhookSignatureUrl,
+  retrieveTwilioMessagingService,
   sendSmsViaTwilio,
   TwilioSmsApiError,
   verifyTwilioSignature,
@@ -281,6 +282,43 @@ describe("Twilio SMS helpers", () => {
     expect(url).toBe(
       "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json?To=%2B15557654321&PageSize=3",
     );
+  });
+
+  it("retrieves Twilio Messaging Service webhook settings", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            sid: "MG123",
+            inbound_request_url: "https://gateway.example.com/webhooks/sms",
+            inbound_method: "POST",
+            use_inbound_webhook_on_number: false,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+
+    await expect(
+      retrieveTwilioMessagingService({
+        account: createAccount({ messagingServiceSid: "MG123", fromNumber: "" }),
+        serviceSid: "MG123",
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      sid: "MG123",
+      inboundRequestUrl: "https://gateway.example.com/webhooks/sms",
+      inboundMethod: "POST",
+      useInboundWebhookOnNumber: false,
+    });
+
+    const [url, init] = fetchImpl.mock.calls[0] ?? [];
+    expect(url).toBe("https://messaging.twilio.com/v1/Services/MG123");
+    expect(init?.headers).toMatchObject({
+      authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
+    });
   });
 
   it("can send through a Twilio Messaging Service SID", async () => {

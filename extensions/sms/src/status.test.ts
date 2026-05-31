@@ -186,6 +186,64 @@ describe("SMS status probe", () => {
     );
   });
 
+  it("validates Twilio Messaging Service webhook settings", async () => {
+    const fetchImpl = createFetch([
+      {
+        sid: "MG123",
+        inbound_request_url: "https://gateway.example.com/webhooks/sms",
+        inbound_method: "POST",
+        use_inbound_webhook_on_number: false,
+      },
+    ]);
+
+    await expect(
+      probeSmsAccount({
+        account: createAccount({
+          fromNumber: "",
+          messagingServiceSid: "MG123",
+        }),
+        timeoutMs: 1000,
+        options: { fetchImpl },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      webhook: {
+        status: "messaging-service-matches",
+        serviceSid: "MG123",
+        configuredUrl: "https://gateway.example.com/webhooks/sms",
+      },
+    });
+  });
+
+  it("does not report Messaging Service defer-to-number probes as healthy", async () => {
+    const fetchImpl = createFetch([
+      {
+        sid: "MG123",
+        inbound_request_url: "https://gateway.example.com/webhooks/sms",
+        inbound_method: "POST",
+        use_inbound_webhook_on_number: true,
+      },
+    ]);
+
+    await expect(
+      probeSmsAccount({
+        account: createAccount({
+          fromNumber: "",
+          messagingServiceSid: "MG123",
+        }),
+        timeoutMs: 1000,
+        options: { fetchImpl },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error:
+        "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before probing.",
+      webhook: {
+        status: "unavailable",
+      },
+    });
+  });
+
   it("formats probe details for channel capability output", () => {
     expect(
       formatSmsProbeLines({
