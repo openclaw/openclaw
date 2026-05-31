@@ -220,7 +220,7 @@ async function writeConfig(params: {
           command: "node",
           args: [params.serverPath],
           cwd: path.dirname(params.serverPath),
-          connectionTimeoutMs: 5000,
+          connectionTimeoutMs: 30_000,
         },
       },
     },

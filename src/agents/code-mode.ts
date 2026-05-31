@@ -720,6 +720,14 @@ function enforceSnapshotStateLimits(params: {
   output: unknown[];
 }) {
   enforceActiveRunLimit();
+  enforceSnapshotPayloadLimits(params);
+}
+
+function enforceSnapshotPayloadLimits(params: {
+  snapshotBytes: Uint8Array;
+  config: CodeModeConfig;
+  output: unknown[];
+}) {
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
     throw new CodeModeLimitError("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
@@ -921,13 +929,18 @@ async function settleCodeModeResult(params: {
   let result = params.result;
   const output = params.output;
   let namespaceRounds = 0;
+  const settleDeadline = Date.now() + params.config.timeoutMs;
   while (
     result.status === "waiting" &&
     result.pendingRequests.length > 0 &&
     result.pendingRequests.every((request) => request.method === "namespace") &&
     namespaceRounds < params.config.maxPendingToolCalls
   ) {
-    enforceSnapshotStateLimits({
+    const remainingMs = settleDeadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    enforceSnapshotPayloadLimits({
       snapshotBytes: result.snapshotBytes,
       config: params.config,
       output,
@@ -940,7 +953,7 @@ async function settleCodeModeResult(params: {
       signal: params.signal,
       onUpdate: params.onUpdate,
     });
-    const ready = await waitForPending(pending, params.config.timeoutMs);
+    const ready = await waitForPending(pending, remainingMs);
     if (!ready) {
       return storeSnapshotState({
         pending,
@@ -965,7 +978,7 @@ async function settleCodeModeResult(params: {
           config: params.config,
           settledRequests,
         },
-        params.config.timeoutMs + 1000,
+        Math.max(1, settleDeadline - Date.now()) + 1000,
       ),
     );
     output.push(...result.output);
