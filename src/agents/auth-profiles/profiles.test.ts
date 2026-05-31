@@ -486,6 +486,7 @@ describe("promoteAuthProfileInOrder", () => {
       const newProfileId = "openai:new-login";
       const primaryProfileId = "openai:primary-login";
       const backupProfileId = "openai:backup-login";
+      const unrelatedProfileId = "openai:unrelated-login";
       saveAuthProfileStore(
         {
           version: AUTH_STORE_VERSION,
@@ -510,6 +511,13 @@ describe("promoteAuthProfileInOrder", () => {
               access: "new-access",
               refresh: "new-refresh",
               expires: Date.now() + 60 * 60 * 1000,
+            },
+            [unrelatedProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "unrelated-access",
+              refresh: "unrelated-refresh",
+              expires: Date.now() + 30 * 60 * 1000,
             },
           },
         },

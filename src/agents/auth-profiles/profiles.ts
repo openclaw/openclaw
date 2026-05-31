@@ -114,10 +114,11 @@ export async function promoteAuthProfileInOrder(params: {
         if (!params.createIfMissing) {
           return false;
         }
-        const providerProfiles = dedupeProfileIds([
-          ...(params.createFromOrder ?? []),
-          ...listProfilesForProvider(store, providerKey),
-        ]);
+        const providerProfiles = dedupeProfileIds(
+          params.createFromOrder !== undefined
+            ? params.createFromOrder
+            : listProfilesForProvider(store, providerKey),
+        );
         const next = dedupeProfileIds([
           params.profileId,
           ...providerProfiles.filter((profileId) => profileId !== params.profileId),
