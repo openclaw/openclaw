@@ -25,6 +25,8 @@ const refreshQueuedFollowupSessionMock = vi.fn();
 const incrementCompactionCountMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
 const ensureMemoryFlushTargetFileMock = vi.fn();
+const emitAgentEventMock = vi.fn();
+const TEST_MAX_FLUSH_FAILURES = 3;
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
@@ -171,6 +173,7 @@ describe("runMemoryFlushIfNeeded", () => {
     refreshQueuedFollowupSessionMock.mockReset();
     ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
+    emitAgentEventMock.mockReset();
     incrementCompactionCountMock.mockReset().mockImplementation(async (params) => {
       const sessionKey = String(params.sessionKey ?? "");
       if (!sessionKey || !params.sessionStore?.[sessionKey]) {
@@ -208,6 +211,7 @@ describe("runMemoryFlushIfNeeded", () => {
       incrementCompactionCount: incrementCompactionCountMock as never,
       ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginMock as never,
       registerAgentRunContext: vi.fn() as never,
+      emitAgentEvent: emitAgentEventMock as never,
       randomUUID: () => "00000000-0000-0000-0000-000000000001",
       now: () => 1_700_000_000_000,
     });
@@ -487,6 +491,236 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(visibleErrorPayloads).toEqual([]);
+  });
+
+  it("increments memoryFlushFailureCount on non-abort flush failure", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+    runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    expect(persisted.main.memoryFlushFailureCount).toBe(1);
+    expect(persisted.main.memoryFlushLastFailedAt).toBe(1_700_000_000_000);
+    expect(persisted.main.memoryFlushLastFailureError).toContain("provider crashed during flush");
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "memory_flush_failed",
+          attempt: 1,
+          maxAttempts: TEST_MAX_FLUSH_FAILURES,
+        }),
+      }),
+    );
+  });
+
+  it("does not track failure on abort error", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      memoryFlushFailureCount: 0,
+    };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+    const abortErr = new Error("operation aborted by user");
+    abortErr.name = "AbortError";
+    runWithModelFallbackMock.mockRejectedValueOnce(abortErr);
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    expect(persisted.main.memoryFlushFailureCount).toBe(0);
+    expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
+    expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
+  });
+
+  it("clears failure counters on successful flush", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      memoryFlushFailureCount: 2,
+      memoryFlushLastFailedAt: 1_699_999_999_000,
+      memoryFlushLastFailureError: "provider crashed during flush",
+    };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    expect(persisted.main.memoryFlushFailureCount).toBe(0);
+    expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
+    expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
+  });
+
+  it("marks flush as completed after MAX_FLUSH_FAILURES to break retry loop", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      memoryFlushFailureCount: TEST_MAX_FLUSH_FAILURES - 1,
+    };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+    runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
+
+    const visibleErrorPayloads: { text: string; isError: boolean }[] = [];
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    expect(persisted.main.memoryFlushCompactionCount).toBe(1);
+    expect(persisted.main.memoryFlushFailureCount).toBe(TEST_MAX_FLUSH_FAILURES);
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "memory_flush_exhausted",
+          attempt: TEST_MAX_FLUSH_FAILURES,
+          maxAttempts: TEST_MAX_FLUSH_FAILURES,
+        }),
+      }),
+    );
+    expect(visibleErrorPayloads[0]).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("skipping for this cycle"),
+        isError: true,
+      }),
+    );
+  });
+
+  it("retries flush on subsequent messages until MAX_FLUSH_FAILURES", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+    runWithModelFallbackMock.mockRejectedValue(new Error("provider crashed during flush"));
+
+    const params = {
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off" as const,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    };
+
+    await runMemoryFlushIfNeeded(params);
+    await runMemoryFlushIfNeeded({ ...params, replyOperation: createReplyOperation() });
+
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as { main: SessionEntry };
+    expect(persisted.main.memoryFlushFailureCount).toBe(2);
+  });
+
+  it("next message retries flush after failure", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+    runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
+
+    const params = {
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off" as const,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    };
+
+    await runMemoryFlushIfNeeded(params);
+    await runMemoryFlushIfNeeded({ ...params, replyOperation: createReplyOperation() });
+
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
   });
 
   it("runs memory flush on the configured maintenance model without active fallbacks", async () => {
