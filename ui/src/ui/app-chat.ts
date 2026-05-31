@@ -976,6 +976,21 @@ function isSelectedSessionKnownIdle(
   return Boolean(row && !isSessionRunActive(row));
 }
 
+function isHistorySessionInfoForRequestedSession(
+  host: ChatHost,
+  historySessionKey: string | undefined,
+  requestedSessionKey: string,
+): boolean {
+  if (areUiSessionKeysEquivalent(historySessionKey, requestedSessionKey)) {
+    return true;
+  }
+  return Boolean(
+    historySessionKey &&
+    isGlobalSessionKey(historySessionKey) &&
+    resolveGlobalAliasAgentId(host, requestedSessionKey),
+  );
+}
+
 function flushChatQueueAfterIdleSessionReconciliation(
   host: ChatHost,
   sessionKey: string,
@@ -996,7 +1011,7 @@ function flushChatQueueAfterIdleSessionReconciliation(
         : null;
     const historySessionKnownIdle = Boolean(
       historySessionInfo &&
-      areUiSessionKeysEquivalent(historySessionInfo.key, sessionKey) &&
+      isHistorySessionInfoForRequestedSession(host, historySessionInfo.key, sessionKey) &&
       !isSessionRunActive(historySessionInfo),
     );
     const sessionsResultKnownIdle = freshSessionsResult

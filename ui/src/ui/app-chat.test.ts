@@ -472,6 +472,46 @@ describe("refreshChat", () => {
     expect(host.chatQueue).toEqual([]);
   });
 
+  it("drains a restored queue when global history metadata answers an agent main alias", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return {
+          messages: [],
+          sessionInfo: row("global", {
+            kind: "global",
+            hasActiveRun: false,
+            status: "done",
+          }),
+        };
+      }
+      return {};
+    });
+    const previousSessionsResult = createSessionsResult([
+      row("agent:main:main", { hasActiveRun: false, status: "done" }),
+    ]);
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:work:main",
+      agentsList: { defaultId: "main", mainKey: "main" },
+      sessionsResult: previousSessionsResult,
+      chatQueue: [{ id: "queued-1", text: "after global alias reload", createdAt: 1 }],
+    });
+    (host as ChatHost & { sessionsResultAgentId: string }).sessionsResultAgentId = "main";
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:work:main",
+        message: "after global alias reload",
+      }),
+    );
+    expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
+    expect(host.chatQueue).toEqual([]);
+  });
+
   it("drains a restored queue from fresh history metadata despite stale sessions errors", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.history") {
