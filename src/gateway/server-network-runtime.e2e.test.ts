@@ -70,9 +70,9 @@ describe("gateway network runtime", () => {
     const originalDispatcher = getGlobalDispatcher();
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-proxy-home-"));
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-    const testDispatcher = new Agent();
 
     try {
+      const testDispatcher = new Agent();
       setGlobalDispatcher(testDispatcher);
       for (const key of NETWORK_GATEWAY_ENV_KEYS) {
         delete process.env[key];
@@ -114,9 +114,6 @@ describe("gateway network runtime", () => {
       setGlobalDispatcher(originalDispatcher);
       if (dispatcherToClose !== originalDispatcher) {
         await closeTestDispatcher(dispatcherToClose);
-      }
-      if (dispatcherToClose !== testDispatcher && testDispatcher !== originalDispatcher) {
-        await closeTestDispatcher(testDispatcher);
       }
       await fs.rm(tempHome, { recursive: true, force: true });
       envSnapshot.restore();
