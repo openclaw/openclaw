@@ -154,6 +154,22 @@ Imported themes are stored only in the current browser profile. They are not wri
   </Accordion>
 </AccordionGroup>
 
+## MCP page
+
+The dedicated MCP page is an operator view for OpenClaw-managed MCP servers under `mcp.servers`. It does not start MCP transports by itself; use it to inspect and edit saved config, then use `openclaw mcp doctor --probe` when you need live server proof.
+
+Typical workflow:
+
+1. Open **MCP** from the sidebar.
+2. Check the summary cards for total, enabled, OAuth, and filtered server counts.
+3. Review each server row for transport, enablement, auth, filters, timeouts, and command hints.
+4. Toggle enablement when a server should remain configured but stay out of runtime discovery.
+5. Edit the scoped `mcp` config section for server definitions, headers, TLS/mTLS paths, OAuth metadata, tool filters, and Codex projection metadata.
+6. Use **Save** for a config write, or **Save & Publish** when the running Gateway should apply the changed config.
+7. Run `openclaw mcp status --verbose`, `openclaw mcp doctor --probe`, or `openclaw mcp reload` from a terminal when the edited process needs static diagnostics, live proof, or cached-runtime disposal.
+
+The page redacts credential-bearing URL-like values before rendering and quotes server names in command snippets so copied commands still work with spaces or shell metacharacters. The full CLI and config reference lives in [MCP](/cli/mcp).
+
 ## Activity tab
 
 The Activity tab is an ephemeral browser-local observer for live tool activity. It is derived from the same Gateway `session.tool` / tool event stream that powers Chat tool cards; it does not add another Gateway event family, endpoint, durable activity store, metrics feed, or external observer stream.

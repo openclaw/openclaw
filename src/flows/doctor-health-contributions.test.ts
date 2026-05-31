@@ -147,6 +147,7 @@ describe("doctor health contributions", () => {
     mocks.listHealthChecks.mockReset();
     mocks.listHealthChecks.mockReturnValue([
       { id: "core/doctor/shell-completion" },
+      { id: "core/doctor/ui-protocol-freshness" },
       { id: "core/doctor/unrelated" },
     ]);
     mocks.getHealthCheck.mockReset();
@@ -319,7 +320,7 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("keeps legacy positional shell completion out of the broad structured repair pass", async () => {
+  it("keeps legacy positional repairs out of the broad structured repair pass", async () => {
     const contribution = requireDoctorContribution("doctor:structured-health-repairs");
     const ctx = {
       cfg: {},
