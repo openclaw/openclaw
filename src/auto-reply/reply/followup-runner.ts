@@ -545,6 +545,7 @@ export function createFollowupRunner(params: {
       if (run.sessionKey) {
         registerAgentRunContext(runId, {
           sessionKey: run.sessionKey,
+          ...(run.sessionId ? { sessionId: run.sessionId } : {}),
           verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
         });

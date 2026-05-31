@@ -11,7 +11,7 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -1347,6 +1347,10 @@ export async function runEmbeddedAgent(
           const nextSessionFile = compactResult.result?.sessionFile;
           if (nextSessionId && nextSessionId !== activeSessionId) {
             activeSessionId = nextSessionId;
+            // Keep the run context's sessionId tracking the live session so
+            // lifecycle persistence isn't treated as stale after a legitimate
+            // mid-run compaction rotation (#88538).
+            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
@@ -1705,6 +1709,8 @@ export async function runEmbeddedAgent(
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
+            // Track the live session for lifecycle persistence identity (#88538).
+            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
