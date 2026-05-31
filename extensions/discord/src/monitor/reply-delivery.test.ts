@@ -157,7 +157,7 @@ describe("deliverDiscordReply", () => {
     ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
   });
 
-  it("preserves explicit tool progress payloads at the tool delivery boundary", async () => {
+  it("drops raw internal tool trace payloads at the tool delivery boundary", async () => {
     await deliverDiscordReply({
       replies: [{ text: "🛠️ Exec: `echo visible`" }],
       target: "channel:101",
@@ -169,19 +169,35 @@ describe("deliverDiscordReply", () => {
       kind: "tool",
     });
 
+    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves non-internal tool progress text at the tool delivery boundary", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "Working on the fix now." }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "tool",
+    });
+
     expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        payloads: [{ text: "🛠️ Exec: `echo visible`" }],
+        payloads: [{ text: "Working on the fix now." }],
       }),
     );
   });
 
-  it("strips internal execution trace lines at the final Discord send boundary", async () => {
+  it("strips internal execution trace lines at the Discord send boundary", async () => {
     await deliverDiscordReply({
       replies: [
         {
           text: [
             "📊 Session Status: current",
+            "🧾 Session History: session current, limit 20",
             "🛠️ run git status",
             "🛠️ `gh pr view`",
             "🛠️ `docker compose up`",

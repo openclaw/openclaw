@@ -4,7 +4,7 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { stripPlainTextToolCallBlocks } from "openclaw/plugin-sdk/tool-payload";
 
 const DISCORD_INTERNAL_TRACE_LINE_RE =
-  /^(?:>\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
+  /^(?:>\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|🧾)\s*(?:Session Status|Session History|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
 const DISCORD_INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
   /^(?:>\s*)?🛠️\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/i;
 const DISCORD_INTERNAL_CHANNEL_LINE_RE =
@@ -76,14 +76,12 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
   payloads: readonly ReplyPayload[],
   options: { kind?: "tool" | "block" | "final" } = {},
 ): ReplyPayload[] {
-  const preserveVerboseToolProgress = options.kind === "tool";
+  void options;
   const safePayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const safeText =
       typeof payload.text === "string"
-        ? preserveVerboseToolProgress
-          ? collapseExcessBlankLines(sanitizeAssistantVisibleText(payload.text)).trim()
-          : sanitizeDiscordFrontChannelText(payload.text)
+        ? sanitizeDiscordFrontChannelText(payload.text)
         : payload.text;
     const nextPayload =
       safeText === payload.text
