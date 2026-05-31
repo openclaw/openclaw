@@ -361,29 +361,38 @@ export interface Shell {
 /** Filesystem and process execution environment used by the harness. */
 export interface ExecutionEnv extends FileSystem, Shell {}
 
+/** Base fields shared by append-only session tree entries. */
 export interface SessionTreeEntryBase {
+  /** Entry discriminator used for JSONL persistence and typed narrowing. */
   type: string;
+  /** Stable entry id unique within a session file. */
   id: string;
+  /** Parent entry id, or null for a root entry. */
   parentId: string | null;
+  /** ISO timestamp string used for persistence and sorting. */
   timestamp: string;
 }
 
+/** Persisted transcript message entry. */
 export interface MessageEntry extends SessionTreeEntryBase {
   type: "message";
   message: AgentMessage;
 }
 
+/** Persisted thinking-level selection marker. */
 export interface ThinkingLevelChangeEntry extends SessionTreeEntryBase {
   type: "thinking_level_change";
   thinkingLevel: string;
 }
 
+/** Persisted model selection marker. */
 export interface ModelChangeEntry extends SessionTreeEntryBase {
   type: "model_change";
   provider: string;
   modelId: string;
 }
 
+/** Persisted summary that replaces older transcript history in context. */
 export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   type: "compaction";
   summary: string;
@@ -393,6 +402,7 @@ export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   fromHook?: boolean;
 }
 
+/** Persisted summary of an abandoned branch when navigating the session tree. */
 export interface BranchSummaryEntry<T = unknown> extends SessionTreeEntryBase {
   type: "branch_summary";
   fromId: string;
@@ -401,12 +411,14 @@ export interface BranchSummaryEntry<T = unknown> extends SessionTreeEntryBase {
   fromHook?: boolean;
 }
 
+/** Persisted harness/application marker that is not replayed into model context. */
 export interface CustomEntry<T = unknown> extends SessionTreeEntryBase {
   type: "custom";
   customType: string;
   data?: T;
 }
 
+/** Persisted harness/application message that can be replayed into model context. */
 export interface CustomMessageEntry<T = unknown> extends SessionTreeEntryBase {
   type: "custom_message";
   customType: string;
@@ -415,22 +427,27 @@ export interface CustomMessageEntry<T = unknown> extends SessionTreeEntryBase {
   display: boolean;
 }
 
+/** Append-only label update for another session entry. */
 export interface LabelEntry extends SessionTreeEntryBase {
   type: "label";
   targetId: string;
   label: string | undefined;
 }
 
+/** Persisted session metadata marker. */
 export interface SessionInfoEntry extends SessionTreeEntryBase {
-  type: "session_info"; // legacy name, kept for backwards compatibility
+  // The persisted discriminator predates the public "session name" wording.
+  type: "session_info";
   name?: string;
 }
 
+/** Append-only marker that changes the active visible leaf. */
 export interface LeafEntry extends SessionTreeEntryBase {
   type: "leaf";
   targetId: string | null;
 }
 
+/** All persisted session tree entry variants. */
 export type SessionTreeEntry =
   | MessageEntry
   | ThinkingLevelChangeEntry
