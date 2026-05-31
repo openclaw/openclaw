@@ -88,6 +88,7 @@ import {
   resolveGlobalInstallSpec,
   resolvePnpmGlobalDirFromGlobalRoot,
   type GlobalInstallManager,
+  type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
@@ -1064,21 +1065,24 @@ function readBunRegistryEnv(env: NodeJS.ProcessEnv): string | null {
 
 function resolvePackageManagerRegistryConfigArgs(params: {
   manager?: GlobalInstallManager | null;
+  command?: string | null;
 }): string[] | null {
   const manager = params.manager ?? "npm";
+  const command = params.command ?? manager;
   if (manager === "pnpm") {
-    return ["pnpm", "config", "get", "registry"];
+    return [command, "config", "get", "registry"];
   }
   if (manager !== "npm") {
     return null;
   }
-  return ["npm", "config", "get", "registry", "--global"];
+  return [command, "config", "get", "registry", "--global"];
 }
 
 async function resolveEffectiveNpmRegistry(params: {
   env: NodeJS.ProcessEnv;
   invocationCwd?: string;
   registryConfigCwd?: string;
+  registryConfigCommand?: string;
   timeoutMs?: number;
   manager?: GlobalInstallManager | null;
 }): Promise<string | null> {
@@ -1091,7 +1095,10 @@ async function resolveEffectiveNpmRegistry(params: {
       return registryEnv;
     }
   }
-  const argv = resolvePackageManagerRegistryConfigArgs({ manager: params.manager });
+  const argv = resolvePackageManagerRegistryConfigArgs({
+    manager: params.manager,
+    command: params.registryConfigCommand,
+  });
   if (!argv) {
     return readNpmRegistryEnv(params.env);
   }
@@ -1116,6 +1123,7 @@ async function hasCustomNpmRegistryOverride(params: {
   env?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   registryConfigCwd?: string;
+  registryConfigCommand?: string;
   timeoutMs?: number;
   manager?: GlobalInstallManager | null;
 }): Promise<boolean> {
@@ -1124,6 +1132,7 @@ async function hasCustomNpmRegistryOverride(params: {
     env,
     invocationCwd: params.invocationCwd,
     registryConfigCwd: params.registryConfigCwd,
+    registryConfigCommand: params.registryConfigCommand,
     timeoutMs: params.timeoutMs,
     manager: params.manager,
   });
@@ -1216,6 +1225,7 @@ async function resolvePackageTargetAvailabilityPreflightError(params: {
   env?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   registryConfigCwd?: string;
+  registryConfigCommand?: string;
   manager?: GlobalInstallManager | null;
 }): Promise<string | null> {
   const target = resolvePackageRegistryTargetFromInstallSpec(params.installSpec);
@@ -1227,6 +1237,7 @@ async function resolvePackageTargetAvailabilityPreflightError(params: {
       env: params.env,
       invocationCwd: params.invocationCwd,
       registryConfigCwd: params.registryConfigCwd,
+      registryConfigCommand: params.registryConfigCommand,
       timeoutMs: params.timeoutMs,
       manager: params.manager,
     })
@@ -3421,28 +3432,54 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     });
     return packageUpdateManager;
   };
-  let pnpmPackageRegistryConfigCwd: string | undefined;
-  let didResolvePnpmPackageRegistryConfigCwd = false;
-  const resolvePackageRegistryConfigCwd = async (
+  let packageRegistryPreflightTarget:
+    | {
+        manager: GlobalInstallManager | null;
+        installTarget?: ResolvedGlobalInstallTarget;
+        registryConfigCwd?: string;
+      }
+    | undefined;
+  const resolvePackageRegistryPreflightTarget = async (
     manager: GlobalInstallManager | null,
-  ): Promise<string | undefined> => {
-    if (manager !== "pnpm") {
-      return invocationCwd;
+  ): Promise<{
+    manager: GlobalInstallManager | null;
+    registryConfigCommand?: string;
+    registryConfigCwd?: string;
+  }> => {
+    if (!manager) {
+      return { manager: null, registryConfigCwd: invocationCwd };
     }
-    if (didResolvePnpmPackageRegistryConfigCwd) {
-      return pnpmPackageRegistryConfigCwd;
+    if (packageRegistryPreflightTarget?.manager === manager) {
+      return {
+        manager: packageRegistryPreflightTarget.installTarget?.manager ?? manager,
+        ...(packageRegistryPreflightTarget.installTarget?.command
+          ? { registryConfigCommand: packageRegistryPreflightTarget.installTarget.command }
+          : {}),
+        ...(packageRegistryPreflightTarget.registryConfigCwd
+          ? { registryConfigCwd: packageRegistryPreflightTarget.registryConfigCwd }
+          : {}),
+      };
     }
-    didResolvePnpmPackageRegistryConfigCwd = true;
     const installTarget = await resolveGlobalInstallTarget({
       manager,
       runCommand: createGlobalCommandRunner(),
       timeoutMs: updateStepTimeoutMs,
       pkgRoot: root,
     });
-    pnpmPackageRegistryConfigCwd = installTarget.globalRoot
-      ? path.dirname(installTarget.globalRoot)
-      : undefined;
-    return pnpmPackageRegistryConfigCwd;
+    const registryConfigCwd =
+      installTarget.manager === "pnpm" && installTarget.globalRoot
+        ? path.dirname(installTarget.globalRoot)
+        : invocationCwd;
+    packageRegistryPreflightTarget = {
+      manager,
+      installTarget,
+      registryConfigCwd,
+    };
+    return {
+      manager: installTarget.manager,
+      ...(installTarget.command ? { registryConfigCommand: installTarget.command } : {}),
+      ...(registryConfigCwd ? { registryConfigCwd } : {}),
+    };
   };
 
   if (updateInstallKind !== "git") {
@@ -3481,13 +3518,21 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     const packageTargetManager = resolvePackageRegistryTargetFromInstallSpec(availabilityInstallSpec)
       ? await resolvePackageUpdateManager()
       : null;
+    const registryPreflightTarget =
+      packageTargetManager === null
+        ? {
+            manager: packageTargetManager,
+            ...(invocationCwd ? { registryConfigCwd: invocationCwd } : {}),
+          }
+        : await resolvePackageRegistryPreflightTarget(packageTargetManager);
     const targetAvailabilityError = await resolvePackageTargetAvailabilityPreflightError({
       installSpec: availabilityInstallSpec,
       timeoutMs,
       env: process.env,
       invocationCwd,
-      registryConfigCwd: await resolvePackageRegistryConfigCwd(packageTargetManager),
-      manager: packageTargetManager,
+      registryConfigCwd: registryPreflightTarget.registryConfigCwd,
+      registryConfigCommand: registryPreflightTarget.registryConfigCommand,
+      manager: registryPreflightTarget.manager,
     });
     if (targetAvailabilityError) {
       defaultRuntime.error(targetAvailabilityError);
