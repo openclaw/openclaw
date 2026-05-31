@@ -1040,6 +1040,35 @@ async function resolvePackageRuntimePreflightError(params: {
   ].join("\n");
 }
 
+function isNpmRegistryMissingTargetError(error: string | undefined): boolean {
+  return /^HTTP 404\b/u.test(error?.trim() ?? "");
+}
+
+async function resolvePackageTargetAvailabilityPreflightError(params: {
+  tag: string;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
+    return null;
+  }
+  const target = params.tag.trim();
+  if (!target) {
+    return null;
+  }
+  const status = await fetchNpmPackageTargetStatus({
+    target,
+    timeoutMs: params.timeoutMs,
+  });
+  if (status.version || !isNpmRegistryMissingTargetError(status.error)) {
+    return null;
+  }
+  return [
+    `openclaw@${target} is not available on the npm registry yet.`,
+    "`openclaw update --dry-run` checks npm before apply so it does not green-light a target that npm install will reject with ETARGET.",
+    "Wait for npm propagation, choose an available dist-tag, or use a GitHub package spec such as `--tag github:openclaw/openclaw#v<version>`.",
+  ].join("\n");
+}
+
 async function resolvePackageRuntimeForPreflight(params: {
   nodeRunner?: string;
   timeoutMs?: number;
@@ -3229,6 +3258,15 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       tag,
       env: process.env,
     });
+    const targetAvailabilityError = await resolvePackageTargetAvailabilityPreflightError({
+      tag,
+      timeoutMs,
+    });
+    if (targetAvailabilityError) {
+      defaultRuntime.error(targetAvailabilityError);
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   if (opts.dryRun) {
