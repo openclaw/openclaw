@@ -7,10 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import {
-  classifyCompactionReason,
-  DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
-} from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../../agents/harness/compaction-recovery.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -187,10 +184,6 @@ function isPreflightCompactionSkipReason(reason?: string): boolean {
     classification === "no_compactable_entries" ||
     classification === "already_compacted_recently"
   );
-}
-
-function isDeferredPreflightCompactionReason(reason?: string): boolean {
-  return normalizeOptionalString(reason) === DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON;
 }
 
 function resolveMemoryFlushModelFallbackOptions(
@@ -921,15 +914,13 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
 
   if (!result.compacted) {
-    const reason = normalizeOptionalString(result.reason);
-    if (isDeferredPreflightCompactionReason(reason)) {
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+    const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
+    if (isPreflightCompactionSkipReason(reason)) {
+      logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+      return entry ?? params.sessionEntry;
     }
-    logVerbose(
-      `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason ?? "not_compacted"}`,
-    );
-    return entry ?? params.sessionEntry;
+    logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+    throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 
   await deps.incrementCompactionCount({
