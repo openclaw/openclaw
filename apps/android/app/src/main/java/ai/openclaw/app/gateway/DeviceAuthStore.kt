@@ -124,10 +124,13 @@ class DeviceAuthStore(
     return "gateway.deviceTokenMeta.$normalizedDevice.$normalizedRole"
   }
 
+  /** Normalizes device ids before they become encrypted preference key segments. */
   private fun normalizeDeviceId(deviceId: String): String = deviceId.trim().lowercase()
 
+  /** Normalizes role names so node/operator token slots are stable across callers. */
   private fun normalizeRole(role: String): String = role.trim().lowercase()
 
+  /** Stores scopes in deterministic order for display and restart comparisons. */
   private fun normalizeScopes(scopes: List<String>): List<String> =
     scopes
       .map { it.trim() }
