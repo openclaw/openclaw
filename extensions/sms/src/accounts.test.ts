@@ -6,6 +6,7 @@ const ENV_KEYS = [
   "TWILIO_ACCOUNT_SID",
   "TWILIO_AUTH_TOKEN",
   "TWILIO_PHONE_NUMBER",
+  "TWILIO_MESSAGING_SERVICE_SID",
   "SMS_PUBLIC_WEBHOOK_URL",
   "SMS_WEBHOOK_PATH",
   "SMS_ALLOWED_USERS",
@@ -37,6 +38,7 @@ describe("SMS account config", () => {
       accountSid: "AC123",
       authToken: "token",
       fromNumber: "+5551234567",
+      messagingServiceSid: "",
       webhookPath: "/webhooks/sms",
       publicWebhookUrl: "https://example.com/webhooks/sms",
       dmPolicy: "pairing",
@@ -129,6 +131,7 @@ describe("SMS account config", () => {
     process.env.TWILIO_ACCOUNT_SID = "AC-env";
     process.env.TWILIO_AUTH_TOKEN = "env-token";
     process.env.TWILIO_PHONE_NUMBER = "+15550001111";
+    process.env.TWILIO_MESSAGING_SERVICE_SID = "MG-env";
     process.env.SMS_WEBHOOK_PATH = "/webhooks/sms/env";
     process.env.SMS_PUBLIC_WEBHOOK_URL = "https://sms.example.com/webhook";
     process.env.SMS_ALLOWED_USERS = "sms:+15552223333,+15554445555";
@@ -142,6 +145,7 @@ describe("SMS account config", () => {
       accountSid: "AC-env",
       authToken: "env-token",
       fromNumber: "+15550001111",
+      messagingServiceSid: "MG-env",
       webhookPath: "/webhooks/sms/env",
       publicWebhookUrl: "https://sms.example.com/webhook",
       dangerouslyDisableSignatureValidation: true,
@@ -153,6 +157,7 @@ describe("SMS account config", () => {
       accountSid: "",
       authToken: "",
       fromNumber: "",
+      messagingServiceSid: "",
       webhookPath: "/webhooks/sms",
       publicWebhookUrl: "",
       dangerouslyDisableSignatureValidation: false,
@@ -172,6 +177,20 @@ describe("SMS account config", () => {
       accountSid: "AC-env",
       authToken: "env-token",
       fromNumber: "+15550001111",
+    });
+  });
+
+  it("accepts a Twilio Messaging Service SID instead of a from number", () => {
+    process.env.TWILIO_ACCOUNT_SID = "AC-env";
+    process.env.TWILIO_AUTH_TOKEN = "env-token";
+    process.env.TWILIO_MESSAGING_SERVICE_SID = "MG-env";
+
+    expect(listSmsAccountIds({})).toEqual(["default"]);
+    expect(resolveSmsAccount({})).toMatchObject({
+      accountSid: "AC-env",
+      authToken: "env-token",
+      fromNumber: "",
+      messagingServiceSid: "MG-env",
     });
   });
 

@@ -28,7 +28,7 @@ import {
   normalizeSmsAllowFrom,
   normalizeSmsPhoneNumber,
 } from "./phone.js";
-import { sendSmsTextChunks } from "./send.js";
+import { sendSmsTextChunks, toSmsPlainText } from "./send.js";
 import { sendSmsViaTwilio } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
@@ -43,6 +43,7 @@ const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
     "accountSid",
     "authToken",
     "fromNumber",
+    "messagingServiceSid",
     "webhookPath",
     "publicWebhookUrl",
     "dangerouslyDisableSignatureValidation",
@@ -81,6 +82,7 @@ function smsSetupPatch(input: Record<string, unknown>): Record<string, unknown> 
     "accountSid",
     "authToken",
     "fromNumber",
+    "messagingServiceSid",
     "webhookPath",
     "publicWebhookUrl",
     "dmPolicy",
@@ -209,10 +211,11 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
       ...smsConfigAdapter,
       inspectAccount: inspectSmsAccount,
       isConfigured: isSmsAccountConfigured,
-      unconfiguredReason: () => "SMS requires accountSid, authToken, and fromNumber.",
+      unconfiguredReason: () =>
+        "SMS requires accountSid, authToken, and fromNumber or messagingServiceSid.",
       describeAccount: (account) => ({
         accountId: account.accountId,
-        name: account.fromNumber || "SMS",
+        name: account.fromNumber || account.messagingServiceSid || "SMS",
         configured: isSmsAccountConfigured(account),
         enabled: account.enabled,
       }),
@@ -280,6 +283,7 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
     chunkerMode: "text",
     textChunkLimit: 1500,
     resolveEffectiveTextChunkLimit: resolveSmsTextChunkLimit,
+    sanitizeText: ({ text }) => toSmsPlainText(text),
     sendText: sendSmsText,
   },
 });

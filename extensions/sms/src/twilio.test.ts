@@ -24,6 +24,7 @@ describe("Twilio SMS helpers", () => {
       to: "+15557654321",
       body: "hello there",
       messageSid: "SM123",
+      accountSid: "",
     });
   });
 
@@ -98,6 +99,7 @@ describe("Twilio SMS helpers", () => {
           accountSid: "AC123",
           authToken: "secret",
           fromNumber: "+15557654321",
+          messagingServiceSid: "",
           webhookPath: "/webhooks/sms",
           publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
           dangerouslyDisableSignatureValidation: false,
@@ -118,6 +120,80 @@ describe("Twilio SMS helpers", () => {
       authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
       "content-type": "application/x-www-form-urlencoded",
     });
-    expect(String(init?.body)).toBe("From=%2B15557654321&To=%2B15551234567&Body=hello");
+    const body = new URLSearchParams(String(init?.body));
+    expect(body.get("From")).toBe("+15557654321");
+    expect(body.get("To")).toBe("+15551234567");
+    expect(body.get("Body")).toBe("hello");
+  });
+
+  it("can send through a Twilio Messaging Service SID", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ sid: "SM789" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await sendSmsViaTwilio({
+      account: {
+        accountId: "default",
+        enabled: true,
+        accountSid: "AC123",
+        authToken: "secret",
+        fromNumber: "",
+        messagingServiceSid: "MG123",
+        webhookPath: "/webhooks/sms",
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+        dangerouslyDisableSignatureValidation: false,
+        dmPolicy: "pairing",
+        allowFrom: [],
+        textChunkLimit: 1500,
+      },
+      to: "+15551234567",
+      text: "hello",
+      fetchImpl,
+    });
+
+    const [, init] = fetchImpl.mock.calls[0] ?? [];
+    const body = new URLSearchParams(String(init?.body));
+    expect(body.get("MessagingServiceSid")).toBe("MG123");
+    expect(body.get("To")).toBe("+15551234567");
+    expect(body.get("Body")).toBe("hello");
+  });
+
+  it("prefers an explicit from number when both sender options are resolved", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ sid: "SM999" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await sendSmsViaTwilio({
+      account: {
+        accountId: "default",
+        enabled: true,
+        accountSid: "AC123",
+        authToken: "secret",
+        fromNumber: "+15557654321",
+        messagingServiceSid: "MG123",
+        webhookPath: "/webhooks/sms",
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+        dangerouslyDisableSignatureValidation: false,
+        dmPolicy: "pairing",
+        allowFrom: [],
+        textChunkLimit: 1500,
+      },
+      to: "+15551234567",
+      text: "hello",
+      fetchImpl,
+    });
+
+    const [, init] = fetchImpl.mock.calls[0] ?? [];
+    const body = new URLSearchParams(String(init?.body));
+    expect(body.get("From")).toBe("+15557654321");
+    expect(body.get("MessagingServiceSid")).toBeNull();
   });
 });

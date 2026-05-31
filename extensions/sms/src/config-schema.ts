@@ -17,6 +17,7 @@ const SmsAccountConfigSchema = z
     accountSid: z.string().optional(),
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),
+    messagingServiceSid: z.string().optional(),
     webhookPath: z.string().optional(),
     publicWebhookUrl: z.string().optional(),
     dangerouslyDisableSignatureValidation: z.boolean().optional(),
@@ -57,6 +58,10 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     fromNumber: {
       label: "SMS From Number",
       help: "Twilio SMS-capable phone number in E.164 format, for example +15551234567.",
+    },
+    messagingServiceSid: {
+      label: "Twilio Messaging Service SID",
+      help: "Twilio Messaging Service SID to use instead of a dedicated fromNumber.",
     },
     publicWebhookUrl: {
       label: "SMS Public Webhook URL",

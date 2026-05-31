@@ -19,6 +19,7 @@ function createAccount(): ResolvedSmsAccount {
     accountSid: "AC123",
     authToken: "secret",
     fromNumber: "+15557654321",
+    messagingServiceSid: "",
     webhookPath: "/webhooks/sms",
     publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
     dangerouslyDisableSignatureValidation: false,
@@ -56,7 +57,8 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("dedupes replayed signed Twilio webhooks by message SID", async () => {
-    const body = "From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=SM123";
+    const body =
+      "AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=SM123";
     const signature = computeTwilioSignature({
       url: "https://gateway.example.com/webhooks/sms",
       authToken: "secret",
@@ -76,5 +78,26 @@ describe("createSmsWebhookHandler", () => {
     expect(firstRes.statusCode).toBe(200);
     expect(replayRes.statusCode).toBe(200);
     expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects signed webhooks for a different Twilio account", async () => {
+    const body =
+      "AccountSid=AC-other&From=%2B15551234567&To=%2B15557654321&Body=hello&SmsMessageSid=SM123";
+    const signature = computeTwilioSignature({
+      url: "https://gateway.example.com/webhooks/sms",
+      authToken: "secret",
+      form: parseTwilioFormBody(body),
+    });
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    const res = createResponse();
+    await handler(createRequest(body, signature), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(dispatchSmsInboundEvent).not.toHaveBeenCalled();
   });
 });

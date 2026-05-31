@@ -48,9 +48,11 @@ function hasBaseAccount(channelCfg: SmsChannelConfig | undefined): boolean {
     channelCfg?.accountSid ||
     hasConfiguredSecretInput(channelCfg?.authToken) ||
     channelCfg?.fromNumber ||
+    channelCfg?.messagingServiceSid ||
     process.env.TWILIO_ACCOUNT_SID ||
     process.env.TWILIO_AUTH_TOKEN ||
-    process.env.TWILIO_PHONE_NUMBER,
+    process.env.TWILIO_PHONE_NUMBER ||
+    process.env.TWILIO_MESSAGING_SERVICE_SID,
   );
 }
 
@@ -95,6 +97,9 @@ export function resolveSmsAccount(
   const envAccountSid = useEnvFallbacks ? process.env.TWILIO_ACCOUNT_SID : undefined;
   const envAuthToken = useEnvFallbacks ? process.env.TWILIO_AUTH_TOKEN : undefined;
   const envFromNumber = useEnvFallbacks ? process.env.TWILIO_PHONE_NUMBER : undefined;
+  const envMessagingServiceSid = useEnvFallbacks
+    ? process.env.TWILIO_MESSAGING_SERVICE_SID
+    : undefined;
   const envWebhookPath = useEnvFallbacks ? process.env.SMS_WEBHOOK_PATH : undefined;
   const envPublicWebhookUrl = useEnvFallbacks ? process.env.SMS_PUBLIC_WEBHOOK_URL : undefined;
   const envAllowFrom = useEnvFallbacks ? process.env.SMS_ALLOWED_USERS : undefined;
@@ -119,6 +124,7 @@ export function resolveSmsAccount(
     accountSid: String(merged.accountSid ?? envAccountSid ?? "").trim(),
     authToken,
     fromNumber: normalizeSmsPhoneNumber(String(merged.fromNumber ?? envFromNumber ?? "")),
+    messagingServiceSid: String(merged.messagingServiceSid ?? envMessagingServiceSid ?? "").trim(),
     webhookPath: webhookPath || DEFAULT_WEBHOOK_PATH,
     publicWebhookUrl,
     dangerouslyDisableSignatureValidation:
@@ -132,7 +138,7 @@ export function resolveSmsAccount(
 
 export function inspectSmsAccount(cfg: OpenClawConfig, accountId?: string | null) {
   const account = resolveSmsAccount(cfg, accountId);
-  const configured = Boolean(account.accountSid && account.authToken && account.fromNumber);
+  const configured = isSmsAccountConfigured(account);
   return {
     enabled: account.enabled,
     configured,
@@ -146,5 +152,7 @@ export function inspectSmsAccount(cfg: OpenClawConfig, accountId?: string | null
 }
 
 export function isSmsAccountConfigured(account: ResolvedSmsAccount): boolean {
-  return Boolean(account.accountSid && account.authToken && account.fromNumber);
+  return Boolean(
+    account.accountSid && account.authToken && (account.fromNumber || account.messagingServiceSid),
+  );
 }

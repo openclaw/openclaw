@@ -17,6 +17,7 @@ function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSms
     accountSid: "AC123",
     authToken: "secret",
     fromNumber: "+15557654321",
+    messagingServiceSid: "",
     webhookPath: "/webhooks/sms",
     publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
     dangerouslyDisableSignatureValidation: false,
@@ -78,6 +79,7 @@ describe("dispatchSmsInboundEvent", () => {
         to: "+15557654321",
         body: "hello",
         messageSid: "SM-inbound",
+        accountSid: "AC123",
       },
     });
 
@@ -120,6 +122,7 @@ describe("dispatchSmsInboundEvent", () => {
         to: "+15557654321",
         body: "hello",
         messageSid: "SM-inbound",
+        accountSid: "AC123",
       },
     });
 
@@ -129,6 +132,7 @@ describe("dispatchSmsInboundEvent", () => {
       to: "+15557654321",
       body: "hello",
       messageSid: "SM-inbound",
+      accountSid: "AC123",
     });
     const turn = await runParams.adapter.resolveTurn(ingested);
 

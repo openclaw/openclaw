@@ -5,6 +5,7 @@ export type SmsChannelConfigFields = {
   accountSid?: string;
   authToken?: SecretInput;
   fromNumber?: string;
+  messagingServiceSid?: string;
   webhookPath?: string;
   publicWebhookUrl?: string;
   dangerouslyDisableSignatureValidation?: boolean;
@@ -26,6 +27,7 @@ export interface ResolvedSmsAccount {
   accountSid: string;
   authToken: string;
   fromNumber: string;
+  messagingServiceSid: string;
   webhookPath: string;
   publicWebhookUrl: string;
   dangerouslyDisableSignatureValidation: boolean;
@@ -36,6 +38,7 @@ export interface ResolvedSmsAccount {
 
 export interface SmsInboundMessage {
   messageSid: string;
+  accountSid: string;
   from: string;
   to: string;
   body: string;

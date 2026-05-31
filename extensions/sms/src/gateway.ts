@@ -25,8 +25,14 @@ function normalizeWebhookPath(path: string): string {
 
 export function collectSmsStartupWarnings(account: ResolvedSmsAccount): string[] {
   const warnings: string[] = [];
-  if (!account.accountSid || !account.authToken || !account.fromNumber) {
-    warnings.push("- SMS: accountSid, authToken, and fromNumber are required.");
+  if (
+    !account.accountSid ||
+    !account.authToken ||
+    (!account.fromNumber && !account.messagingServiceSid)
+  ) {
+    warnings.push(
+      "- SMS: accountSid, authToken, and fromNumber or messagingServiceSid are required.",
+    );
   }
   if (!account.publicWebhookUrl && !account.dangerouslyDisableSignatureValidation) {
     warnings.push(

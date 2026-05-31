@@ -108,6 +108,11 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       respondTwiml(res, 400, "Missing SMS payload");
       return true;
     }
+    if (msg.accountSid && msg.accountSid !== params.account.accountSid) {
+      params.log?.warn?.("SMS webhook rejected mismatched Twilio AccountSid");
+      respondTwiml(res, 403, "Invalid account");
+      return true;
+    }
     if (
       !rememberWebhookMessage({
         accountId: params.account.accountId,

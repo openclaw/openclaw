@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { sendSmsTextChunks } from "./send.js";
+import { sendSmsTextChunks, toSmsPlainText } from "./send.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
 const sendSmsViaTwilio = vi.hoisted(() => vi.fn(async ({ to }) => ({ sid: `SM-${to}`, to })));
@@ -15,6 +15,7 @@ function createAccount(textChunkLimit: number): ResolvedSmsAccount {
     accountSid: "AC123",
     authToken: "secret",
     fromNumber: "+15557654321",
+    messagingServiceSid: "",
     webhookPath: "/webhooks/sms",
     publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
     dangerouslyDisableSignatureValidation: false,
@@ -34,5 +35,11 @@ describe("sendSmsTextChunks", () => {
 
     expect(sendSmsViaTwilio).toHaveBeenCalledTimes(2);
     expect(sendSmsViaTwilio.mock.calls.map(([call]) => call.text)).toEqual(["alpha", "beta"]);
+  });
+
+  it("flattens markdown before sending SMS chunks", async () => {
+    expect(toSmsPlainText("**Hi** [docs](https://example.com)\n\n\nthere")).toBe(
+      "Hi docs (https://example.com)\n\nthere",
+    );
   });
 });

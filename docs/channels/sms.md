@@ -6,7 +6,7 @@ read_when:
 title: "SMS"
 ---
 
-OpenClaw can receive and send SMS through a Twilio phone number. The Gateway registers an inbound webhook route, validates Twilio request signatures by default, and sends replies back through Twilio's Messages API.
+OpenClaw can receive and send SMS through a Twilio phone number or Messaging Service. The Gateway registers an inbound webhook route, validates Twilio request signatures by default, and sends replies back through Twilio's Messages API.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -23,8 +23,8 @@ OpenClaw can receive and send SMS through a Twilio phone number. The Gateway reg
 ## Quick setup
 
 <Steps>
-  <Step title="Create or choose a Twilio phone number">
-    In Twilio, choose a phone number with SMS capability. Save the Account SID, Auth Token, and phone number.
+  <Step title="Create or choose a Twilio sender">
+    In Twilio, choose an SMS-capable phone number or Messaging Service. Save the Account SID, Auth Token, and sender value.
   </Step>
 
   <Step title="Configure the SMS channel">
@@ -45,7 +45,7 @@ OpenClaw can receive and send SMS through a Twilio phone number. The Gateway reg
 ```
 
     Env fallbacks for the default account:
-    `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, and `SMS_PUBLIC_WEBHOOK_URL`.
+    `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID`, and `SMS_PUBLIC_WEBHOOK_URL`.
 
   </Step>
 
@@ -92,7 +92,24 @@ Outbound SMS targets use the `sms:` prefix:
 openclaw message --to sms:+15551234567 "hello"
 ```
 
-Agent replies from inbound SMS conversations automatically go back to the sender through the configured Twilio phone number.
+Agent replies from inbound SMS conversations automatically go back to the sender through the configured Twilio sender.
+
+Use `messagingServiceSid` instead of `fromNumber` when Twilio should choose the sender through a Messaging Service:
+
+```json5
+{
+  channels: {
+    sms: {
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      messagingServiceSid: "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+    },
+  },
+}
+```
+
+If both are present after defaults/env resolution, `fromNumber` is used.
 
 ## Webhook security
 
