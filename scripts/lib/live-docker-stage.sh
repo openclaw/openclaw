@@ -110,6 +110,7 @@ openclaw_live_stage_state_dir() {
       --exclude=workspace \
       --exclude=sandboxes \
       --exclude=plugins/installs.json \
+      --exclude=plugins/installs.json.migrated \
       --exclude=relay.sock \
       --exclude='*.sock' \
       --exclude='*/*.sock' \
