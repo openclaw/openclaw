@@ -2122,6 +2122,24 @@ describe("message tool boot-echo guard", () => {
     expect(call?.params?.attachments).toEqual([{ media: "file:///tmp/status.png" }]);
   });
 
+  it("sanitizes boot echo text and still sends when buffer content remains", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        caption: echoedText,
+        buffer: "SGVsbG8=",
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.caption).toBe("");
+    expect(call?.params?.buffer).toBe("SGVsbG8=");
+  });
+
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
     setBootEchoContextForSession("agent:main", longBootPrompt);
     mockSendResult({ channel: "telegram", to: "telegram:123" });

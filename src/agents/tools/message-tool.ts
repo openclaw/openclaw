@@ -225,7 +225,10 @@ function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolea
       presentation: params.presentation,
       interactive: params.interactive,
     },
-    { trimText: true },
+    {
+      trimText: true,
+      extraContent: typeof params.buffer === "string" && params.buffer.trim().length > 0,
+    },
   );
 }
 
