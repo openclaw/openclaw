@@ -3,6 +3,7 @@ import { isSessionRunActive } from "../session-run-state.ts";
 import type { SessionsListResult } from "../types.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
+  reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
   STALE_ACTIVE_ROW_RECONCILE_WINDOW_MS,
 } from "./run-lifecycle.ts";
@@ -142,6 +143,27 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
     expect(rowActive(host)).toBe(true);
     expect(host.lastLocalTerminalReconcile).toBeNull();
+  });
+
+  it("clears selected agent-main alias runs from canonical global history rows", () => {
+    const host = makeHost({
+      sessionKey: "agent:work:main",
+      chatRunId: "run-global",
+      chatStream: "streaming",
+      sessionsResult: makeSessionsResult([
+        { key: "agent:work:main", hasActiveRun: true, status: "running" },
+      ]),
+    });
+
+    const reconciled = reconcileChatRunFromSessionRow(
+      host,
+      { key: "global", kind: "global", updatedAt: 1, hasActiveRun: false, status: "done" },
+      { publishRunStatus: false },
+    );
+
+    expect(reconciled).toBe(true);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
   });
 
   it("arms suppression on a completed turn, then suppresses the racing refresh", () => {

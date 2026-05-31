@@ -1,5 +1,9 @@
 import { resetToolStream, type CompactionStatus, type FallbackStatus } from "../app-tool-stream.ts";
-import { areUiSessionKeysEquivalent } from "../session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  DEFAULT_MAIN_KEY,
+  parseAgentSessionKey,
+} from "../session-key.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../types.ts";
 
@@ -274,12 +278,23 @@ export function reconcileChatRunFromCurrentSessionRow(
   return reconcileChatRunFromSessionRow(host, row, options);
 }
 
+function isSessionRowForSelectedChat(rowKey: string, sessionKey: string): boolean {
+  if (areUiSessionKeysEquivalent(rowKey, sessionKey)) {
+    return true;
+  }
+  if (rowKey !== "global") {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  return parsed?.rest === DEFAULT_MAIN_KEY;
+}
+
 export function reconcileChatRunFromSessionRow(
   host: RunLifecycleHost,
   row: GatewaySessionRow,
   options: { publishRunStatus?: boolean } = {},
 ): boolean {
-  if (!areUiSessionKeysEquivalent(row.key, host.sessionKey)) {
+  if (!isSessionRowForSelectedChat(row.key, host.sessionKey)) {
     return false;
   }
   if (!host.chatRunId && host.chatStream == null) {
