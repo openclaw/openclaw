@@ -429,6 +429,7 @@ export type AppViewState = {
     skillWorkshopStatusFilter: "all" | "pending" | "applied" | "rejected" | "quarantined" | "stale";
     skillWorkshopQuery: string;
     skillWorkshopFilePreviewKey: string | null;
+    skillWorkshopFilePreviewQuery: string;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

@@ -705,11 +705,24 @@
   font-size: 12px;
 }
 
+.sw-modal__empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px;
+}
+
 .sw-modal__detail {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+.sw-modal__detail--empty {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
 }
 
 .sw-modal__detail-head {

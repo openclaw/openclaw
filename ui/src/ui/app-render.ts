@@ -2876,12 +2876,15 @@ export function renderApp(state: AppViewState) {
                 statusFilter: state.skillWorkshopStatusFilter,
                 query: state.skillWorkshopQuery,
                 filePreviewKey: state.skillWorkshopFilePreviewKey,
+                filePreviewQuery: state.skillWorkshopFilePreviewQuery,
                 counts,
                 onStatusFilterChange: (next) => (state.skillWorkshopStatusFilter = next),
                 onQueryChange: (next) => (state.skillWorkshopQuery = next),
+                onFilePreviewQueryChange: (next) => (state.skillWorkshopFilePreviewQuery = next),
                 onSelect: (key) => {
                   state.skillWorkshopSelectedKey = key;
                   state.skillWorkshopFilePreviewKey = null;
+                  state.skillWorkshopFilePreviewQuery = "";
                 },
                 onPrev: () => goto(-1),
                 onNext: () => goto(1),
@@ -2889,8 +2892,13 @@ export function renderApp(state: AppViewState) {
                 onRevise: () => {},
                 onSetAside: () => {},
                 onReject: () => {},
-                onPreviewFile: (_key, path) => (state.skillWorkshopFilePreviewKey = path),
-                onClosePreview: () => (state.skillWorkshopFilePreviewKey = null),
+                onPreviewFile: (_key, path) => {
+                  state.skillWorkshopFilePreviewKey = path;
+                },
+                onClosePreview: () => {
+                  state.skillWorkshopFilePreviewKey = null;
+                  state.skillWorkshopFilePreviewQuery = "";
+                },
               });
             })
           : nothing}

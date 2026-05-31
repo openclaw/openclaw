@@ -632,6 +632,7 @@ export class OpenClawApp extends LitElement {
     | "stale" = "all";
   @state() skillWorkshopQuery = "";
   @state() skillWorkshopFilePreviewKey: string | null = null;
+  @state() skillWorkshopFilePreviewQuery = "";
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
