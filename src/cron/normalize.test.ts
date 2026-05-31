@@ -1082,3 +1082,24 @@ describe("local-llamacpp concatenated key recovery", () => {
     expect(normalized.sessionTargetName).toBeUndefined();
   });
 });
+
+  it("recovers concatenated keys in cron.update patch input", () => {
+    const normalized = normalizeCronJobPatch({
+      id: "test-job",
+      namePayload: { kind: "agentTurn", message: "updated message" },
+      scheduleKind: { expr: "*/5 * * * *", kind: "cron" },
+      sessionTargetName: "updated-job",
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.name).toBe("updated-job");
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "updated message",
+    });
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.expr).toBe("*/5 * * * *");
+    expect(normalized.namePayload).toBeUndefined();
+    expect(normalized.scheduleKind).toBeUndefined();
+    expect(normalized.sessionTargetName).toBeUndefined();
+  });

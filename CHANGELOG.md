@@ -30,7 +30,6 @@ Docs: https://docs.openclaw.ai
 - Codex: bound ChatGPT OAuth token exchange and refresh requests so stalled auth endpoints fail instead of hanging login or refresh.
 - QA/E2E/CI: bound Telegram, kitchen-sink, Open WebUI, ClawHub, MCP, Discord, realtime, labeler, and GitHub API waits; fail empty explicit test, live-media, gateway CPU, plugin gauntlet, and beta-smoke runs instead of false-greening.
 - Agents/Codex: keep spawned agent bootstrap files rooted in the agent workspace while running task commands, transcripts, and compaction from the requested cwd. (#87218) Thanks @mbelinky.
-- Cron: recover from local-llamacpp parameter serialization bugs where adjacent JSON property names get concatenated (e.g. `namePayload`, `scheduleKind`, `sessionTargetName`), restoring correct cron job normalization. (#88439)
 
 ## 2026.5.26
 
