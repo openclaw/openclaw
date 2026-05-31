@@ -33,6 +33,8 @@ object CanvasActionTrust {
     candidateUri: URI,
     trustedUrl: String,
   ): Boolean {
+    // Gateway-advertised URLs are capabilities. Treat malformed entries as
+    // absent instead of broadening trust to same-origin or prefix matches.
     val trustedUri = parseUri(trustedUrl) ?: return false
     val normalizedTrusted = normalizeTrustedRemoteA2uiUri(trustedUri) ?: return false
     return candidateUri == normalizedTrusted
@@ -58,6 +60,7 @@ object CanvasActionTrust {
     }
   }
 
+  /** Parses untrusted WebView/gateway URL text without throwing into UI event handlers. */
   private fun parseUri(raw: String): URI? =
     try {
       URI(raw)
