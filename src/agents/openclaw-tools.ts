@@ -511,6 +511,12 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
+      activeDeliveryContext: {
+        channel: options?.agentChannel,
+        to: options?.currentChannelId ?? options?.agentTo,
+        accountId: options?.agentAccountId,
+        threadId: options?.currentThreadTs ?? options?.agentThreadId,
+      },
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
