@@ -2061,6 +2061,39 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("executes cached healthy tools when a runtime sibling is malformed", async () => {
+    const factory = vi.fn(() => [
+      createMalformedTool("fuzz_move_angles"),
+      {
+        ...makeTool("mockplugin_status"),
+        async execute() {
+          return { content: [{ type: "text", text: "mock-status-ok" }] };
+        },
+      },
+    ]);
+    setRegistry([
+      {
+        pluginId: "fuzzplugin",
+        optional: false,
+        source: "/tmp/fuzzplugin.js",
+        names: ["mockplugin_status"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+    const statusTool = second.find((tool) => tool.name === "mockplugin_status");
+
+    expectResolvedToolNames(first, ["mockplugin_status"]);
+    expectResolvedToolNames(second, ["mockplugin_status"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    await expect(statusTool?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "mock-status-ok" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
   it("reuses cached plugin tool descriptors across session identity changes", async () => {
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sessionId?: string };
