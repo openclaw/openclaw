@@ -560,7 +560,7 @@ export function createTelegramThreadBindingManager(params: {
       sessionEntry.entry.status === "failed" ||
       sessionEntry.entry.status === "killed" ||
       sessionEntry.entry.status === "timeout" ||
-      sessionEntry.entry.acp?.state === "error";
+      sessionEntry.acp?.state === "error";
     if (isStale) {
       staleSessionKeys.add(targetSessionKey);
     }

@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -2037,14 +2038,20 @@ export function buildGatewaySessionRow(params: {
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
+  const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+    cfg,
+    agentId: sessionAgentId,
+    sessionKey: key,
+  });
+  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
   const agentRuntime = resolveModelAgentRuntimeMetadata({
     cfg,
     agentId: sessionAgentId,
     provider: rowModelProvider,
     model: rowModel,
-    sessionKey: key,
-    acpRuntime: entry?.acp != null,
-    acpBackend: entry?.acp?.backend,
+    sessionKey: acpSessionKey,
+    acpRuntime: acpMeta != null,
+    acpBackend: acpMeta?.backend,
   });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)

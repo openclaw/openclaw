@@ -556,6 +556,11 @@ function createAcpSessionEntry(options?: {
   return {
     sessionKey,
     storeSessionKey: sessionKey,
+    entry: {
+      sessionId: "sess-acp",
+      updatedAt: Date.now(),
+      label: "codex-main",
+    },
     acp: {
       backend: "acpx",
       agent: "codex",
@@ -1799,25 +1804,7 @@ describe("/acp command", () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
     );
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      [defaultAcpSessionKey]: {
-        sessionId: "sess-1",
-        updatedAt: Date.now(),
-        label: "codex-main",
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "runtime-1",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
-      },
-      "agent:main:main": {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-      },
-    });
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([createAcpSessionEntry()]);
 
     const result = await runDiscordAcpCommand("/acp sessions", baseCfg);
 

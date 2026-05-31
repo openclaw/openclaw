@@ -21,6 +21,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import {
@@ -1296,7 +1297,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (normalizedAttachments.length > 0) {
         let baseProvider: string | undefined;
         let baseModel: string | undefined;
-        let requestedSessionEntry: SessionEntry | undefined;
+        let requestedAcpMeta: ReturnType<typeof readAcpSessionMeta>;
         if (requestedSessionKeyRaw) {
           const {
             cfg: sessCfg,
@@ -1306,7 +1307,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             ...(agentId ? { agentId } : {}),
             clone: false,
           });
-          requestedSessionEntry = sessEntry;
           const sessionAgentId =
             sessCanonicalKey === "global" && agentId
               ? agentId
@@ -1314,13 +1314,14 @@ export const agentHandlers: GatewayRequestHandlers = {
           const modelRef = resolveSessionModelRef(sessCfg, sessEntry, sessionAgentId);
           baseProvider = modelRef.provider;
           baseModel = modelRef.model;
+          requestedAcpMeta = readAcpSessionMeta({ sessionKey: sessCanonicalKey });
         }
         const effectiveProvider = providerOverride || baseProvider;
         const effectiveModel = modelOverride || baseModel;
         const isConfirmedAcpSession =
           request.acpTurnSource === "manual_spawn" &&
           isAcpSessionKey(requestedSessionKeyRaw) &&
-          requestedSessionEntry?.acp != null;
+          requestedAcpMeta != null;
         const supportsInlineImages = isConfirmedAcpSession
           ? true
           : await resolveGatewayModelSupportsImages({

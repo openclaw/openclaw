@@ -31,6 +31,7 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -2330,14 +2331,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       provider: resolved.provider,
       model: resolved.model,
     });
+    const acpMeta = readAcpSessionMeta({ sessionKey: target.canonicalKey ?? key });
     const agentRuntime = resolveModelAgentRuntimeMetadata({
       cfg,
       agentId,
       provider: resolvedDisplayModel.provider,
       model: resolvedDisplayModel.model,
       sessionKey: target.canonicalKey ?? key,
-      acpRuntime: applied.entry?.acp != null,
-      acpBackend: applied.entry?.acp?.backend,
+      acpRuntime: acpMeta != null,
+      acpBackend: acpMeta?.backend,
     });
     const result: SessionsPatchResult = {
       ok: true,

@@ -29,6 +29,22 @@ export interface AcpReplaySessions {
   updated_at: number;
 }
 
+export interface AcpSessions {
+  agent: string;
+  backend: string;
+  cwd: string | null;
+  identity_json: string | null;
+  last_activity_at: number;
+  last_error: string | null;
+  mode: string;
+  runtime_options_json: string | null;
+  runtime_session_name: string;
+  session_id: string | null;
+  session_key: string;
+  state: string;
+  updated_at: number;
+}
+
 export interface AgentDatabases {
   agent_id: string;
   last_seen_at: number;
@@ -902,6 +918,7 @@ export interface WorkspaceSetupState {
 export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
+  acp_sessions: AcpSessions;
   agent_databases: AgentDatabases;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;

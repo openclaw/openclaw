@@ -311,7 +311,8 @@ The branch already has a real shared SQLite base:
   `delivery_queue_entries`, `model_capability_cache`,
   `workspace_setup_state`, `native_hook_relay_bridges`,
   `current_conversation_bindings`, `plugin_binding_approvals`,
-  `tui_last_sessions`, `task_runs`, `task_delivery_state`, `flow_runs`,
+  `tui_last_sessions`, `acp_sessions`, `acp_replay_sessions`,
+  `acp_replay_events`, `task_runs`, `task_delivery_state`, `flow_runs`,
   `subagent_runs`, `migration_runs`, and `backup_runs`.
 - Arbitrary plugin-owned state does not get host-owned typed tables. Installed
   plugins use `plugin_state_entries` for versioned JSON payloads and
@@ -1669,6 +1670,8 @@ Move these into agent databases:
 - ACP replay ledger sessions. Done for runtime writes via
   `acp_replay_sessions` and `acp_replay_events`; legacy `acp/event-ledger.json`
   remains only as doctor input.
+- ACP session metadata. Done for runtime writes via `acp_sessions`; legacy
+  `entry.acp` blocks in `sessions.json` are doctor migration input only.
 - Trajectory sidecars when they are not explicit export files. Done for runtime
   writes: trajectory capture writes agent-database `trajectory_runtime_events`
   rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars are doctor

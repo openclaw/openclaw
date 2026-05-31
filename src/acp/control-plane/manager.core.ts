@@ -1749,7 +1749,7 @@ export class AcpSessionManager {
         if (!entry) {
           return null;
         }
-        const base = current ?? entry.acp;
+        const base = current;
         if (!base) {
           return null;
         }
@@ -1895,7 +1895,7 @@ export class AcpSessionManager {
         if (!entry) {
           return null;
         }
-        const base = current ?? entry.acp;
+        const base = current;
         if (!base) {
           return null;
         }
@@ -1944,7 +1944,7 @@ export class AcpSessionManager {
         if (!entry) {
           return null;
         }
-        const base = current ?? entry.acp;
+        const base = current;
         if (!base) {
           return null;
         }
@@ -2055,7 +2055,7 @@ export class AcpSessionManager {
         if (!entry) {
           return null;
         }
-        const base = current ?? entry.acp;
+        const base = current;
         if (!base) {
           return null;
         }
