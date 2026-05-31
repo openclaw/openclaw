@@ -174,6 +174,7 @@ async function probeLocalProviderEndpoint(params: {
   }
 }
 
+/** Checks local model-provider reachability before a scheduled cron run starts. */
 export async function preflightCronModelProvider(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -194,6 +195,8 @@ export async function preflightCronModelProvider(params: {
   const cacheKey = `${api}\0${baseUrl}`;
   const cached = preflightCache.get(cacheKey);
   if (cached && nowMs - cached.checkedAtMs < PREFLIGHT_CACHE_TTL_MS) {
+    // Cache by endpoint, not model: this probe only verifies local server
+    // reachability, while model availability is handled by the runner.
     if (cached.result.status === "available") {
       return { status: "available" };
     }
@@ -224,6 +227,7 @@ export async function preflightCronModelProvider(params: {
   });
 }
 
+/** Clears the local-provider preflight cache for deterministic tests. */
 export function resetCronModelProviderPreflightCacheForTest(): void {
   preflightCache.clear();
 }
