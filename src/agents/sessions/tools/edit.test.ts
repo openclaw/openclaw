@@ -28,6 +28,16 @@ describe("edit tool", () => {
     return filePath;
   }
 
+  async function captureEditError(action: Promise<unknown>): Promise<Error> {
+    try {
+      await action;
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      return error as Error;
+    }
+    throw new Error("Expected edit tool to throw");
+  }
+
   it("adds current file contents to exact-match mismatch errors", async () => {
     const filePath = await createTempFile("actual current content");
     const tool = createEditTool(tmpDir);
@@ -39,6 +49,101 @@ describe("edit tool", () => {
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
+  });
+
+  it("adds a closest-match line hint to near exact-match mismatch errors", async () => {
+    const filePath = await createTempFile('alpha\nconst value = "actual";\nomega\n');
+    const tool = createEditTool(tmpDir);
+
+    const error = await captureEditError(
+      tool.execute(
+        "call-1",
+        { path: filePath, edits: [{ oldText: 'const value = "actuel";', newText: "ignored" }] },
+        undefined,
+      ),
+    );
+
+    expect(error.message).toContain("Closest match at line 2");
+    expect(error.message).toMatch(/\(\d+% similar\)/);
+    expect(error.message).toContain('const value = \\"actual\\";');
+  });
+
+  it("does not add a closest-match hint for unrelated missing oldText", async () => {
+    const filePath = await createTempFile("alpha beta gamma\n");
+    const tool = createEditTool(tmpDir);
+
+    const error = await captureEditError(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "network socket reader", newText: "ignored" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(error.message).not.toContain("Closest match");
+  });
+
+  it("skips closest-match hints for large files", async () => {
+    const lines = Array.from({ length: 5_001 }, (_, index) =>
+      index === 4_000 ? 'const value = "actual";' : `line ${index} unrelated;`,
+    );
+    const filePath = await createTempFile(`${lines.join("\n")}\n`);
+    const tool = createEditTool(tmpDir);
+
+    const error = await captureEditError(
+      tool.execute(
+        "call-1",
+        { path: filePath, edits: [{ oldText: 'const value = "actuel";', newText: "ignored" }] },
+        undefined,
+      ),
+    );
+
+    expect(error.message).not.toContain("Closest match");
+  });
+
+  it("skips closest-match hints for oversized oldText", async () => {
+    const filePath = await createTempFile('const value = "actual";\n');
+    const tool = createEditTool(tmpDir);
+
+    const error = await captureEditError(
+      tool.execute(
+        "call-1",
+        { path: filePath, edits: [{ oldText: "a".repeat(25_000), newText: "ignored" }] },
+        undefined,
+      ),
+    );
+
+    expect(error.message).not.toContain("Closest match");
+  });
+
+  it("caps closest-match work before scanning every candidate window", async () => {
+    const oldValue = "a".repeat(125);
+    const unrelatedValue = "b".repeat(125);
+    const nearValue = `${"a".repeat(124)}b`;
+    const unrelatedLines = Array.from(
+      { length: 30 },
+      (_, index) => `const value${index} = "${unrelatedValue}";`,
+    );
+    const filePath = await createTempFile(
+      `${unrelatedLines.join("\n")}\nconst value999 = "${nearValue}";\n`,
+    );
+    const tool = createEditTool(tmpDir);
+
+    const error = await captureEditError(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: `const value999 = "${oldValue}";`, newText: "ignored" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(error.message).not.toContain("Closest match");
   });
 
   it("recovers success after a post-write throw when the edit already applied", async () => {

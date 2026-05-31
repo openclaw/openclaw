@@ -86,10 +86,27 @@ interface MatchedEdit {
   newText: string;
 }
 
+interface ClosestEditMatchHint {
+  startLine: number;
+  endLine: number;
+  similarity: number;
+  snippet: string;
+}
+
 export interface AppliedEditsResult {
   baseContent: string;
   newContent: string;
 }
+
+const CLOSEST_MATCH_HINT_LIMIT = 3;
+const CLOSEST_MATCH_MIN_SIMILARITY = 0.65;
+const CLOSEST_MATCH_MAX_CONTENT_CHARS = 500_000;
+const CLOSEST_MATCH_MAX_FILE_LINES = 5_000;
+const CLOSEST_MATCH_MAX_OLD_LINES = 40;
+const CLOSEST_MATCH_MAX_WINDOWS = 5_000;
+const CLOSEST_MATCH_SNIPPET_CHARS = 240;
+const CLOSEST_MATCH_MAX_DIFF_CELLS = 20_000;
+const CLOSEST_MATCH_MAX_TOTAL_DIFF_CELLS = 250_000;
 
 /**
  * Find oldText in content, trying exact match first, then fuzzy match.
@@ -150,14 +167,142 @@ function countOccurrences(content: string, oldText: string): number {
   return fuzzyContent.split(fuzzyOldText).length - 1;
 }
 
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
+function splitHintLines(text: string): string[] {
+  const lines = text.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
+function compactSimilarityText(text: string): string {
+  return normalizeForFuzzyMatch(text).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function characterSimilarityAgainstCompactTexts(
+  leftText: string,
+  rightText: string,
+  remainingDiffCells: { value: number },
+): number {
+  if (leftText === rightText) {
+    return 1;
+  }
+  if (!leftText || !rightText) {
+    return 0;
+  }
+  const diffCells = leftText.length * rightText.length;
+  if (diffCells > CLOSEST_MATCH_MAX_DIFF_CELLS || diffCells > remainingDiffCells.value) {
+    return 0;
+  }
+  remainingDiffCells.value -= diffCells;
+
+  const unchangedChars = Diff.diffChars(leftText, rightText).reduce(
+    (total, part) => total + (part.added || part.removed ? 0 : part.value.length),
+    0,
+  );
+  return (2 * unchangedChars) / (leftText.length + rightText.length);
+}
+
+function truncateClosestMatchSnippet(snippet: string): string {
+  const compact = snippet.trim().replace(/\n/g, "\\n");
+  if (compact.length <= CLOSEST_MATCH_SNIPPET_CHARS) {
+    return compact;
+  }
+  return `${compact.slice(0, CLOSEST_MATCH_SNIPPET_CHARS - 15)}... (truncated)`;
+}
+
+function findClosestEditMatchHints(content: string, oldText: string): ClosestEditMatchHint[] {
+  if (content.length > CLOSEST_MATCH_MAX_CONTENT_CHARS) {
+    return [];
+  }
+
+  const contentLines = splitHintLines(content);
+  const oldLines = splitHintLines(oldText);
+  const windowLineCount = Math.max(1, oldLines.length);
+  const windowCount = contentLines.length - windowLineCount + 1;
+  if (
+    contentLines.length > CLOSEST_MATCH_MAX_FILE_LINES ||
+    oldLines.length > CLOSEST_MATCH_MAX_OLD_LINES ||
+    windowCount <= 0 ||
+    windowCount > CLOSEST_MATCH_MAX_WINDOWS
+  ) {
+    return [];
+  }
+
+  const compactOldText = compactSimilarityText(oldText);
+  if (!compactOldText || compactOldText.length > CLOSEST_MATCH_MAX_DIFF_CELLS) {
+    return [];
+  }
+
+  const hints: ClosestEditMatchHint[] = [];
+  const remainingDiffCells = { value: CLOSEST_MATCH_MAX_TOTAL_DIFF_CELLS };
+  for (let index = 0; index < windowCount; index++) {
+    if (remainingDiffCells.value <= 0) {
+      break;
+    }
+    const snippet = contentLines.slice(index, index + windowLineCount).join("\n");
+    const compactSnippet = compactSimilarityText(snippet);
+    const similarity = characterSimilarityAgainstCompactTexts(
+      compactOldText,
+      compactSnippet,
+      remainingDiffCells,
+    );
+    if (similarity < CLOSEST_MATCH_MIN_SIMILARITY) {
+      continue;
+    }
+    hints.push({
+      startLine: index + 1,
+      endLine: index + windowLineCount,
+      similarity,
+      snippet: truncateClosestMatchSnippet(snippet),
+    });
+  }
+  return hints
+    .toSorted((a, b) => b.similarity - a.similarity || a.startLine - b.startLine)
+    .slice(0, CLOSEST_MATCH_HINT_LIMIT);
+}
+
+function formatLineRange(hint: ClosestEditMatchHint): string {
+  return hint.startLine === hint.endLine
+    ? `line ${hint.startLine}`
+    : `lines ${hint.startLine}-${hint.endLine}`;
+}
+
+function formatClosestMatchHints(
+  hints: ClosestEditMatchHint[],
+  editIndex: number | undefined,
+): string {
+  if (hints.length === 0) {
+    return "";
+  }
+
+  const editLabel = editIndex === undefined ? "" : ` for edits[${editIndex}]`;
+  const formatHint = (hint: ClosestEditMatchHint) =>
+    `${formatLineRange(hint)} (${Math.round(hint.similarity * 100)}% similar): ${JSON.stringify(hint.snippet)}`;
+  if (hints.length === 1) {
+    return `\nClosest match${editLabel} at ${formatHint(hints[0])}.`;
+  }
+  return `\nClosest matches${editLabel}:\n${hints.map((hint) => `- ${formatHint(hint)}`).join("\n")}`;
+}
+
+function getNotFoundError(
+  path: string,
+  editIndex: number,
+  totalEdits: number,
+  content: string,
+  oldText: string,
+): Error {
+  const closestMatchHint = formatClosestMatchHints(
+    findClosestEditMatchHints(content, oldText),
+    totalEdits === 1 ? undefined : editIndex,
+  );
   if (totalEdits === 1) {
     return new Error(
-      `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
+      `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.${closestMatchHint}`,
     );
   }
   return new Error(
-    `Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
+    `Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.${closestMatchHint}`,
   );
 }
 
@@ -229,7 +374,7 @@ export function applyEditsToNormalizedContent(
     const edit = normalizedEdits[i];
     const matchResult = fuzzyFindText(baseContent, edit.oldText);
     if (!matchResult.found) {
-      throw getNotFoundError(path, i, normalizedEdits.length);
+      throw getNotFoundError(path, i, normalizedEdits.length, baseContent, edit.oldText);
     }
 
     const occurrences = countOccurrences(baseContent, edit.oldText);
