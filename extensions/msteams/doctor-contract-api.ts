@@ -124,6 +124,19 @@ async function archiveLegacySource(params: {
   }
 }
 
+function mergeLearnings(legacy: string[], existing?: FeedbackLearningEntry): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const learning of [...legacy, ...(existing?.learnings ?? [])]) {
+    if (seen.has(learning)) {
+      continue;
+    }
+    seen.add(learning);
+    merged.push(learning);
+  }
+  return merged.slice(-10);
+}
+
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "msteams-feedback-learnings-json-to-plugin-state",
@@ -164,14 +177,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           continue;
         }
         const key = encodeSessionKey(file.sessionKey);
-        if (!(await store.lookup(key))) {
-          await store.register(key, {
-            sessionKey: file.sessionKey,
-            learnings: file.learnings,
-            updatedAt: Date.now(),
-          });
-          imported++;
-        }
+        const existing = await store.lookup(key);
+        await store.register(key, {
+          sessionKey: existing?.sessionKey ?? file.sessionKey,
+          learnings: mergeLearnings(file.learnings, existing),
+          updatedAt: Date.now(),
+        });
+        imported++;
         await archiveLegacySource({ filePath: file.filePath, changes, warnings });
       }
       if (imported > 0) {

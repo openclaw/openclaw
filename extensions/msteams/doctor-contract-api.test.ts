@@ -58,6 +58,18 @@ describe("msteams doctor state migration", () => {
     await fs.writeFile(sanitizedSourcePath, JSON.stringify(["Prefer cards"]));
 
     const migration = stateMigrations[0];
+    const context = createDoctorContext(env);
+    await context
+      .openPluginStateKeyedStore({
+        namespace: "feedback-learnings",
+        maxEntries: 10_000,
+      })
+      .register(encodeSessionKey(encodedSessionKey), {
+        sessionKey: encodedSessionKey,
+        learnings: ["Use examples", "New runtime note"],
+        updatedAt: 1900,
+      });
+
     await expect(
       migration.detectLegacyState({
         config: {
@@ -67,7 +79,7 @@ describe("msteams doctor state migration", () => {
         env,
         stateDir,
         oauthDir: path.join(stateDir, "oauth"),
-        context: createDoctorContext(env),
+        context,
       }),
     ).resolves.toMatchObject({
       preview: [expect.stringContaining("2 files")],
@@ -81,7 +93,7 @@ describe("msteams doctor state migration", () => {
       env,
       stateDir,
       oauthDir: path.join(stateDir, "oauth"),
-      context: createDoctorContext(env),
+      context,
     });
 
     expect(result.warnings).toEqual([]);
@@ -95,13 +107,13 @@ describe("msteams doctor state migration", () => {
     await expect(fs.access(`${encodedSourcePath}.migrated`)).resolves.toBeUndefined();
     await expect(fs.access(`${sanitizedSourcePath}.migrated`)).resolves.toBeUndefined();
 
-    const store = createDoctorContext(env).openPluginStateKeyedStore({
+    const store = context.openPluginStateKeyedStore({
       namespace: "feedback-learnings",
       maxEntries: 10_000,
     });
     await expect(store.lookup(encodeSessionKey(encodedSessionKey))).resolves.toMatchObject({
       sessionKey: encodedSessionKey,
-      learnings: ["Be concise", "Use examples"],
+      learnings: ["Be concise", "Use examples", "New runtime note"],
     });
     await expect(store.lookup(encodeSessionKey(sanitizedSessionKey))).resolves.toMatchObject({
       sessionKey: sanitizedSessionKey,
