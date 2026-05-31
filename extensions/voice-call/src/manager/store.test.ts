@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTestStorePath,
   makePersistedCall,
-  writeCallsToStore,
+  writeLegacyCallsJsonl,
 } from "../manager.test-harness.js";
 import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
@@ -45,22 +45,20 @@ describe("voice-call call record store", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("migrates legacy JSONL records into SQLite-backed plugin state", async () => {
+  it("does not import legacy JSONL records at runtime", async () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(
       makePersistedCall({ callId: "call-legacy", processedEventIds: ["evt-1"] }),
     );
-    writeCallsToStore(storePath, [call]);
+    writeLegacyCallsJsonl(storePath, [call]);
 
     const restored = loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.get("call-legacy")?.providerCallId).toBe(call.providerCallId);
-    expect(restored.processedEventIds.has("evt-1")).toBe(true);
-    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
-    expect(fs.existsSync(path.join(storePath, "state", "openclaw.sqlite"))).toBe(true);
+    expect(restored.activeCalls.has("call-legacy")).toBe(false);
+    expect(restored.processedEventIds.has("evt-1")).toBe(false);
+    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(true);
 
     const history = await getCallHistoryFromStore(storePath);
-    expect(history).toHaveLength(1);
-    expect(history[0]?.callId).toBe("call-legacy");
+    expect(history).toEqual([]);
   });
 
   it("persists new call snapshots without recreating the JSONL log", async () => {
@@ -77,26 +75,10 @@ describe("voice-call call record store", () => {
     expect(restored.activeCalls.get("call-sqlite")?.providerCallId).toBe(call.providerCallId);
   });
 
-  it("imports fallback JSONL writes created after the migration marker", async () => {
-    const storePath = createTestStorePath();
-    const sqliteCall = CallRecordSchema.parse(makePersistedCall({ callId: "call-sqlite" }));
-    const fallbackCall = CallRecordSchema.parse(makePersistedCall({ callId: "call-fallback" }));
-
-    persistCallRecord(storePath, sqliteCall);
-    writeCallsToStore(storePath, [fallbackCall]);
-
-    const restored = loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.has("call-sqlite")).toBe(true);
-    expect(restored.activeCalls.get("call-fallback")?.providerCallId).toBe(
-      fallbackCall.providerCallId,
-    );
-    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
-  });
-
-  it("reads the JSONL fallback when SQLite state cannot open", () => {
+  it("does not read the JSONL fallback when SQLite state cannot open", () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(makePersistedCall({ callId: "call-jsonl" }));
-    writeCallsToStore(storePath, [call]);
+    writeLegacyCallsJsonl(storePath, [call]);
     setVoiceCallStateRuntime({
       state: {
         resolveStateDir: () => "",
@@ -110,19 +92,21 @@ describe("voice-call call record store", () => {
     });
 
     const restored = loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.get("call-jsonl")?.providerCallId).toBe(call.providerCallId);
+    expect(restored.activeCalls.has("call-jsonl")).toBe(false);
+    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(true);
   });
 
-  it("keeps oversized fallback records readable when they exceed SQLite chunk budget", async () => {
+  it("persists oversized records in SQLite without creating a JSONL fallback", async () => {
     const storePath = createTestStorePath();
     const call = CallRecordSchema.parse(
       makePersistedCall({
         callId: "call-large",
+        metadata: { mode: "conversation", numberRouteKey: "+15550000001" },
         transcript: [
           {
             timestamp: Date.now(),
             speaker: "user",
-            text: "x".repeat(2 * 1024 * 1024),
+            text: "x".repeat(3 * 1024 * 1024),
             isFinal: true,
           },
         ],
@@ -133,41 +117,15 @@ describe("voice-call call record store", () => {
     await flushPendingCallRecordWritesForTest();
 
     const restored = loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.get("call-large")?.providerCallId).toBe(call.providerCallId);
-    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(true);
-  });
-
-  it("does not let an older fallback record override a newer SQLite snapshot", async () => {
-    const storePath = createTestStorePath();
-    const olderFallback = CallRecordSchema.parse(
-      makePersistedCall({
-        callId: "call-mixed",
-        state: "answered",
-        transcript: [
-          {
-            timestamp: Date.now(),
-            speaker: "user",
-            text: "x".repeat(2 * 1024 * 1024),
-            isFinal: true,
-          },
-        ],
-      }),
-    );
-    const newerSqlite = CallRecordSchema.parse(
-      makePersistedCall({
-        callId: "call-mixed",
-        state: "completed",
-        endedAt: Date.now(),
-        endReason: "completed",
-      }),
-    );
-
-    persistCallRecord(storePath, olderFallback);
-    await flushPendingCallRecordWritesForTest();
-    persistCallRecord(storePath, newerSqlite);
-
-    const restored = loadActiveCallsFromStore(storePath);
-    expect(restored.activeCalls.has("call-mixed")).toBe(false);
+    const restoredCall = restored.activeCalls.get("call-large");
+    expect(restoredCall?.providerCallId).toBe(call.providerCallId);
+    expect(restoredCall?.transcript).toEqual([]);
+    expect(restoredCall?.metadata).toMatchObject({
+      mode: "conversation",
+      numberRouteKey: "+15550000001",
+      voiceCallPersistence: { transcriptTruncated: true },
+    });
+    expect(fs.existsSync(path.join(storePath, "calls.jsonl"))).toBe(false);
   });
 
   it("replays same-millisecond snapshots in write order", () => {
