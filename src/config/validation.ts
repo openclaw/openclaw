@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
+import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
@@ -1724,6 +1725,12 @@ function validateConfigObjectWithPluginsBase(
       } else {
         issues.push({ path: pathLocal, message });
       }
+      return;
+    }
+    if (
+      normalizePluginId(pluginId) === "codex" &&
+      shouldSuppressMissingCodexPluginDiagnostics(config)
+    ) {
       return;
     }
     if (optsLocal?.warnOnly && optsLocal.officialInstallHint !== false) {
