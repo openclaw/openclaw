@@ -1173,13 +1173,14 @@
 .sw-today__actions {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .sw-today__big {
-  padding: 16px 14px;
-  border-radius: 14px;
-  font-size: 14.5px;
+  min-height: 72px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
   font-family: inherit;
@@ -1191,7 +1192,8 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  gap: 3px;
 }
 
 .sw-today__big:active {
@@ -1204,9 +1206,10 @@
 }
 
 .sw-today__big-sub {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 400;
-  opacity: 0.7;
+  line-height: 1.3;
+  opacity: 0.66;
 }
 
 .sw-today__big--primary {
