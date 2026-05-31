@@ -29,6 +29,7 @@ type HarnessRuntimeSettingsParams = {
   providerId?: string | null;
   requestedModelId?: string | null;
   modelId?: string | null;
+  modelFamily?: string | null;
   tokenBudget?: number | null;
   maxOutputTokens?: number | null;
   fallbackActive?: boolean;
@@ -48,7 +49,10 @@ function buildHarnessContextEngineRuntimeSettings(
       provider: params.providerId,
       requestedModel: params.requestedModelId,
       resolvedModel: params.modelId ?? params.requestedModelId,
-      modelFamily: params.modelId ?? params.requestedModelId,
+      // model.family is a real family value when the caller supplies one; it is
+      // never derived from the model id, which would put a concrete id in a
+      // field named "family". Defaults to null until a family value exists.
+      modelFamily: params.modelFamily ?? null,
       tokenBudget: params.tokenBudget,
       maxOutputTokens: params.maxOutputTokens,
       fallbackActive: params.fallbackActive,
