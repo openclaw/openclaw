@@ -3,6 +3,7 @@ package ai.openclaw.app
 import java.time.Instant
 import java.time.ZoneId
 
+/** Package-filter mode used before notification events are forwarded to the gateway. */
 enum class NotificationPackageFilterMode(
   val rawValue: String,
 ) {
@@ -11,6 +12,7 @@ enum class NotificationPackageFilterMode(
   ;
 
   companion object {
+    /** Parses persisted filter mode text, defaulting to blocklist for safer forwarding. */
     fun fromRawValue(raw: String?): NotificationPackageFilterMode = entries.firstOrNull { it.rawValue == raw?.trim()?.lowercase() } ?: Blocklist
   }
 }
@@ -89,6 +91,7 @@ internal class NotificationBurstLimiter {
   private var windowStartMs: Long = -1L
   private var eventsInWindow: Int = 0
 
+  /** Returns true when the current minute bucket still has forwarding capacity. */
   fun allow(
     nowEpochMs: Long,
     maxEventsPerMinute: Int,
