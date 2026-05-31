@@ -84,7 +84,7 @@ function makeFake(options: FakeFactoryOptions = {}) {
 
     const client: FakeClient = {
       id,
-      copilotHome: clientOptions.copilotHome ?? "",
+      copilotHome: clientOptions.baseDirectory ?? "",
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => {
         stops.push(id);
@@ -277,11 +277,11 @@ describe("createCopilotClientPool", () => {
     const sdkFactory = async (clientOptions: CopilotClientOptions) => {
       attempt += 1;
       if (attempt === 1) {
-        throw new Error(`constructor failed for ${String(clientOptions.copilotHome)}`);
+        throw new Error(`constructor failed for ${String(clientOptions.baseDirectory)}`);
       }
       return {
         id: attempt,
-        copilotHome: clientOptions.copilotHome,
+        copilotHome: clientOptions.baseDirectory,
         start: vi.fn(async () => undefined),
         stop: vi.fn(async () => []),
         createSession: vi.fn(async () => ({})),
@@ -454,7 +454,7 @@ describe("createCopilotClientPool", () => {
       expect(first.client).toBe(second.client);
       expect(first.key.copilotHome).toBe(normalizedHome);
       expect(second.key.copilotHome).toBe(normalizedHome);
-      expect(String(sdk.ctorCalls[0]?.copilotHome)).toBe(normalizedHome);
+      expect(String(sdk.ctorCalls[0]?.baseDirectory)).toBe(normalizedHome);
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
     }
@@ -482,6 +482,6 @@ describe("createCopilotClientPool", () => {
     expect(first.key.copilotHome).toBe(normalizedHome);
     expect(second.key.copilotHome).toBe(normalizedHome);
     expect(sdk.ctorCalls.length).toBe(1);
-    expect(String(sdk.ctorCalls[0]?.copilotHome)).toBe(normalizedHome);
+    expect(String(sdk.ctorCalls[0]?.baseDirectory)).toBe(normalizedHome);
   });
 });
