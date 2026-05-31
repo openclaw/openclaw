@@ -29,6 +29,7 @@ type CapturedBackupManifest = {
   platform: NodeJS.Platform;
   options: {
     includeWorkspace: boolean;
+    includeSessionTranscripts: boolean;
     onlyConfig: boolean;
   };
   paths: {
@@ -38,6 +39,7 @@ type CapturedBackupManifest = {
     workspaceDirs: string[];
   };
   assets: Array<Pick<BackupAsset, "kind" | "sourcePath" | "archivePath">>;
+  sessionTranscriptSnapshots?: Array<{ sourcePath: string; archivePath: string }>;
   skipped: Array<{ kind: string; sourcePath: string; reason: string; coveredBy?: string }>;
 };
 
@@ -77,6 +79,7 @@ describe("backup commands", () => {
       createdAt: new Date().toISOString(),
       runtimeVersion: "test",
       assetCount: 1,
+      sessionTranscriptSnapshotCount: 0,
       entryCount: 2,
     });
   });
@@ -253,7 +256,11 @@ describe("backup commands", () => {
       expect(manifest.createdAt).toBe(result.createdAt);
       expect(manifest.archiveRoot).toBe(result.archiveRoot);
       expect(manifest.platform).toBe(process.platform);
-      expect(manifest.options).toEqual({ includeWorkspace: true, onlyConfig: false });
+      expect(manifest.options).toEqual({
+        includeWorkspace: true,
+        includeSessionTranscripts: false,
+        onlyConfig: false,
+      });
       expect(manifest.paths).toEqual({
         stateDir,
         configPath,
@@ -356,6 +363,99 @@ describe("backup commands", () => {
       expect(payload).not.toContain("Backup skipped");
       const parsedPayload = JSON.parse(payload) as { skippedVolatileCount?: unknown };
       expect(parsedPayload.skippedVolatileCount).toBe(1);
+    } finally {
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stages active session transcripts when disaster-recovery backups request them", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-sessions-"));
+    const agentTranscript = path.join(stateDir, "agents", "main", "sessions", "abc.jsonl");
+    const legacyTranscript = path.join(stateDir, "sessions", "legacy.log");
+    let capturedManifest: CapturedBackupManifest | null = null;
+    let capturedEntryPaths: string[] = [];
+    let capturedFilter: ((entryPath: string) => boolean) | undefined;
+    let capturedOnWriteEntry: ((entry: { path: string }) => void) | null = null;
+    try {
+      await fs.mkdir(path.dirname(agentTranscript), { recursive: true });
+      await fs.mkdir(path.dirname(legacyTranscript), { recursive: true });
+      await fs.writeFile(agentTranscript, '{"role":"user","content":"important"}\n', "utf8");
+      await fs.writeFile(legacyTranscript, "legacy transcript\n", "utf8");
+      await mockStateOnlyBackupPlan(stateDir);
+      tarCreateMock.mockImplementationOnce(
+        async (
+          options: {
+            file: string;
+            filter?: (entryPath: string) => boolean;
+            onWriteEntry?: (entry: { path: string }) => void;
+          },
+          entryPaths: string[],
+        ) => {
+          capturedManifest = JSON.parse(
+            await fs.readFile(entryPaths[0], "utf8"),
+          ) as CapturedBackupManifest;
+          capturedEntryPaths = entryPaths;
+          capturedFilter = options.filter;
+          capturedOnWriteEntry = options.onWriteEntry ?? null;
+          for (const stagedPath of entryPaths.slice(2)) {
+            await expect(fs.readFile(stagedPath, "utf8")).resolves.toMatch(/transcript|important/);
+          }
+          expect(options.filter?.(await fs.realpath(agentTranscript))).toBe(false);
+          expect(options.filter?.(entryPaths[2] ?? "")).toBe(true);
+          await fs.writeFile(options.file, "archive-bytes", "utf8");
+        },
+      );
+
+      const result = await backupCreateCommand(createBackupTestRuntime(), {
+        output: backupDir,
+        includeSessionTranscripts: true,
+      });
+
+      expect(result.includeSessionTranscripts).toBe(true);
+      expect(result.sessionTranscriptSnapshotCount).toBe(2);
+      if (!capturedManifest || !capturedOnWriteEntry || !capturedFilter) {
+        throw new Error("Expected backup test to capture archive callbacks");
+      }
+
+      const manifest = capturedManifest as CapturedBackupManifest;
+      expect(manifest.options.includeSessionTranscripts).toBe(true);
+      expect(manifest.sessionTranscriptSnapshots).toHaveLength(2);
+      const canonicalAgentTranscript = await fs.realpath(agentTranscript);
+      const canonicalLegacyTranscript = await fs.realpath(legacyTranscript);
+      expect(manifest.sessionTranscriptSnapshots?.map((snapshot) => snapshot.sourcePath)).toEqual(
+        [canonicalAgentTranscript, canonicalLegacyTranscript].toSorted((left, right) =>
+          left.localeCompare(right),
+        ),
+      );
+      expect(capturedEntryPaths).toHaveLength(result.assets.length + 1 + 2);
+      const stagedTranscriptPaths = capturedEntryPaths.slice(result.assets.length + 1);
+      expect(stagedTranscriptPaths).toHaveLength(2);
+      expect(
+        stagedTranscriptPaths.every((entryPath) =>
+          entryPath.includes(`session-transcript-snapshots${path.sep}`),
+        ),
+      ).toBe(true);
+
+      expect(capturedFilter(stagedTranscriptPaths[0] ?? "")).toBe(true);
+      expect(result.skippedVolatileCount).toBe(1);
+
+      const stagedPath = stagedTranscriptPaths[0];
+      const snapshot = manifest.sessionTranscriptSnapshots?.find(
+        (entry) =>
+          entry.archivePath.endsWith(
+            encodeAbsolutePathForBackupArchive(canonicalAgentTranscript),
+          ) ||
+          entry.archivePath.endsWith(encodeAbsolutePathForBackupArchive(canonicalLegacyTranscript)),
+      );
+      if (!stagedPath || !snapshot) {
+        throw new Error("Expected staged transcript path and manifest snapshot");
+      }
+      const remappedTranscriptEntry = { path: stagedPath };
+      capturedOnWriteEntry(remappedTranscriptEntry);
+      expect(manifest.sessionTranscriptSnapshots?.map((entry) => entry.archivePath)).toContain(
+        remappedTranscriptEntry.path,
+      );
     } finally {
       await fs.rm(backupDir, { recursive: true, force: true });
     }

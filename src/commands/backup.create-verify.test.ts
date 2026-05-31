@@ -45,7 +45,11 @@ describe("backupCreateCommand verify wrapper", () => {
       verified: false,
       dryRun: false,
       includeWorkspace: false,
+      includeSessionTranscripts: false,
       onlyConfig: false,
+      skipped: [],
+      skippedVolatileCount: 0,
+      sessionTranscriptSnapshotCount: 0,
     });
     backupVerifyCommandMock.mockResolvedValue({
       ok: true,

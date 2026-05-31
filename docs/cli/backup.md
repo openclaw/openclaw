@@ -12,9 +12,10 @@ Create a local backup archive for OpenClaw state, config, auth profiles, channel
 
 ```bash
 openclaw backup create
-openclaw backup create --output ~/Backups
+openclaw backup create --output ./backups
 openclaw backup create --dry-run --json
 openclaw backup create --verify
+openclaw backup create --verify --include-session-transcripts
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
 openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
@@ -29,13 +30,14 @@ openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 - Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` validates that the archive contains exactly one root manifest, rejects traversal-style archive paths, and checks that every manifest-declared payload exists in the tarball.
 - `openclaw backup create --verify` runs that validation immediately after writing the archive.
+- `openclaw backup create --include-session-transcripts` snapshots active session transcript files into a temporary staging area before archiving them, then records each snapshot in the manifest.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
 
 ## What gets backed up
 
 `openclaw backup create` plans backup sources from your local OpenClaw install:
 
-- The state directory returned by OpenClaw's local state resolver, usually `~/.openclaw`
+- The state directory returned by OpenClaw's local state resolver
 - The active config file path
 - The resolved `credentials/` directory when it exists outside the state directory
 - Workspace directories discovered from the current config, unless you pass `--no-include-workspace`
@@ -53,7 +55,9 @@ skipped.
 
 The archive payload stores file contents from those source trees, and the embedded `manifest.json` records the resolved absolute source paths plus the archive layout used for each asset.
 
-During archive creation, OpenClaw skips known live-mutation files that do not have restoration value, including active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result includes `skippedVolatileCount` so automation can see how many files were intentionally omitted.
+During archive creation, OpenClaw skips known live-mutation files by default, including active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result includes `skippedVolatileCount` so automation can see how many files were intentionally omitted from direct tree walking.
+
+For disaster recovery, pass `--include-session-transcripts`. OpenClaw still skips the live transcript files during the normal state-tree walk, but it first copies stable snapshots of legacy `sessions/` transcripts and per-agent `agents/<agentId>/sessions/` transcript files into temporary staging. The archive stores those staged snapshots at their original payload locations, and the manifest records `sessionTranscriptSnapshots` plus the JSON result field `sessionTranscriptSnapshotCount`.
 
 Installed plugin source and manifest files under the state directory's
 `extensions/` tree are included, but their nested `node_modules/` dependency

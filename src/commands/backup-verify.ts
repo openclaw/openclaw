@@ -12,6 +12,11 @@ type BackupManifestAsset = {
   archivePath: string;
 };
 
+type BackupManifestSessionTranscriptSnapshot = {
+  sourcePath: string;
+  archivePath: string;
+};
+
 type BackupManifest = {
   schemaVersion: number;
   createdAt: string;
@@ -21,6 +26,8 @@ type BackupManifest = {
   nodeVersion: string;
   options?: {
     includeWorkspace?: boolean;
+    includeSessionTranscripts?: boolean;
+    onlyConfig?: boolean;
   };
   paths?: {
     stateDir?: string;
@@ -29,6 +36,7 @@ type BackupManifest = {
     workspaceDirs?: string[];
   };
   assets: BackupManifestAsset[];
+  sessionTranscriptSnapshots?: BackupManifestSessionTranscriptSnapshot[];
   skipped?: Array<{
     kind?: string;
     sourcePath?: string;
@@ -49,6 +57,7 @@ export type BackupVerifyResult = {
   createdAt: string;
   runtimeVersion: string;
   assetCount: number;
+  sessionTranscriptSnapshotCount: number;
   entryCount: number;
 };
 
@@ -136,6 +145,27 @@ function parseManifest(raw: string): BackupManifest {
     });
   }
 
+  const sessionTranscriptSnapshots: BackupManifestSessionTranscriptSnapshot[] = [];
+  if (Array.isArray(parsed.sessionTranscriptSnapshots)) {
+    for (const snapshot of parsed.sessionTranscriptSnapshots) {
+      if (!isRecord(snapshot)) {
+        throw new Error("Backup manifest contains a non-object session transcript snapshot.");
+      }
+      if (typeof snapshot.sourcePath !== "string" || !snapshot.sourcePath.trim()) {
+        throw new Error("Backup manifest session transcript snapshot is missing sourcePath.");
+      }
+      if (typeof snapshot.archivePath !== "string" || !snapshot.archivePath.trim()) {
+        throw new Error("Backup manifest session transcript snapshot is missing archivePath.");
+      }
+      sessionTranscriptSnapshots.push({
+        sourcePath: snapshot.sourcePath,
+        archivePath: snapshot.archivePath,
+      });
+    }
+  } else if (parsed.sessionTranscriptSnapshots !== undefined) {
+    throw new Error("Backup manifest sessionTranscriptSnapshots must be an array.");
+  }
+
   return {
     schemaVersion: 1,
     archiveRoot: parsed.archiveRoot,
@@ -147,7 +177,13 @@ function parseManifest(raw: string): BackupManifest {
     platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
     nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
     options: isRecord(parsed.options)
-      ? { includeWorkspace: parsed.options.includeWorkspace as boolean | undefined }
+      ? {
+          includeWorkspace: parsed.options.includeWorkspace as boolean | undefined,
+          includeSessionTranscripts: parsed.options.includeSessionTranscripts as
+            | boolean
+            | undefined,
+          onlyConfig: parsed.options.onlyConfig as boolean | undefined,
+        }
       : undefined,
     paths: isRecord(parsed.paths)
       ? {
@@ -162,6 +198,7 @@ function parseManifest(raw: string): BackupManifest {
         }
       : undefined,
     assets,
+    sessionTranscriptSnapshots,
     skipped: Array.isArray(parsed.skipped) ? parsed.skipped : undefined,
   };
 }
@@ -246,6 +283,23 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
   }
+
+  for (const snapshot of manifest.sessionTranscriptSnapshots ?? []) {
+    const snapshotArchivePath = normalizeArchivePath(
+      snapshot.archivePath,
+      "Backup manifest session transcript snapshot path",
+    );
+    if (!isArchivePathWithin(snapshotArchivePath, payloadRoot)) {
+      throw new Error(
+        `Manifest session transcript snapshot path is outside payload root: ${snapshot.archivePath}`,
+      );
+    }
+    if (!normalizedEntrySet.has(snapshotArchivePath)) {
+      throw new Error(
+        `Archive is missing session transcript snapshot payload: ${snapshotArchivePath}`,
+      );
+    }
+  }
 }
 
 function formatResult(result: BackupVerifyResult): string {
@@ -255,6 +309,9 @@ function formatResult(result: BackupVerifyResult): string {
     `Created at: ${result.createdAt}`,
     `Runtime version: ${result.runtimeVersion}`,
     `Assets verified: ${result.assetCount}`,
+    ...(result.sessionTranscriptSnapshotCount > 0
+      ? [`Session transcript snapshots verified: ${result.sessionTranscriptSnapshotCount}`]
+      : []),
     `Archive entries scanned: ${result.entryCount}`,
   ].join("\n");
 }
@@ -312,6 +369,7 @@ export async function backupVerifyCommand(
     createdAt: manifest.createdAt,
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
+    sessionTranscriptSnapshotCount: manifest.sessionTranscriptSnapshots?.length ?? 0,
     entryCount: rawEntries.length,
   };
 

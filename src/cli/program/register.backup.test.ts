@@ -52,6 +52,7 @@ describe("registerBackupCommand", () => {
         dryRun: true,
         verify: false,
         onlyConfig: false,
+        includeSessionTranscripts: false,
         includeWorkspace: true,
       }),
     );
@@ -75,6 +76,17 @@ describe("registerBackupCommand", () => {
       runtime,
       expect.objectContaining({
         verify: true,
+      }),
+    );
+  });
+
+  it("forwards --include-session-transcripts to backup create", async () => {
+    await runCli(["backup", "create", "--include-session-transcripts"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        includeSessionTranscripts: true,
       }),
     );
   });

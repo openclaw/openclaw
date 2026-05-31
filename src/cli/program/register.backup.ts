@@ -19,11 +19,16 @@ export function registerBackupCommand(program: Command) {
 
   backup
     .command("create")
-    .description("Write a backup archive for config, credentials, sessions, and workspaces")
+    .description("Write a backup archive for config, credentials, state, and workspaces")
     .option("--output <path>", "Archive path or destination directory")
     .option("--json", "Output JSON", false)
     .option("--dry-run", "Print the backup plan without writing the archive", false)
     .option("--verify", "Verify the archive after writing it", false)
+    .option(
+      "--include-session-transcripts",
+      "Snapshot active session transcript files into the archive",
+      false,
+    )
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
     .addHelpText(
@@ -44,6 +49,10 @@ export function registerBackupCommand(program: Command) {
             "Create the archive and immediately validate its manifest and payload layout.",
           ],
           [
+            "openclaw backup create --verify --include-session-transcripts",
+            "Include stable snapshots of active session transcripts for disaster recovery.",
+          ],
+          [
             "openclaw backup create --no-include-workspace",
             "Back up state/config without agent workspace files.",
           ],
@@ -57,6 +66,7 @@ export function registerBackupCommand(program: Command) {
           json: Boolean(opts.json),
           dryRun: Boolean(opts.dryRun),
           verify: Boolean(opts.verify),
+          includeSessionTranscripts: Boolean(opts.includeSessionTranscripts),
           onlyConfig: Boolean(opts.onlyConfig),
           includeWorkspace: opts.includeWorkspace as boolean,
         });

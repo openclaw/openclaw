@@ -7,6 +7,7 @@ import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
   buildBackupArchiveRoot,
+  encodeAbsolutePathForBackupArchive,
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
@@ -29,6 +30,7 @@ export type BackupCreateOptions = {
   output?: string;
   dryRun?: boolean;
   includeWorkspace?: boolean;
+  includeSessionTranscripts?: boolean;
   onlyConfig?: boolean;
   verify?: boolean;
   json?: boolean;
@@ -47,6 +49,11 @@ type BackupManifestAsset = {
   archivePath: string;
 };
 
+type BackupManifestSessionTranscriptSnapshot = {
+  sourcePath: string;
+  archivePath: string;
+};
+
 type BackupManifest = {
   schemaVersion: 1;
   createdAt: string;
@@ -56,6 +63,7 @@ type BackupManifest = {
   nodeVersion: string;
   options: {
     includeWorkspace: boolean;
+    includeSessionTranscripts: boolean;
     onlyConfig?: boolean;
   };
   paths: {
@@ -65,6 +73,7 @@ type BackupManifest = {
     workspaceDirs: string[];
   };
   assets: BackupManifestAsset[];
+  sessionTranscriptSnapshots?: BackupManifestSessionTranscriptSnapshot[];
   skipped: Array<{
     kind: string;
     sourcePath: string;
@@ -79,6 +88,7 @@ export type BackupCreateResult = {
   archivePath: string;
   dryRun: boolean;
   includeWorkspace: boolean;
+  includeSessionTranscripts: boolean;
   onlyConfig: boolean;
   verified: boolean;
   assets: BackupAsset[];
@@ -95,6 +105,12 @@ export type BackupCreateResult = {
    * Populated on real writes only; dry runs report 0.
    */
   skippedVolatileCount: number;
+  /**
+   * Count of active session transcript snapshot files selected for the backup.
+   * Real writes stage these files before archiving; dry runs report the
+   * currently discoverable candidate count without copying file contents.
+   */
+  sessionTranscriptSnapshotCount: number;
 };
 
 const BACKUP_TAR_MAX_ATTEMPTS = 3;
@@ -323,12 +339,177 @@ async function canonicalizePathForContainment(targetPath: string): Promise<strin
   }
 }
 
+const SESSION_TRANSCRIPT_EXTENSIONS = new Set([".jsonl", ".log"]);
+const SESSION_TRANSCRIPT_COPY_ATTEMPTS = 3;
+const SESSION_TRANSCRIPT_COPY_RETRY_MS = 50;
+
+type SessionTranscriptSnapshot = BackupManifestSessionTranscriptSnapshot;
+
+type StagedSessionTranscriptSnapshot = SessionTranscriptSnapshot & {
+  stagedPath: string;
+};
+
+function isSessionTranscriptFileName(fileName: string): boolean {
+  return SESSION_TRANSCRIPT_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
+
+async function collectFilesUnder(
+  rootPath: string,
+  seenCanonicalPaths: Set<string>,
+  files: string[],
+): Promise<void> {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(rootPath, { withFileTypes: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return;
+    }
+    throw err;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      await collectFilesUnder(entryPath, seenCanonicalPaths, files);
+      continue;
+    }
+    if (!entry.isFile() || !isSessionTranscriptFileName(entry.name)) {
+      continue;
+    }
+    const canonicalPath = await fs.realpath(entryPath).catch(() => path.resolve(entryPath));
+    if (seenCanonicalPaths.has(canonicalPath)) {
+      continue;
+    }
+    seenCanonicalPaths.add(canonicalPath);
+    files.push(canonicalPath);
+  }
+}
+
+async function collectSessionTranscriptSourceFiles(stateDir: string): Promise<string[]> {
+  const stateRoot = path.resolve(stateDir);
+  const transcriptRoots = [path.join(stateRoot, "sessions")];
+  const agentsRoot = path.join(stateRoot, "agents");
+
+  try {
+    const agentEntries = await fs.readdir(agentsRoot, { withFileTypes: true });
+    for (const entry of agentEntries) {
+      if (entry.isDirectory()) {
+        transcriptRoots.push(path.join(agentsRoot, entry.name, "sessions"));
+      }
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      throw err;
+    }
+  }
+
+  const files: string[] = [];
+  const seenCanonicalPaths = new Set<string>();
+  for (const transcriptRoot of transcriptRoots) {
+    await collectFilesUnder(transcriptRoot, seenCanonicalPaths, files);
+  }
+  return files.toSorted((left, right) => left.localeCompare(right));
+}
+
+async function copySessionTranscriptSnapshot(params: {
+  sourcePath: string;
+  stagedPath: string;
+}): Promise<boolean> {
+  await fs.mkdir(path.dirname(params.stagedPath), { recursive: true });
+  let copied = false;
+
+  for (let attempt = 1; attempt <= SESSION_TRANSCRIPT_COPY_ATTEMPTS; attempt += 1) {
+    let before: import("node:fs").Stats;
+    try {
+      before = await fs.stat(params.sourcePath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") {
+        await fs.rm(params.stagedPath, { force: true }).catch(() => undefined);
+        return false;
+      }
+      throw err;
+    }
+    if (!before.isFile()) {
+      await fs.rm(params.stagedPath, { force: true }).catch(() => undefined);
+      return false;
+    }
+
+    try {
+      await fs.copyFile(params.sourcePath, params.stagedPath);
+      copied = true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") {
+        await fs.rm(params.stagedPath, { force: true }).catch(() => undefined);
+        return false;
+      }
+      throw err;
+    }
+
+    let after: import("node:fs").Stats;
+    try {
+      after = await fs.stat(params.sourcePath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") {
+        await fs.rm(params.stagedPath, { force: true }).catch(() => undefined);
+        return false;
+      }
+      throw err;
+    }
+    if (!after.isFile()) {
+      await fs.rm(params.stagedPath, { force: true }).catch(() => undefined);
+      return false;
+    }
+    if (before.size === after.size && before.mtimeMs === after.mtimeMs) {
+      return true;
+    }
+    if (attempt < SESSION_TRANSCRIPT_COPY_ATTEMPTS) {
+      await sleep(SESSION_TRANSCRIPT_COPY_RETRY_MS);
+    }
+  }
+
+  return copied;
+}
+
+async function stageSessionTranscriptSnapshots(params: {
+  stateDir: string;
+  tempDir: string;
+  archiveRoot: string;
+}): Promise<StagedSessionTranscriptSnapshot[]> {
+  const sourcePaths = await collectSessionTranscriptSourceFiles(params.stateDir);
+  const snapshots: StagedSessionTranscriptSnapshot[] = [];
+  for (const sourcePath of sourcePaths) {
+    const stagedPath = path.join(
+      params.tempDir,
+      "session-transcript-snapshots",
+      encodeAbsolutePathForBackupArchive(sourcePath),
+    );
+    const copied = await copySessionTranscriptSnapshot({ sourcePath, stagedPath });
+    if (!copied) {
+      continue;
+    }
+    snapshots.push({
+      sourcePath,
+      archivePath: buildBackupArchivePath(params.archiveRoot, sourcePath),
+      stagedPath,
+    });
+  }
+  return snapshots;
+}
+
 function buildManifest(params: {
   createdAt: string;
   archiveRoot: string;
   includeWorkspace: boolean;
+  includeSessionTranscripts: boolean;
   onlyConfig: boolean;
   assets: BackupAsset[];
+  sessionTranscriptSnapshots: readonly SessionTranscriptSnapshot[];
   skipped: BackupCreateResult["skipped"];
   stateDir: string;
   configPath: string;
@@ -344,6 +525,7 @@ function buildManifest(params: {
     nodeVersion: process.version,
     options: {
       includeWorkspace: params.includeWorkspace,
+      includeSessionTranscripts: params.includeSessionTranscripts,
       onlyConfig: params.onlyConfig,
     },
     paths: {
@@ -357,6 +539,13 @@ function buildManifest(params: {
       sourcePath: asset.sourcePath,
       archivePath: asset.archivePath,
     })),
+    sessionTranscriptSnapshots:
+      params.sessionTranscriptSnapshots.length > 0
+        ? params.sessionTranscriptSnapshots.map((snapshot) => ({
+            sourcePath: snapshot.sourcePath,
+            archivePath: snapshot.archivePath,
+          }))
+        : undefined,
     skipped: params.skipped.map((entry) => ({
       kind: entry.kind,
       sourcePath: entry.sourcePath,
@@ -386,6 +575,13 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
     lines.push("Dry run only; archive was not written.");
   } else {
     lines.push(`Created ${result.archivePath}`);
+    if (result.sessionTranscriptSnapshotCount > 0) {
+      lines.push(
+        `Snapshotted ${result.sessionTranscriptSnapshotCount} active session transcript file${
+          result.sessionTranscriptSnapshotCount === 1 ? "" : "s"
+        } into the archive.`,
+      );
+    }
     if (result.skippedVolatileCount > 0) {
       lines.push(
         `Skipped ${result.skippedVolatileCount} volatile file${
@@ -404,10 +600,15 @@ function remapArchiveEntryPath(params: {
   entryPath: string;
   manifestPath: string;
   archiveRoot: string;
+  stagedArchivePathByPath?: ReadonlyMap<string, string>;
 }): string {
   const normalizedEntry = path.resolve(params.entryPath);
   if (normalizedEntry === params.manifestPath) {
     return path.posix.join(params.archiveRoot, "manifest.json");
+  }
+  const stagedArchivePath = params.stagedArchivePathByPath?.get(normalizedEntry);
+  if (stagedArchivePath) {
+    return stagedArchivePath;
   }
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
@@ -437,6 +638,7 @@ export async function createBackupArchive(
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+  const includeSessionTranscripts = !onlyConfig && Boolean(opts.includeSessionTranscripts);
   const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
   const outputPath = await resolveOutputPath({
     output: opts.output,
@@ -474,14 +676,22 @@ export async function createBackupArchive(
     archivePath: outputPath,
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
+    includeSessionTranscripts,
     onlyConfig,
     verified: false,
     assets: plan.included,
     skipped: plan.skipped,
     skippedVolatileCount: 0,
+    sessionTranscriptSnapshotCount: 0,
   };
 
   if (opts.dryRun) {
+    if (includeSessionTranscripts) {
+      const stateAsset = result.assets.find((asset) => asset.kind === "state");
+      result.sessionTranscriptSnapshotCount = (
+        await collectSessionTranscriptSourceFiles(stateAsset?.sourcePath ?? plan.stateDir)
+      ).length;
+    }
     return result;
   }
 
@@ -492,12 +702,30 @@ export async function createBackupArchive(
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
   try {
+    const tar = await loadTarRuntime();
+    const stateAsset = result.assets.find((asset) => asset.kind === "state");
+    const sessionTranscriptSnapshots = includeSessionTranscripts
+      ? await stageSessionTranscriptSnapshots({
+          stateDir: stateAsset?.sourcePath ?? plan.stateDir,
+          tempDir,
+          archiveRoot,
+        })
+      : [];
+    result.sessionTranscriptSnapshotCount = sessionTranscriptSnapshots.length;
+    const stagedArchivePathByPath = new Map(
+      sessionTranscriptSnapshots.map((snapshot) => [
+        path.resolve(snapshot.stagedPath),
+        snapshot.archivePath,
+      ]),
+    );
     const manifest = buildManifest({
       createdAt,
       archiveRoot,
       includeWorkspace,
+      includeSessionTranscripts,
       onlyConfig,
       assets: result.assets,
+      sessionTranscriptSnapshots,
       skipped: result.skipped,
       stateDir: plan.stateDir,
       configPath: plan.configPath,
@@ -506,8 +734,6 @@ export async function createBackupArchive(
     });
     await writeJson(manifestPath, manifest, { trailingNewline: true });
 
-    const tar = await loadTarRuntime();
-    const stateAsset = result.assets.find((asset) => asset.kind === "state");
     const extensionsFilter = stateAsset
       ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
       : undefined;
@@ -517,6 +743,9 @@ export async function createBackupArchive(
       // The manifest is staged in a tmp dir outside any state directory and
       // is always safe to include.
       if (path.resolve(entryPath) === manifestPath) {
+        return true;
+      }
+      if (stagedArchivePathByPath.has(path.resolve(entryPath))) {
         return true;
       }
       if (extensionsFilter && !extensionsFilter(entryPath)) {
@@ -548,10 +777,15 @@ export async function createBackupArchive(
                 entryPath: entry.path,
                 manifestPath,
                 archiveRoot,
+                stagedArchivePathByPath,
               });
             },
           },
-          [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+          [
+            manifestPath,
+            ...result.assets.map((asset) => asset.sourcePath),
+            ...sessionTranscriptSnapshots.map((snapshot) => snapshot.stagedPath),
+          ],
         );
       },
     });
