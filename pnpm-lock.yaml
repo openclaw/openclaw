@@ -113,6 +113,9 @@ importers:
       express:
         specifier: 5.2.1
         version: 5.2.1
+      file-type:
+        specifier: 22.0.1
+        version: 22.0.1
       glob:
         specifier: 13.0.6
         version: 13.0.6

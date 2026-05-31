@@ -1874,6 +1874,7 @@
     "diff": "9.0.0",
     "dotenv": "17.4.2",
     "express": "5.2.1",
+    "file-type": "22.0.1",
     "glob": "13.0.6",
     "grammy": "1.43.0",
     "highlight.js": "11.11.1",

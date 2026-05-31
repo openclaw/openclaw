@@ -144,6 +144,7 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        "file-type",
         "playwright-core",
         "sqlite-vec",
         "tree-sitter-bash",
