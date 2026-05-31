@@ -9,6 +9,7 @@ export type SecretInputModePromptCopy = {
   refHint?: string;
 };
 
+/** Resolves whether setup stores a plaintext secret or an external secret reference. */
 export async function resolveSecretInputModeForEnvSelection(params: {
   prompter: Pick<WizardPrompter, "select">;
   explicitMode?: SecretInputMode;
@@ -18,6 +19,8 @@ export async function resolveSecretInputModeForEnvSelection(params: {
     return params.explicitMode;
   }
   if (typeof params.prompter.select !== "function") {
+    // Non-interactive or minimal prompters cannot ask for a mode, so keep the
+    // historical plaintext path unless the caller supplied an explicit mode.
     return "plaintext";
   }
   const selected = await params.prompter.select<SecretInputMode>({
@@ -38,5 +41,7 @@ export async function resolveSecretInputModeForEnvSelection(params: {
       },
     ],
   });
+  // Treat unknown prompt return values as plaintext so custom prompt adapters
+  // cannot accidentally switch users into an unsupported secret-ref flow.
   return selected === "ref" ? "ref" : "plaintext";
 }
