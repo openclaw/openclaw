@@ -88,7 +88,8 @@ fun buildGatewayTlsConfig(
         }
         if (params.allowTOFU) {
           // Store only after the TLS stack presents a concrete server cert; the
-          // caller persists the fingerprint against the endpoint's stable id.
+          // caller persists the fingerprint against the endpoint's stable id,
+          // and later connects must come back through the pinned branch above.
           onStore?.invoke(fingerprint)
           return
         }
@@ -163,7 +164,8 @@ suspend fun probeGatewayTlsFingerprint(
           socket.sslParameters = params
         }
       } catch (_: Throwable) {
-        // ignore
+        // SNI is only a probe hint. IP literals and odd Bonjour names should
+        // still be probed instead of failing before the TLS handshake.
       }
 
       socket.startHandshake()
