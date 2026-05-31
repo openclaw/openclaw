@@ -1604,6 +1604,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let label: String?
     public let spawnedby: String?
     public let agentid: String?
+    public let projectid: String?
     public let search: String?
 
     public init(
@@ -1618,6 +1619,7 @@ public struct SessionsListParams: Codable, Sendable {
         label: String?,
         spawnedby: String?,
         agentid: String? = nil,
+        projectid: String?,
         search: String?)
     {
         self.limit = limit
@@ -1631,6 +1633,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.label = label
         self.spawnedby = spawnedby
         self.agentid = agentid
+        self.projectid = projectid
         self.search = search
     }
 
@@ -1646,6 +1649,7 @@ public struct SessionsListParams: Codable, Sendable {
         case label
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
+        case projectid = "projectId"
         case search
     }
 }
@@ -2060,6 +2064,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let label: String?
     public let model: String?
     public let parentsessionkey: String?
+    public let projectid: String?
     public let emitcommandhooks: Bool?
     public let task: String?
     public let message: String?
@@ -2070,6 +2075,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         label: String?,
         model: String?,
         parentsessionkey: String?,
+        projectid: String?,
         emitcommandhooks: Bool?,
         task: String?,
         message: String?)
@@ -2079,6 +2085,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.label = label
         self.model = model
         self.parentsessionkey = parentsessionkey
+        self.projectid = projectid
         self.emitcommandhooks = emitcommandhooks
         self.task = task
         self.message = message
@@ -2090,6 +2097,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case label
         case model
         case parentsessionkey = "parentSessionKey"
+        case projectid = "projectId"
         case emitcommandhooks = "emitCommandHooks"
         case task
         case message
@@ -2211,6 +2219,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let spawnedby: AnyCodable?
     public let spawnedworkspacedir: AnyCodable?
     public let spawnedcwd: AnyCodable?
+    public let projectid: AnyCodable?
     public let spawndepth: AnyCodable?
     public let subagentrole: AnyCodable?
     public let subagentcontrolscope: AnyCodable?
@@ -2238,6 +2247,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         spawnedby: AnyCodable?,
         spawnedworkspacedir: AnyCodable?,
         spawnedcwd: AnyCodable?,
+        projectid: AnyCodable?,
         spawndepth: AnyCodable?,
         subagentrole: AnyCodable?,
         subagentcontrolscope: AnyCodable?,
@@ -2264,6 +2274,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.spawnedby = spawnedby
         self.spawnedworkspacedir = spawnedworkspacedir
         self.spawnedcwd = spawnedcwd
+        self.projectid = projectid
         self.spawndepth = spawndepth
         self.subagentrole = subagentrole
         self.subagentcontrolscope = subagentcontrolscope
@@ -2292,6 +2303,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case spawnedby = "spawnedBy"
         case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawnedcwd = "spawnedCwd"
+        case projectid = "projectId"
         case spawndepth = "spawnDepth"
         case subagentrole = "subagentRole"
         case subagentcontrolscope = "subagentControlScope"
@@ -6671,6 +6683,328 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case ok
         case descriptors
+    }
+}
+
+public struct ProjectsListParams: Codable, Sendable {
+    public let includearchived: Bool?
+
+    public init(
+        includearchived: Bool?)
+    {
+        self.includearchived = includearchived
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case includearchived = "includeArchived"
+    }
+}
+
+public struct ProjectsGetParams: Codable, Sendable {
+    public let projectid: String
+    public let includesessions: Bool?
+    public let includecontextpreview: Bool?
+
+    public init(
+        projectid: String,
+        includesessions: Bool?,
+        includecontextpreview: Bool?)
+    {
+        self.projectid = projectid
+        self.includesessions = includesessions
+        self.includecontextpreview = includecontextpreview
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case includesessions = "includeSessions"
+        case includecontextpreview = "includeContextPreview"
+    }
+}
+
+public struct ProjectsCreateParams: Codable, Sendable {
+    public let name: String
+    public let description: String?
+    public let instructions: String?
+    public let memorymode: AnyCodable?
+    public let color: String?
+    public let emoji: String?
+
+    public init(
+        name: String,
+        description: String?,
+        instructions: String?,
+        memorymode: AnyCodable?,
+        color: String?,
+        emoji: String?)
+    {
+        self.name = name
+        self.description = description
+        self.instructions = instructions
+        self.memorymode = memorymode
+        self.color = color
+        self.emoji = emoji
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case instructions
+        case memorymode = "memoryMode"
+        case color
+        case emoji
+    }
+}
+
+public struct ProjectsUpdateParams: Codable, Sendable {
+    public let projectid: String
+    public let name: AnyCodable?
+    public let description: AnyCodable?
+    public let instructions: AnyCodable?
+    public let memorymode: AnyCodable?
+    public let color: AnyCodable?
+    public let emoji: AnyCodable?
+
+    public init(
+        projectid: String,
+        name: AnyCodable?,
+        description: AnyCodable?,
+        instructions: AnyCodable?,
+        memorymode: AnyCodable?,
+        color: AnyCodable?,
+        emoji: AnyCodable?)
+    {
+        self.projectid = projectid
+        self.name = name
+        self.description = description
+        self.instructions = instructions
+        self.memorymode = memorymode
+        self.color = color
+        self.emoji = emoji
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case name
+        case description
+        case instructions
+        case memorymode = "memoryMode"
+        case color
+        case emoji
+    }
+}
+
+public struct ProjectsDeleteParams: Codable, Sendable {
+    public let projectid: String
+
+    public init(
+        projectid: String)
+    {
+        self.projectid = projectid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+    }
+}
+
+public struct ProjectsRestoreParams: Codable, Sendable {
+    public let projectid: String
+
+    public init(
+        projectid: String)
+    {
+        self.projectid = projectid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+    }
+}
+
+public struct ProjectsResourcesListParams: Codable, Sendable {
+    public let projectid: String
+
+    public init(
+        projectid: String)
+    {
+        self.projectid = projectid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+    }
+}
+
+public struct ProjectsResourcesAddParams: Codable, Sendable {
+    public let projectid: String
+    public let name: String?
+    public let path: String?
+    public let content: String?
+
+    public init(
+        projectid: String,
+        name: String?,
+        path: String?,
+        content: String?)
+    {
+        self.projectid = projectid
+        self.name = name
+        self.path = path
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case name
+        case path
+        case content
+    }
+}
+
+public struct ProjectsResourcesUploadParams: Codable, Sendable {
+    public let projectid: String
+    public let name: String?
+    public let filename: String
+    public let mediatype: String?
+    public let contentbase64: String
+
+    public init(
+        projectid: String,
+        name: String?,
+        filename: String,
+        mediatype: String?,
+        contentbase64: String)
+    {
+        self.projectid = projectid
+        self.name = name
+        self.filename = filename
+        self.mediatype = mediatype
+        self.contentbase64 = contentbase64
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case name
+        case filename = "fileName"
+        case mediatype = "mediaType"
+        case contentbase64 = "contentBase64"
+    }
+}
+
+public struct ProjectsResourcesRemoveParams: Codable, Sendable {
+    public let projectid: String
+    public let resourceid: String
+
+    public init(
+        projectid: String,
+        resourceid: String)
+    {
+        self.projectid = projectid
+        self.resourceid = resourceid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case resourceid = "resourceId"
+    }
+}
+
+public struct ProjectsResourcesReindexParams: Codable, Sendable {
+    public let projectid: String
+    public let resourceid: String
+
+    public init(
+        projectid: String,
+        resourceid: String)
+    {
+        self.projectid = projectid
+        self.resourceid = resourceid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case resourceid = "resourceId"
+    }
+}
+
+public struct ProjectsSessionsListParams: Codable, Sendable {
+    public let projectid: String
+    public let limit: Int?
+
+    public init(
+        projectid: String,
+        limit: Int?)
+    {
+        self.projectid = projectid
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case limit
+    }
+}
+
+public struct ProjectsSessionsAttachParams: Codable, Sendable {
+    public let projectid: String
+    public let key: String
+
+    public init(
+        projectid: String,
+        key: String)
+    {
+        self.projectid = projectid
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case key
+    }
+}
+
+public struct ProjectsSessionsDetachParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct ProjectsContextPreviewParams: Codable, Sendable {
+    public let projectid: String
+    public let query: String?
+    public let maxchars: Int?
+    public let maxresources: Int?
+    public let includesessions: Bool?
+
+    public init(
+        projectid: String,
+        query: String?,
+        maxchars: Int?,
+        maxresources: Int?,
+        includesessions: Bool?)
+    {
+        self.projectid = projectid
+        self.query = query
+        self.maxchars = maxchars
+        self.maxresources = maxresources
+        self.includesessions = includesessions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectid = "projectId"
+        case query
+        case maxchars = "maxChars"
+        case maxresources = "maxResources"
+        case includesessions = "includeSessions"
     }
 }
 

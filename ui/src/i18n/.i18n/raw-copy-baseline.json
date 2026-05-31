@@ -4331,6 +4331,370 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Active Projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Archived Projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project status"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "/path/to/resource.md or .docx"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Optional resource name"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project instructions"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project name"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Purpose"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Quick note for this project"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Search projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Active Projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Add instructions or resources to build context."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Add instructions, upload a resource, or write a note."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Add Note"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Add Path"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Advanced: gateway-local file path"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Archive"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Archived Projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Chats"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Context"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Context Used Next"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Current chat attached"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Find project"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Hide this project without deleting its stored data."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Instructions"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Newest first"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Next context"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "No matching active projects."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "No matching archived projects."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Persistent guidance for chats in this project."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project Chats"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project chats with active instructions and resources."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project cockpit"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Project status, chats, and context will appear here."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Projects"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Reindex"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Remove"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Resources"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Restore"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Save"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Select a project."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Start a chat to use this project context."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Start Project Chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Truncated"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Upload Files"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Context ready"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Failed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Needs attention"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Needs context"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Ready"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/projects.ts",
+      "text": "Unsupported"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/ui/views/sessions.ts",
       "text": "Session filters"
     },
@@ -4557,6 +4921,7328 @@
       "name": "label",
       "path": "ui/src/ui/views/skills.ts",
       "text": "Ready"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "60 Hz runtime playtest canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Active game pieces"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add pieces to the level"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI approval steps"
+    },
+    {
+      "count": 3,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI Arcade Builder"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI Arcade Builder start"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI build path"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI change review"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI Gap Filler"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI helper"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI production team"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI provider"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI-first SNES game builder"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "All Things Map"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask AI about the game screen"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask AI to create or change the game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask AI to make or change the game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Before and after preview"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Beginner prompt ideas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Brush size"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build controls"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build game on canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build loop"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build this level"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build tools"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Canvas-first level builder"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Choose who helps"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex-supervised OpenClaw game team"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex-supervised OpenClaw production run"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Collision materials"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create a game from one prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create a SNES game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Critical button health"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Current project status"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Current test facts"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag sound cards to bind them"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag things into the game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Draggable game pieces"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Draggable sound library"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Draw the level"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Editable game objects"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Editable game plan"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Editor shelves"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Emulator proof run pack"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export SNES game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fast game creation steps"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "First 60 seconds after creating a game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game actions"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game Control Bar"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game health"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game world canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game, results, and next action"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Gateway agent session"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generated object groups"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Graphics Style"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Guided build steps"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hero in test scene. Click to edit, drag to move."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Inline AI preview for selected thing"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Kid Builder"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Latest AI result"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Layer edit mode"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Level canvas and editor"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Levels"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Levels as chapters"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live agent connection check"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make custom things"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make SNES game file"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Mode 1 level preview"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "More scene tools"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Move the hero"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next action on the canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next best step"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Object card groups"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw and Codex connection status"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pieces to drop"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Plain-language SNES word guide"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play loop"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play results"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play status"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play test game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playable controls"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playable game stage"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playable game test"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playable level canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playable level scene"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview selected area AI change"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Professional SNES workbench"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Prompt brush presets"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Quick AI targets"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Quick Create AI provider"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Quick selected area changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Recommended next steps"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Resize selected emulator area"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM Runtime Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Runtime milestone gates"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Selected emulator area"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Selected object editor"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Selected part editor"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Selected thing"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Selected thing editor"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Simple creation path"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Simple start actions"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES fit check"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES Game Builder modes"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES Studio AI team connector"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES Studio command palette"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES Studio guided workspace"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES Studio recovery"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound Desk"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound prompt shortcuts"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start creates a whole game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start guide"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Starter game ideas"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Starter ideas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Style palette"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test controls"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Things on the canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Things Shelf"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Three step beginner path"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tile brushes"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Try selected area prompts"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Try the game now"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Version History"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "What changed"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "What happens next"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "What just happened"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "/Volumes/FXPAKPRO"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ares, bsnes, mesen, snes9x"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Example: Create a rival drone enemy called Volt Warden that guards the hidden key."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Example: Make a robot mountain adventure with three levels, gems, a rival drone, a hidden key, and a big door at the end."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Example: Make a story-driven robot platformer with three levels, gems, a rival drone, hidden key, and mountain ending."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Example: Make this level reveal the hidden key through three safe jumps, one rival drone, and a gem trail."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "hero, key, boss, save..."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Advance the game forward for a short burst."
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click to edit. Drag to move."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click to edit. Drag to move. Ask AI or test after selecting."
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag to resize the selected area"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "1 Codex Architect"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "1 Review"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "1. Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "16x16"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "2 Approve"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "2 OpenClaw Game Team"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "2. What happened"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "3 Codex QA Gate"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "3 Edit"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "3 Steps"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "3. Change it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "60 Hz runtime playtest"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add an enemy, item, door, or goal."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Animation"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Custom Brush"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Cutscene"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Door"
+    },
+    {
+      "count": 5,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Enemy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Event"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Frame"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add game things"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Goal"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Guide"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Item"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Line"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add NPC"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Or Change Things"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add pieces"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add pieces or draw the level without opening a drawer."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Save Field"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add SFX"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add SFX Step"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Track"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Advanced AI stage"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "After"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Agent Details"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Aggro range"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI Arcade Builder"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI connection check"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI Creator"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI Details"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI Gap Filler"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI helper"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI makes the game plan"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI Production Team"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI repair"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "All AI Tools"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "All editable game sections have an audit trail and can be changed with OpenClaw."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "All Things"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "All things in this level"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "All Things Map"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Apply Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Apply Preview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Apply Sound Prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Approval"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Approve Patch"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask"
+    },
+    {
+      "count": 6,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask AI"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask AI About This"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask AI to Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask AI To Change Selection"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask Gateway"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask Gateway Agent"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask Live OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask one change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask OpenClaw to change this"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask. Play. Change."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Asset Pipeline"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Asset Pipeline Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Audio"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Audio ARAM"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Audio bytes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Auth"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Auto Run"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Auto-quantize high-color PNGs to one SNES 4bpp palette"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Automated E2E"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Available emulators"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Background tiles"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Background tracks"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Base address"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Before"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Beginner export stays simple. Expert hardware proof for the flash cart, save memory, SuperFX, budgets, and checksum remains in Advanced Studio."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Behavior"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Blank Game"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "blocked"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "blueprint and quality rubric"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Blueprint, rubric, risks."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Boss"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build a hardware-true LoROM platformer slice, keep SNES budgets visible, and prepare FXPAK PRO exports without risking SRAM data."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Console"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Level"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Levels"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Local Draft"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build On The Canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Pipeline"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Preview ROM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Preview SNES Game File"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build ROM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Scene"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build This Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build tools"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build With AI"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build With OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Bumps"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Cancel Preview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Card"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Card mounted"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Cast or thing prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "CGRAM remaining"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Challenge"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change any level, hero, enemy, item, or sound."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change It"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change it by typing above, dragging it in the game, or using these simple controls."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change Level With AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change Look With OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change One Thing"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change the original idea at any time. Codex writes the blueprint, OpenClaw fills the playable draft, and Codex reviews quality before export."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change the selected level with AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change With OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Check Area Trigger"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Check Opening Story"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Checkpoints and recent AI changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "CHR bytes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Clear Layer"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Clear Selection"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click · Drag · AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click a game piece to change it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click a glow to edit. Drag a glow to move it. Drag empty space to change an area."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click an enemy, item, level, sound, or story part first."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click Anything"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click squares to make ground."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click the hero, an enemy, an item, a door, a goal, or a sound. Then ask AI, drag it, or test it."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click the hero, an enemy, an item, a door, or a guide in the playable scene."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click the hero, enemy, item, door, or goal in the playtest."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click to add. Drag to place."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click To Edit"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Click, drag, prompt"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Clicked Thing"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Close"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex approved for playtest"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex Architect"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex blueprint ready"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex plans and reviews. OpenClaw fills the game."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex QA"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex Review Gate"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Collected"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Collision Paint"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Command"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Configure supported emulators before boot/screenshot validation."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Controller"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Cost-aware Auto Team"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create + Build Game File"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create + Build ROM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create editable SNES 4bpp sprite tiles and a metasprite entity from text."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create every story object with a prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create Game + Play opens the test."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create Game File"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create Game From Prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create Game Preview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create the whole game from one prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create the whole game or generate one editable component at a time with OpenClaw agents or Codex."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create Thing"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Critical button health"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ctrl+B"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ctrl+K"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ctrl+Shift+B"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Current project matches the latest snapshot."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "custom brush"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Custom brush name"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Custom brush tile"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Cutscene Timeline"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Cutscenes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Dashboard auth"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Deduped tiles"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Delete"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Describe"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Describe the game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Describe the game, then press Build My Game."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Describe, send, edit, play"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Destination"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Deterministic ROM path from project schema to FXPAK PRO deployment."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Dialogue and Cutscenes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "dialogue-runtime"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Diff Timeline"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Discard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Dismiss"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Download Emulator Run Script"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag a reward, enemy, door, or goal on the level."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag generated entities onto the grid, then refine them in the inspector."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag Into Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag or click to add things"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag sounds onto levels or actions. “Vocals” means vocal-like melodies, chants, leads, or sample-style ideas that fit SNES limits."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drag-select the screen and ask AI to add, remove, or change things."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Draw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Draw Ground"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Draw level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Draw Level With AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Draw with AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drop"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drop a thing onto the playable scene, or click to add it."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Drop PNG Tileset"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Dry run"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Duplicate"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Duplicate Frame"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Duplicate Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Duration"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Each level has a story purpose, setting, challenge, reward, and goal. Build a level with AI, then drag or prompt-tune it in Build & Play."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Each part has a prompt button and an edit button."
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit anything AI creates"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit Current Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit every frame, tile reference, offset, loop mode, and entity binding."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit Generated"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit pattern metadata before the production SPC700 driver lands."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit Prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Edit This"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Editable objects"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "emulator"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Emulator"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Emulator boot proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Emulator parity"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Emulator Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Enable SRAM save file"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "enemy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Enemy Behavior"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Entity kind"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Estimated bytes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Event Scripts"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Events"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Events and Logic"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Every AI or hand edit is undoable."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Every major action is labeled as verified, tested, or blocked."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Everything AI created"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Everything you can create and edit"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Expected state"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Expert details"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Expert Details"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Expert Studio"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Expert test details"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Build Manifest"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Codex Task"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Emulator Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Expert File Map"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Flash Cart Package"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export FXPAK Package"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Game File"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Hardware QA Bundle"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Later"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export My Game"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Playable Draft"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Project Bundle"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Project JSON"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Proof"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export QA Bundle"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export ROM Map"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Face Left"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Face Right"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fast changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fast sequence sketching for menus, pickups, and enemy feedback."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "fill every editable game part"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fill Gaps"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fill Ground"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fill Layer"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fill Missing Pieces"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Find"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Find by list"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "First 60 Seconds"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fix Build"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fix First"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fix This with AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fix With AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Follow these in order to get to hardware proof."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Four simple moves: ask, draw, drop, test."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Free bytes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Full SNES editor workbench"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "fxpak"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "FXPAK"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "FXPAK card"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "FXPAK Card Scanner"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "FXPAK Export"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "FXPAK path"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "FXPAK PRO card is mounted"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game file"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game idea"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game is running now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game Plan"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game Status"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Gateway"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Gateway session"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generate Enemy Sprite"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generate Entire Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generate Item Sprite"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generate NPC Sprite"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generate Player Sprite"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generated Object Audit"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generated Object Inspector"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Goal"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Graphics Style"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Gravity"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hardware Budgets"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Header checksum"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hero"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hero goal"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hold arrows or A/D to move. Space jumps. Enter runs. Esc pauses. R restarts."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Idea"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import 8px-aligned PNG pixel art directly into deduplicated SNES 4bpp CHR data. Transparent pixels become palette index 0; high-color art can be reduced into a safe 15-visible-color SNES palette before export."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import Agent Patch JSON"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import Art"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import height"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import Indexed Tileset"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import PNG Tileset"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import Project Document"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import project JSON or bundle"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import Result"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import returned OpenClaw/Codex patches without pasting JSON."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import Stream Patch"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Import width"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Imported CHR"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Imported tilesets"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Indexed pixels"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Install a supported emulator, run boot, and capture screenshot bytes."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Instrument"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Jump"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Jump height"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Jump velocity"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Keep it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Key"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Kid Builder"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Label"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "latest snapshot"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Left"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Left/right"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Let AI check the full game, then make the SNES game file"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Level Editor"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Levels"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Line"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Lines"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Link font, text box, and event-trigger renderer into the ROM."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Link production SPC700 driver and play generated tracker metadata."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live Agent Results"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live Agent Stream"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live AI team"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live AI Team Status"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live OpenClaw/Codex proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Look"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Loop animation"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Checkpoint"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make it playable"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make music, beats, vocal-like leads, and sound FX by prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make or change"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Playable"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make SNES Game File"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make the hero, villain, enemies, NPCs, items, powerups, doors, hazards, music ideas, or new level chapters. AI adds them to the shelf and the playtest."
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Things"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Max fall speed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Metasprite tiles"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "More drawing and object tools"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "More options"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Mount the 128 GB FAT32 FXPAK PRO card and hash copied ROM bytes."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Move Left"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Move one thing"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Move Right"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Move speed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Movement rule"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Music"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Music Tracker"
+    },
+    {
+      "count": 5,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Name"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Need help or checks?"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next Best Step"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next edit panels"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next moves"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next on the canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next prompt changes only"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Next Steps"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "No AI change yet"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "No blockers. Ready for deterministic build tooling."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "No chapters yet. Press Fill Missing Pieces or Build My Game."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "No current blockers. Keep testing after every big visual change."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "No returned agent patches are waiting."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "No streaming agent output is active."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "No thing selected yet"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "No-code triggers that connect items, enemies, flags, and cutscenes."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Note"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Now Playing"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "npc"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "One-Prompt Game Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Only this thing changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open / Import"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open advanced SNES tools, logs, budgets, and export proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open after AI creates the first draft"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open AI setup"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open Asset Tools"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open Build"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open choices"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open Export Details"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open for plain-English meanings. Hover any ? for quick help."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open Hardware Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open only when you want a list instead of the canvas"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open project file"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open Project File"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open when you want guided steps, SNES checks, or extra tools."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open, import, templates, and recovery"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw Agents"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw Game Team filled"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw is waiting for your first game idea."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw or Codex creates a safe editable draft."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw SNES Studio"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw workers"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw Workers"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "optional smoke opt-in"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Paint Danger"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Paint From Prompt"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Paint Level From Prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Paint the level from your prompt."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Paint Water"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Parts Shelf: everything you can change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Paste returned patch JSON"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Path"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Patrol end X"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Patrol start X"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pattern"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pattern rows"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pause"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Physics"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pick a game idea"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pick a part, prompt it, drag it where it belongs, edit it, or test it."
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pick Hero"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pick one, then click."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pick what AI changes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pick, move, ask AI, play."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pipeline checks"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Place"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Plan Emulator Fix with AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Plan Flash Cart Fix with AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Plan Live Agent Proof with AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Plan Save Fix with AI"
+    },
+    {
+      "count": 5,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play & Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play Again"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play from this scene now."
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play it, point at it, ask OpenClaw to change it."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play Now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play Results"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play Test"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play with keys or buttons. Click a thing to edit it, or drag an empty rectangle on the emulator and ask AI to add, remove, or change whatever is inside it."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playable"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playable Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "player"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Player Physics"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playtest"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playtest Now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Portable project bundle readiness for backup, review, and handoff."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Power-cycle hardware and compare pre/post .srm slot values."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Premise"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preserve existing FXPAK saves"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preserve saves"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview Agent Patch"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview Area Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview before apply"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview dialogue timing, triggers, and event links before ROM text runtime."
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview First"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview or advanced AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview ROM unavailable"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview Sound Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview the audio manifest and ARAM budget before a playback driver lands."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview Timeline"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Previews hardware-safe JSON patches for OpenClaw and Codex style assistance. Approved changes save a local snapshot first."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Previous Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Priority"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Professional AI details"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Professional sound details"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Profile"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Project"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Project Kit"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Project name"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Project Package QA"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Project Safety"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Prompt every game part, then edit it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Prompt Sprite Generator"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Provider"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Queued OpenClaw/Codex tasks"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Queued tasks"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Quick Start"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Readiness"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ready"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Recent"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Recent test notes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Record the mounted FAT32 card profile before export."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Recover Project"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Recovery"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Redo"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Refresh"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Remove"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Remove Animation"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Remove Frame"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Remove Level"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Remove SFX"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Remove Step"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Remove Track"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Rename"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Repair missing parts, build a SNES game file, then edit anything."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Replay parity"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Replay proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Required surfaces"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Reset Starter"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Reset Test"
+    },
+    {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Restart"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Restore a safe project state"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Restore a safe project state from a snapshot or saved version."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Restore Latest Version"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Restore Snapshot"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Returned patches"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Review Before Apply"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Review it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "review, corrections, approval"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Reward"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Rewards and risk"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Right"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM base filename"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM copy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM file"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM Manifest"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM path"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM Runtime Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Run Audio Preview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Run Local Agent"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Run Local Agent Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Run local proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Run Right"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Run script"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Run Sound Preview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Run speed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Runtime Completion Gates"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Runtime milestone gates"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Samples"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Save / recover"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Save bytes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Save Memory Simulator"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Save path"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Save slots"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Scene width"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Scenes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Score"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Scores and approves before export."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Screenshot"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Screenshot diff"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "See the hero move and watch what changed."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Select a game thing to change it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Selected Thing"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Send it to AI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Send to Gateway Agent"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SFX"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SFX name"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Show It Working"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Simulate Save Load"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Slot size"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Slots"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Small"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Snapshot"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES 4bpp import, dedupe, palette, VRAM, and CGRAM safety checks."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES Fit Check"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Solid collision brush"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound Desk"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound Effects"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound FX"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Source"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SPC700 driver"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SPC700 Sound Test"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SPC700 status"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "spc700-runtime"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Speaker"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Speed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sprite Animations"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sprite OAM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sprite prompt"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sprite tiles"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sprites and Entities"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "sram"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SRAM"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SRAM copy"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SRAM image"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SRAM path"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SRAM Save Simulator"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SRAM Serialization Proof"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start Blank"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start fast, then edit everything."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start from nothing, generate the full game or one component at a time, and jump straight into the editor for each generated result."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start Here"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start Playtest"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start Test"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start with one side-scrolling platformer. Codex plans and reviews; OpenClaw fills the game, then the emulator-like canvas becomes the editor."
+    },
+    {
+      "count": 5,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Status"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Story"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Story checks"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Story, levels, cast, playtest basics, save memory, and export plan are present."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Story, levels, cast, rules, music idea, save plan."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Story, levels, cast, rules."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "superfx"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SuperFX"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Surface"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Switch shelves only when you want sound, story, rules, or export setup."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sync Stream"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Target"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Target ID"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tell AI exactly what should feel better."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tell AI how to change it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tell AI what to change on this one thing, then preview or play it."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Template details"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Templates"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tempo"
+    },
+    {
+      "count": 3,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test From Here"
+    },
+    {
+      "count": 6,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test Game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test instantly."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test it"
+    },
+    {
+      "count": 5,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test Now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test the game now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test This Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Text Generator"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "The emulator-like canvas moves immediately."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "The whole game AI made from your prompt"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Then you can prompt only that thing, drag it, duplicate it, or tune simple controls."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "These cards explain the test and let you change the exact game part."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Things"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Things Shelf"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "This is the Book Publisher-style plan for the game: story, hero goal, enemy, ending, levels, rewards, music mood, and the plain rules that make it playable."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "This keeps the game friendly to real Super Nintendo limits while you build."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Three obvious steps for making a working SNES game without knowing SNES terms."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ticks"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tile index"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tile Paint"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tiles and Palettes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tileset name"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "timeline"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Total save bytes"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Track name"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tracks the pieces that still need real emulator, FXPAK, or SNES runtime proof."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tracks whether a single prompt produced every editable game component."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Trigger"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Try asking"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Try it immediately"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Try it now"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Type"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Type one idea. Codex creates the blueprint, OpenClaw fills the game, Codex checks it, and you get a playable side-scrolling game you can change by clicking the emulator."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Type one line or tap a starter idea."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Type one story prompt and press Build With OpenClaw."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Type what you want. SNES Studio makes it editable, playable, and exportable."
+    },
+    {
+      "count": 11,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Undo"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Undo Last Change"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "undo stack"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Unique tiles"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Up/down"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use a starter idea or type your own."
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use Instant Draft"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use snapshots, undo history, or version history when a prompt or edit goes the wrong way."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use the big Create button."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use the canvas first. Add, move, ask AI, then play."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use the emulator as the editor"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use the prompt above, then test and edit anything on the canvas."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use this list when you want to find something by name. The canvas is still the fastest way to change level pieces."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Use This Look"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Used by Send to Gateway Agent."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "v0.1 vertical slice"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Validate Build"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Validate SNES Game File"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Verify Copy Dry Run"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "version history"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Version History"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Versioned header, slot layout, field offsets, and image validation."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Versions"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Villain and ending"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Visible proof status before game-file or hardware claims."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Volume"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Volume path"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Volume scan"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "VRAM remaining"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Walk through the game like chapters"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "warning"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Watch OpenClaw/Codex streaming chunks and auto-import final patches."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "What changed"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "What Changed"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "What game do you want to make?"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "What Just Happened"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "What to try next"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Who helps?"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Whole game"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Why this matters on real SNES"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Words explained"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Working"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "World"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Write the whole game idea."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Write, read, validate, and compare a local save slot before hardware proof."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "X"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "X offset"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Y"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Y offset"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "You are here"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "You play it"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "You point and prompt"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Coins"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Enemy"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Add Key"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "All"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask Gateway Agent prompts"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Audio"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "bank"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Beats / Drums"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build Levels"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Build/export actions"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Cave"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "CGRAM"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Characters"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "checksum"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Clicked Thing"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Colors"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Controller input"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create Game File"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Create Game with OpenClaw/Codex"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Danger"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Door"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Enemies"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Enemy"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Enemy/item/NPC OAM"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Erase"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Export Setup"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Fix & Play"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "flash cart"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Focused Create & Edit prompts"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Forest"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Forest adventure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Game Plan"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Generated entity drag/drop"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ground"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Guide"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hardware"
+    },
+    {
+      "count": 5,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hero"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Idea"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Item"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Items"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Lava"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Lead Melody"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Level art memory"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Level Canvas"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "level square"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Levels"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "LoROM"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Danger"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Easier"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Gap"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Ground"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Make Things"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Mode 1"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Mode 1 upload order"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Moving things"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Multi-level table"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Music"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OAM"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "palette"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pieces"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play & Change"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Player physics"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Player sprite OAM"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Prompt brush presets"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Real emulator and flash cart actions"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Remove Things"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Robot mountain adventure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "ROM asset upload loop"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Rules"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Rules & Goals"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "save memory"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Save Points"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Saves"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Selected emulator area"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sky"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sky robots"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SNES game file"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound & Saves"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound Effects"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Space rescue"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SPC700"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Spooky forest coin quest"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "sprite"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "sprite size"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SRAM header bootstrap"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Start"
+    },
+    {
+      "count": 6,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Story"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Story Text"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "SuperFX"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test Game controls"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "This Level"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tile/collision layers"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tower"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Underwater rescue"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "VRAM"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Water"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "where the player bumps"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Where the player bumps"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Whole Game"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI change applied"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI could not fill gaps"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI could not finish"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI could not make the game"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "AI is building it"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Area selected"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ask AI"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Asking live agent"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Auto run finished"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Background Music"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Beats / Drums"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Change from Play"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Checking automatically"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Checking Codex-supervised OpenClaw route"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Checking live agent"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Checking live AI production route"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Checking live OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Checking live OpenClaw setup"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Checking local agent"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex and OpenClaw are making your game"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Codex-supervised OpenClaw route verified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Dashboard Gateway ready"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Enemy defeated"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Gateway accepted, no patch yet"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Gateway accepted, result return not complete"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Gateway production route not verified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Gateway route accepted"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Goal reached"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Graphics style updated"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hero jumped"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hero landed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Hero lost"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Instant"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Instant builder"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Level rebuilt"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Level switched"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live agent"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live agent failed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live agent needs setup"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live agent preview ready"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live agent proof failed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live agent proof passed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live AI production needs setup"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live OpenClaw runtime unavailable"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live OpenClaw unavailable"
+    },
+    {
+      "count": 3,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live OpenClaw workers need setup"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live play started at 60 Hz"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live production route failed"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Live production route verified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Local agent proof failed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Local agent proof passed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Local AI path verified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Melody / Vocal-like Lead"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Move"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Open through Dashboard"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw accepted the prompt"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw AI change ready"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "OpenClaw AI needs setup"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Pick"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Picked up a reward"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Play"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playtest paused"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Playtest restarted"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preparing live AI production route"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview canceled"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Preview ready"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Ready to test"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Selected thing changed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Sound FX"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Story or rule event checked"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tell AI what to make"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Tell AI what to make first"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test reset"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Test started"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "The hero bumped something"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "The hero lost"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "Waiting for editable preview"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/ui/views/snes-studio.ts",
+      "text": "You reached the goal"
     },
     {
       "count": 1,
