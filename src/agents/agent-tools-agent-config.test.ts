@@ -143,7 +143,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).toContain("write");
     expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("apply_patch");
+    expect(toolNames).toContain("apply_patch");
   });
 
   it("should keep global tool policy when agent only sets tools.elevated", () => {
@@ -687,7 +687,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("browser");
     expect(toolNames).not.toContain("exec");
     expect(toolNames).not.toContain("process");
-    expect(toolNames).not.toContain("apply_patch");
+    expect(toolNames).toContain("apply_patch");
   });
 
   it("should work with sandbox tools filtering", () => {
