@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -113,6 +114,7 @@ describe("timeout-triggered compaction", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    resetAgentEventsForTest();
   });
 
   it("attempts compaction when LLM times out with high prompt token usage (>65%)", async () => {
@@ -298,6 +300,9 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("points idle-timeout errors at provider timeout and the agent runtime ceiling", async () => {
+    const localAgentEvent = vi.fn();
+    const busEvent = vi.fn();
+    const stopBus = onAgentEvent(busEvent);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -308,13 +313,72 @@ describe("timeout-triggered compaction", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent(overflowBaseRunParams);
+    try {
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        onAgentEvent: localAgentEvent,
+        runId: "run-idle-timeout-error",
+      });
 
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
+      expect(mockedCompactDirect).not.toHaveBeenCalled();
+      expect(result.payloads?.[0]?.isError).toBe(true);
+      expect(result.payloads?.[0]?.text).toContain("models.providers.<id>.timeoutSeconds");
+      expect(result.payloads?.[0]?.text).toContain("agents.defaults.timeoutSeconds");
+      expect(result.payloads?.[0]?.text).toContain("provider timeouts cannot extend");
+      expect(localAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "assistant",
+          data: expect.objectContaining({
+            isError: true,
+            text: expect.stringContaining("models.providers.<id>.timeoutSeconds"),
+          }),
+        }),
+      );
+      expect(busEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-idle-timeout-error",
+          stream: "assistant",
+          data: expect.objectContaining({
+            isError: true,
+            text: expect.stringContaining("models.providers.<id>.timeoutSeconds"),
+          }),
+        }),
+      );
+      expect(localAgentEvent.mock.calls[0]?.[0].data).not.toHaveProperty("delta");
+      expect(busEvent.mock.calls[0]?.[0].data).not.toHaveProperty("delta");
+    } finally {
+      stopBus();
+    }
+  });
+
+  it("returns terminal idle-timeout errors when local event observers reject", async () => {
+    const onAgentEvent = vi.fn(async () => {
+      throw new Error("observer failed");
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        idleTimedOut: true,
+        lastAssistant: {
+          usage: { input: 20000 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      onAgentEvent,
+      runId: "run-idle-timeout-observer-error",
+    });
+
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("models.providers.<id>.timeoutSeconds");
-    expect(result.payloads?.[0]?.text).toContain("agents.defaults.timeoutSeconds");
-    expect(result.payloads?.[0]?.text).toContain("provider timeouts cannot extend");
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "assistant",
+        data: expect.objectContaining({ isError: true }),
+      }),
+    );
   });
 
   it("retries one silent idle timeout before surfacing an error", async () => {

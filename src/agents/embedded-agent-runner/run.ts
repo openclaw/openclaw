@@ -11,7 +11,7 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { emitAgentEvent, emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -210,6 +210,36 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function emitTerminalErrorAssistantText(params: {
+  onAgentEvent?: RunEmbeddedAgentParams["onAgentEvent"];
+  runId: string;
+  sessionKey?: string;
+  text: string;
+}): void {
+  const text = params.text.trim();
+  if (!text) {
+    return;
+  }
+  const event = {
+    stream: "assistant",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    data: {
+      text,
+      isError: true,
+    },
+  } as const;
+  emitAgentEvent({
+    runId: params.runId,
+    ...event,
+  });
+  try {
+    const maybeDelivered = params.onAgentEvent?.(event);
+    void Promise.resolve(maybeDelivered).catch(() => undefined);
+  } catch {
+    // Event observers are best-effort; never hide the terminal error payload.
+  }
+}
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -486,7 +516,10 @@ export async function runEmbeddedAgent(
       },
       laneTaskTimeoutMs,
     );
-  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+  const enqueueGlobal = <T>(
+    task: () => Promise<T>,
+    opts?: CommandQueueEnqueueOptions,
+  ): Promise<T> => {
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
@@ -495,7 +528,10 @@ export async function runEmbeddedAgent(
       ? params.enqueue(task, withLaneTimeout(globalOpts))
       : enqueueCommandInLane(globalLane, task, withLaneTimeout(globalOpts));
   };
-  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+  const enqueueSession = <T>(
+    task: () => Promise<T>,
+    opts?: CommandQueueEnqueueOptions,
+  ): Promise<T> => {
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
     return params.enqueue
       ? params.enqueue(task, sessionOpts)
@@ -3017,6 +3053,12 @@ export async function runEmbeddedAgent(
               timeoutPhase,
               providerStarted,
             });
+            emitTerminalErrorAssistantText({
+              onAgentEvent: params.onAgentEvent,
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              text: timeoutText,
+            });
             return {
               payloads: [
                 ...(hasPartialAssistantTextAfterPromptTimeout ? [] : payloadsWithToolMedia || []),
@@ -3265,6 +3307,12 @@ export async function runEmbeddedAgent(
               replayInvalid,
               livenessState,
             });
+            emitTerminalErrorAssistantText({
+              onAgentEvent: params.onAgentEvent,
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              text: STRICT_AGENTIC_BLOCKED_TEXT,
+            });
             return {
               payloads: [
                 {
@@ -3298,19 +3346,24 @@ export async function runEmbeddedAgent(
             };
           }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
-            const replayInvalid = resolveReplayInvalidForAttempt(
-              "⚠️ Agent couldn't generate a response. Please try again.",
-            );
+            const terminalText = "⚠️ Agent couldn't generate a response. Please try again.";
+            const replayInvalid = resolveReplayInvalidForAttempt(terminalText);
             const livenessState = resolveRunLivenessState({
               payloadCount: 0,
               aborted,
               timedOut,
               attempt,
-              incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
+              incompleteTurnText: terminalText,
             });
             attempt.setTerminalLifecycleMeta?.({
               replayInvalid,
               livenessState,
+            });
+            emitTerminalErrorAssistantText({
+              onAgentEvent: params.onAgentEvent,
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              text: terminalText,
             });
             if (lastProfileId) {
               await maybeMarkAuthProfileFailure({
@@ -3321,7 +3374,7 @@ export async function runEmbeddedAgent(
             return {
               payloads: [
                 {
-                  text: "⚠️ Agent couldn't generate a response. Please try again.",
+                  text: terminalText,
                   isError: true,
                 },
               ],
@@ -3414,6 +3467,12 @@ export async function runEmbeddedAgent(
             attempt.setTerminalLifecycleMeta?.({
               replayInvalid,
               livenessState,
+            });
+            emitTerminalErrorAssistantText({
+              onAgentEvent: params.onAgentEvent,
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              text: incompleteTurnText,
             });
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
             const replayMetadata = resolveAttemptReplayMetadata(attempt);

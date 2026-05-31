@@ -1,0 +1,84 @@
+{
+  "source": "xinflo chat.completions stream, sanitized from live probe",
+  "capturedAt": "2026-05-27T15:11:22.756Z",
+  "request": {
+    "model": "openai/gpt-5.5",
+    "stream": true,
+    "max_tokens": 64,
+    "reasoning_effort": "high",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a concise assistant. Always produce a visible final answer."
+      },
+      {
+        "role": "user",
+        "content": "只回复 OK"
+      }
+    ]
+  },
+  "chunks": [
+    {
+      "choices": [
+        {
+          "delta": {
+            "role": "assistant"
+          },
+          "finish_reason": null,
+          "index": 0
+        }
+      ],
+      "created": 1779890000,
+      "id": "chatcmpl-xinflo-snapshot",
+      "model": "openai/gpt-5.5",
+      "object": "chat.completion.chunk"
+    },
+    {
+      "choices": [
+        {
+          "delta": {
+            "content": "OK"
+          },
+          "finish_reason": null,
+          "index": 0
+        }
+      ],
+      "created": 1779890000,
+      "id": "chatcmpl-xinflo-snapshot",
+      "model": "openai/gpt-5.5",
+      "object": "chat.completion.chunk"
+    },
+    {
+      "choices": [
+        {
+          "delta": {},
+          "finish_reason": "stop",
+          "index": 0
+        }
+      ],
+      "created": 1779890000,
+      "id": "chatcmpl-xinflo-snapshot",
+      "model": "openai/gpt-5.5",
+      "object": "chat.completion.chunk",
+      "usage": {
+        "completion_tokens": 17,
+        "completion_tokens_details": {
+          "reasoning_tokens": 10
+        },
+        "input_tokens": 26,
+        "input_tokens_details": {
+          "cached_tokens": 0
+        },
+        "output_tokens": 17,
+        "output_tokens_details": {
+          "reasoning_tokens": 10
+        },
+        "prompt_tokens": 26,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 43
+      }
+    }
+  ]
+}
