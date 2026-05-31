@@ -2809,7 +2809,8 @@ async function processOpenAICompletionsStream(
   flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   const hasVisibleText = output.content.some(
-    (block) => block.type === "text" && block.text.trim().length > 0,
+    (block) =>
+      block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,
   );
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
