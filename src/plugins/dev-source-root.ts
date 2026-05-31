@@ -7,8 +7,13 @@ export const OPENCLAW_DEV_SOURCE_ROOT_ENV = "OPENCLAW_DEV_SOURCE_ROOT";
 
 function readPackageName(packageJsonPath: string): string | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as { name?: unknown };
-    return typeof parsed.name === "string" ? parsed.name : null;
+    const parsed: unknown = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+    return parsed &&
+      typeof parsed === "object" &&
+      "name" in parsed &&
+      typeof parsed.name === "string"
+      ? parsed.name
+      : null;
   } catch {
     return null;
   }

@@ -32,6 +32,7 @@ export const clamp = clampNumber;
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON parsing helper lets callers ascribe the expected payload type.
 export function safeParseJson<T>(raw: string): T | null {
   try {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- JSON parsing helper lets callers ascribe the expected payload type.
     return JSON.parse(raw) as T;
   } catch {
     return null;
