@@ -526,7 +526,10 @@ export function mergeAuthProfileStores(
         Object.entries(mergedOrder)
           .map(([provider, profileIds]) => [
             provider,
-            profileIds.filter((profileId) => profiles[profileId]),
+            profileIds.filter(
+              (profileId) =>
+                profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
+            ),
           ])
           .filter(([, profileIds]) => profileIds.length > 0),
       )

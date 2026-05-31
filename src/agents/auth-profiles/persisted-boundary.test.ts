@@ -203,6 +203,36 @@ describe("persisted auth profile boundary", () => {
     expect(merged.lastGood?.anthropic).toBe(profileId);
   });
 
+  it("preserves config-only order fallbacks during agent-store merges", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+        order: {
+          openai: ["openai:aws-sdk"],
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:new-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "new-access",
+            refresh: "new-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          openai: ["openai:new-login", "openai:aws-sdk"],
+        },
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(merged.order?.openai).toEqual(["openai:new-login", "openai:aws-sdk"]);
+  });
+
   it("preserves inherited base runtime external profiles during agent-store merges", () => {
     const profileId = "anthropic:claude-cli";
     const merged = mergeAuthProfileStores(
