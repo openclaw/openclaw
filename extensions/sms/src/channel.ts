@@ -254,6 +254,20 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
       },
     },
     status: {
+      buildAccountSnapshot: ({ account, runtime }) => ({
+        accountId: account.accountId,
+        name: account.fromNumber || account.messagingServiceSid || "SMS",
+        enabled: account.enabled,
+        configured: isSmsAccountConfigured(account),
+        running: runtime?.running ?? false,
+        lastStartAt: runtime?.lastStartAt ?? null,
+        lastStopAt: runtime?.lastStopAt ?? null,
+        lastError: runtime?.lastError ?? null,
+        dmPolicy: account.dmPolicy,
+        allowFrom: account.allowFrom,
+        webhookPath: account.webhookPath,
+        webhookUrl: account.publicWebhookUrl,
+      }),
       buildCapabilitiesDiagnostics: async ({ account }) => ({
         lines: collectSmsStartupWarnings(account).map((text) => ({ text, tone: "warn" })),
       }),

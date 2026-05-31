@@ -357,7 +357,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      channel: "sms",
+      channel: "definitely-not-a-channel",
       idempotencyKey: "idem-agent-bad-channel",
     });
     expect(res.ok).toBe(false);
