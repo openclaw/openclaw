@@ -512,7 +512,7 @@ export async function disableTailscaleServe(exec: typeof runExec = runExec, serv
   await execWithSudoFallback(
     exec,
     tailscaleBin,
-    serviceName ? ["serve", `--service=${serviceName}`, "off"] : ["serve", "reset"],
+    serviceName ? ["serve", "clear", serviceName] : ["serve", "reset"],
     {
       maxBuffer: 200_000,
       timeoutMs: 15_000,

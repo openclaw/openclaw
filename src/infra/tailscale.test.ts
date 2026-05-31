@@ -242,7 +242,7 @@ describe("tailscale helpers", () => {
     await disableTailscaleServe(exec as never, "svc:openclaw");
 
     expect(exec).toHaveBeenCalledTimes(1);
-    expectExecCall(exec, 1, tailscaleBin, ["serve", "--service=svc:openclaw", "off"], {
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "clear", "svc:openclaw"], {
       maxBuffer: 200_000,
       timeoutMs: 15_000,
     });
