@@ -28,7 +28,7 @@ function run(command, args) {
 function workflowFiles() {
   return readdirSync(WORKFLOW_DIR)
     .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
-    .sort()
+    .toSorted()
     .map((file) => join(WORKFLOW_DIR, file));
 }
 
