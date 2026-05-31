@@ -2263,6 +2263,50 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.params?.pollOption).toEqual(["Yes", "No"]);
   });
 
+  it("strips internal-runtime-context blocks from quote text before dispatch", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: "Visible",
+        quoteText: `Quoted\n${internalContext}`,
+      },
+    });
+
+    expect(call?.params?.quoteText).toBe("Quoted");
+  });
+
+  it("parses and sanitizes stringified presentation and interactive payloads before dispatch", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        message: "Visible",
+        presentation: JSON.stringify({
+          title: `Presentation\n${internalContext}`,
+          blocks: [{ type: "text", text: `Block\n${internalContext}` }],
+        }),
+        interactive: JSON.stringify({
+          blocks: [{ type: "text", text: `Legacy\n${internalContext}` }],
+        }),
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "Presentation",
+      blocks: [{ type: "text", text: "Block" }],
+    });
+    expect(call?.params?.interactive).toEqual({
+      blocks: [{ type: "text", text: "Legacy" }],
+    });
+  });
+
   it("suppresses pure internal-runtime-context sends before generic raw-params logging can see original args", async () => {
     const { call, result } = await executeSendWithResult({
       action: {

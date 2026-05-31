@@ -31,6 +31,10 @@ import {
   getBootEchoContextForSession,
   stripBootEchoFromOutboundText,
 } from "../../gateway/boot-echo-guard.js";
+import {
+  parseInteractiveParam,
+  parseJsonMessageParam,
+} from "../../infra/outbound/message-action-params.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
@@ -1115,7 +1119,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       //    substantial chunk of the boot prompt content. Refs #53732.
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayload = false;
-      for (const field of ["text", "content", "message", "caption", "SendMessage"]) {
+      parseJsonMessageParam(params, "presentation");
+      parseInteractiveParam(params);
+      for (const field of [
+        "text",
+        "content",
+        "message",
+        "caption",
+        "SendMessage",
+        "quoteText",
+        "quote_text",
+      ]) {
         suppressedVisiblePayload =
           sanitizeStringParam(params, field, bootPromptForSession) || suppressedVisiblePayload;
       }
@@ -1133,6 +1147,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       );
       params.presentation = sanitizedPresentation.value;
       suppressedVisiblePayload ||= sanitizedPresentation.suppressed;
+      const sanitizedInteractive = sanitizePresentationTextFieldsResult(
+        params.interactive,
+        bootPromptForSession,
+      );
+      params.interactive = sanitizedInteractive.value;
+      suppressedVisiblePayload ||= sanitizedInteractive.suppressed;
 
       const action = readStringParam(params, "action", {
         required: true,
