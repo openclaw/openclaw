@@ -9,6 +9,7 @@ function hasListEntries(value: string[] | undefined): boolean {
   return Array.isArray(value) && value.length > 0;
 }
 
+/** Reports whether config can change plugin command visibility in root help. */
 export function hasPluginHelpAffectingConfig(config: OpenClawConfig | null | undefined): boolean {
   const plugins = config?.plugins;
   if (!plugins) {
@@ -25,12 +26,14 @@ export function hasPluginHelpAffectingConfig(config: OpenClawConfig | null | und
   );
 }
 
+/** Reports whether environment overrides can change plugin command visibility in root help. */
 export function hasPluginHelpAffectingEnv(env: NodeJS.ProcessEnv): boolean {
   return Boolean(
     env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() || env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim(),
   );
 }
 
+/** Loads live config for root help only when plugin config/env can affect rendered commands. */
 export async function loadRootHelpRenderOptionsForConfigSensitivePlugins(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RootHelpRenderOptions | null> {
@@ -40,6 +43,7 @@ export async function loadRootHelpRenderOptionsForConfigSensitivePlugins(
     skipPluginValidation: true,
   });
   if (!snapshot.valid) {
+    // Invalid config falls back to precomputed static help so `openclaw --help` remains cheap.
     return null;
   }
   if (!hasPluginHelpAffectingEnv(env) && !hasPluginHelpAffectingConfig(snapshot.sourceConfig)) {
