@@ -1120,7 +1120,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ["stale_thread_binding", "thread not found: <codex-thread-id>"],
     ["missing_thread_binding", "no thread binding for session"],
   ])(
-    "continues after recoverable native harness %s failure during preflight compaction",
+    "fails required preflight compaction after native harness %s failure",
     async (failureReason, reason) => {
       const sessionFile = path.join(rootDir, "session.jsonl");
       await fs.writeFile(
@@ -1151,30 +1151,31 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
 
-      const entry = await runPreflightCompactionIfNeeded({
-        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-        followupRun: createTestFollowupRun({
-          sessionId: "session",
-          sessionFile,
+      await expect(
+        runPreflightCompactionIfNeeded({
+          cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+          followupRun: createTestFollowupRun({
+            sessionId: "session",
+            sessionFile,
+            sessionKey: "agent:main:telegram:group:redacted",
+          }),
+          defaultModel: "anthropic/claude-opus-4-6",
+          agentCfgContextTokens: 100,
+          sessionEntry,
+          sessionStore,
           sessionKey: "agent:main:telegram:group:redacted",
+          storePath: path.join(rootDir, "sessions.json"),
+          isHeartbeat: false,
+          replyOperation: createReplyOperation(),
         }),
-        defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 100,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:telegram:group:redacted",
-        storePath: path.join(rootDir, "sessions.json"),
-        isHeartbeat: false,
-        replyOperation: createReplyOperation(),
-      });
+      ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
 
-      expect(entry).toBe(sessionEntry);
       expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
       expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     },
   );
 
-  it("continues after an unstructured thread-not-found preflight compaction failure", async () => {
+  it("fails required preflight compaction after an unstructured thread-not-found failure", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -1203,24 +1204,27 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
 
-    const entry = await runPreflightCompactionIfNeeded({
-      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionFile,
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:telegram:group:redacted",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100,
+        sessionEntry,
+        sessionStore,
         sessionKey: "agent:main:telegram:group:redacted",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
       }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100,
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:telegram:group:redacted",
-      storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
+    ).rejects.toThrow(
+      "Preflight compaction required but failed: thread not found: <codex-thread-id>",
+    );
 
-    expect(entry).toBe(sessionEntry);
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });

@@ -8,7 +8,6 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { isRecoverableNativeHarnessBindingFailure } from "../../agents/harness/compaction-recovery.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -904,12 +903,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       return entry ?? params.sessionEntry;
     }
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-    if (isRecoverableNativeHarnessBindingFailure(result)) {
-      logVerbose(
-        `preflightCompaction continuing after recoverable native harness binding failure: sessionKey=${params.sessionKey} reason=${reason}`,
-      );
-      return entry ?? params.sessionEntry;
-    }
     throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 
