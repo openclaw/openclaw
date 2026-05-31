@@ -1116,13 +1116,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayload = false;
       for (const field of ["text", "content", "message", "caption", "SendMessage"]) {
-        suppressedVisiblePayload ||= sanitizeStringParam(params, field, bootPromptForSession);
+        suppressedVisiblePayload =
+          sanitizeStringParam(params, field, bootPromptForSession) || suppressedVisiblePayload;
       }
       for (const field of ["pollQuestion", "poll_question"]) {
-        suppressedVisiblePayload ||= sanitizeStringParam(params, field, bootPromptForSession);
+        suppressedVisiblePayload =
+          sanitizeStringParam(params, field, bootPromptForSession) || suppressedVisiblePayload;
       }
       for (const field of ["pollOption", "poll_option"]) {
-        suppressedVisiblePayload ||= sanitizeStringArrayParam(params, field, bootPromptForSession);
+        suppressedVisiblePayload =
+          sanitizeStringArrayParam(params, field, bootPromptForSession) || suppressedVisiblePayload;
       }
       const sanitizedPresentation = sanitizePresentationTextFieldsResult(
         params.presentation,

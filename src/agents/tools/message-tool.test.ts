@@ -2281,6 +2281,24 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(JSON.stringify(result)).not.toContain("BOOT.md");
     expect(JSON.stringify(result)).not.toContain("Wake up and report");
   });
+
+  it("sanitizes every visible text alias even after an earlier field is fully suppressed", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const internalOnly =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: internalOnly,
+        message: `Visible\n${internalOnly}`,
+        mediaUrl: "file:///tmp/status.png",
+      },
+    });
+
+    expect(call?.params?.text).toBe("");
+    expect(call?.params?.message).toBe("Visible");
+  });
 });
 
 describe("message tool sandbox passthrough", () => {
