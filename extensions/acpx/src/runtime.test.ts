@@ -53,10 +53,10 @@ function makeRuntime(
   };
 } {
   const runtime = new AcpxRuntime(
-      {
-        cwd: "/tmp",
-        sessionStore: baseStore as unknown as AcpSessionStore,
-        agentRegistry: {
+    {
+      cwd: "/tmp",
+      sessionStore: baseStore as unknown as AcpSessionStore,
+      agentRegistry: {
         resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
         list: () => ["codex", "openclaw"],
       },
