@@ -433,6 +433,8 @@ function buildManagedResponse(
       }
     },
   });
+  // Stream consumers should cancel deterministically; this catches abandoned
+  // wrapper bodies so guarded dispatchers and local-service leases do not leak.
   managedStreamCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return new Response(wrappedBody, {
     status: response.status,
