@@ -338,14 +338,30 @@ function resolveProviderTransport(params: {
   };
 }
 
-function resolveConfiguredProviderDefaultApi(
-  providerConfig: InlineProviderConfig | undefined,
-): Api | undefined {
+function resolveConfiguredProviderDefaultApi(params: {
+  provider: string;
+  providerConfig: InlineProviderConfig | undefined;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  runtimeHooks?: ProviderRuntimeHooks;
+}): Api | undefined {
+  const { providerConfig } = params;
   const explicit = normalizeResolvedTransportApi(providerConfig?.api);
   if (explicit) {
     return explicit;
   }
-  return providerConfig?.baseUrl ? "openai-completions" : undefined;
+  if (!providerConfig?.baseUrl) {
+    return undefined;
+  }
+  const normalized = resolveProviderTransport({
+    provider: params.provider,
+    api: undefined,
+    baseUrl: providerConfig.baseUrl,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    runtimeHooks: params.runtimeHooks,
+  });
+  return normalized.api ?? "openai-completions";
 }
 
 function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
@@ -660,7 +676,13 @@ function applyConfiguredProviderOverrides(params: {
     input: metadataOverrideModel?.input,
     fallbackInput: discoveredModel.input,
   });
-  const providerDefaultApi = resolveConfiguredProviderDefaultApi(providerConfig);
+  const providerDefaultApi = resolveConfiguredProviderDefaultApi({
+    provider: params.provider,
+    providerConfig,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    runtimeHooks: params.runtimeHooks,
+  });
   const resolvedTransportApi =
     metadataOverrideModel?.api ??
     (params.preferDiscoveredTransport
@@ -697,7 +719,7 @@ function applyConfiguredProviderOverrides(params: {
     api:
       resolvedTransport.api ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
-      resolveConfiguredProviderDefaultApi(providerConfig) ??
+      providerDefaultApi ??
       "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     discoveredHeaders,
@@ -1040,7 +1062,13 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
-      resolveConfiguredProviderDefaultApi(providerConfig) ??
+      resolveConfiguredProviderDefaultApi({
+        provider,
+        providerConfig,
+        cfg,
+        workspaceDir,
+        runtimeHooks,
+      }) ??
       normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       "openai-responses",
     baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? staticCatalogModel?.baseUrl,

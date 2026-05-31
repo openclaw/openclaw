@@ -989,6 +989,27 @@ describe("resolveModel", () => {
     expect(model.api).toBe("openai-completions");
   });
 
+  it("defaults baseUrl-only Google fallback models to native Gemini transport", () => {
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("google", "gemini-2.5-flash-lite", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.provider).toBe("google");
+    expect(model.id).toBe("gemini-2.5-flash-lite");
+    expect(model.api).toBe("google-generative-ai");
+    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+  });
+
   it("uses bundled static metadata for configured provider fallback token limits", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
