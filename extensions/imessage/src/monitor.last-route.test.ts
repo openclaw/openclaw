@@ -297,6 +297,31 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
+  it("subscribes without a startup watermark when the configured dbPath is not readable", async () => {
+    const dbPath = path.join(os.tmpdir(), `openclaw-missing-chat-${Date.now()}.db`);
+    const client = {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async () => client as never);
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dbPath, dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true },
+      { timeoutMs: 10_000 },
+    );
+  });
+
   it("advances the catchup cursor after startup catchup succeeds and a live row is handled", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-live-cursor-"));
     tempDirs.push(stateDir);
