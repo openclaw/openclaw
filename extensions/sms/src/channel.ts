@@ -28,7 +28,9 @@ import {
   normalizeSmsAllowFrom,
   normalizeSmsPhoneNumber,
 } from "./phone.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendSmsTextChunks, toSmsPlainText } from "./send.js";
+import { formatSmsProbeLines, probeSmsAccount, type SmsProbe } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
 const CHANNEL_ID = "sms";
@@ -227,7 +229,7 @@ const smsMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlugin({
+export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
     meta: {
@@ -302,10 +304,16 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
         lastInboundAt: null,
         lastOutboundAt: null,
       },
+      probeAccount: async ({ account, timeoutMs }) => await probeSmsAccount({ account, timeoutMs }),
+      formatCapabilitiesProbe: ({ probe }) => formatSmsProbeLines(probe),
       buildAccountSnapshot: buildSmsAccountSnapshot,
       buildCapabilitiesDiagnostics: async ({ account }) => ({
         lines: collectSmsStartupWarnings(account).map((text) => ({ text, tone: "warn" })),
       }),
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     agentPrompt: {
       messageToolHints: () => [
