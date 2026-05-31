@@ -2113,6 +2113,8 @@ describe("update-cli", () => {
 
   it("uses pnpm registry config before deciding availability preflight", async () => {
     const root = createCaseDir("openclaw-update-pnpm");
+    const pnpmGlobalProject = path.join(root, "pnpm-global", "5");
+    const pnpmGlobalRoot = path.join(pnpmGlobalProject, "node_modules");
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     resolveGlobalManager.mockResolvedValue("pnpm");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
@@ -2134,9 +2136,20 @@ describe("update-cli", () => {
       error: "HTTP 404",
     });
     vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv) => {
+      expect(argv).toEqual(["pnpm", "root", "-g"]);
+      return {
+        stdout: `${pnpmGlobalRoot}\n`,
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
     vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
       expect(argv).toEqual(["pnpm", "config", "get", "registry"]);
-      expect(options.cwd).toBe(process.cwd());
+      expect(options.cwd).toBe(pnpmGlobalProject);
       return {
         stdout: "https://pnpm.internal.example/\n",
         stderr: "",
@@ -2154,6 +2167,75 @@ describe("update-cli", () => {
     const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
     expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
     expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+  });
+
+  it("ignores caller-local pnpm registry config before public npm availability preflight", async () => {
+    const root = createCaseDir("openclaw-update-pnpm-local-registry");
+    const pnpmGlobalProject = path.join(root, "pnpm-global", "5");
+    const pnpmGlobalRoot = path.join(pnpmGlobalProject, "node_modules");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    resolveGlobalManager.mockResolvedValue("pnpm");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "package",
+      packageManager: "pnpm",
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+      if (argv[0] === "pnpm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${pnpmGlobalRoot}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (argv[0] === "pnpm" && argv[1] === "config" && argv[2] === "get") {
+        return {
+          stdout:
+            options.cwd === pnpmGlobalProject
+              ? "https://registry.npmjs.org/\n"
+              : "https://pnpm.internal.example/\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it("uses the resolved global manager instead of package metadata for registry config", async () => {
@@ -6252,11 +6334,7 @@ describe("update-cli", () => {
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     }
     expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(
-      vi
-        .mocked(runCommandWithTimeout)
-        .mock.calls.some((call) => Array.isArray(call[0]) && call[0][0] === "npm"),
-    ).toBe(shouldRunPackageUpdate);
+    expect(packageInstallCommandCall() !== undefined).toBe(shouldRunPackageUpdate);
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
