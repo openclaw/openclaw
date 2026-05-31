@@ -4,6 +4,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionUtils from "./session-utils.js";
 
@@ -282,6 +283,130 @@ describe("SessionHistorySseState", () => {
     expect(
       (snapshot.history.messages[0] as { content?: Array<{ text?: string }> }).content?.[0]?.text,
     ).toBe("Cursor-visible reply.");
+  });
+
+  test("projects sessions_yield tool results as visible history mirrors", () => {
+    const yieldMessage = "Waiting for child completion.";
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "spawn a child" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-yield",
+              name: "sessions_yield",
+              arguments: { message: yieldMessage },
+            },
+          ],
+          __openclaw: { seq: 2 },
+        },
+        {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          toolCallId: "call-yield",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+            },
+          ],
+          details: { status: "yielded", message: yieldMessage },
+          __openclaw: { seq: 3 },
+        },
+      ],
+    });
+
+    expect(
+      snapshot.history.messages.flatMap(
+        (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+      ),
+    ).toEqual(["spawn a child", yieldMessage]);
+    expect(snapshot.history.messages.some((message) => message.role === "toolResult")).toBe(false);
+    expect(
+      Boolean(
+        snapshot.history.messages.find(
+          (message) => message.openclawSessionsYieldMirror !== undefined,
+        ),
+      ),
+    ).toBe(true);
+    expect(snapshot.history.messages.at(-1)?.["__openclaw"]?.seq).toBe(3);
+  });
+
+  test("does not mirror a single sessions_yield tool result without prior assistant context", () => {
+    const projected = projectChatDisplayMessage({
+      role: "toolResult",
+      toolName: "sessions_yield",
+      toolCallId: "call-yield",
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ status: "yielded", message: "Waiting for child completion." }),
+        },
+      ],
+      details: { status: "yielded", message: "Waiting for child completion." },
+      __openclaw: { seq: 3 },
+    });
+
+    expect(projected?.role).toBe("toolResult");
+    expect(projected?.openclawSessionsYieldMirror).toBeUndefined();
+  });
+
+  test("does not duplicate visible sessions_yield text during inline SSE appends", () => {
+    const yieldMessage = "Waiting for child completion.";
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: yieldMessage },
+            {
+              type: "toolCall",
+              id: "call-yield",
+              name: "sessions_yield",
+              arguments: { message: yieldMessage },
+            },
+          ],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "toolResult",
+        toolName: "sessions_yield",
+        toolCallId: "call-yield",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+          },
+        ],
+        details: { status: "yielded", message: yieldMessage },
+      },
+      messageSeq: 2,
+    });
+
+    expect(appended?.shouldRefresh).toBe(true);
+    expect(
+      state
+        .snapshot()
+        .messages.flatMap(
+          (message) => (message as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? [],
+        ),
+    ).toEqual([yieldMessage]);
+    expect(
+      state
+        .snapshot()
+        .messages.some((message) => message.openclawSessionsYieldMirror !== undefined),
+    ).toBe(false);
   });
 
   test("does not coerce partial cursor values", () => {

@@ -1176,6 +1176,62 @@ describe("gateway server chat", () => {
     ).toBe(false);
   });
 
+  test("chat.history replays sessions_yield tool results as visible assistant text", async () => {
+    const yieldMessage = "Waiting for child completion.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "spawn a child" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-yield",
+            name: "sessions_yield",
+            arguments: { message: yieldMessage },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "sessions_yield",
+        toolCallId: "call-yield",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ status: "yielded", message: yieldMessage }),
+          },
+        ],
+        details: { status: "yielded", message: yieldMessage },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["spawn a child", yieldMessage]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          (message as { role?: unknown }).role === "toolResult",
+      ),
+    ).toBe(false);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean(
+            (message as { openclawSessionsYieldMirror?: unknown }).openclawSessionsYieldMirror,
+          ),
+      ),
+    ).toBe(true);
+  });
+
   test("chat.history hides commentary-only assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {

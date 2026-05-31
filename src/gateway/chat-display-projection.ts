@@ -5,6 +5,10 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import {
+  assistantCallsSessionsYield,
+  isSessionsYieldToolResult,
+} from "../agents/subagent-yield-output.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromText } from "../chat/canvas-render.js";
@@ -40,10 +44,28 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
+type SessionsYieldVisibleReply = {
+  toolCallId?: string;
+  text: string;
+  anchor: Record<string, unknown>;
+};
+
+type ProjectChatDisplayOptions = {
+  maxChars?: number;
+  stripEnvelope?: boolean;
+  mirrorSessionsYieldToolResults?: boolean;
+};
+
 /** Resolve the text cap used when projecting chat history for display. */
-export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
+export function resolveEffectiveChatHistoryMaxChars(
+  cfg: { gateway?: { webchat?: { chatHistoryMaxChars?: number } } },
+  maxChars?: number,
+): number {
   if (typeof maxChars === "number") {
     return maxChars;
+  }
+  if (typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number") {
+    return cfg.gateway.webchat.chatHistoryMaxChars;
   }
   return DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
 }
@@ -1069,6 +1091,145 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
   return changed ? next : messages;
 }
 
+function readSessionsYieldPayloadMessage(value: unknown): string | undefined {
+  const record = readMaybeJsonRecord(value);
+  if (record) {
+    const status = normalizeOptionalString(record.status)?.toLowerCase();
+    const message = normalizeOptionalString(record.message);
+    if (status === "yielded" && message) {
+      return stripInlineDirectiveTagsForDisplay(message).text;
+    }
+    for (const key of ["details", "result", "output", "content", "text"] as const) {
+      const nested = readSessionsYieldPayloadMessage(record[key]);
+      if (nested) {
+        return nested;
+      }
+    }
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  for (const block of value) {
+    const nested = readSessionsYieldPayloadMessage(block);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function readSessionsYieldToolResultMessage(
+  message: Record<string, unknown>,
+  previousAssistantCalledYield: boolean,
+): string | undefined {
+  if (!isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
+    return undefined;
+  }
+  return readSessionsYieldPayloadMessage(message);
+}
+
+function readAssistantSessionsYieldVisibleText(
+  message: Record<string, unknown>,
+): string | undefined {
+  if (message.role !== "assistant") {
+    return undefined;
+  }
+  const text = extractProjectedText(message.content ?? message.text);
+  const stripped = stripInlineDirectiveTagsForDisplay(text).text.trim();
+  if (!stripped || isSuppressedControlReplyText(stripped)) {
+    return undefined;
+  }
+  return stripped;
+}
+
+function buildSessionsYieldVisibleReplyMirror(
+  reply: SessionsYieldVisibleReply,
+): Record<string, unknown> {
+  const mirror: Record<string, unknown> = {
+    role: "assistant",
+    content: [{ type: "text", text: reply.text }],
+    openclawSessionsYieldMirror: {
+      toolName: "sessions_yield",
+      ...(reply.toolCallId ? { toolCallId: reply.toolCallId } : {}),
+    },
+  };
+  for (const field of ["timestamp", "createdAt", "agentId"] as const) {
+    if (reply.anchor[field] !== undefined) {
+      mirror[field] = reply.anchor[field];
+    }
+  }
+  const transcriptMeta = readRecord(reply.anchor["__openclaw"]);
+  if (transcriptMeta) {
+    mirror["__openclaw"] = { ...transcriptMeta };
+  }
+  return mirror;
+}
+
+function mirrorSessionsYieldToolResults(messages: unknown[]): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  if (!messages.some((message) => readRecord(message))) {
+    return messages;
+  }
+
+  let changed = false;
+  const next: unknown[] = [];
+  let previousAssistantCalledYield = false;
+  let previousAssistantYieldText: string | undefined;
+  let previousAssistantVisibleText: string | undefined;
+
+  for (const message of messages) {
+    const record = readRecord(message);
+    if (!record) {
+      next.push(message);
+      previousAssistantCalledYield = false;
+      previousAssistantYieldText = undefined;
+      continue;
+    }
+
+    const yieldText = readSessionsYieldToolResultMessage(record, previousAssistantCalledYield);
+    if (yieldText?.trim()) {
+      const normalizedYieldText = yieldText.trim();
+      const duplicatesPreviousAssistantText =
+        (previousAssistantCalledYield && previousAssistantYieldText === normalizedYieldText) ||
+        previousAssistantVisibleText === normalizedYieldText;
+      if (!duplicatesPreviousAssistantText) {
+        next.push(
+          buildSessionsYieldVisibleReplyMirror({
+            text: normalizedYieldText,
+            anchor: record,
+            ...(readMessageToolResultCallId(record)
+              ? { toolCallId: readMessageToolResultCallId(record) }
+              : {}),
+          }),
+        );
+      }
+      changed = true;
+      previousAssistantCalledYield = false;
+      previousAssistantYieldText = undefined;
+      previousAssistantVisibleText = undefined;
+      continue;
+    }
+
+    next.push(message);
+    if (record.role === "assistant") {
+      const assistantText = readAssistantSessionsYieldVisibleText(record);
+      previousAssistantCalledYield = assistantCallsSessionsYield(record);
+      previousAssistantYieldText = previousAssistantCalledYield ? assistantText : undefined;
+      previousAssistantVisibleText = assistantText;
+    } else if (record.role === "user" || record.role === "toolResult" || record.role === "tool") {
+      previousAssistantCalledYield = false;
+      previousAssistantYieldText = undefined;
+      previousAssistantVisibleText = undefined;
+    }
+  }
+
+  return changed ? next : messages;
+}
+
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -1597,10 +1758,14 @@ function projectSessionsSendInterSessionMessages(
 
 export function projectChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: ProjectChatDisplayOptions,
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
-  const mirrored = mirrorMessageToolVisibleReplies(source);
+  const mirroredMessageReplies = mirrorMessageToolVisibleReplies(source);
+  const mirrored =
+    options?.mirrorSessionsYieldToolResults === false
+      ? mirroredMessageReplies
+      : mirrorSessionsYieldToolResults(mirroredMessageReplies);
   const projectedForwarded = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
       projectSessionsSendInterSessionMessages(
@@ -1628,7 +1793,7 @@ function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
 
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
+  options?: ProjectChatDisplayOptions & { maxMessages?: number },
 ): Array<Record<string, unknown>> {
   return limitChatDisplayMessages(
     projectChatDisplayMessages(messages, options),
@@ -1638,7 +1803,10 @@ export function projectRecentChatDisplayMessages(
 
 export function projectChatDisplayMessage(
   message: unknown,
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: ProjectChatDisplayOptions,
 ): Record<string, unknown> | undefined {
-  return projectChatDisplayMessages([message], options)[0];
+  return projectChatDisplayMessages([message], {
+    ...options,
+    mirrorSessionsYieldToolResults: false,
+  })[0];
 }
