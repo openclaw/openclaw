@@ -1051,6 +1051,7 @@ describe("handleFeishuMessage command authorization", () => {
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
       sendPolicyDenied: true,
+      noVisibleReplyFallbackEligible: true,
     });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({

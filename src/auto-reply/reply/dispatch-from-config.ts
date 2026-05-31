@@ -2943,6 +2943,7 @@ export async function dispatchReplyFromConfig(
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
+      ...(!queuedFinal ? { noVisibleReplyFallbackEligible: true } : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
     });
   } catch (err) {

@@ -90,10 +90,14 @@ type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group
 
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
+  noVisibleReplyFallbackEligible?: boolean;
+  queuedFinal?: boolean;
   sendPolicyDenied?: boolean;
   sourceReplyDeliveryMode?: string;
 }): boolean {
   return (
+    dispatchResult.noVisibleReplyFallbackEligible === true &&
+    dispatchResult.queuedFinal !== true &&
     (dispatchResult.counts.final ?? 0) === 0 &&
     dispatchResult.sendPolicyDenied !== true &&
     dispatchResult.sourceReplyDeliveryMode !== "message_tool_only"

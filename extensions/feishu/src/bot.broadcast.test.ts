@@ -346,7 +346,11 @@ describe("broadcast dispatch", () => {
   it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {
     mockDispatchReplyFromConfig
       .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
-      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 0 } });
+      .mockResolvedValueOnce({
+        queuedFinal: false,
+        counts: { final: 0 },
+        noVisibleReplyFallbackEligible: true,
+      });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
       dispatcher: {
@@ -388,6 +392,7 @@ describe("broadcast dispatch", () => {
         queuedFinal: false,
         counts: { final: 0 },
         sourceReplyDeliveryMode: "message_tool_only",
+        noVisibleReplyFallbackEligible: true,
       });
     const ensureNoVisibleReplyFallback = vi.fn();
     mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
