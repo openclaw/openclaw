@@ -21,6 +21,9 @@ internal enum class SmsSearchAvailabilityReason {
   Unavailable,
 }
 
+/**
+ * Distinguish permanent SMS search unavailability from permission-gated search.
+ */
 internal fun classifySmsSearchAvailability(
   readSmsAvailable: Boolean,
   smsFeatureEnabled: Boolean,
@@ -53,6 +56,9 @@ internal fun smsSearchAvailabilityError(
       )
   }
 
+/**
+ * Gateway node.invoke command router for Android-owned capabilities.
+ */
 class InvokeDispatcher(
   private val canvas: CanvasController,
   private val cameraHandler: CameraHandler,
@@ -96,6 +102,7 @@ class InvokeDispatcher(
           message = "INVALID_REQUEST: unknown command",
         )
     if (spec.requiresForeground && !isForeground()) {
+      // Canvas, camera, and screen-backed commands need an active Activity/WebView surface.
       return GatewaySession.InvokeResult.error(
         code = "NODE_BACKGROUND_UNAVAILABLE",
         message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
@@ -103,6 +110,7 @@ class InvokeDispatcher(
     }
     availabilityError(spec.availability)?.let { return it }
 
+    // Command strings come from OpenClawProtocolConstants; the registry above owns advertised availability.
     return when (command) {
       // Canvas commands
       OpenClawCanvasCommand.Present.rawValue -> {
@@ -239,6 +247,7 @@ class InvokeDispatcher(
         )
     val readyOnFirstCheck = a2uiHandler.ensureA2uiReady(a2uiUrl)
     if (!readyOnFirstCheck) {
+      // Gateway canvas host metadata can lag reconnects; refresh once before failing the command.
       refreshCanvasHostUrl()
       a2uiUrl = a2uiHandler.resolveA2uiHostUrl() ?: a2uiUrl
       if (!a2uiHandler.ensureA2uiReady(a2uiUrl)) {
@@ -255,6 +264,7 @@ class InvokeDispatcher(
     try {
       block()
     } catch (_: Throwable) {
+      // WebView calls throw when the Activity is backgrounded between the foreground check and execution.
       GatewaySession.InvokeResult.error(
         code = "NODE_BACKGROUND_UNAVAILABLE",
         message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
@@ -312,6 +322,7 @@ class InvokeDispatcher(
       InvokeCommandAvailability.ReadSmsAvailable,
       InvokeCommandAvailability.RequestableSmsSearchAvailable,
       ->
+        // SMS search may still be advertised as promptable; runtime invoke fails only on permanent unavailability.
         smsSearchAvailabilityError(
           readSmsAvailable = readSmsAvailable(),
           smsFeatureEnabled = smsFeatureEnabled(),
@@ -347,6 +358,9 @@ class InvokeDispatcher(
     }
 }
 
+/**
+ * Talk-mode command adapter implemented by the voice subsystem.
+ */
 interface TalkHandler {
   suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult
 
