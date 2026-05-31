@@ -433,6 +433,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseCreateInFlight = false;
   private responseCancelInFlight = false;
   private responseCreatePending = false;
+  private autoRespondSuppressedForManualResponse = false;
   private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
@@ -891,18 +892,20 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private sendSessionUpdate(): void {
+  private sendSessionUpdate(options?: { autoRespondToAudio?: boolean }): void {
     if (this.usesAzureDeploymentRealtimeApi()) {
-      this.sendEvent(this.buildAzureDeploymentSessionUpdate());
+      this.sendEvent(this.buildAzureDeploymentSessionUpdate(options));
       return;
     }
 
-    this.sendEvent(this.buildGaSessionUpdate());
+    this.sendEvent(this.buildGaSessionUpdate(options));
   }
 
-  private buildGaSessionUpdate(): RealtimeGaSessionUpdate {
+  private buildGaSessionUpdate(options?: {
+    autoRespondToAudio?: boolean;
+  }): RealtimeGaSessionUpdate {
     const cfg = this.config;
-    const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
+    const autoRespondToAudio = options?.autoRespondToAudio ?? cfg.autoRespondToAudio ?? true;
     const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
     return {
       type: "session.update",
@@ -945,9 +948,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return Boolean(this.config.azureEndpoint && this.config.azureDeployment);
   }
 
-  private buildAzureDeploymentSessionUpdate(): RealtimeAzureDeploymentSessionUpdate {
+  private buildAzureDeploymentSessionUpdate(options?: {
+    autoRespondToAudio?: boolean;
+  }): RealtimeAzureDeploymentSessionUpdate {
     const cfg = this.config;
     const format = this.resolveLegacyRealtimeAudioFormat();
+    const autoRespondToAudio = options?.autoRespondToAudio ?? cfg.autoRespondToAudio ?? true;
     return {
       type: "session.update",
       session: {
@@ -962,7 +968,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           threshold: cfg.vadThreshold ?? 0.5,
           prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
           silence_duration_ms: cfg.silenceDurationMs ?? 500,
-          create_response: cfg.autoRespondToAudio ?? true,
+          create_response: autoRespondToAudio,
         },
         temperature: cfg.temperature ?? 0.8,
         ...(cfg.tools && cfg.tools.length > 0
@@ -1017,9 +1023,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
       case "session.updated":
         this.sessionConfigured = true;
-        for (const chunk of this.pendingAudio.splice(0)) {
-          this.sendAudio(chunk);
-        }
         if (this.activeConnectionReason) {
           this.config.onEvent?.({
             direction: "server",
@@ -1031,6 +1034,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (!this.sessionReadyFired) {
           this.sessionReadyFired = true;
           this.config.onReady?.();
+        }
+        for (const chunk of this.pendingAudio.splice(0)) {
+          this.sendAudio(chunk);
         }
         return;
 
@@ -1103,7 +1109,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.responseActive = false;
         this.responseCreateInFlight = false;
         this.responseCancelInFlight = false;
-        this.flushPendingResponseCreate();
+        if (this.responseCreatePending) {
+          this.flushPendingResponseCreate();
+        } else {
+          this.restoreAutoRespondAfterManualResponse();
+        }
         return;
 
       case "response.function_call_arguments.delta": {
@@ -1158,9 +1168,15 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
           this.responseActive = false;
           this.responseCancelInFlight = false;
-          this.flushPendingResponseCreate();
+          if (this.responseCreatePending) {
+            this.flushPendingResponseCreate();
+          } else {
+            this.restoreAutoRespondAfterManualResponse();
+          }
           return;
         }
+        this.responseCreateInFlight = false;
+        this.restoreAutoRespondAfterManualResponse();
         this.config.onError?.(new Error(detail));
       }
 
@@ -1263,7 +1279,24 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     this.responseCreatePending = false;
     this.responseCreateInFlight = true;
+    this.suppressAutoRespondForManualResponse();
     this.sendEvent({ type: "response.create" });
+  }
+
+  private suppressAutoRespondForManualResponse(): void {
+    if (this.config.autoRespondToAudio === false || this.autoRespondSuppressedForManualResponse) {
+      return;
+    }
+    this.autoRespondSuppressedForManualResponse = true;
+    this.sendSessionUpdate({ autoRespondToAudio: false });
+  }
+
+  private restoreAutoRespondAfterManualResponse(): void {
+    if (!this.autoRespondSuppressedForManualResponse) {
+      return;
+    }
+    this.autoRespondSuppressedForManualResponse = false;
+    this.sendSessionUpdate();
   }
 
   private flushPendingResponseCreate(): void {
@@ -1281,6 +1314,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreateInFlight = false;
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
+    this.autoRespondSuppressedForManualResponse = false;
     this.continuingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
