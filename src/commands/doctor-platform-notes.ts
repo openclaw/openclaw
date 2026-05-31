@@ -84,9 +84,17 @@ export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
   env?: NodeJS.ProcessEnv;
+  service?: Pick<GatewayService, "readCommand">;
   noteFn?: typeof note;
 }) {
-  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps);
+  const platform = deps?.platform ?? process.platform;
+  const serviceEnv =
+    platform === "darwin" ? await resolveGatewayServiceEnvForPlatformNotes(deps) : deps?.env;
+  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
+    env: serviceEnv,
+    findJobs: deps?.findJobs,
+    platform,
+  });
   if (warning) {
     (deps?.noteFn ?? note)(warning, "Gateway (macOS)");
   }

@@ -180,8 +180,39 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
     );
   });
 
+  it("uses service env for doctor stale updater notes", async () => {
+    const serviceEnv = {
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
+    };
+    const service = {
+      readCommand: vi.fn(async () => ({
+        programArguments: ["/bin/node", "cli", "doctor"],
+        environment: serviceEnv,
+      })),
+    };
+    const findJobs = vi.fn(async () => []);
+
+    await noteMacStaleOpenClawUpdateLaunchdJobs({
+      platform: "darwin",
+      service,
+      findJobs,
+    });
+
+    expect(service.readCommand).toHaveBeenCalledTimes(1);
+    expect(findJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
+      }),
+    );
+  });
+
   it("prints stale updater job cleanup guidance on macOS", async () => {
     const noteFn = vi.fn();
+    const service = {
+      readCommand: vi.fn(async () => null),
+    };
     const findJobs = vi.fn(async () => [
       {
         label: "ai.openclaw.update.2026.5.12",
@@ -195,6 +226,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
 
     await noteMacStaleOpenClawUpdateLaunchdJobs({
       platform: "darwin",
+      service,
       findJobs,
       noteFn,
     });
@@ -211,10 +243,14 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
 
   it("does nothing when no stale updater jobs exist", async () => {
     const noteFn = vi.fn();
+    const service = {
+      readCommand: vi.fn(async () => null),
+    };
     const findJobs = vi.fn(async () => []);
 
     await noteMacStaleOpenClawUpdateLaunchdJobs({
       platform: "darwin",
+      service,
       findJobs,
       noteFn,
     });
