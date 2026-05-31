@@ -1995,6 +1995,89 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
+  "sessions.echo": async ({ params, respond, context }) => {
+    const p = params as {
+      key?: string;
+      action?: "add" | "remove" | "list";
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+      label?: string;
+      echoUser?: boolean;
+      echoAssistant?: boolean;
+    };
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+    const action = p.action ?? "list";
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(
+      key,
+      context.getRuntimeConfig(),
+    );
+
+    if (action === "list") {
+      const store = loadSessionStore(storePath);
+      const entry = store[target.canonicalKey ?? key];
+      respond(true, { echoTargets: entry?.echoTargets ?? [] }, undefined);
+      return;
+    }
+
+    if (!p.channel || !p.to) {
+      respond(false, undefined, "channel and to are required for add/remove");
+      return;
+    }
+
+    const updated = await updateSessionStore(storePath, (store) => {
+      const storeKey = target.canonicalKey ?? key;
+      const entry = store[storeKey];
+      if (!entry) {
+        return null;
+      }
+      const existing = entry.echoTargets ?? [];
+
+      if (action === "add") {
+        const duplicate = existing.find(
+          (t: { channel: string; to: string }) => t.channel === p.channel && t.to === p.to,
+        );
+        if (duplicate) {
+          return entry;
+        }
+        entry.echoTargets = [
+          ...existing,
+          {
+            channel: p.channel!,
+            to: p.to!,
+            accountId: p.accountId,
+            threadId: p.threadId,
+            label: p.label,
+            echoUser: p.echoUser,
+            echoAssistant: p.echoAssistant,
+            addedAt: Date.now(),
+          },
+        ];
+      } else if (action === "remove") {
+        entry.echoTargets = existing.filter(
+          (t: { channel: string; to: string }) => !(t.channel === p.channel && t.to === p.to),
+        );
+        if (entry.echoTargets.length === 0) {
+          delete entry.echoTargets;
+        }
+      }
+      return entry;
+    });
+
+    if (!updated) {
+      respond(false, undefined, `Session not found: ${key}`);
+      return;
+    }
+    respond(true, { echoTargets: updated.echoTargets ?? [] }, undefined);
+    emitSessionsChanged(context, {
+      sessionKey: target.canonicalKey ?? key,
+      reason: "echo",
+    });
+  },
   "sessions.pluginPatch": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (
       !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)

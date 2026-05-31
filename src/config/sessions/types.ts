@@ -7,6 +7,17 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
+export type SessionEchoTarget = {
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+  label?: string;
+  echoUser?: boolean;
+  echoAssistant?: boolean;
+  addedAt: number;
+};
+
 export type SessionScope = "per-sender" | "global";
 
 export type SessionChannelId = ChannelId;
@@ -216,6 +227,8 @@ export type SessionEntry = {
   heartbeatIsolatedBaseSessionKey?: string;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
+  /** Echo targets: additional channels that receive copies of all session messages. */
+  echoTargets?: SessionEchoTarget[];
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
   /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
