@@ -732,6 +732,7 @@ describe("chrome MCP page parsing", () => {
     });
     const tabsExpectation = expect(tabsPromise).rejects.toThrow(/caller cancelled/);
 
+    await vi.waitFor(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
     releaseFactory();
 
@@ -769,6 +770,7 @@ describe("chrome MCP page parsing", () => {
     });
     const abortedTabsExpectation = expect(abortedTabsPromise).rejects.toThrow(/caller cancelled/);
 
+    await vi.waitFor(() => expect(factoryCalls).toBe(1));
     ctrl.abort(new Error("caller cancelled"));
     await abortedTabsExpectation;
 

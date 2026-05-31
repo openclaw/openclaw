@@ -963,6 +963,9 @@ async function getSession(
   const options = normalizeChromeMcpOptions(profileOptions);
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, options);
   await closeChromeMcpSessionsForProfile(profileName, cacheKey);
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
+  }
 
   for (;;) {
     let session = sessions.get(cacheKey);
