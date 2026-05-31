@@ -617,10 +617,12 @@ async function* parseAnthropicSseBody(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
   try {
     while (true) {
       const { done, value } = await readAnthropicSseChunk(reader, signal);
       if (done) {
+        completed = true;
         break;
       }
       buffer = `${buffer}${decoder.decode(value, { stream: true })}`.replaceAll("\r\n", "\n");
@@ -651,6 +653,9 @@ async function* parseAnthropicSseBody(
       }
     }
   } finally {
+    if (!completed) {
+      await reader.cancel(signal?.reason).catch(() => undefined);
+    }
     reader.releaseLock();
   }
 }
