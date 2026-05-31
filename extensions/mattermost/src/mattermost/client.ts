@@ -82,7 +82,6 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
 export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Mattermost error payloads are external JSON; only optional message is consumed.
     const data = (await res.json()) as { message?: string } | undefined;
     if (data?.message) {
       return data.message;
@@ -152,17 +151,13 @@ export function createMattermostClient(params: {
     }
 
     if (res.status === 204) {
-      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Generic request callers type the expected endpoint body; 204 has no body.
       return undefined as T;
     }
 
     const contentType = res.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
-      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Generic request callers type the expected Mattermost endpoint body.
       return (await res.json()) as T;
     }
-
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Generic request callers type the expected Mattermost endpoint body.
     return (await res.text()) as T;
   };
 
@@ -597,8 +592,6 @@ export async function uploadMattermostFile(
     const detail = await readMattermostError(res);
     throw new Error(`Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`);
   }
-
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Mattermost upload response is external JSON; required file id is checked below.
   const data = (await res.json()) as { file_infos?: MattermostFileInfo[] };
   const info = data.file_infos?.[0];
   if (!info?.id) {

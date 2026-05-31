@@ -41,7 +41,6 @@ export class PluginLruCache<T> {
     if (!this.#entries.has(cacheKey)) {
       return { hit: false };
     }
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Map.has proves the value exists while preserving caller-specific cache value type.
     const cached = this.#entries.get(cacheKey) as T;
     this.#entries.delete(cacheKey);
     this.#entries.set(cacheKey, cached);
@@ -89,7 +88,6 @@ export function resolveConfigScopedRuntimeCacheValue<T>(params: {
     params.cache.set(params.config, configCache);
   }
   if (configCache.has(params.key)) {
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Map.has proves the value exists while preserving caller-specific cache value type.
     return configCache.get(params.key) as T;
   }
   const loaded = params.load();

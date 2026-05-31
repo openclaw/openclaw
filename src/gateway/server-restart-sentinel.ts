@@ -68,7 +68,7 @@ function cloneRestartSentinelPayload(
   if (!payload) {
     return null;
   }
-  return structuredClone(payload) as RestartSentinelPayload;
+  return structuredClone(payload);
 }
 
 function hasRoutableDeliveryContext(context?: {

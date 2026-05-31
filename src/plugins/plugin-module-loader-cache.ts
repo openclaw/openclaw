@@ -63,9 +63,7 @@ const pluginModuleLoaderStats = {
 
 function isJitiLoaderModule(value: unknown): value is { createJiti: PluginModuleLoaderFactory } {
   const canHaveProperties = (value && typeof value === "object") || typeof value === "function";
-  return Boolean(
-    canHaveProperties && "createJiti" in value && typeof value.createJiti === "function",
-  );
+  return canHaveProperties && "createJiti" in value && typeof value.createJiti === "function";
 }
 
 function recordSourceTransformTarget(target: string): void {

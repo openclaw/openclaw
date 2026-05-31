@@ -67,9 +67,7 @@ function mergeMattermostAccountConfig(
   accountId: string,
 ): MattermostAccountConfig {
   return resolveMergedAccountConfig<MattermostAccountConfig>({
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Mattermost channel config is plugin-owned open config merged by the account resolver.
     channelConfig: cfg.channels?.mattermost as MattermostAccountConfig | undefined,
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Mattermost account entries are plugin-owned open config records.
     accounts: cfg.channels?.mattermost?.accounts as
       | Record<string, Partial<MattermostAccountConfig>>
       | undefined,
