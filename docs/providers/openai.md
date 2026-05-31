@@ -62,6 +62,14 @@ legacy Codex model refs, legacy Codex auth profile ids, and
 legacy Codex auth order to the canonical OpenAI route.
 
 <Note>
+If you see an error like `No available auth profile for openai-codex`, some part
+of your setup is still pointing at the legacy `openai-codex` provider. Run
+`openclaw doctor --fix` and switch to canonical `openai/*` model refs plus
+`auth.order.openai`. Avoid editing `auth-profiles.json` provider fields by hand
+unless a maintainer explicitly asked you to.
+</Note>
+
+<Note>
 GPT-5.5 is available through both direct OpenAI Platform API-key access and
 subscription/OAuth routes. For ChatGPT/Codex subscription plus native Codex
 execution, use `openai/gpt-5.5`; unset runtime config now selects the Codex

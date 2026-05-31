@@ -22,6 +22,13 @@ under `auth.order.openai`; older legacy Codex auth profile ids and
 legacy Codex auth order entries are legacy state repaired by
 `openclaw doctor --fix`.
 
+<Note>
+If you see auth lookup errors referencing `openai-codex`, it usually means an
+older config or a manual edit is still pointing at the legacy provider. Run
+`openclaw doctor --fix` and keep both model refs and `auth.order` on canonical
+`openai`.
+</Note>
+
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled while leaving code-mode-only off by default.
 That keeps Codex native workspace and code capabilities available while
