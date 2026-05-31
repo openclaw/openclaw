@@ -6,9 +6,9 @@
  * configuration issues and emits actionable fix suggestions.
  *
  * Checks performed:
- *   1. .wslconfig resource limits — memory / processors / swap (WSL2 only)
- *   2. WSL version and kernel — informational context for diagnostics
- *   3. systemd status — displayed in summary (detailed systemd
+ *   1. .wslconfig resource limits: memory / processors / swap (WSL2 only)
+ *   2. WSL version and kernel: informational context for diagnostics
+ *   3. systemd status: displayed in summary (detailed systemd
  *      diagnostics are handled by the gateway daemon flow to
  *      avoid duplicate messaging)
  *
@@ -20,13 +20,14 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { promisify } from "node:util";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { isWSL, isWSL2Sync } from "../infra/wsl.js";
-import { note } from "../terminal/note.js";
 
 const execFileAsync = promisify(execFile);
+const WINDOWS_CMD_CANDIDATES = ["cmd.exe", "/mnt/c/Windows/System32/cmd.exe"] as const;
 
-// ─── Types ──────────────────────────────────────────────────────
+// Types
 
 /** Complete WSL environment diagnostics result. */
 export type WSLDiagnostics = {
@@ -52,6 +53,8 @@ export type WSLDiagnostics = {
 
 /** Parsed resource settings from .wslconfig [wsl2] section. */
 export type WSLConfigResources = {
+  /** Whether the file has a [wsl2] section. */
+  hasWsl2Section?: boolean;
   /** Memory cap as written in .wslconfig (e.g. "8GB"). */
   memory: string | null;
   /** Processor core count allocated to WSL. */
@@ -60,11 +63,11 @@ export type WSLConfigResources = {
   swap: string | null;
 };
 
-// ─── INI Parser ─────────────────────────────────────────────────
+// INI parser
 
 /**
  * Minimal INI parser for wsl.conf / .wslconfig files.
- * Returns a map of section → key → value. Lines before any
+ * Returns a map of section -> key -> value. Lines before any
  * section header are filed under the empty string key "".
  */
 export function parseINI(content: string): Record<string, Record<string, string>> {
@@ -86,7 +89,10 @@ export function parseINI(content: string): Record<string, Record<string, string>
     const eqIndex = line.indexOf("=");
     if (eqIndex > 0) {
       const key = line.slice(0, eqIndex).trim().toLowerCase();
-      const value = line.slice(eqIndex + 1).trim();
+      const value = line
+        .slice(eqIndex + 1)
+        .replace(/\s+[;#].*$/, "")
+        .trim();
       if (!result[currentSection]) {
         result[currentSection] = {};
       }
@@ -96,7 +102,20 @@ export function parseINI(content: string): Record<string, Record<string, string>
   return result;
 }
 
-// ─── Data Collectors ────────────────────────────────────────────
+export function windowsPathToDefaultWslMountPath(windowsPath: string): string | null {
+  const normalized = windowsPath.trim().replace(/\\/g, "/");
+  const match = normalized.match(/^([A-Za-z]):\/(.+)$/);
+  if (!match) {
+    return null;
+  }
+  return `/mnt/${match[1].toLowerCase()}/${match[2]}`;
+}
+
+function formatGiB(bytes: number): string {
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1).replace(/\.0$/, "");
+}
+
+// Data collectors
 
 /**
  * Check whether /etc/wsl.conf has [boot] systemd=true.
@@ -120,51 +139,106 @@ export async function readWslConfSystemdEnabled(): Promise<boolean | null> {
   }
 }
 
+async function resolveAccessibleWindowsProfilePath(windowsPath: string): Promise<string | null> {
+  const trimmed = windowsPath.trim();
+  if (!trimmed || trimmed === "%USERPROFILE%") {
+    return null;
+  }
+
+  const candidates: string[] = [];
+  try {
+    const { stdout } = await execFileAsync("wslpath", ["-u", trimmed], {
+      encoding: "utf8",
+      timeout: 3000,
+    });
+    const resolved = stdout.trim();
+    if (resolved) {
+      candidates.push(resolved);
+    }
+  } catch {
+    // wslpath is optional; the default /mnt/<drive> conversion covers common installs.
+  }
+
+  const defaultMountPath = windowsPathToDefaultWslMountPath(trimmed);
+  if (defaultMountPath) {
+    candidates.push(defaultMountPath);
+  }
+
+  for (const candidate of new Set(candidates)) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Keep trying lower-confidence candidates.
+    }
+  }
+  return null;
+}
+
+async function readWindowsUserProfileFromInterop(): Promise<string | null> {
+  for (const cmdPath of WINDOWS_CMD_CANDIDATES) {
+    try {
+      const { stdout } = await execFileAsync(cmdPath, ["/c", "echo %USERPROFILE%"], {
+        encoding: "utf8",
+        timeout: 3000,
+      });
+      const trimmed = stdout.trim();
+      if (trimmed && trimmed !== "%USERPROFILE%") {
+        return trimmed;
+      }
+    } catch {
+      // Try the next Windows command path.
+    }
+  }
+  return null;
+}
+
 /**
  * Resolve the Windows user profile directory path from within WSL.
  *
  * Strategy (in priority order):
- *   1. `wslvar USERPROFILE` — most reliable, queries Windows env directly
- *   2. `wslpath` conversion of USERPROFILE env var — if WSLENV passes it
- *   3. Heuristic fallback — /mnt/c/Users/<username>
+ *   1. `wslvar USERPROFILE`: direct Windows env query when wslu is installed
+ *   2. `cmd.exe /c echo %USERPROFILE%`: built-in Windows interop query
+ *   3. `USERPROFILE` env var: if WSLENV passes it through
+ *   4. Heuristic fallback: /mnt/c/Users/<linux-username>
  *
  * Returns a WSL-native path (e.g. /mnt/c/Users/james) or null.
  */
 export async function resolveWindowsUserProfilePath(): Promise<string | null> {
-  // Strategy 1: wslvar + wslpath (most reliable)
+  // Strategy 1: wslvar + wslpath.
   try {
     const { stdout: winProfile } = await execFileAsync("wslvar", ["USERPROFILE"], {
+      encoding: "utf8",
       timeout: 3000,
     });
-    const trimmedWinProfile = winProfile.trim();
-    if (trimmedWinProfile) {
-      const { stdout: wslPath } = await execFileAsync("wslpath", ["-u", trimmedWinProfile], {
-        timeout: 3000,
-      });
-      const resolved = wslPath.trim();
-      if (resolved) {
-        return resolved;
-      }
+    const resolved = await resolveAccessibleWindowsProfilePath(winProfile);
+    if (resolved) {
+      return resolved;
     }
   } catch {
-    // wslvar/wslpath not available — fall through
+    // wslvar/wslpath not available; fall through.
   }
 
-  // Strategy 2: USERPROFILE env var with manual conversion
-  const windowsUserProfile = process.env.USERPROFILE ?? null;
-  if (windowsUserProfile) {
-    const converted = windowsUserProfile
-      .replace(/\\/g, "/")
-      .replace(/^([A-Za-z]):/, (_match, drive: string) => `/mnt/${drive.toLowerCase()}`);
-    try {
-      await fs.access(converted);
-      return converted;
-    } catch {
-      // Path not accessible — fall through
+  // Strategy 2: built-in Windows interop. This catches normal WSL installs
+  // where the Linux username differs from the Windows profile name.
+  const interopProfile = await readWindowsUserProfileFromInterop();
+  if (interopProfile) {
+    const resolved = await resolveAccessibleWindowsProfilePath(interopProfile);
+    if (resolved) {
+      return resolved;
     }
   }
 
-  // Strategy 3: heuristic fallback
+  // Strategy 3: USERPROFILE env var with conversion.
+  const windowsUserProfile = process.env.USERPROFILE ?? null;
+  if (windowsUserProfile) {
+    const resolved = await resolveAccessibleWindowsProfilePath(windowsUserProfile);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  // Strategy 4: heuristic fallback.
   const homeUser = os.userInfo().username;
   const fallback = `/mnt/c/Users/${homeUser}`;
   try {
@@ -182,8 +256,8 @@ export async function resolveWindowsUserProfilePath(): Promise<string | null> {
  * Returns null when:
  *   - The Windows profile path cannot be resolved
  *   - The .wslconfig file does not exist or is unreadable
- *   - The file exists but has no [wsl2] section (treated as
- *     unconfigured so downstream fallback diagnostics still fire)
+ *   - The file exists but has no [wsl2] section (reported as present
+ *     but missing WSL2 resource settings)
  */
 export async function readWSLConfigResources(): Promise<WSLConfigResources | null> {
   const profilePath = await resolveWindowsUserProfilePath();
@@ -196,11 +270,15 @@ export async function readWSLConfigResources(): Promise<WSLConfigResources | nul
     const ini = parseINI(content);
     const wsl2Section = ini["wsl2"];
     if (!wsl2Section) {
-      // File exists but has no [wsl2] section — treat as unconfigured
-      // so the missing-config fallback path in diagnostics still fires.
-      return null;
+      return {
+        hasWsl2Section: false,
+        memory: null,
+        processors: null,
+        swap: null,
+      };
     }
     return {
+      hasWsl2Section: true,
       memory: wsl2Section["memory"] ?? null,
       processors: wsl2Section["processors"]
         ? Number.parseInt(wsl2Section["processors"], 10) || null
@@ -261,7 +339,7 @@ export async function collectWSLDiagnostics(): Promise<WSLDiagnostics> {
   };
 }
 
-// ─── Diagnostic Report ──────────────────────────────────────────
+// Diagnostic report
 
 /**
  * Parse a memory string (e.g. "8GB", "4096MB") into megabytes.
@@ -304,7 +382,7 @@ export function parseMemoryToMB(value: string | null): number | null {
  * Build user-facing diagnostic notes from WSL diagnostics.
  * Returns an empty array when everything looks healthy.
  *
- * Note: systemd diagnostics are intentionally omitted here —
+ * Note: systemd diagnostics are intentionally omitted here:
  * the gateway daemon flow already handles systemd-unavailable
  * messaging with WSL-specific hints. This check focuses on
  * resource limits and environment information that no other
@@ -326,34 +404,50 @@ export function buildWSLDiagnosticNotes(diag: WSLDiagnostics): string[] {
 
   const notes: string[] = [];
 
-  // .wslconfig resource checks apply to WSL2 only — WSL1 does not
+  // .wslconfig resource checks apply to WSL2 only; WSL1 does not
   // use .wslconfig for resource allocation.
   if (!diag.isWSL2) {
     return notes;
   }
 
-  // ── Resource limit checks (WSL2 only) ──
+  // Resource limit checks (WSL2 only).
   // 4GB threshold compared in bytes, before rounding, so values like
   // 3.5GB are not rounded up to 4 and silently pass the check.
   const fourGiB = 4 * 1024 * 1024 * 1024;
   const visibleBytes = diag.wslVisibleMemoryBytes;
-  const visibleGB = Math.round(visibleBytes / (1024 * 1024 * 1024));
+  const visibleGB = formatGiB(visibleBytes);
   const memoryMB = diag.wslconfig ? parseMemoryToMB(diag.wslconfig.memory) : null;
 
   if (diag.wslconfig && memoryMB !== null) {
     if (memoryMB < 4096) {
       notes.push(
-        `WSL memory limit is ${diag.wslconfig.memory} — this may be too low for OpenClaw.`,
+        `WSL memory limit is ${diag.wslconfig.memory} - this may be too low for OpenClaw.`,
       );
       notes.push("Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB");
+    } else if (visibleBytes > 0 && visibleBytes < fourGiB) {
+      notes.push(
+        `WSL currently exposes ~${visibleGB}GB memory even though .wslconfig sets ${diag.wslconfig.memory}.`,
+      );
+      notes.push(
+        "Run wsl --shutdown from PowerShell, then restart OpenClaw so WSL applies the limit.",
+      );
     }
   } else if (visibleBytes > 0 && visibleBytes < fourGiB) {
     // Either no .wslconfig, or a .wslconfig with no explicit memory key:
     // fall back to the VM-visible memory (os.totalmem reflects the VM
     // allocation directly inside WSL2, so compare without halving).
     if (diag.wslconfig) {
-      notes.push(`WSL .wslconfig has no memory limit set; WSL is currently limited to ~${visibleGB}GB.`);
-      notes.push("Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB");
+      if (diag.wslconfig.hasWsl2Section === false) {
+        notes.push(
+          `WSL .wslconfig has no [wsl2] section; WSL is currently limited to ~${visibleGB}GB.`,
+        );
+        notes.push("Add [wsl2] memory=8GB to %USERPROFILE%\\.wslconfig, then run wsl --shutdown.");
+      } else {
+        notes.push(
+          `WSL .wslconfig has no memory limit set; WSL is currently limited to ~${visibleGB}GB.`,
+        );
+        notes.push("Recommended: at least 4GB. Edit %USERPROFILE%\\.wslconfig [wsl2] memory=8GB");
+      }
     } else {
       notes.push(`No .wslconfig found. WSL is currently limited to ~${visibleGB}GB memory.`);
       notes.push("Tip: create %USERPROFILE%\\.wslconfig to set explicit resource limits.");
@@ -362,7 +456,7 @@ export function buildWSLDiagnosticNotes(diag: WSLDiagnostics): string[] {
 
   if (diag.wslconfig && diag.wslconfig.processors !== null && diag.wslconfig.processors < 2) {
     notes.push(
-      `WSL processor limit is ${diag.wslconfig.processors} — OpenClaw performs better with 2+ cores.`,
+      `WSL processor limit is ${diag.wslconfig.processors} - OpenClaw performs better with 2+ cores.`,
     );
     notes.push("Edit %USERPROFILE%\\.wslconfig [wsl2] processors=4");
   }
@@ -383,17 +477,17 @@ export function buildWSLInfoSummary(diag: WSLDiagnostics): string | null {
   if (diag.kernelVersion) {
     parts.push(`kernel ${diag.kernelVersion}`);
   }
-  parts.push(diag.systemdAvailable ? "systemd ✓" : "systemd ✗");
+  parts.push(diag.systemdAvailable ? "systemd OK" : "systemd unavailable");
   if (diag.isWSL2 && diag.wslconfig?.memory) {
     parts.push(`memory limit ${diag.wslconfig.memory}`);
   }
   if (diag.isWSL2 && diag.wslconfig?.processors) {
     parts.push(`${diag.wslconfig.processors} processors`);
   }
-  return parts.join(" · ");
+  return parts.join(" | ");
 }
 
-// ─── Doctor Contribution Entry Point ────────────────────────────
+// Doctor contribution entry point
 
 /**
  * Doctor health contribution: WSL environment diagnostics.
@@ -403,7 +497,7 @@ export function buildWSLInfoSummary(diag: WSLDiagnostics): string | null {
  * issues are found, a diagnostics note with actionable suggestions.
  *
  * systemd diagnostics are intentionally left to the gateway daemon
- * flow to avoid duplicate messaging — this contribution focuses on
+ * flow to avoid duplicate messaging; this contribution focuses on
  * environment context and resource limits.
  */
 export async function noteWSLEnvironment(): Promise<void> {

@@ -15,9 +15,10 @@ import {
   parseINI,
   parseMemoryToMB,
   type WSLDiagnostics,
+  windowsPathToDefaultWslMountPath,
 } from "./doctor-wsl.js";
 
-// ─── parseINI ───────────────────────────────────────────────────
+// parseINI
 
 describe("parseINI", () => {
   it("parses a standard wsl.conf file", () => {
@@ -37,6 +38,17 @@ describe("parseINI", () => {
     const content = ["# comment", "; also a comment", "", "[boot]", "systemd=true"].join("\n");
     const result = parseINI(content);
     expect(result["boot"]).toEqual({ systemd: "true" });
+  });
+
+  it("strips trailing comments from values", () => {
+    const content = [
+      "[wsl2]",
+      "memory=2GB # low-memory test",
+      "processors=1 ; constrained CPU",
+      "swap=4GB",
+    ].join("\n");
+    const result = parseINI(content);
+    expect(result["wsl2"]).toEqual({ memory: "2GB", processors: "1", swap: "4GB" });
   });
 
   it("handles Windows CRLF line endings", () => {
@@ -60,7 +72,19 @@ describe("parseINI", () => {
   });
 });
 
-// ─── parseMemoryToMB ────────────────────────────────────────────
+describe("windowsPathToDefaultWslMountPath", () => {
+  it("converts Windows drive paths to the default WSL mount path", () => {
+    expect(windowsPathToDefaultWslMountPath("C:\\Users\\Jane")).toBe("/mnt/c/Users/Jane");
+    expect(windowsPathToDefaultWslMountPath("D:/Work/OpenClaw")).toBe("/mnt/d/Work/OpenClaw");
+  });
+
+  it("returns null for non-drive paths", () => {
+    expect(windowsPathToDefaultWslMountPath("%USERPROFILE%")).toBeNull();
+    expect(windowsPathToDefaultWslMountPath("/mnt/c/Users/Jane")).toBeNull();
+  });
+});
+
+// parseMemoryToMB
 
 describe("parseMemoryToMB", () => {
   it("parses GB values", () => {
@@ -105,7 +129,7 @@ describe("parseMemoryToMB", () => {
   });
 });
 
-// ─── buildWSLDiagnosticNotes ────────────────────────────────────
+// buildWSLDiagnosticNotes
 
 describe("buildWSLDiagnosticNotes", () => {
   function healthyWSL2Diag(): WSLDiagnostics {
@@ -154,6 +178,15 @@ describe("buildWSLDiagnosticNotes", () => {
     expect(buildWSLDiagnosticNotes(diag)).toEqual([]);
   });
 
+  it("warns when configured memory is adequate but effective WSL memory is low", () => {
+    const diag = healthyWSL2Diag();
+    diag.wslconfig = { memory: "8GB", processors: 4, swap: "4GB" };
+    diag.wslVisibleMemoryBytes = 3 * 1024 * 1024 * 1024;
+    const notes = buildWSLDiagnosticNotes(diag);
+    expect(notes.some((n) => n.includes("currently exposes ~3GB"))).toBe(true);
+    expect(notes.some((n) => n.includes("wsl --shutdown"))).toBe(true);
+  });
+
   it("warns when no .wslconfig and WSL visible memory is below 4GB", () => {
     const diag = healthyWSL2Diag();
     diag.wslconfig = null;
@@ -161,6 +194,15 @@ describe("buildWSLDiagnosticNotes", () => {
     const notes = buildWSLDiagnosticNotes(diag);
     expect(notes.some((n) => n.includes("limited to ~3GB"))).toBe(true);
     expect(notes.some((n) => n.includes(".wslconfig"))).toBe(true);
+  });
+
+  it("warns when .wslconfig exists without a [wsl2] section", () => {
+    const diag = healthyWSL2Diag();
+    diag.wslconfig = { hasWsl2Section: false, memory: null, processors: null, swap: null };
+    diag.wslVisibleMemoryBytes = 3 * 1024 * 1024 * 1024;
+    const notes = buildWSLDiagnosticNotes(diag);
+    expect(notes.some((n) => n.includes("has no [wsl2] section"))).toBe(true);
+    expect(notes.some((n) => n.includes("Add [wsl2] memory=8GB"))).toBe(true);
   });
 
   it("does not warn when no .wslconfig but WSL visible memory is ample", () => {
@@ -205,6 +247,7 @@ describe("buildWSLDiagnosticNotes", () => {
     diag.wslVisibleMemoryBytes = Math.round(3.5 * 1024 * 1024 * 1024);
     const notes = buildWSLDiagnosticNotes(diag);
     expect(notes.some((n) => n.includes("No .wslconfig found"))).toBe(true);
+    expect(notes.some((n) => n.includes("~3.5GB"))).toBe(true);
   });
 
   it("falls back to visible memory when .wslconfig omits the memory key", () => {
@@ -226,7 +269,7 @@ describe("buildWSLDiagnosticNotes", () => {
   });
 });
 
-// ─── buildWSLInfoSummary ────────────────────────────────────────
+// buildWSLInfoSummary
 
 describe("buildWSLInfoSummary", () => {
   it("produces a full summary for a healthy WSL2 environment", () => {
@@ -240,13 +283,13 @@ describe("buildWSLInfoSummary", () => {
       wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     });
     expect(summary).toContain("WSL2");
-    expect(summary).toContain("systemd ✓");
+    expect(summary).toContain("systemd OK");
     expect(summary).toContain("memory limit 8GB");
     expect(summary).toContain("4 processors");
     expect(summary).toContain("kernel");
   });
 
-  it("shows systemd ✗ in summary when unavailable", () => {
+  it("shows systemd unavailable in summary when unavailable", () => {
     const summary = buildWSLInfoSummary({
       isWSL: true,
       isWSL2: true,
@@ -256,7 +299,7 @@ describe("buildWSLInfoSummary", () => {
       kernelVersion: "5.15.153.1-microsoft-standard-WSL2",
       wslVisibleMemoryBytes: 32 * 1024 * 1024 * 1024,
     });
-    expect(summary).toContain("systemd ✗");
+    expect(summary).toContain("systemd unavailable");
   });
 
   it("omits .wslconfig resource fields from summary on WSL1", () => {
@@ -285,7 +328,7 @@ describe("buildWSLInfoSummary", () => {
       wslVisibleMemoryBytes: 16 * 1024 * 1024 * 1024,
     });
     expect(summary).toContain("WSL1");
-    expect(summary).toContain("systemd ✗");
+    expect(summary).toContain("systemd unavailable");
   });
 
   it("returns null for non-WSL environments", () => {
