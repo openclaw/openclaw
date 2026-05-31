@@ -24,12 +24,14 @@ export function listTasksForSessionKeyForStatus(sessionKey: string): TaskRecord[
   return listTasksForSessionKey(sessionKey);
 }
 
-export function listTasksForAgentIdForStatus(agentId: string): TaskRecord[] {
-  return listTasksForAgentId(agentId);
+export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: string): TaskRecord[] {
+  return listTaskRecords().filter(
+    (task) => task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey,
+  );
 }
 
-export function listTaskRecordsForStatus(): TaskRecord[] {
-  return listTaskRecords();
+export function listTasksForAgentIdForStatus(agentId: string): TaskRecord[] {
+  return listTasksForAgentId(agentId);
 }
 
 export function findTaskByRunIdForStatus(runId: string): TaskRecord | undefined {

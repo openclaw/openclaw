@@ -141,9 +141,11 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
 });
 
 vi.mock("./runtime.js", async () => {
-  const { createChannelIngressQueue } = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/channel-outbound")
-  >("openclaw/plugin-sdk/channel-outbound");
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
+    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
+      "openclaw/plugin-sdk/plugin-state-test-runtime",
+    ),
+  );
   const stateDir = `/tmp/openclaw-whatsapp-inbound-media-${Date.now()}-${Math.random()}`;
   return {
     getOptionalWhatsAppRuntime: () => undefined,

@@ -50,6 +50,48 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function buildDedupeTerminalSnapshot(params: {
+  status: AgentRunTerminalOutcome["status"];
+  startedAt?: number;
+  endedAt: number;
+  error?: string;
+  stopReason?: string;
+  livenessState?: string;
+  yielded: boolean;
+  timeoutPhase: unknown;
+  providerStarted: unknown;
+}): AgentWaitTerminalSnapshot {
+  const terminalOutcome = buildAgentRunTerminalOutcome({
+    status: params.status,
+    livenessState: params.livenessState,
+    error: params.error,
+    stopReason: params.stopReason,
+    timeoutPhase: params.timeoutPhase,
+    providerStarted: params.providerStarted,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+  });
+  const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
+  return {
+    status: normalized.status,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+    error:
+      normalized.status === "error"
+        ? normalized.error
+        : normalized.status === "timeout"
+          ? terminalOutcome.error
+          : undefined,
+    stopReason: params.stopReason,
+    livenessState: params.livenessState,
+    ...(params.yielded ? { yielded: params.yielded } : {}),
+    ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
+    ...(terminalOutcome.providerStarted !== undefined
+      ? { providerStarted: terminalOutcome.providerStarted }
+      : {}),
+  };
+}
+
 function removeWaiter(runId: string, waiter: () => void): void {
   const waiters = AGENT_WAITERS_BY_RUN_ID.get(runId);
   if (!waiters) {
@@ -127,69 +169,26 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         ? payload.summary
         : entry.error?.message;
 
-  if (status === "ok" || status === "timeout") {
-    const terminalOutcome = buildAgentRunTerminalOutcome({
-      status,
-      livenessState,
-      error: errorMessage,
-      stopReason,
-      timeoutPhase,
-      providerStarted,
-      startedAt,
-      endedAt,
-    });
-    const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
-    return {
-      status: normalized.status,
-      startedAt,
-      endedAt,
-      error:
-        normalized.status === "error"
-          ? normalized.error
-          : normalized.status === "timeout"
-            ? terminalOutcome.error
-            : undefined,
-      stopReason,
-      livenessState,
-      ...(yielded ? { yielded } : {}),
-      ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
-      ...(terminalOutcome.providerStarted !== undefined
-        ? { providerStarted: terminalOutcome.providerStarted }
-        : {}),
-    };
+  const terminalStatus =
+    status === "ok" || status === "timeout" || status === "error"
+      ? status
+      : entry.ok
+        ? null
+        : "error";
+  if (!terminalStatus) {
+    return null;
   }
-  if (status === "error" || !entry.ok) {
-    const terminalOutcome = buildAgentRunTerminalOutcome({
-      status: "error",
-      livenessState,
-      error: errorMessage,
-      stopReason,
-      timeoutPhase,
-      providerStarted,
-      startedAt,
-      endedAt,
-    });
-    const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
-    return {
-      status: normalized.status,
-      startedAt,
-      endedAt,
-      error:
-        normalized.status === "error"
-          ? normalized.error
-          : normalized.status === "timeout"
-            ? terminalOutcome.error
-            : undefined,
-      stopReason,
-      livenessState,
-      ...(yielded ? { yielded } : {}),
-      ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
-      ...(terminalOutcome.providerStarted !== undefined
-        ? { providerStarted: terminalOutcome.providerStarted }
-        : {}),
-    };
-  }
-  return null;
+  return buildDedupeTerminalSnapshot({
+    status: terminalStatus,
+    startedAt,
+    endedAt,
+    error: errorMessage,
+    stopReason,
+    livenessState,
+    yielded,
+    timeoutPhase,
+    providerStarted,
+  });
 }
 
 function terminalOutcomeFromWaitSnapshot(

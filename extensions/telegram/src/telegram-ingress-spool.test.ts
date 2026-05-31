@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests as createChannelIngressQueue,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";

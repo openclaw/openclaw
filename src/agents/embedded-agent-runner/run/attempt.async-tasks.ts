@@ -3,7 +3,7 @@ import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import {
   findTaskByRunIdForStatus,
-  listTaskRecordsForStatus,
+  listTasksForOwnerOrRequesterSessionKeyForStatus,
 } from "../../../tasks/task-status-access.js";
 
 export type AsyncStartedToolMeta = {
@@ -101,14 +101,8 @@ function collectAsyncTaskRunIds(
   if (!normalizedSessionKey) {
     return runIds;
   }
-  for (const task of listTaskRecordsForStatus()) {
+  for (const task of listTasksForOwnerOrRequesterSessionKeyForStatus(normalizedSessionKey)) {
     if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
-      continue;
-    }
-    if (
-      task.requesterSessionKey !== normalizedSessionKey &&
-      task.ownerKey !== normalizedSessionKey
-    ) {
       continue;
     }
     if (isTerminalTaskStatus(task.status)) {
@@ -141,7 +135,7 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   toolMetas: readonly AsyncStartedToolMeta[];
 }): boolean {
   const sessionKey = params.sessionKey?.trim();
-  if (!isCronRunSessionKey(sessionKey)) {
+  if (!sessionKey || !isCronRunSessionKey(sessionKey)) {
     return false;
   }
   if (
@@ -151,11 +145,10 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   ) {
     return true;
   }
-  return listTaskRecordsForStatus().some(
+  return listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey).some(
     (task) =>
       COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "") &&
       !isTerminalTaskStatus(task.status) &&
-      (task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey) &&
       Boolean(task.runId?.trim()),
   );
 }

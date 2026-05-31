@@ -173,6 +173,7 @@ type OpenAIResponsesOptions = BaseStreamOptions & {
   reasoning?: OpenAIReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
+  replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
 };
@@ -908,6 +909,16 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
   return isOpenAIResponsesReasoningReplayMetadata(value) ? value : undefined;
 }
 
+function normalizeOpenAIResponsesReasoningReplayItem(
+  item: ReplayableResponseReasoningItem,
+): ReplayableResponseReasoningItem {
+  const record = item as ReplayableResponseReasoningItem & Record<string, unknown>;
+  if (record.type !== "reasoning" || Array.isArray(record.summary)) {
+    return item;
+  }
+  return { ...record, summary: [] } as ReplayableResponseReasoningItem;
+}
+
 function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
   context: OpenAIResponsesReplayContext,
@@ -916,16 +927,18 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } =
     item as ReplayableResponseReasoningItem & Record<string, unknown>;
   if (!("encrypted_content" in rest)) {
-    return rest as ReplayableResponseReasoningItem;
+    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const metadata =
     blockMetadata ??
     (isOpenAIResponsesReasoningReplayMetadata(rawMetadata) ? rawMetadata : undefined);
   if (encryptedReasoningReplayMetadataMatches(metadata, context)) {
-    return rest as ReplayableResponseReasoningItem;
+    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const stripped = stripEncryptedContentFields(rest);
-  return stripped.value as ReplayableResponseReasoningItem;
+  return normalizeOpenAIResponsesReasoningReplayItem(
+    stripped.value as ReplayableResponseReasoningItem,
+  );
 }
 
 async function createResponsesStreamWithEncryptedContentRetry(params: {
@@ -1145,6 +1158,7 @@ function convertResponsesMessages(
               delete replayableReasoningItem.id;
             }
             if (
+              shouldReplayResponsesItemIds &&
               model.provider === "github-copilot" &&
               !isSafeResponsesReplayItemId(replayableReasoningItem.id)
             ) {
@@ -1190,7 +1204,7 @@ function convertResponsesMessages(
               : undefined;
           output.push({
             type: "function_call",
-            id: itemId,
+            ...(itemId ? { id: itemId } : {}),
             call_id: callId,
             name: block.name,
             arguments:
@@ -2077,6 +2091,12 @@ export function buildOpenAIResponsesParams(
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
+  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
+    storeMode: "disable",
+  });
+  const policyAllowsReplayIds = payloadPolicy.explicitStore !== false;
+  const replayResponsesItemIds =
+    !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   const messages = convertResponsesMessages(
     model,
     context,
@@ -2085,7 +2105,7 @@ export function buildOpenAIResponsesParams(
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
       replayReasoningItems: true,
-      replayResponsesItemIds: !isNativeCodexResponses,
+      replayResponsesItemIds,
       authProfileId: options?.authProfileId,
       sessionId: options?.sessionId,
     },
@@ -2095,9 +2115,6 @@ export function buildOpenAIResponsesParams(
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
-  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "disable",
-  });
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,

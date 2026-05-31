@@ -238,4 +238,92 @@ describe("convertResponsesMessages", () => {
       ),
     ).not.toHaveProperty("id");
   });
+
+  it("omits Responses replay item ids when requested by store-disabled callers", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc|fc_prior",
+            toolName: "price_lookup",
+            content: [{ type: "text", text: "$83.95" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    const reasoningItem = input.find((item) => item.type === "reasoning");
+    expect(reasoningItem).toMatchObject({
+      type: "reasoning",
+      encrypted_content: "ciphertext",
+      summary: [],
+    });
+    expect(reasoningItem).not.toHaveProperty("id");
+
+    const assistantMessage = input.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expect(assistantMessage).toMatchObject({
+      type: "message",
+      role: "assistant",
+      phase: "commentary",
+    });
+    expect(assistantMessage).not.toHaveProperty("id");
+
+    const functionCall = input.find((item) => item.type === "function_call");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      call_id: "call_abc",
+    });
+    expect(functionCall).not.toHaveProperty("id");
+  });
 });

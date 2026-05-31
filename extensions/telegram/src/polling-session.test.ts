@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { createChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests as createChannelIngressQueue,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openOpenClawStateDatabase,
-  type OpenClawStateTestDatabase,
+  type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
@@ -106,7 +106,10 @@ type WorkerPollErrorListener = (message: {
 type WorkerMessageListener = (message: TelegramIngressWorkerMessage) => void;
 type AsyncVoidFn = () => Promise<void>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
-type TelegramPollingTestDatabase = Pick<OpenClawStateTestDatabase, "channel_ingress_events">;
+type TelegramPollingTestDatabase = Pick<
+  OpenClawStateKyselyDatabaseForTests,
+  "channel_ingress_events"
+>;
 
 const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
 

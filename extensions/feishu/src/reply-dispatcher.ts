@@ -575,7 +575,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
     const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
       await closeStreaming(options);
-      typingCallbacks?.onIdle?.();
+      await Promise.resolve(typingCallbacks?.onIdle?.());
     });
     idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
     return nextIdleSideEffects;
@@ -609,7 +609,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
-        await typingCallbacks?.onReplyStart?.();
+        await Promise.resolve(typingCallbacks?.onReplyStart?.());
       },
       deliver: async (payload: ReplyPayload, info) => {
         if (info?.kind === "final") {

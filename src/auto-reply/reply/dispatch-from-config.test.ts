@@ -5043,6 +5043,72 @@ describe("dispatchReplyFromConfig", () => {
     expect(processedEvent?.sessionKey).toBe("agent:main:main");
   });
 
+  it("carries the session store UUID on interactive diagnostic events", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "test-uuid-1234",
+    };
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-1",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "test-uuid-1234",
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
+      sessionId: "test-uuid-1234",
+      sessionKey: "agent:main:main",
+      state: "processing",
+      reason: "message_start",
+    });
+  });
+
+  it("does not stamp a command target's UUID under the source session key", async () => {
+    // Native command turn: runs in the source conversation but targets a
+    // different session. resolveSessionStoreLookup is command-target-aware, so
+    // its entry is the *target's* — while the lifecycle reports the *source*
+    // key. The UUID must NOT be attached here, to avoid mis-associating a
+    // session id with the wrong session key (agentweave#187).
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "target-session-uuid-9999",
+    };
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      CommandSource: "native",
+      SessionKey: "agent:main:source-convo",
+      CommandTargetSessionKey: "agent:main:target-session",
+      MessageSid: "msg-1",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(1);
+    const queued = diagnosticMocks.logMessageQueued.mock.calls[0]?.[0] as
+      | { sessionId?: unknown; sessionKey?: unknown }
+      | undefined;
+    expect(queued?.sessionKey).toBe("agent:main:source-convo");
+    expect(queued?.sessionId).toBeUndefined();
+  });
+
   it("marks diagnostic progress for real reply events but not reply start callbacks", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
