@@ -60,12 +60,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Result of applying a stored chat draft to the current composer input. */
 internal data class DraftApplication(
   val input: String,
   val lastAppliedDraft: String?,
   val consumed: Boolean,
 )
 
+/** Applies a draft exactly once so restored prompts do not overwrite user edits. */
 internal fun applyDraftText(
   draftText: String?,
   currentInput: String,
@@ -91,6 +93,7 @@ internal fun applyDraftText(
   )
 }
 
+/** Chat input surface for text, image attachments, thinking level, and run controls. */
 @Composable
 fun ChatComposer(
   draftText: String?,
