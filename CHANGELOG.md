@@ -3240,7 +3240,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- CLI/uninstall: preserve configured workspace directories during state-only cleanup, so nested workspaces under `.openclaw` are not deleted unless workspace removal is selected. Fixes #75052. Thanks @Jason-Bai.
 - CLI/message: skip eager model context warmup and preserve channel-declared gateway execution for Discord and Telegram message actions, avoiding Codex app-server/model discovery during simple send/read commands. Thanks @fuller-stack-dev.
 - Agents/exec approvals: parse exec approval result metadata with balanced parentheses so nested-paren denial and finished payloads such as `Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): ...` are matched and routed to the denied followup branch instead of falling through to the generic followup path. (#72268) Thanks @amittell.
 - Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
