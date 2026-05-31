@@ -571,6 +571,18 @@ async function prepareCronRunContext(params: {
     config: cfgWithAgentDefaults,
     workspaceDir,
     allowGatewaySubagentBinding: true,
+    ...(input.onExecutionPhase
+      ? {
+          onLoadProgress: (runtimePlugins) => {
+            input.onExecutionPhase?.({
+              jobId: input.job.id,
+              agentId,
+              phase: "runtime_plugins",
+              runtimePlugins,
+            });
+          },
+        }
+      : {}),
   });
 
   const isGmailHook = hookExternalContentSource === "gmail";

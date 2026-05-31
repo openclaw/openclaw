@@ -2,6 +2,7 @@
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { RuntimePluginLoadProgress } from "../plugins/runtime/load-diagnostics.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
 
@@ -198,6 +199,7 @@ export type CronAgentExecutionStarted = {
   tool?: string;
   toolCallId?: string;
   itemId?: string;
+  runtimePlugins?: RuntimePluginLoadProgress;
   /** @deprecated Use phase-specific execution milestones for watchdog progress. */
   firstModelCallStarted?: boolean;
 };

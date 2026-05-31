@@ -37,4 +37,39 @@ describe("runCronIsolatedAgentTurn runtime plugins loading", () => {
       resolveCronDeliveryPlanMock.mock.invocationCallOrder[0],
     );
   });
+
+  it("reports runtime plugin load progress through cron execution phases", async () => {
+    const phases: unknown[] = [];
+    ensureRuntimePluginsLoadedMock.mockImplementation((options: Record<string, unknown>) => {
+      const onLoadProgress = options.onLoadProgress;
+      if (typeof onLoadProgress === "function") {
+        onLoadProgress({
+          pluginIds: ["telegram", "memory-core"],
+          completedPluginIds: ["telegram"],
+          inFlightPluginId: "memory-core",
+          inFlightPhase: "register",
+        });
+      }
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeIsolatedAgentTurnParams(),
+      onExecutionPhase: (info) => {
+        phases.push(info);
+      },
+    });
+
+    expect(result.status).toBe("ok");
+    expect(phases).toContainEqual(
+      expect.objectContaining({
+        phase: "runtime_plugins",
+        runtimePlugins: {
+          pluginIds: ["telegram", "memory-core"],
+          completedPluginIds: ["telegram"],
+          inFlightPluginId: "memory-core",
+          inFlightPhase: "register",
+        },
+      }),
+    );
+  });
 });

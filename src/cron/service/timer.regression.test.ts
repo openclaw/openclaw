@@ -3244,6 +3244,12 @@ describe("cron service timer regressions", () => {
             onExecutionPhase?.({
               jobId: "isolated-before-agent-reply-unhandled-82811",
               phase: "runtime_plugins",
+              runtimePlugins: {
+                pluginIds: ["telegram", "memory-core"],
+                completedPluginIds: ["telegram"],
+                inFlightPluginId: "memory-core",
+                inFlightPhase: "register",
+              },
             });
             started.resolve();
             abortSignal?.addEventListener(
@@ -3269,6 +3275,9 @@ describe("cron service timer regressions", () => {
       expect(job.state.lastStatus).toBe("error");
       expect(job.state.lastError).toContain("stalled before execution start");
       expect(job.state.lastError).toContain("runtime-plugins");
+      expect(job.state.lastError).toContain("attempted=[telegram, memory-core]");
+      expect(job.state.lastError).toContain("completed=[telegram]");
+      expect(job.state.lastError).toContain("in-flight=memory-core/register");
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
