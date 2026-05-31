@@ -543,6 +543,23 @@ function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   );
 }
 
+function hasCurrentSourceReplyContext(input: RunMessageActionParams): boolean {
+  const provider = normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
+  if (!provider) {
+    return false;
+  }
+  if (provider === INTERNAL_MESSAGE_CHANNEL) {
+    return true;
+  }
+  const currentMessageId = input.toolContext?.currentMessageId;
+  return Boolean(
+    normalizeOptionalString(input.toolContext?.currentChannelId) ||
+    normalizeOptionalString(input.toolContext?.currentThreadTs) ||
+    (typeof currentMessageId === "number" && Number.isFinite(currentMessageId)) ||
+    normalizeOptionalString(currentMessageId),
+  );
+}
+
 function shouldUseInternalSourceReplySink(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
@@ -550,8 +567,7 @@ function shouldUseInternalSourceReplySink(
   return (
     input.action === "send" &&
     input.sourceReplyDeliveryMode === "message_tool_only" &&
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider) ===
-      INTERNAL_MESSAGE_CHANNEL &&
+    hasCurrentSourceReplyContext(input) &&
     Boolean(input.sessionKey?.trim()) &&
     !hasExplicitRouteParam(params)
   );
@@ -770,7 +786,7 @@ function buildInternalSourceReplyToolResult(payload: {
     content: [
       {
         type: "text",
-        text: `${action} visible reply to the current webchat conversation${sink}.`,
+        text: `${action} visible reply to the current source conversation${sink}.`,
       },
     ],
     details: {
