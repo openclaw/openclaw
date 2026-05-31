@@ -1,5 +1,5 @@
-import { LitElement, css, html } from "lit";
-import { property } from "lit/decorators.js";
+import { LitElement, css, html, type PropertyValues } from "lit";
+import { property, query } from "lit/decorators.js";
 
 export type FilePreviewModalFile = {
   path: string;
@@ -18,6 +18,7 @@ export class OpenClawFilePreviewModal extends LitElement {
   @property() readOnlyLabel = "read-only";
   @property() emptyTitle = "No files match";
   @property() emptySubtitle = "Try another file name or content search.";
+  @query(".search") private searchInput?: HTMLInputElement;
 
   static override styles = css`
     :host {
@@ -367,6 +368,7 @@ export class OpenClawFilePreviewModal extends LitElement {
         role="dialog"
         aria-label=${this.label}
         aria-modal="true"
+        tabindex="-1"
         @keydown=${this.handleKeydown}
       >
         <header class="head">
@@ -457,6 +459,16 @@ export class OpenClawFilePreviewModal extends LitElement {
     return files.find((file) => file.path === this.activePath) ?? files[0];
   }
 
+  protected override firstUpdated() {
+    this.focusModal();
+  }
+
+  protected override updated(changed: PropertyValues<this>) {
+    if (changed.has("activePath") || changed.has("query") || changed.has("files")) {
+      this.scrollActiveFileIntoView();
+    }
+  }
+
   private handleQueryInput = (event: Event) => {
     const query = (event.target as HTMLInputElement).value ?? "";
     this.dispatchEvent(
@@ -469,13 +481,56 @@ export class OpenClawFilePreviewModal extends LitElement {
   };
 
   private handleKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") {
-      return;
+    switch (event.key) {
+      case "Escape":
+        event.preventDefault();
+        event.stopPropagation();
+        this.emitClose();
+        return;
+      case "ArrowDown":
+        this.moveSelection(1, event);
+        return;
+      case "ArrowUp":
+        this.moveSelection(-1, event);
+        return;
+      default:
+        return;
     }
+  };
+
+  private focusModal() {
+    const target = this.searchInput ?? this.shadowRoot?.querySelector<HTMLElement>(".modal");
+    target?.focus({ preventScroll: true });
+  }
+
+  private moveSelection(offset: number, event: KeyboardEvent) {
     event.preventDefault();
     event.stopPropagation();
-    this.emitClose();
-  };
+    const files = this.filterFiles();
+    if (files.length === 0) {
+      return;
+    }
+    const activeFile = this.resolveActiveFile(files);
+    const currentIndex = activeFile ? files.findIndex((file) => file.path === activeFile.path) : -1;
+    const nextIndex = Math.max(0, Math.min(files.length - 1, currentIndex + offset));
+    const nextFile = files[nextIndex];
+    if (nextFile && nextFile.path !== activeFile?.path) {
+      this.emitSelect(nextFile.path);
+    }
+  }
+
+  private scrollActiveFileIntoView() {
+    this.updateComplete
+      .then(() => {
+        if (!this.isConnected) {
+          return;
+        }
+        this.shadowRoot
+          ?.querySelector<HTMLElement>(".item.is-active")
+          ?.scrollIntoView({ block: "nearest" });
+      })
+      .catch(() => {});
+  }
 
   private emitSelect(path: string) {
     this.dispatchEvent(

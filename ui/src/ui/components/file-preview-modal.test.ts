@@ -93,4 +93,46 @@ describe("openclaw-file-preview-modal", () => {
     expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps keyboard focus in the modal and navigates files with arrow keys", async () => {
+    const modal = await renderPreview();
+    const onSelect = vi.fn();
+    const onDocumentKeydown = vi.fn();
+    modal.addEventListener("file-preview-select", onSelect);
+    document.addEventListener("keydown", onDocumentKeydown);
+
+    const input = modal.shadowRoot?.querySelector<HTMLInputElement>(".search");
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    expect(modal.shadowRoot?.activeElement).toBe(input);
+
+    const arrowDown = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    input!.dispatchEvent(arrowDown);
+
+    expect(arrowDown.defaultPrevented).toBe(true);
+    expect(onDocumentKeydown).not.toHaveBeenCalled();
+    expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
+  });
+
+  it("blocks background arrow-key scrolling even when no files match", async () => {
+    const modal = await renderPreview("missing");
+    const onDocumentKeydown = vi.fn();
+    document.addEventListener("keydown", onDocumentKeydown);
+
+    const input = modal.shadowRoot?.querySelector<HTMLInputElement>(".search");
+    const arrowDown = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    input!.dispatchEvent(arrowDown);
+
+    expect(arrowDown.defaultPrevented).toBe(true);
+    expect(onDocumentKeydown).not.toHaveBeenCalled();
+  });
 });
