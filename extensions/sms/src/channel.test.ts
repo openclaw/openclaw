@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { resolveSmsTextChunkLimit, smsPlugin } from "./channel.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type ChannelModule = typeof import("./channel.js");
+
+let resolveSmsTextChunkLimit: ChannelModule["resolveSmsTextChunkLimit"];
+let smsPlugin: ChannelModule["smsPlugin"];
 
 const sendSmsViaTwilio = vi.hoisted(() =>
   vi.fn(async ({ to }) => ({
@@ -10,9 +14,18 @@ const sendSmsViaTwilio = vi.hoisted(() =>
   })),
 );
 
-vi.mock("./twilio.js", () => ({
-  sendSmsViaTwilio,
-}));
+beforeEach(async () => {
+  vi.resetModules();
+  sendSmsViaTwilio.mockClear();
+  vi.doMock("./twilio.js", () => ({
+    sendSmsViaTwilio,
+  }));
+  ({ resolveSmsTextChunkLimit, smsPlugin } = await import("./channel.js"));
+});
+
+afterEach(() => {
+  vi.doUnmock("./twilio.js");
+});
 
 describe("smsPlugin outbound", () => {
   it("declares an active text chunker and account-aware chunk limit", () => {

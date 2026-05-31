@@ -420,6 +420,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "communications":
       case "appearance":
       case "automation":
+      case "mcp":
       case "infrastructure":
       case "aiAgents":
         {

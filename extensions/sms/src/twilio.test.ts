@@ -29,15 +29,14 @@ function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSms
   };
 }
 
-function twilioRequestBody(init: RequestInit | undefined): URLSearchParams {
-  const body = init?.body;
-  if (body instanceof URLSearchParams) {
-    return body;
+function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchParams {
+  if (typeof init?.body === "string") {
+    return new URLSearchParams(init.body);
   }
-  if (typeof body !== "string") {
-    throw new Error("Expected Twilio request body to be URL-encoded.");
+  if (init?.body instanceof URLSearchParams) {
+    return init.body;
   }
-  return new URLSearchParams(body);
+  throw new Error("Expected Twilio request body to be URL-encoded.");
 }
 
 describe("Twilio SMS helpers", () => {
@@ -167,7 +166,7 @@ describe("Twilio SMS helpers", () => {
       authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
       "content-type": "application/x-www-form-urlencoded",
     });
-    const body = twilioRequestBody(init);
+    const body = readUrlEncodedRequestBody(init);
     expect(body.get("From")).toBe("+15557654321");
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
@@ -204,7 +203,7 @@ describe("Twilio SMS helpers", () => {
     });
 
     const [, init] = fetchImpl.mock.calls[0] ?? [];
-    const body = twilioRequestBody(init);
+    const body = readUrlEncodedRequestBody(init);
     expect(body.get("MessagingServiceSid")).toBe("MG123");
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
@@ -241,7 +240,7 @@ describe("Twilio SMS helpers", () => {
     });
 
     const [, init] = fetchImpl.mock.calls[0] ?? [];
-    const body = twilioRequestBody(init);
+    const body = readUrlEncodedRequestBody(init);
     expect(body.get("From")).toBe("+15557654321");
     expect(body.get("MessagingServiceSid")).toBeNull();
   });
