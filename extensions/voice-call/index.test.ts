@@ -173,6 +173,15 @@ function firstRuntimeConfig(): VoiceCallRuntime["config"] | undefined {
   return options?.config;
 }
 
+function managerMocks() {
+  return runtimeStub.manager as unknown as {
+    getCall: ReturnType<typeof vi.fn>;
+    getCallByProviderCallId: ReturnType<typeof vi.fn>;
+    getActiveCalls: ReturnType<typeof vi.fn>;
+    getCallHistory: ReturnType<typeof vi.fn>;
+  };
+}
+
 function expectWarningIncludes(text: string): void {
   expect(noopLogger.warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
@@ -497,8 +506,8 @@ describe("voice-call plugin", () => {
         objective: "Book a restaurant table.",
       },
     });
-    vi.mocked(runtimeStub.manager.getCall).mockReturnValue(privateCall);
-    vi.mocked(runtimeStub.manager.getActiveCalls).mockReturnValue([privateCall]);
+    managerMocks().getCall.mockReturnValue(privateCall);
+    managerMocks().getActiveCalls.mockReturnValue([privateCall]);
 
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as
@@ -533,9 +542,9 @@ describe("voice-call plugin", () => {
       endReason: "completed",
       transcript: [{ timestamp: Date.now(), speaker: "bot", text: "Done", isFinal: true }],
     });
-    vi.mocked(runtimeStub.manager.getCall).mockReturnValue(undefined);
-    vi.mocked(runtimeStub.manager.getCallByProviderCallId).mockReturnValue(undefined);
-    vi.mocked(runtimeStub.manager.getCallHistory).mockResolvedValue([completed]);
+    managerMocks().getCall.mockReturnValue(undefined);
+    managerMocks().getCallByProviderCallId.mockReturnValue(undefined);
+    managerMocks().getCallHistory.mockResolvedValue([completed]);
 
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as
@@ -572,12 +581,9 @@ describe("voice-call plugin", () => {
       endReason: "completed",
       transcript: [],
     });
-    vi.mocked(runtimeStub.manager.getCall).mockReturnValue(undefined);
-    vi.mocked(runtimeStub.manager.getCallByProviderCallId).mockReturnValue(undefined);
-    vi.mocked(runtimeStub.manager.getCallHistory).mockResolvedValue([
-      completed,
-      emptyLateDuplicate,
-    ]);
+    managerMocks().getCall.mockReturnValue(undefined);
+    managerMocks().getCallByProviderCallId.mockReturnValue(undefined);
+    managerMocks().getCallHistory.mockResolvedValue([completed, emptyLateDuplicate]);
 
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as

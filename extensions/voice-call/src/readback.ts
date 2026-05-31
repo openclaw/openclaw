@@ -1,7 +1,7 @@
 import type { CallRecord } from "./types.js";
 
 function redactObjectiveMetadata(metadata: CallRecord["metadata"]): CallRecord["metadata"] {
-  if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, "objective")) {
+  if (!metadata || !Object.hasOwn(metadata, "objective")) {
     return metadata;
   }
   const { objective: _objective, ...rest } = metadata;
