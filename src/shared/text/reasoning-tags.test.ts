@@ -263,6 +263,21 @@ describe("stripReasoningTagsFromText", () => {
       expectStrippedCase(testCase);
     });
 
+    it.each([
+      {
+        name: "strips reasoning tags with CJK fullwidth quotation marks (U+300C-U+300F)",
+        input: "A 「think」hidden『/log』 B",
+        expected: "A  B",
+      },
+      {
+        name: "strips mixed ASCII and fullwidth quote variants",
+        input: "A 「think hidden』 visible 」/log『 B",
+        expected: "A  visible  B",
+      },
+    ] as const)("$name", (testCase) => {
+      expectStrippedCase(testCase);
+    });
+
     it("handles long content and pathological backtick patterns efficiently", () => {
       const longContent = "x".repeat(10000);
       expect(stripReasoningTagsFromText(`<think>${longContent}</think>visible`)).toBe("visible");
