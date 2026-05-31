@@ -22,6 +22,12 @@ describe("persisted auth profile boundary", () => {
           provider: "openai",
           apiKey: "legacy-openai-key",
         },
+        "openai:legacy-malformed-ref": {
+          type: "apiKey",
+          provider: "openai",
+          apiKey: "legacy-fallback-key",
+          keyRef: { source: "env", id: "" },
+        },
         "minimax:default": {
           type: "token",
           provider: "minimax",
@@ -79,6 +85,11 @@ describe("persisted auth profile boundary", () => {
           type: "api_key",
           provider: "openai",
           key: "legacy-openai-key",
+        },
+        "openai:legacy-malformed-ref": {
+          type: "api_key",
+          provider: "openai",
+          key: "legacy-fallback-key",
         },
         "minimax:default": {
           type: "token",

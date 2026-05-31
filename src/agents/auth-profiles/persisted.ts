@@ -109,7 +109,11 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   if (entry.type === "apiKey") {
     entry.type = "api_key";
   }
-  if (!("key" in entry) && !("keyRef" in entry) && typeof entry["apiKey"] === "string") {
+  if (
+    !("key" in entry) &&
+    !coerceSecretRef(entry["keyRef"]) &&
+    typeof entry["apiKey"] === "string"
+  ) {
     entry["key"] = entry["apiKey"];
   }
   normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
