@@ -1,9 +1,5 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { getTelegramRuntime } from "./runtime.js";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
@@ -43,15 +39,6 @@ function openUpdateOffsetStore(env?: NodeJS.ProcessEnv): TelegramUpdateOffsetSto
       ...(env ? { env } : {}),
     })
   );
-}
-
-function resolveTelegramUpdateOffsetPath(
-  accountId?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const stateDir = resolveStateDir(env, os.homedir);
-  const normalized = normalizeTelegramUpdateOffsetAccountId(accountId);
-  return path.join(stateDir, "telegram", `update-offset-${normalized}.json`);
 }
 
 function extractBotIdFromToken(token?: string): string | null {
@@ -152,7 +139,6 @@ export async function readTelegramUpdateOffset(params: {
   env?: NodeJS.ProcessEnv;
   onRotationDetected?: (info: TelegramUpdateOffsetRotationInfo) => void | Promise<void>;
 }): Promise<number | null> {
-  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
   const key = normalizeTelegramUpdateOffsetAccountId(params.accountId);
   let storedValue: unknown;
   try {
@@ -160,16 +146,7 @@ export async function readTelegramUpdateOffset(params: {
   } catch {
     storedValue = undefined;
   }
-  const legacyValue = (await readJsonFileWithFallback<unknown>(filePath, null)).value;
-  const candidates = [safeParseState(storedValue), safeParseState(legacyValue)].filter(
-    (candidate): candidate is TelegramUpdateOffsetState => Boolean(candidate),
-  );
-  const compatibleCandidates = candidates.filter(
-    (candidate) => !rotationForToken(candidate, params.botToken),
-  );
-  const parsed = (compatibleCandidates.length > 0 ? compatibleCandidates : candidates).toSorted(
-    (left, right) => (right.lastUpdateId ?? -1) - (left.lastUpdateId ?? -1),
-  )[0];
+  const parsed = safeParseState(storedValue);
   if (!parsed) {
     return null;
   }
@@ -196,52 +173,19 @@ export async function writeTelegramUpdateOffset(params: {
     botId: extractBotIdFromToken(params.botToken),
     tokenFingerprint: fingerprintFromToken(params.botToken),
   };
-  try {
-    await openUpdateOffsetStore(params.env).register(
-      normalizeTelegramUpdateOffsetAccountId(params.accountId),
-      payload,
-    );
-    await fs.unlink(resolveTelegramUpdateOffsetPath(params.accountId, params.env)).catch((err) => {
-      const code = (err as { code?: string }).code;
-      if (code !== "ENOENT") {
-        throw err;
-      }
-    });
-  } catch {
-    await writeJsonFileAtomically(
-      resolveTelegramUpdateOffsetPath(params.accountId, params.env),
-      payload,
-    );
-  }
+  await openUpdateOffsetStore(params.env).register(
+    normalizeTelegramUpdateOffsetAccountId(params.accountId),
+    payload,
+  );
 }
 
 export async function deleteTelegramUpdateOffset(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  let storeDeleteError: unknown;
-  try {
-    await openUpdateOffsetStore(params.env).delete(
-      normalizeTelegramUpdateOffsetAccountId(params.accountId),
-    );
-  } catch (err) {
-    storeDeleteError = err;
-  }
-  let legacyDeleteError: unknown;
-  try {
-    await fs.unlink(resolveTelegramUpdateOffsetPath(params.accountId, params.env));
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "ENOENT") {
-      legacyDeleteError = err;
-    }
-  }
-  if (storeDeleteError) {
-    throw storeDeleteError;
-  }
-  if (legacyDeleteError) {
-    throw legacyDeleteError;
-  }
+  await openUpdateOffsetStore(params.env).delete(
+    normalizeTelegramUpdateOffsetAccountId(params.accountId),
+  );
 }
 
 export function setTelegramUpdateOffsetStoreForTest(
@@ -260,4 +204,40 @@ export async function listTelegramLegacyUpdateOffsetEntries(params: {
     return [];
   }
   return [{ key: normalizeTelegramUpdateOffsetAccountId(params.accountId), value: parsed }];
+}
+
+export function shouldReplaceTelegramUpdateOffsetEntry(params: {
+  existingValue: unknown;
+  incomingValue: unknown;
+  botToken?: string;
+}): boolean {
+  const existing = safeParseState(params.existingValue);
+  const incoming = safeParseState(params.incomingValue);
+  if (!incoming || incoming.lastUpdateId === null) {
+    return false;
+  }
+  if (!existing || existing.lastUpdateId === null) {
+    return true;
+  }
+  if (!params.botToken) {
+    if (existing.botId && incoming.botId && existing.botId !== incoming.botId) {
+      return false;
+    }
+    if (
+      existing.tokenFingerprint &&
+      incoming.tokenFingerprint &&
+      existing.tokenFingerprint !== incoming.tokenFingerprint
+    ) {
+      return false;
+    }
+  }
+  const incomingRotation = rotationForToken(incoming, params.botToken);
+  if (incomingRotation) {
+    return false;
+  }
+  const existingRotation = rotationForToken(existing, params.botToken);
+  if (existingRotation) {
+    return true;
+  }
+  return incoming.lastUpdateId > existing.lastUpdateId;
 }

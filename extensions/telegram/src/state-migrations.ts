@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import { resolveChannelAllowFromPath } from "openclaw/plugin-sdk/channel-pairing";
@@ -41,6 +42,7 @@ import {
   TELEGRAM_THREAD_BINDINGS_NAMESPACE,
   testing as telegramThreadBindingTesting,
 } from "./thread-bindings.js";
+import { resolveTelegramToken } from "./token.js";
 import {
   listTelegramLegacyTopicNameCacheEntries,
   resolveTopicNameCacheNamespace,
@@ -51,6 +53,7 @@ import {
 import {
   listTelegramLegacyUpdateOffsetEntries,
   normalizeTelegramUpdateOffsetAccountId,
+  shouldReplaceTelegramUpdateOffsetEntry,
   TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
   TELEGRAM_UPDATE_OFFSET_NAMESPACE,
 } from "./update-offset-store.js";
@@ -77,6 +80,30 @@ function resolveMigrationStateDir(params: { env: NodeJS.ProcessEnv; stateDir?: s
       path.dirname(path.dirname(path.dirname(resolveStorePath(undefined, { env: params.env })))),
     )
   );
+}
+
+function listTelegramLegacySidecarAccountIds(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+  prefix: string;
+  suffix: string;
+}): string[] {
+  let persistedAccountIds: string[] = [];
+  try {
+    persistedAccountIds = fs
+      .readdirSync(path.join(params.stateDir, "telegram"), { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          entry.name.startsWith(params.prefix) &&
+          entry.name.endsWith(params.suffix),
+      )
+      .map((entry) => entry.name.slice(params.prefix.length, -params.suffix.length))
+      .filter(Boolean);
+  } catch {
+    persistedAccountIds = [];
+  }
+  return uniqueStrings([...listTelegramAccountIds(params.cfg), ...persistedAccountIds]);
 }
 
 function detectTelegramMessageCacheLegacyStateMigration(params: {
@@ -151,11 +178,26 @@ function detectTelegramUpdateOffsetLegacyStateMigration(params: {
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
   const stateDir = resolveMigrationStateDir(params);
-  return listTelegramAccountIds(params.cfg).flatMap((accountId) => {
+  return listTelegramLegacySidecarAccountIds({
+    cfg: params.cfg,
+    stateDir,
+    prefix: "update-offset-",
+    suffix: ".json",
+  }).flatMap((accountId) => {
     const normalized = normalizeTelegramUpdateOffsetAccountId(accountId);
     const persistedPath = path.join(stateDir, "telegram", `update-offset-${normalized}.json`);
     if (!fileExists(persistedPath)) {
       return [];
+    }
+    let botToken: string | undefined;
+    try {
+      botToken =
+        resolveTelegramToken(params.cfg, {
+          accountId,
+          envToken: params.env.TELEGRAM_BOT_TOKEN,
+        }).token || undefined;
+    } catch {
+      botToken = undefined;
     }
     return {
       kind: "plugin-state-import",
@@ -169,6 +211,12 @@ function detectTelegramUpdateOffsetLegacyStateMigration(params: {
       cleanupSource: "rename",
       preview: `- Telegram update offset: ${persistedPath} → plugin state (${TELEGRAM_UPDATE_OFFSET_NAMESPACE})`,
       readEntries: () => listTelegramLegacyUpdateOffsetEntries({ accountId, persistedPath }),
+      shouldReplaceExistingEntry: ({ existingValue, incomingValue }) =>
+        shouldReplaceTelegramUpdateOffsetEntry({
+          existingValue,
+          incomingValue,
+          botToken,
+        }),
     };
   });
 }
@@ -237,8 +285,15 @@ function detectTelegramSentMessageCacheLegacyStateMigration(params: {
 function detectTelegramThreadBindingLegacyStateMigration(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  return listTelegramAccountIds(params.cfg).flatMap((accountId) => {
+  const stateDir = resolveMigrationStateDir(params);
+  return listTelegramLegacySidecarAccountIds({
+    cfg: params.cfg,
+    stateDir,
+    prefix: "thread-bindings-",
+    suffix: ".json",
+  }).flatMap((accountId) => {
     const persistedPath = telegramThreadBindingTesting.resolveBindingsPath(accountId, params.env);
     if (!fileExists(persistedPath)) {
       return [];

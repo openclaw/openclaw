@@ -469,42 +469,6 @@ function persistBindingsSafely(params: {
   });
 }
 
-function persistLegacyImportedBindingsSafely(params: {
-  accountId: string;
-  persist: boolean;
-  bindings: TelegramThreadBindingRecord[];
-  legacyPath: string;
-}): void {
-  if (!params.persist) {
-    return;
-  }
-  void enqueuePersistBindings(params)
-    .then(() => {
-      fs.unlinkSync(params.legacyPath);
-    })
-    .catch((err) => {
-      const code = (err as { code?: string }).code;
-      if (code !== "ENOENT") {
-        logVerbose(
-          `telegram thread bindings legacy import cleanup failed (${params.accountId}): ${String(err)}`,
-        );
-      }
-    });
-}
-
-function deleteLegacyBindingsFileSafely(params: { accountId: string; legacyPath: string }): void {
-  try {
-    fs.unlinkSync(params.legacyPath);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "ENOENT") {
-      logVerbose(
-        `telegram thread bindings legacy cleanup failed (${params.accountId}): ${String(err)}`,
-      );
-    }
-  }
-}
-
 function normalizeTimestampMs(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return Date.now();
@@ -565,23 +529,7 @@ export function createTelegramThreadBindingManager(params: {
   );
   const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
 
-  const loadedFromStore = loadBindingsFromStore(accountId);
-  const legacyPath = resolveBindingsPath(accountId);
-  const loadedByKey = new Map<string, TelegramThreadBindingRecord>();
-  for (const entry of loadedFromStore) {
-    loadedByKey.set(resolveBindingKey({ accountId, conversationId: entry.conversationId }), entry);
-  }
-  const legacyEntries = readLegacyBindingsFile(legacyPath, accountId);
-  let importedLegacyBinding = false;
-  for (const entry of legacyEntries) {
-    const key = resolveBindingKey({ accountId, conversationId: entry.conversationId });
-    if (loadedByKey.has(key)) {
-      continue;
-    }
-    loadedByKey.set(key, entry);
-    importedLegacyBinding = true;
-  }
-  const loaded = [...loadedByKey.values()];
+  const loaded = loadBindingsFromStore(accountId);
   for (const entry of loaded) {
     const key = resolveBindingKey({
       accountId,
@@ -591,16 +539,6 @@ export function createTelegramThreadBindingManager(params: {
       ...entry,
       accountId,
     });
-  }
-  if (importedLegacyBinding) {
-    persistLegacyImportedBindingsSafely({
-      accountId,
-      persist,
-      bindings: loaded,
-      legacyPath,
-    });
-  } else if (legacyEntries.length > 0 && persist) {
-    deleteLegacyBindingsFileSafely({ accountId, legacyPath });
   }
 
   const acpSessionKeys = new Set<string>();

@@ -1,11 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 import {
   TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
   TELEGRAM_UPDATE_OFFSET_NAMESPACE,
@@ -13,17 +13,20 @@ import {
   deleteTelegramUpdateOffset,
   readTelegramUpdateOffset,
   setTelegramUpdateOffsetStoreForTest,
+  shouldReplaceTelegramUpdateOffsetEntry,
   writeTelegramUpdateOffset,
 } from "./update-offset-store.js";
 
 describe("deleteTelegramUpdateOffset", () => {
+  let updateOffsetStore: PluginStateKeyedStore<TelegramUpdateOffsetState>;
+
   beforeEach(async () => {
-    const store = createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
+    updateOffsetStore = createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
       namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
       maxEntries: TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
     });
-    await store.clear();
-    setTelegramUpdateOffsetStoreForTest(store);
+    await updateOffsetStore.clear();
+    setTelegramUpdateOffsetStoreForTest(updateOffsetStore);
   });
 
   afterEach(() => {
@@ -31,7 +34,7 @@ describe("deleteTelegramUpdateOffset", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("removes the offset file so a new bot starts fresh", async () => {
+  it("removes the offset row so a new bot starts fresh", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
       await writeTelegramUpdateOffset({ accountId: "default", updateId: 432_000_000 });
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(432_000_000);
@@ -41,36 +44,10 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("keeps a missing offset file absent after delete", async () => {
+  it("keeps a missing offset row absent after delete", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
       await deleteTelegramUpdateOffset({ accountId: "nonexistent" });
       expect(await readTelegramUpdateOffset({ accountId: "nonexistent" })).toBeNull();
-    });
-  });
-
-  it("removes the legacy offset file even when plugin-state delete fails", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: 333, botId: "111111" }, null, 2)}\n`,
-        "utf-8",
-      );
-      setTelegramUpdateOffsetStoreForTest({
-        ...createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
-          namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
-          maxEntries: TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
-        }),
-        async delete() {
-          throw new Error("store delete failed");
-        },
-      });
-
-      await expect(deleteTelegramUpdateOffset({ accountId: "default" })).rejects.toThrow(
-        "store delete failed",
-      );
-      await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -86,7 +63,7 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("falls back to an atomic legacy file when plugin-state writes fail", async () => {
+  it("surfaces plugin-state write failures", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
       setTelegramUpdateOffsetStoreForTest({
         ...createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
@@ -98,79 +75,9 @@ describe("deleteTelegramUpdateOffset", () => {
         },
       });
 
-      await writeTelegramUpdateOffset({ accountId: "default", updateId: 808 });
-
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(808);
-    });
-  });
-
-  it("prefers a newer legacy fallback offset over stale plugin-state", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async () => {
-      const store = createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
-        namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
-        maxEntries: TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
-      });
-      setTelegramUpdateOffsetStoreForTest(store);
-      await writeTelegramUpdateOffset({ accountId: "default", updateId: 10 });
-      setTelegramUpdateOffsetStoreForTest({
-        ...store,
-        async register() {
-          throw new Error("store write failed");
-        },
-      });
-
-      await writeTelegramUpdateOffset({ accountId: "default", updateId: 20 });
-
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(20);
-    });
-  });
-
-  it("prefers token-compatible plugin-state over a higher stale legacy offset", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      await writeTelegramUpdateOffset({
-        accountId: "default",
-        updateId: 10,
-        botToken: "111111:current",
-      });
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify(
-          {
-            version: 3,
-            lastUpdateId: 999,
-            botId: "222222",
-            tokenFingerprint: "stale",
-          },
-          null,
-          2,
-        )}\n`,
-        "utf-8",
-      );
-
-      expect(
-        await readTelegramUpdateOffset({
-          accountId: "default",
-          botToken: "111111:current",
-        }),
-      ).toBe(10);
-    });
-  });
-
-  it("removes legacy fallback files after successful plugin-state writes", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: 10, botId: "111111" }, null, 2)}\n`,
-        "utf-8",
-      );
-
-      await writeTelegramUpdateOffset({ accountId: "default", updateId: 11 });
-
-      await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        writeTelegramUpdateOffset({ accountId: "default", updateId: 808 }),
+      ).rejects.toThrow("store write failed");
     });
   });
 
@@ -226,15 +133,12 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("invokes onRotationDetected for legacy offsets without bot identity", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify({ version: 1, lastUpdateId: 777 }, null, 2)}\n`,
-        "utf-8",
-      );
+  it("invokes onRotationDetected for imported legacy offsets without bot identity", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await updateOffsetStore.register("default", {
+        version: 1,
+        lastUpdateId: 777,
+      } as TelegramUpdateOffsetState);
 
       const rotations: Array<Record<string, unknown>> = [];
       const offset = await readTelegramUpdateOffset({
@@ -257,32 +161,8 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("reads legacy offset files when the plugin runtime is unavailable", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-primary.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: 4242, botId: "111111" }, null, 2)}\n`,
-        "utf-8",
-      );
-
-      setTelegramUpdateOffsetStoreForTest(undefined);
-
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(4242);
-    });
-  });
-
-  it("falls back to legacy offset files when the plugin-state read fails", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-primary.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: 5555, botId: "111111" }, null, 2)}\n`,
-        "utf-8",
-      );
-
+  it("returns null when the plugin-state read fails", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
       setTelegramUpdateOffsetStoreForTest({
         ...createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
           namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
@@ -293,8 +173,69 @@ describe("deleteTelegramUpdateOffset", () => {
         },
       });
 
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(5555);
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
     });
+  });
+
+  it("lets migration replace stale plugin-state with a higher compatible imported offset", () => {
+    const token = "111111:current";
+    expect(
+      shouldReplaceTelegramUpdateOffsetEntry({
+        botToken: token,
+        existingValue: {
+          version: 3,
+          lastUpdateId: 10,
+          botId: "111111",
+          tokenFingerprint: fingerprintTelegramBotToken(token),
+        },
+        incomingValue: {
+          version: 3,
+          lastUpdateId: 20,
+          botId: "111111",
+          tokenFingerprint: fingerprintTelegramBotToken(token),
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps plugin-state when the imported offset belongs to another bot", () => {
+    const token = "111111:current";
+    expect(
+      shouldReplaceTelegramUpdateOffsetEntry({
+        botToken: token,
+        existingValue: {
+          version: 3,
+          lastUpdateId: 10,
+          botId: "111111",
+          tokenFingerprint: fingerprintTelegramBotToken(token),
+        },
+        incomingValue: {
+          version: 3,
+          lastUpdateId: 999,
+          botId: "222222",
+          tokenFingerprint: "stale",
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps plugin-state across persisted bot-id conflicts when no token is available", () => {
+    expect(
+      shouldReplaceTelegramUpdateOffsetEntry({
+        existingValue: {
+          version: 3,
+          lastUpdateId: 10,
+          botId: "111111",
+          tokenFingerprint: "current-fingerprint",
+        },
+        incomingValue: {
+          version: 3,
+          lastUpdateId: 999,
+          botId: "222222",
+          tokenFingerprint: "stale-fingerprint",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("detects same-bot token rotation via the persisted fingerprint", async () => {
@@ -336,15 +277,13 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("treats v2 bot-id-only offsets as stale when token identity cannot be verified", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: 999, botId: "111111" }, null, 2)}\n`,
-        "utf-8",
-      );
+  it("treats imported v2 bot-id-only offsets as stale when token identity cannot be verified", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await updateOffsetStore.register("default", {
+        version: 2,
+        lastUpdateId: 999,
+        botId: "111111",
+      } as TelegramUpdateOffsetState);
 
       const rotations: Array<Record<string, unknown>> = [];
       const offset = await readTelegramUpdateOffset({
@@ -390,15 +329,12 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("treats legacy offset records without bot identity as stale when token is provided", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
-        `${JSON.stringify({ version: 1, lastUpdateId: 777 }, null, 2)}\n`,
-        "utf-8",
-      );
+  it("treats imported legacy offset records without bot identity as stale when token is provided", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await updateOffsetStore.register("default", {
+        version: 1,
+        lastUpdateId: 777,
+      } as TelegramUpdateOffsetState);
 
       expect(
         await readTelegramUpdateOffset({
@@ -409,22 +345,20 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("ignores invalid persisted update IDs from disk", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      const offsetPath = path.join(stateDir, "telegram", "update-offset-default.json");
-      await fs.mkdir(path.dirname(offsetPath), { recursive: true });
-      await fs.writeFile(
-        offsetPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: -1, botId: "111111" }, null, 2)}\n`,
-        "utf-8",
-      );
+  it("ignores invalid persisted update IDs from plugin-state", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await updateOffsetStore.register("default", {
+        version: 2,
+        lastUpdateId: -1,
+        botId: "111111",
+      } as TelegramUpdateOffsetState);
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
 
-      await fs.writeFile(
-        offsetPath,
-        `${JSON.stringify({ version: 2, lastUpdateId: Number.POSITIVE_INFINITY, botId: "111111" }, null, 2)}\n`,
-        "utf-8",
-      );
+      await updateOffsetStore.register("default", {
+        version: 2,
+        lastUpdateId: "not-a-number",
+        botId: "111111",
+      } as unknown as TelegramUpdateOffsetState);
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
     });
   });

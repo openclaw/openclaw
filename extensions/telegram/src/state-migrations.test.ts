@@ -399,6 +399,67 @@ describe("telegram state migrations", () => {
     }
   });
 
+  it("detects Telegram account sidecars even after the account was removed from config", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const updateOffsetPath = path.join(dir, "telegram", "update-offset-oldbot.json");
+    const threadBindingsPath = path.join(dir, "telegram", "thread-bindings-oldbot.json");
+    const now = Date.now();
+    try {
+      await mkdir(path.dirname(updateOffsetPath), { recursive: true });
+      await writeFile(
+        updateOffsetPath,
+        JSON.stringify({
+          version: 3,
+          lastUpdateId: 12345,
+          botId: "123456",
+          tokenFingerprint: "token:fingerprint",
+        }),
+      );
+      await writeFile(
+        threadBindingsPath,
+        JSON.stringify({
+          version: 1,
+          bindings: [
+            {
+              accountId: "oldbot",
+              conversationId: "-100:topic:7",
+              targetKind: "subagent",
+              targetSessionKey: "agent:main:subagent:child",
+              boundAt: now,
+              lastActivityAt: now,
+            },
+          ],
+        }),
+      );
+
+      const plans = await detectTelegramLegacyStateMigrations({ cfg: {}, env });
+      const updateOffsetPlan = plans.find((plan) => plan.sourcePath === updateOffsetPath);
+      const threadBindingsPlan = plans.find((plan) => plan.sourcePath === threadBindingsPath);
+
+      expect(updateOffsetPlan).toMatchObject({
+        kind: "plugin-state-import",
+        label: "Telegram update offset",
+        namespace: "telegram.update-offsets",
+      });
+      expect(threadBindingsPlan).toMatchObject({
+        kind: "plugin-state-import",
+        label: "Telegram thread bindings",
+        namespace: "telegram.thread-bindings",
+      });
+      if (!updateOffsetPlan || updateOffsetPlan.kind !== "plugin-state-import") {
+        throw new Error("expected orphaned update offset import plan");
+      }
+      if (!threadBindingsPlan || threadBindingsPlan.kind !== "plugin-state-import") {
+        throw new Error("expected orphaned thread bindings import plan");
+      }
+      expect(await updateOffsetPlan.readEntries()).toHaveLength(1);
+      expect(await threadBindingsPlan.readEntries()).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("imports legacy session-store sidecars into the current runtime scope", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
