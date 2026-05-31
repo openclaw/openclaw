@@ -56,6 +56,20 @@ describe("ensureSystemPromptCacheBoundary", () => {
     );
   });
 
+  it("does not add a boundary for an empty prompt", () => {
+    expect(ensureSystemPromptCacheBoundary("")).toBe("");
+    expect(ensureSystemPromptCacheBoundary(" \n\t ")).toBe(" \n\t ");
+  });
+
+  it("uses a per-turn addition directly when the base prompt is empty", () => {
+    expect(
+      prependSystemPromptAdditionAfterCacheBoundary({
+        systemPrompt: ensureSystemPromptCacheBoundary(""),
+        systemPromptAddition: "Per-turn media task hint",
+      }),
+    ).toBe("Per-turn media task hint");
+  });
+
   it("is idempotent for a marker-free prompt", () => {
     const once = ensureSystemPromptCacheBoundary("Marker-free override");
     expect(ensureSystemPromptCacheBoundary(once)).toBe(once);
