@@ -63,25 +63,9 @@ const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agent
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
 /**
- * Inline ACP model overlay — catalog #20.
- *
- * When a session ran via the ACP control plane (e.g. key =
- * `agent:copilot:acp:<uuid>` AND ACP metadata is persisted), the agent's
- * configured model is irrelevant: the actual model is selected inside the ACP
- * child process. We overlay a sentinel `{ provider: "acpx",
- * model: "<agentId>-acp" }` so the listing clearly signals "ACP runtime" and
- * does not mislead operators into thinking the configured model ran.
- *
- * Key-shape alone is not sufficient: ACP bridge sessions (translator.ts) also
- * use ACP-shaped keys but never persist `SessionAcpMeta` — they run the
- * normal configured model and must not receive the sentinel. The `acpRuntime`
- * flag is set at row-construction time from SQLite metadata.
- *
- * The resolver (`resolveSessionDisplayModelRef`) stays pure; this overlay
- * applies only at the emit sites in this file.
- *
- * NOTE: Will be replaced by a shared `applyAcpModelOverlay` helper from
- * `src/agents/acp-runtime-overlay.ts` once PR 2 lands.
+ * Applies the ACP display sentinel only after persisted ACP metadata proves the
+ * child process selected the model. ACP-shaped keys without metadata still use
+ * the normal configured model.
  */
 function applyAcpModelOverlayIfNeeded(
   modelRef: { provider: string; model: string },
@@ -106,6 +90,8 @@ function selectNewestSessionRows(rows: SessionRow[], limit: number | undefined):
   if (limit > TOP_N_SELECTION_LIMIT) {
     return rows.toSorted(compareSessionRowsByUpdatedAt).slice(0, limit);
   }
+  // Small limits keep a bounded sorted window instead of sorting every row from
+  // every selected session store.
   const selected: SessionRow[] = [];
   for (const row of rows) {
     const insertAt = selected.findIndex(
@@ -240,6 +226,8 @@ function stripChannelRecipientPrefix(
     return raw;
   }
   const stripped = raw.slice(prefix.length);
+  // Topic-qualified recipients still group by direct peer for runtime-policy
+  // lookup, so omit the topic suffix from the display lookup key.
   const topicMarkerIndex = stripped.toLowerCase().indexOf(":topic:");
   return topicMarkerIndex >= 0 ? stripped.slice(0, topicMarkerIndex) : stripped;
 }
@@ -272,6 +260,8 @@ function resolveDisplayRuntimePolicySessionKey(params: {
     stripChannelRecipientPrefix(to, channel) ??
     stripChannelRecipientPrefix(from, channel);
 
+  // Rebuild the same direct-message context used by runtime policy routing so
+  // list output can show the derived policy session key when it differs.
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
     cfg,
     sessionKey: key,
@@ -296,6 +286,7 @@ function resolveDisplayRuntimePolicySessionKey(params: {
     : undefined;
 }
 
+/** Lists persisted sessions across one or more selected session stores. */
 export async function sessionsCommand(
   opts: {
     json?: boolean;

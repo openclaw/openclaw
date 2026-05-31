@@ -18,6 +18,7 @@ function loadBackupVerifyRuntime(): Promise<BackupVerifyRuntime> {
   return backupVerifyRuntimeLoader.load();
 }
 
+/** Creates a backup archive and optionally verifies it before returning the result. */
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCreateOptions = {},
@@ -28,6 +29,8 @@ export async function backupCreateCommand(
   });
   if (opts.verify && !opts.dryRun) {
     const { backupVerifyCommand } = await loadBackupVerifyRuntime();
+    // Verification should not duplicate the create summary in human output; it
+    // only upgrades the returned result when the archive passes validation.
     await backupVerifyCommand(
       {
         ...runtime,

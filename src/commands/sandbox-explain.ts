@@ -52,6 +52,8 @@ function normalizeExplainSessionKey(params: {
   if (raw === "global") {
     return "global";
   }
+  // Bare session aliases are agent-main keys; fully qualified keys pass
+  // through unchanged above.
   return buildAgentMainSessionKey({
     agentId: params.agentId,
     mainKey: normalizeMainKey(raw),
@@ -115,6 +117,8 @@ function resolveActiveChannel(params: {
   ).trim();
   const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
   if (!normalizedCandidate) {
+    // Older session rows may not persist channel metadata; infer from the
+    // session-key suffix only as a fallback.
     return inferProviderFromSessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
@@ -133,6 +137,7 @@ function resolveActiveChannel(params: {
   });
 }
 
+/** Explains the effective sandbox and elevated-tool policy for one session. */
 export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
@@ -180,6 +185,8 @@ export async function sandboxExplainCommand(
   const elevatedAgentEnabled = elevatedAgent?.enabled !== false;
   const elevatedEnabled = elevatedGlobalEnabled && elevatedAgentEnabled;
 
+  // Elevated allowFrom is evaluated in two layers: global policy must allow
+  // the channel, and an agent override must also allow it when present.
   const globalAllow = channel ? elevatedGlobal?.allowFrom?.[channel] : undefined;
   const agentAllow = channel ? elevatedAgent?.allowFrom?.[channel] : undefined;
 

@@ -88,6 +88,7 @@ function pruneAutoFallbackPrimaryProbeState(params: {
   }
 }
 
+/** Primary/fallback model pair that can be tested for automatic fallback recovery. */
 export type AutoFallbackPrimaryProbe = {
   provider: string;
   model: string;
@@ -97,6 +98,7 @@ export type AutoFallbackPrimaryProbe = {
   fallbackAuthProfileIdSource?: "auto" | "user";
 };
 
+/** Finds an auto-selected fallback that should re-probe its original primary model. */
 export function resolveAutoFallbackPrimaryProbe(params: {
   entry:
     | Pick<
@@ -189,6 +191,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
   };
 }
 
+/** Records that a primary model was recently probed so fallback recovery stays bounded. */
 export function markAutoFallbackPrimaryProbe(params: {
   probe: AutoFallbackPrimaryProbe;
   sessionKey?: string | null;
@@ -220,6 +223,7 @@ export function markAutoFallbackPrimaryProbe(params: {
   });
 }
 
+/** Checks whether a session entry still represents the fallback selected for a probe. */
 export function entryMatchesAutoFallbackPrimaryProbe(
   entry:
     | Pick<
@@ -250,6 +254,7 @@ export function entryMatchesAutoFallbackPrimaryProbe(
   );
 }
 
+/** Clears an auto fallback selection after the primary model is usable again. */
 export function clearAutoFallbackPrimaryProbeSelection(
   entry: SessionEntry,
   now = Date.now(),
@@ -276,6 +281,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
 
 export { resolveAgentIdFromSessionKey };
 
+/** Resolves default and session-scoped agent ids from explicit input or session keys. */
 export function resolveSessionAgentIds(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
@@ -295,6 +301,7 @@ export function resolveSessionAgentIds(params: {
   return { defaultAgentId, sessionAgentId };
 }
 
+/** Resolves the effective agent id for a session. */
 export function resolveSessionAgentId(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
@@ -303,6 +310,7 @@ export function resolveSessionAgentId(params: {
   return resolveSessionAgentIds(params).sessionAgentId;
 }
 
+/** Returns the embedded execution contract, preferring agent config over defaults. */
 export function resolveAgentExecutionContract(
   cfg: OpenClawConfig | undefined,
   agentId?: string | null,
@@ -316,6 +324,7 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+/** Returns the effective skill allow/filter list for an agent. */
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
@@ -323,6 +332,7 @@ export function resolveAgentSkillsFilter(
   return resolveEffectiveAgentSkillFilter(cfg, agentId);
 }
 
+/** Returns only the model primary explicitly set on the agent. */
 export function resolveAgentExplicitModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -331,6 +341,7 @@ export function resolveAgentExplicitModelPrimary(
   return resolvePrimaryStringValue(raw);
 }
 
+/** Returns the agent primary model with defaults applied. */
 export function resolveAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -356,8 +367,10 @@ function updateAgentModelPrimary(
   return primary;
 }
 
+/** Config level updated when changing an effective primary model. */
 export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
 
+/** Updates the model primary at the narrowest config level that already owns it. */
 export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
@@ -382,6 +395,7 @@ export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): 
   return resolveAgentExplicitModelPrimary(cfg, agentId);
 }
 
+/** Returns the agent-level fallback override, including explicit empty fallback lists. */
 export function resolveAgentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
@@ -417,13 +431,16 @@ function resolveFirstModelFallbacksOverride(
   return undefined;
 }
 
+/** Source tier that supplied the selected subagent model config. */
 export type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
 
+/** Selected subagent model config plus the tier it came from. */
 export type SubagentModelConfigSelectionResult = {
   raw: AgentModelConfig;
   source: SubagentModelConfigSelectionSource;
 };
 
+/** Selects the model config that should seed subagent runs and records its source. */
 export function resolveSubagentModelConfigSelectionResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -449,6 +466,7 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
 }
 
+/** Selects the model config that should seed subagent runs. */
 export function resolveSubagentModelConfigSelection(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -457,6 +475,7 @@ export function resolveSubagentModelConfigSelection(params: {
   return resolveSubagentModelConfigSelectionResult(params)?.raw;
 }
 
+/** Returns subagent fallback overrides using subagent-specific precedence. */
 export function resolveSubagentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
@@ -488,6 +507,7 @@ function resolveSubagentSpawnModelFallbacksOverride(
   ]);
 }
 
+/** Resolves the agent id used for fallback decisions from explicit input or session key. */
 export function resolveFallbackAgentId(params: {
   agentId?: string | null;
   sessionKey?: string | null;
@@ -499,6 +519,7 @@ export function resolveFallbackAgentId(params: {
   return resolveAgentIdFromSessionKey(params.sessionKey);
 }
 
+/** Resolves the model fallback override for a run target. */
 export function resolveRunModelFallbacksOverride(params: {
   cfg: OpenClawConfig | undefined;
   agentId?: string | null;
@@ -513,6 +534,7 @@ export function resolveRunModelFallbacksOverride(params: {
   );
 }
 
+/** Reports whether the run target can use any configured fallback models. */
 export function hasConfiguredModelFallbacks(params: {
   cfg: OpenClawConfig | undefined;
   agentId?: string | null;
@@ -523,6 +545,7 @@ export function hasConfiguredModelFallbacks(params: {
   return (fallbacksOverride ?? defaultFallbacks).length > 0;
 }
 
+/** Resolves fallbacks after accounting for session overrides and auto-fallback provenance. */
 export function resolveEffectiveModelFallbacks(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -595,6 +618,7 @@ export function resolveAgentIdsByWorkspacePath(
   return matches.map((entry) => entry.id);
 }
 
+/** Returns the most specific configured agent whose workspace contains the path. */
 export function resolveAgentIdByWorkspacePath(
   cfg: OpenClawConfig,
   workspacePath: string,

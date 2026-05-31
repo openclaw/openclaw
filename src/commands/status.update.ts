@@ -8,6 +8,7 @@ import {
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
 
+/** Runs update probes using the configured channel and current install kind. */
 export async function getUpdateCheckResult(params: {
   timeoutMs: number;
   fetchGit: boolean;
@@ -15,6 +16,8 @@ export async function getUpdateCheckResult(params: {
   updateConfigChannel?: string | null;
 }): Promise<UpdateCheckResult> {
   const configChannel = normalizeUpdateChannel(params.updateConfigChannel);
+  // Resolve the package root at runtime so source checkouts, linked installs,
+  // and packaged builds all probe the correct git/package location.
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
@@ -32,6 +35,7 @@ export async function getUpdateCheckResult(params: {
   });
 }
 
+/** Normalized update signal consumed by both status summaries and actionable hints. */
 export type UpdateAvailability = {
   available: boolean;
   hasGitUpdate: boolean;
@@ -40,6 +44,7 @@ export type UpdateAvailability = {
   gitBehind: number | null;
 };
 
+/** Reduces git and registry probes to the small decision shape the UI needs. */
 export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
@@ -59,6 +64,7 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
   };
 }
 
+/** Builds the actionable update hint only when the probes show a newer install target. */
 export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
   const availability = resolveUpdateAvailability(update);
   if (!availability.available) {
@@ -76,6 +82,7 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
   return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
 }
 
+/** Formats the compact status row while preserving git/package-manager install context. */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   const parts: string[] = [];
 
@@ -87,6 +94,8 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.registry?.latestVersion) {
       const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
       if (cmp === 0) {
+        // Git installs can be up to date on npm while still reporting branch
+        // state separately, so only package-manager installs get this label here.
         if (update.installKind !== "git") {
           parts.push("up to date");
         }

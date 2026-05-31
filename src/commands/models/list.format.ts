@@ -1,11 +1,14 @@
 import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
 export { maskApiKey } from "../../utils/mask-api-key.js";
 
+/** Enables rich terminal styling unless machine-readable/plain output was requested. */
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
   isRichTerminal() && !opts?.json && !opts?.plain;
 
+/** Pads table cells without hiding the plain text content from tests/JSON fallbacks. */
 export const pad = (value: string, size: number) => value.padEnd(size);
 
+/** Applies consistent color classes to model-list tag labels. */
 export const formatTag = (tag: string, rich: boolean) => {
   if (!rich) {
     return tag;
@@ -34,6 +37,7 @@ export const formatTag = (tag: string, rich: boolean) => {
   return theme.muted(tag);
 };
 
+/** Truncates model-list cells with an ASCII ellipsis for stable terminal width. */
 export const truncate = (value: string, max: number) => {
   if (value.length <= max) {
     return value;

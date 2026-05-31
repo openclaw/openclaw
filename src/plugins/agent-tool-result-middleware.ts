@@ -27,6 +27,8 @@ function normalizeAgentToolResultMiddlewareRuntime(
       normalized as keyof typeof LEGACY_AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES
     ];
   if (legacyRuntime) {
+    // Older manifests used harness names; runtime names are the canonical
+    // contract, but the alias keeps shipped bundle metadata loadable.
     return legacyRuntime;
   }
   return AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET.has(normalized)
@@ -34,6 +36,7 @@ function normalizeAgentToolResultMiddlewareRuntime(
     : undefined;
 }
 
+/** Normalizes middleware runtime options, defaulting to every supported runtime. */
 export function normalizeAgentToolResultMiddlewareRuntimes(
   options?: AgentToolResultMiddlewareOptions,
 ): AgentToolResultMiddlewareRuntime[] {
@@ -58,6 +61,7 @@ export function normalizeAgentToolResultMiddlewareRuntimes(
 export const normalizeAgentToolResultMiddlewareHarnesses =
   normalizeAgentToolResultMiddlewareRuntimes;
 
+/** Normalizes manifest-declared middleware runtime ids without applying defaults. */
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,
 ): AgentToolResultMiddlewareRuntime[] {
@@ -71,6 +75,7 @@ export function normalizeAgentToolResultMiddlewareRuntimeIds(
   return normalized;
 }
 
+/** Lists active middleware handlers for a runtime from the loaded plugin registry. */
 export function listAgentToolResultMiddlewares(
   runtime: AgentToolResultMiddlewareRuntime,
 ): AgentToolResultMiddleware[] {

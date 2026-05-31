@@ -5,8 +5,10 @@ type EnableStateLike = {
 
 type PluginKindLike = string | readonly string[] | undefined;
 
+/** Where an activation decision came from after config/default evaluation. */
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 
+/** Causes that count as operator-visible explicit plugin selection. */
 export type PluginExplicitSelectionCause =
   | "enabled-in-config"
   | "bundled-channel-enabled-in-config"
@@ -26,6 +28,7 @@ export type PluginActivationCause =
   | "bundled-default-enablement"
   | "bundled-disabled-by-default";
 
+/** Public activation state shape used by status and registry callers. */
 export type PluginActivationStateLike = {
   enabled: boolean;
   activated: boolean;
@@ -34,6 +37,7 @@ export type PluginActivationStateLike = {
   reason?: string;
 };
 
+/** Internal activation decision with a structured cause before reason formatting. */
 export type PluginActivationDecision = PluginActivationStateLike & {
   cause?: PluginActivationCause;
 };
@@ -71,6 +75,7 @@ export const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, st
   "bundled-disabled-by-default": "bundled (disabled by default)",
 };
 
+/** Formats a structured activation cause unless a caller supplied a custom reason. */
 export function resolvePluginActivationReason(
   cause?: PluginActivationCause,
   reason?: string,
@@ -81,6 +86,7 @@ export function resolvePluginActivationReason(
   return cause ? PLUGIN_ACTIVATION_REASON_BY_CAUSE[cause] : undefined;
 }
 
+/** Drops internal cause metadata after converting it to the public reason text. */
 export function toPluginActivationState(
   decision: PluginActivationDecision,
 ): PluginActivationStateLike {
@@ -215,6 +221,8 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     params.allowBundledChannelExplicitBypassesAllowlist === true &&
     explicitSelection.cause === "bundled-channel-enabled-in-config"
   ) {
+    // Channel config is a product-level explicit selection for bundled channel
+    // plugins, so it can bypass allowlists after deny/global disable checks.
     return {
       enabled: true,
       activated: true,
@@ -297,10 +305,12 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   };
 }
 
+/** Converts activation state into the older enable-state result contract. */
 export function toEnableStateResult(state: EnableStateLike): { enabled: boolean; reason?: string } {
   return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
 }
 
+/** Runs a resolver and returns only enabled/reason for compatibility callers. */
 export function resolveEnableStateResult<TParams>(
   params: TParams,
   resolveState: (params: TParams) => EnableStateLike,
@@ -308,6 +318,7 @@ export function resolveEnableStateResult<TParams>(
   return toEnableStateResult(resolveState(params));
 }
 
+/** Builds the legacy positional enable-state resolver API. */
 export function createPluginEnableStateResolver<TConfig, TOrigin extends string>(
   resolveState: (params: {
     id: string;
@@ -325,6 +336,7 @@ export function createPluginEnableStateResolver<TConfig, TOrigin extends string>
     resolveEnableStateResult({ id, origin, config, enabledByDefault }, resolveState);
 }
 
+/** Builds an object-param enable-state resolver from activation-state logic. */
 export function createEffectiveEnableStateResolver<TParams>(
   resolveState: (params: TParams) => EnableStateLike,
 ): (params: TParams) => { enabled: boolean; reason?: string } {

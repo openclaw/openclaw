@@ -27,6 +27,7 @@ type AuthProfileSummary = {
   disabledUntil?: string;
 };
 
+/** Normalizes the optional provider filter and keeps external CLI discovery scoped. */
 function resolveProviderFilter(rawProvider: string | undefined): {
   provider: string | undefined;
   externalCliProvider: string | undefined;
@@ -67,6 +68,7 @@ function resolveProfileExpiry(profile: AuthProfileCredential): string | undefine
   return profile.type === "api_key" ? undefined : formatTimestamp(profile.expires);
 }
 
+/** Converts stored auth credentials and usage stats into list output rows. */
 function summarizeProfile(params: {
   cfg: Awaited<ReturnType<typeof loadModelsConfig>>;
   store: AuthProfileStore;
@@ -108,6 +110,7 @@ function formatProfileLine(profile: AuthProfileSummary): string {
   return `- ${profile.label} [${details.join("; ")}]`;
 }
 
+/** Lists saved auth profiles for one agent, optionally filtered by provider. */
 export async function modelsAuthListCommand(
   opts: { provider?: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
@@ -119,6 +122,8 @@ export async function modelsAuthListCommand(
     agentDir,
     providerFilter.externalCliProvider
       ? {
+          // Discovery is provider-scoped so listing one provider does not trigger
+          // unrelated external CLI lookups or keychain prompts.
           externalCli: externalCliDiscoveryForProviderAuth({
             cfg,
             provider: providerFilter.externalCliProvider,

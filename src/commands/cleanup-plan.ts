@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
 
+/** Reads live config/path state and returns the concrete cleanup plan preview. */
 export function resolveCleanupPlanFromDisk(): {
   cfg: OpenClawConfig;
   stateDir: string;

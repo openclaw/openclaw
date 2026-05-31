@@ -4,6 +4,10 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/**
+ * Returns the raw/source config used for activation decisions when normalized
+ * runtime snapshots would hide legacy enablement or allowlist intent.
+ */
 export function resolvePluginActivationSourceConfig(params: {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;

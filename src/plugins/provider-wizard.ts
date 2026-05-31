@@ -17,6 +17,7 @@ import type {
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
+/** Setup option shown by provider onboarding flows. */
 export type ProviderWizardOption = {
   value: string;
   label: string;
@@ -30,6 +31,7 @@ export type ProviderWizardOption = {
   onboardingFeatured?: boolean;
 };
 
+/** Model-picker entry that can route back to a provider auth choice. */
 export type ProviderModelPickerEntry = {
   value: string;
   label: string;
@@ -44,6 +46,7 @@ type ProviderWizardProvidersResolver = (params: {
 
 let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
 
+/** Installs a scoped provider resolver override for tests and returns its restore callback. */
 export function setProviderWizardProvidersResolverForTest(
   resolver: ProviderWizardProvidersResolver | undefined,
 ): () => void {
@@ -124,6 +127,7 @@ function buildSetupOptionForMethod(params: {
   };
 }
 
+/** Encodes a provider/method pair into the legacy provider-plugin choice namespace. */
 export function buildProviderPluginMethodChoice(providerId: string, methodId: string): string {
   return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${normalizeOptionalString(providerId) ?? ""}:${normalizeOptionalString(methodId) ?? ""}`;
 }
@@ -167,6 +171,7 @@ export function resolveProviderWizardOptions(params: {
       );
     }
     if (methodSetups.length > 0) {
+      // Method-level wizard entries own their choices; don't also synthesize provider-level setup.
       continue;
     }
     const setup = provider.wizard?.setup;
@@ -238,6 +243,7 @@ export function resolveProviderModelPickerEntries(params: {
   return entries;
 }
 
+/** Resolves a setup choice back to the provider auth method that should run. */
 export function resolveProviderPluginChoice(params: {
   providers: ProviderPlugin[];
   choice: string;
@@ -252,6 +258,7 @@ export function resolveProviderPluginChoice(params: {
   }
 
   if (choice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)) {
+    // The namespaced form is stable CLI/internal state, so decode it before label/alias matching.
     const payload = choice.slice(PROVIDER_PLUGIN_CHOICE_PREFIX.length);
     const separator = payload.indexOf(":");
     const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
@@ -296,6 +303,7 @@ export function resolveProviderPluginChoice(params: {
   return null;
 }
 
+/** Runs the provider hook for a selected default model, if the owning plugin exposes one. */
 export async function runProviderModelSelectedHook(params: {
   config: OpenClawConfig;
   model: string;

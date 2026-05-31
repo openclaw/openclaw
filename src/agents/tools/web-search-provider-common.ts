@@ -54,24 +54,29 @@ export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
 export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
+/** Resolves provider search timeout from web-search config defaults. */
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
 }
 
+/** Resolves provider search cache TTL from web-search config defaults. */
 export function resolveSearchCacheTtlMs(searchConfig?: SearchConfigRecord): number {
   return resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
 }
 
+/** Clamps provider result counts to the cross-provider search result limit. */
 export function resolveSearchCount(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
   return clamped;
 }
 
+/** Reads a configured secret-like value after resolving supported secret input forms. */
 export function readConfiguredSecretString(value: unknown, path: string): string | undefined {
   return normalizeSecretInput(normalizeResolvedSecretInputString({ value, path })) || undefined;
 }
 
+/** Reads the first usable provider API key from ordered environment variable names. */
 export function readProviderEnvValue(envVars: string[]): string | undefined {
   for (const envVar of envVars) {
     const value = normalizeSecretInput(process.env[envVar]);
@@ -82,6 +87,7 @@ export function readProviderEnvValue(envVars: string[]): string | undefined {
   return undefined;
 }
 
+/** Runs a request through the trusted web-tools endpoint guard. */
 export async function withTrustedWebSearchEndpoint<T>(
   params: {
     url: string;
@@ -103,6 +109,7 @@ export async function withTrustedWebSearchEndpoint<T>(
   );
 }
 
+/** Runs a request through the self-hosted web-tools endpoint guard. */
 export async function withSelfHostedWebSearchEndpoint<T>(
   params: {
     url: string;
@@ -124,6 +131,7 @@ export async function withSelfHostedWebSearchEndpoint<T>(
   );
 }
 
+/** Posts JSON to a trusted web-tools API and converts non-2xx responses to provider errors. */
 export async function postTrustedWebToolsJson<T>(
   params: {
     url: string;
@@ -168,12 +176,14 @@ export async function postTrustedWebToolsJson<T>(
   );
 }
 
+/** Throws a provider-labeled API error with a bounded response-body detail. */
 export async function throwWebSearchApiError(res: Response, providerLabel: string): Promise<never> {
   const detailResult = await readResponseText(res, { maxBytes: 64_000 });
   const detail = detailResult.text;
   throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
 }
 
+/** Extracts a displayable hostname for search result site labels. */
 export function resolveSiteName(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
@@ -234,6 +244,7 @@ export function isoToPerplexityDate(iso: string): string | undefined {
   return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
 }
 
+/** Normalizes ISO or Perplexity-style dates into YYYY-MM-DD. */
 export function normalizeToIsoDate(value: string): string | undefined {
   const trimmed = value.trim();
   if (ISO_DATE_PATTERN.test(trimmed)) {
@@ -248,6 +259,7 @@ export function normalizeToIsoDate(value: string): string | undefined {
   return undefined;
 }
 
+/** Parses and validates date_after/date_before filters shared by search providers. */
 export function parseIsoDateRange(params: {
   rawDateAfter?: string;
   rawDateBefore?: string;
@@ -292,6 +304,7 @@ export function parseIsoDateRange(params: {
   return { dateAfter, dateBefore };
 }
 
+/** Converts freshness shortcuts between Brave and Perplexity vocabularies. */
 export function normalizeFreshness(
   value: string | undefined,
   provider: WebSearchFreshnessProvider,
@@ -315,6 +328,8 @@ export function normalizeFreshness(
     const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
     if (match) {
       const [, start, end] = match;
+      // Brave accepts explicit ISO ranges; reject impossible dates and inverted
+      // ranges before a provider call is made.
       if (isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
         return `${start}to${end}`;
       }
@@ -324,6 +339,7 @@ export function normalizeFreshness(
   return undefined;
 }
 
+/** Parses freshness/date filters while enforcing the cross-provider conflict rule. */
 export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessProvider>(params: {
   rawFreshness?: string;
   rawDateAfter?: string;
@@ -392,17 +408,20 @@ export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessPro
     : parsedDateRange;
 }
 
+/** Reads a cached search response and marks it for result rendering. */
 export function readCachedSearchPayload(cacheKey: string): Record<string, unknown> | undefined {
   const cached = readCache(SEARCH_CACHE, cacheKey);
   return cached ? { ...cached.value, cached: true } : undefined;
 }
 
+/** Builds a stable cache key from provider-specific search parameters. */
 export function buildSearchCacheKey(parts: Array<string | number | boolean | undefined>): string {
   return normalizeCacheKey(
     parts.map((part) => (part === undefined ? "default" : String(part))).join(":"),
   );
 }
 
+/** Writes a provider search response into the shared in-memory search cache. */
 export function writeCachedSearchPayload(
   cacheKey: string,
   payload: Record<string, unknown>,
@@ -439,6 +458,7 @@ function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): 
   throw new Error("Unsupported web search filter");
 }
 
+/** Builds a provider-specific error for filters unsupported by non-Brave/Perplexity search. */
 export function buildUnsupportedSearchFilterResponse(
   params: Record<string, unknown>,
   provider: string,

@@ -18,10 +18,13 @@ import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type { PluginActivationSource };
+/** Public activation state returned by plugin policy decisions. */
 export type PluginActivationState = PluginActivationStateLike;
 
+/** Normalized plugin config shape after id canonicalization. */
 export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
+/** Normalizes allow/deny/entry ids with a caller-provided canonical id resolver. */
 export function normalizePluginsConfigWithResolver(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
@@ -29,6 +32,7 @@ export function normalizePluginsConfigWithResolver(
   return normalizePluginsConfigWithResolverShared(config, normalizePluginId);
 }
 
+/** Resolves the public activation state for the core plugin config policy path. */
 export function resolvePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
@@ -54,6 +58,7 @@ export const hasExplicitPluginConfig = hasExplicitPluginConfigShared;
 
 export const isBundledChannelEnabledByChannelConfig = isBundledChannelEnabledByChannelConfigShared;
 
+/** Parameters shared by callers that need effective activation after defaults/source config. */
 type PolicyEffectiveActivationParams = {
   id: string;
   origin: PluginOrigin;
@@ -65,12 +70,14 @@ type PolicyEffectiveActivationParams = {
   autoEnabledReason?: string;
 };
 
+/** Compatibility wrapper for callers already using the effective-state name. */
 export function resolveEffectivePluginActivationState(
   params: PolicyEffectiveActivationParams,
 ): PluginActivationState {
   return resolvePluginActivationState(params);
 }
 
+/** Resolves whether a plugin is selected by a named memory slot. */
 export function resolveMemorySlotDecision(params: {
   id: string;
   kind?: PluginKind | PluginKind[];

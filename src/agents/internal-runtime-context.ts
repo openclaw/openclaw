@@ -19,6 +19,7 @@ const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";
 const LEGACY_UNTRUSTED_RESULT_BEGIN = "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>";
 const LEGACY_UNTRUSTED_RESULT_END = "<<<END_UNTRUSTED_CHILD_RESULT>>>";
 
+/** Escapes sentinel tokens before user-controlled text is embedded inside an internal block. */
 export function escapeInternalRuntimeContextDelimiters(value: string): string {
   return value
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_BEGIN, ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN)
@@ -56,6 +57,7 @@ function extractDelimitedBlocks(
     let cursor = start + begin.length;
     let depth = 1;
     let finish = -1;
+    // Treat nested sentinels as part of one internal block so partial child output cannot leak.
     while (depth > 0) {
       const nextBegin = findDelimitedTokenIndex(next, begin, cursor);
       const nextEnd = findDelimitedTokenIndex(next, end, cursor);
@@ -204,6 +206,7 @@ function stripRuntimeContextPromptPreface(text: string): string {
     : text;
 }
 
+/** Removes current and legacy runtime context text while preserving user-visible prose. */
 export function stripInternalRuntimeContext(text: string): string {
   if (!text) {
     return text;
@@ -218,6 +221,7 @@ export function stripInternalRuntimeContext(text: string): string {
   );
 }
 
+/** Splits delimited runtime context from visible text, preserving each extracted block verbatim. */
 export function extractInternalRuntimeContext(text: string): {
   text: string;
   runtimeContext?: string;
@@ -233,6 +237,7 @@ export function extractInternalRuntimeContext(text: string): {
   };
 }
 
+/** Fast presence check for current delimiter blocks and legacy prompt/custom prefaces. */
 export function hasInternalRuntimeContext(text: string): boolean {
   if (!text) {
     return false;
@@ -257,6 +262,7 @@ function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   );
 }
 
+/** Drops all custom-message runtime context entries from a transcript-like message list. */
 export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
@@ -284,6 +290,7 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
     if (!isOpenClawRuntimeContextCustomMessage(messages[index])) {
       break;
     }
+    // Contiguous custom context before the latest user belongs to the active turn; older context does not.
     currentRuntimeContextIndexes.add(index);
   }
   return messages.filter((message, index) => {

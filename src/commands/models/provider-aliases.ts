@@ -12,9 +12,12 @@ type ProviderAliasSource = {
 };
 
 function listManifestPlugins(params: ProviderAliasSource): readonly PluginManifestRecord[] {
-  return params.metadataSnapshot?.manifestRegistry.plugins ?? loadPluginManifestRegistry({
-    config: params.cfg,
-  }).plugins;
+  return (
+    params.metadataSnapshot?.manifestRegistry.plugins ??
+    loadPluginManifestRegistry({
+      config: params.cfg,
+    }).plugins
+  );
 }
 
 function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string, string> {
@@ -24,6 +27,8 @@ function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string,
       const alias = normalizeProviderId(aliasProvider);
       const provider = normalizeProviderId(target.provider);
       if (alias && provider) {
+        // Model catalog aliases are display/list aliases, not auth aliases; keep
+        // the map local to list/configured row canonicalization.
         aliases.set(alias, provider);
       }
     }
@@ -31,6 +36,7 @@ function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string,
   return aliases;
 }
 
+/** Builds canonicalizers for manifest-declared model catalog provider aliases. */
 export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAliasSource): {
   provider: (provider: string) => string;
   ref: <TRef extends { provider: string }>(ref: TRef) => TRef;
@@ -49,6 +55,7 @@ export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAli
   };
 }
 
+/** Canonicalizes one provider id using plugin model catalog alias metadata. */
 export function canonicalizeModelCatalogProviderAlias(
   provider: string,
   params: ProviderAliasSource,
@@ -56,6 +63,7 @@ export function canonicalizeModelCatalogProviderAlias(
   return createModelCatalogProviderAliasCanonicalizer(params).provider(provider);
 }
 
+/** Canonicalizes the provider field of a model ref while preserving the rest of the object. */
 export function canonicalizeModelCatalogProviderRef<TRef extends { provider: string }>(
   ref: TRef,
   params: ProviderAliasSource,

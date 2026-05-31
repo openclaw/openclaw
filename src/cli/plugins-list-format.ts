@@ -3,6 +3,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { shortenHomeInString } from "../utils.js";
 
+/** Formats one plugin registry record for compact or verbose CLI output. */
 export function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   const status =
     plugin.status === "error"
@@ -60,6 +61,7 @@ export function formatPluginLine(plugin: PluginRecord, verbose = false): string 
       plugin.activated === false
         ? "inactive"
         : (plugin.activationSource ?? (plugin.activated ? "active" : "inactive"));
+    // Keep the legacy summary line for users scanning activation state in verbose output.
     parts.push(`  activation: ${activationSummary}`);
   }
   if (plugin.error) {

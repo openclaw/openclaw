@@ -5,11 +5,13 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 
+/** Deferred plugin-id scope resolved from the installed index at load time. */
 export type PluginMetadataSnapshotPluginIdScope = {
   key: string;
   resolve: (params: { index: InstalledPluginIndex }) => readonly string[] | undefined;
 };
 
+/** Reverse lookup maps from manifest-owned surface ids to owning plugin ids. */
 export type PluginMetadataSnapshotOwnerMaps = {
   channels: ReadonlyMap<string, readonly string[]>;
   channelConfigs: ReadonlyMap<string, readonly string[]>;
@@ -21,6 +23,7 @@ export type PluginMetadataSnapshotOwnerMaps = {
   contracts: ReadonlyMap<string, readonly string[]>;
 };
 
+/** Timings and counts captured while building a metadata snapshot. */
 export type PluginMetadataSnapshotMetrics = {
   registrySnapshotMs: number;
   manifestRegistryMs: number;
@@ -30,6 +33,7 @@ export type PluginMetadataSnapshotMetrics = {
   manifestPluginCount: number;
 };
 
+/** Non-fatal persisted registry state surfaced with metadata snapshots. */
 export type PluginMetadataSnapshotRegistryDiagnostic = {
   level: "info" | "warn";
   code:
@@ -40,6 +44,7 @@ export type PluginMetadataSnapshotRegistryDiagnostic = {
   message: string;
 };
 
+/** Immutable control-plane view of plugin manifests, ownership, and registry state. */
 export type PluginMetadataSnapshot = {
   policyHash: string;
   configFingerprint?: string;
@@ -58,10 +63,13 @@ export type PluginMetadataSnapshot = {
   discovery?: PluginDiscoveryResult;
 };
 
+/** Narrow registry view for callers that only need index plus manifest registry. */
 export type PluginMetadataRegistryView = Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
 
+/** Narrow manifest view for callers that only need loaded plugin records. */
 export type PluginMetadataManifestView = Pick<PluginMetadataSnapshot, "index" | "plugins">;
 
+/** Parameters that control metadata snapshot discovery, scope, and cache keys. */
 export type LoadPluginMetadataSnapshotParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -73,6 +81,7 @@ export type LoadPluginMetadataSnapshotParams = {
   preferPersisted?: boolean;
 };
 
+/** Snapshot resolve params, optionally allowing reuse of the current process slot. */
 export type ResolvePluginMetadataSnapshotParams = LoadPluginMetadataSnapshotParams & {
   allowCurrent?: boolean;
   allowWorkspaceScopedCurrent?: boolean;

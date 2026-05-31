@@ -37,6 +37,7 @@ type BundledPluginPathPair = {
   built: string;
 };
 
+/** Metadata collected from bundled plugin packages and manifests for generated loaders. */
 export type BundledPluginMetadata = {
   dirName: string;
   idHint: string;
@@ -168,6 +169,7 @@ function collectBundledPluginMetadata(
   return entries;
 }
 
+/** Lists bundled plugin metadata from source, dist, or an explicit scan directory. */
 export function listBundledPluginMetadata(params?: {
   rootDir?: string;
   scanDir?: string;
@@ -190,6 +192,7 @@ export function listBundledPluginMetadata(params?: {
   return metadata;
 }
 
+/** Finds one bundled plugin metadata record by manifest id. */
 export function findBundledPluginMetadataById(
   pluginId: string,
   params?: {
@@ -202,6 +205,7 @@ export function findBundledPluginMetadataById(
   return listBundledPluginMetadata(params).find((entry) => entry.manifest.id === pluginId);
 }
 
+/** Resolves the workspace/source directory for a bundled plugin id. */
 export function resolveBundledPluginWorkspaceSourcePath(params: {
   rootDir: string;
   scanDir?: string;
@@ -281,6 +285,8 @@ function listBundledPluginEntrySearchPaths(
       continue;
     }
     const normalizedEntry = path.normalize(rawEntry);
+    // Absolute entries from generated metadata are converted back to relative
+    // candidates only when they still live under one of the trusted plugin roots.
     for (const root of roots) {
       if (!isPathInsideRoot(root, normalizedEntry)) {
         continue;
@@ -296,6 +302,7 @@ function listBundledPluginEntrySearchPaths(
   return uniqueStrings(paths);
 }
 
+/** Resolves the generated runtime path for a bundled plugin source/setup entry. */
 export function resolveBundledPluginGeneratedPath(
   rootDir: string,
   entry: BundledPluginPathPair | undefined,
@@ -345,6 +352,7 @@ function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string):
   return candidate;
 }
 
+/** Resolves the repo entry path for a bundled plugin, preferring source or built output. */
 export function resolveBundledPluginRepoEntryPath(params: {
   rootDir: string;
   pluginId: string;

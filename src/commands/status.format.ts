@@ -5,9 +5,11 @@ import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
+/** Formats token counts for dense status rows. */
 export const formatKTokens = (value: number) =>
   `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
+/** Formats elapsed milliseconds for status output, falling back for missing samples. */
 export const formatDuration = (ms: number | null | undefined) => {
   if (ms == null || !Number.isFinite(ms)) {
     return "unknown";
@@ -15,6 +17,7 @@ export const formatDuration = (ms: number | null | undefined) => {
   return formatDurationPrecise(ms, { decimals: 1 });
 };
 
+/** Formats total/context token usage plus a prompt-cache hit suffix when present. */
 export const formatTokensCompact = (
   sess: Pick<
     SessionStatus,
@@ -42,6 +45,7 @@ export const formatTokensCompact = (
   return result;
 };
 
+/** Formats prompt-cache read/write counters for verbose status sections. */
 export const formatPromptCacheCompact = (
   sess: Pick<SessionStatus, "inputTokens" | "totalTokens" | "cacheRead" | "cacheWrite">,
 ) => {
@@ -98,6 +102,7 @@ function resolvePromptCacheStats(
   };
 }
 
+/** Formats daemon runtime status while suppressing unhelpful missing-unit noise. */
 export const formatDaemonRuntimeShort = (runtime?: {
   status?: string;
   pid?: number;
@@ -117,6 +122,8 @@ export const formatDaemonRuntimeShort = (runtime?: {
   if (detail && !noisyLaunchctlDetail) {
     details.push(detail);
   }
+  // Systemd cgroup hygiene adds actionable resource details without changing
+  // the primary runtime status/pid label.
   const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
   if (cgroupSummary) {
     details.push(cgroupSummary);

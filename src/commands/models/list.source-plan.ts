@@ -10,6 +10,7 @@ export type ModelListSourcePlanKind =
   | "provider-runtime-static"
   | "provider-runtime-scoped";
 
+/** Source-selection result that tells model list which catalogs/runtime paths to query. */
 export type ModelListSourcePlan = {
   kind: ModelListSourcePlanKind;
   manifestCatalogRows: readonly NormalizedModelCatalogRow[];
@@ -43,6 +44,7 @@ function createSourcePlan(params: {
   };
 }
 
+/** Source plan that preserves the legacy registry-first listing path. */
 export function createRegistryModelListSourcePlan(): ModelListSourcePlan {
   return createSourcePlan({
     kind: "registry",
@@ -50,6 +52,7 @@ export function createRegistryModelListSourcePlan(): ModelListSourcePlan {
   });
 }
 
+/** Chooses the cheapest model-list sources for the current flags and provider filter. */
 export async function planAllModelListSources(params: {
   all?: boolean;
   enableCascade?: boolean;
@@ -66,6 +69,8 @@ export async function planAllModelListSources(params: {
     await import("./list.manifest-catalog.js");
   if (!params.providerFilter) {
     const { loadProviderIndexCatalogRowsForList } = await providerIndexCatalogLoader.load();
+    // Unfiltered cascades keep registry rows first, then add supplemental
+    // manifest/provider-index rows so broad lists retain runtime availability.
     return createSourcePlan({
       kind: "registry",
       manifestCatalogRows: loadSupplementalManifestCatalogRowsForList({
@@ -95,6 +100,8 @@ export async function planAllModelListSources(params: {
 
   if (manifestCatalogRows.length > 0) {
     if (staticManifestCatalogRows.length === 0) {
+      // Supplemental manifest rows still need registry context for availability
+      // and suppression because they are not an authoritative provider catalog.
       return createSourcePlan({
         kind: "registry",
         manifestCatalogRows,
@@ -128,6 +135,8 @@ export async function planAllModelListSources(params: {
     metadataSnapshot: params.metadataSnapshot,
   });
   if (hasProviderStaticCatalog) {
+    // Static provider catalogs can answer the filtered list directly; keep a
+    // registry fallback for plugins that report no rows at runtime.
     return createSourcePlan({
       kind: "provider-runtime-static",
       skipRuntimeModelSuppression: true,

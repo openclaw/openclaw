@@ -34,6 +34,7 @@ function patchDefaultsFallbacks(
   params: { key: DefaultsFallbackKey; fallbacks: string[]; models?: Record<string, unknown> },
 ): OpenClawConfig {
   const existing = toAgentModelListLike(cfg.agents?.defaults?.[params.key]);
+  // Preserve the existing primary while replacing only the ordered fallback list.
   return {
     ...cfg,
     agents: {
@@ -47,6 +48,7 @@ function patchDefaultsFallbacks(
   };
 }
 
+/** Lists default text/image fallback models in table, plain, or JSON form. */
 export async function listFallbacksCommand(
   params: { label: string; key: DefaultsFallbackKey },
   opts: { json?: boolean; plain?: boolean },
@@ -77,6 +79,7 @@ export async function listFallbacksCommand(
   }
 }
 
+/** Adds one fallback after resolving aliases and folding legacy model keys. */
 export async function addFallbackCommand(
   params: {
     label: string;
@@ -95,6 +98,7 @@ export async function addFallbackCommand(
     const existing = getFallbacks(cfg, params.key);
     const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
     if (existingKeys.includes(targetKey)) {
+      // Treat alias-equivalent duplicates as no-ops so repeated adds stay idempotent.
       return cfg;
     }
 
@@ -109,6 +113,7 @@ export async function addFallbackCommand(
   runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
+/** Removes one fallback by canonical model identity, not by raw string match. */
 export async function removeFallbackCommand(
   params: {
     label: string;
@@ -134,6 +139,7 @@ export async function removeFallbackCommand(
         aliasIndex,
       });
       if (!resolvedEntry) {
+        // Preserve malformed/unresolved historical entries unless they are the target.
         return true;
       }
       return modelKey(resolvedEntry.ref.provider, resolvedEntry.ref.model) !== targetKey;
@@ -152,6 +158,7 @@ export async function removeFallbackCommand(
   runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
+/** Clears all default text/image fallbacks while leaving the primary model intact. */
 export async function clearFallbacksCommand(
   params: { key: DefaultsFallbackKey; clearedMessage: string },
   runtime: RuntimeEnv,

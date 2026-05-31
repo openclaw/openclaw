@@ -18,6 +18,7 @@ export type SourceCheckoutDependencyDiagnostic = {
   message: string;
 };
 
+/** Returns true when bundled plugin discovery should use the empty disabled tree. */
 export function areBundledPluginsDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = normalizeOptionalLowercaseString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
   return raw === "1" || raw === "true";
@@ -99,6 +100,7 @@ function resolvePackageRootsForBundledPlugins(): string[] {
   return uniqueStrings([argvRoot, moduleRoot].filter((entry): entry is string => Boolean(entry)));
 }
 
+/** Diagnoses source checkouts whose bundled plugins exist but dependencies are missing. */
 export function resolveSourceCheckoutDependencyDiagnostic(
   env: NodeJS.ProcessEnv = process.env,
 ): SourceCheckoutDependencyDiagnostic | null {
@@ -131,6 +133,8 @@ function resolveTrustedExistingOverride(resolvedOverride: string): string | null
     return null;
   }
 
+  // Production overrides are accepted only when they resolve under known
+  // package-owned bundled roots; arbitrary filesystem plugin trees stay out.
   const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const packageRoots = modulePackageRoot ? [modulePackageRoot] : [];
   const trustedRoots = packageRoots
@@ -297,6 +301,7 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
   return undefined;
 }
 
+/** Resolves the current bundled plugin directory, honoring disabled/test/trusted overrides. */
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const cacheKey = createBundledPluginsDirCacheKey(env);
   if (bundledPluginsDirCache.has(cacheKey)) {
@@ -307,6 +312,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   return resolved;
 }
 
+/** Test-only override for bundled plugin roots; clears cache between fixtures. */
 export function setBundledPluginsDirOverrideForTest(dir: string | undefined): void {
   if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
     throw new Error("setBundledPluginsDirOverrideForTest is only available in tests");

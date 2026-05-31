@@ -29,6 +29,7 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   };
 }
 
+/** Checks one normalized tool name against a sandbox policy, including groups and aliases. */
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
   if (!policy) {
     return true;
@@ -40,5 +41,6 @@ export function isToolAllowedByPolicies(
   name: string,
   policies: Array<SandboxToolPolicy | undefined>,
 ) {
+  // All policy layers must allow the tool; a single deny/filter removes it.
   return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
 }

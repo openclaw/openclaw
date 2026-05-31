@@ -57,6 +57,8 @@ function resolveBundleLspConfigPaths(params: {
 }): string[] {
   const declared = normalizeBundlePathList(params.raw.lspServers);
   const defaults = fs.existsSync(path.join(params.rootDir, ".lsp.json")) ? [".lsp.json"] : [];
+  // Claude bundles may declare extra config files in the manifest; the local
+  // .lsp.json default stays first so explicit manifest paths can override it.
   return mergeBundlePathLists(defaults, declared);
 }
 
@@ -124,6 +126,7 @@ function loadBundleLspConfig(params: {
   return { config: merged, diagnostics };
 }
 
+/** Inspects whether a bundle exposes runnable stdio LSP server definitions. */
 export function inspectBundleLspRuntimeSupport(params: {
   pluginId: string;
   rootDir: string;
@@ -141,6 +144,7 @@ export function inspectBundleLspRuntimeSupport(params: {
   };
 }
 
+/** Loads merged LSP server config from all activated bundle plugins. */
 export function loadEnabledBundleLspConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;

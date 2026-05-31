@@ -22,12 +22,14 @@ import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
 export { normalizeAlias } from "./alias-name.js";
 export { isLocalBaseUrl } from "./list.local-url.js";
 
+/** Rejects mutually exclusive output flags before commands start formatting. */
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
     throw new Error("Choose either --json or --plain, not both.");
   }
 };
 
+/** Formats token counts for compact model tables. */
 export const formatTokenK = (value?: number | null) => {
   if (!value || !Number.isFinite(value)) {
     return "-";
@@ -38,6 +40,7 @@ export const formatTokenK = (value?: number | null) => {
   return `${Math.round(value / 1024)}k`;
 };
 
+/** Formats latency values for compact model tables. */
 export const formatMs = (value?: number | null) => {
   if (value === null || value === undefined) {
     return "-";
@@ -51,6 +54,7 @@ export const formatMs = (value?: number | null) => {
   return `${Math.round(value / 100) / 10}s`;
 };
 
+/** Loads config for model commands and fails with formatted validation issues. */
 export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -64,6 +68,7 @@ export type UpdateConfigContext = {
   runtimeConfig: OpenClawConfig;
 };
 
+/** Safely mutates source config while exposing runtime-expanded config to callers. */
 export async function updateConfig(
   mutator: (cfg: OpenClawConfig, context: UpdateConfigContext) => OpenClawConfig,
 ): Promise<OpenClawConfig> {
@@ -82,6 +87,7 @@ export async function updateConfig(
   return next;
 }
 
+/** Resolves a user model reference or alias into canonical provider/model ids. */
 export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig }): {
   provider: string;
   model: string;
@@ -137,6 +143,7 @@ export function resolveModelKeysFromEntries(params: {
     .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
 }
 
+/** Builds the configured default-model allowlist using canonical model keys. */
 export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
   const allowed = new Set<string>();
   const models = cfg.agents?.defaults?.models ?? {};
@@ -150,6 +157,7 @@ export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
   return allowed;
 }
 
+/** Validates and normalizes an optional agent id for model-scoped commands. */
 export function resolveKnownAgentId(params: {
   cfg: OpenClawConfig;
   rawAgentId?: string | null;
@@ -168,8 +176,10 @@ export function resolveKnownAgentId(params: {
   return agentId;
 }
 
+/** Primary/fallback model config shape used by default text and image models. */
 export type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
 
+/** Ensures a model config entry exists under its canonical key and folds legacy keys into it. */
 export function upsertCanonicalModelConfigEntry(
   models: Record<string, AgentModelEntryConfig>,
   params: { provider: string; model: string },
@@ -213,6 +223,7 @@ export function upsertCanonicalModelConfigEntry(
   return key;
 }
 
+/** Applies a primary/fallback patch while normalizing stored model references. */
 export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
   patch: { primary?: string; fallbacks?: string[] },
@@ -230,6 +241,7 @@ export function mergePrimaryFallbackConfig(
   return next;
 }
 
+/** Updates the configured default text/image model primary and ensures its catalog entry exists. */
 export function applyDefaultModelPrimaryUpdate(params: {
   cfg: OpenClawConfig;
   resolveCfg?: OpenClawConfig;

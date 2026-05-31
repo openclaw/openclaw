@@ -57,6 +57,7 @@ type OnboardSearchModule = typeof import("../commands/onboard-search.js");
 let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
 const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** Shows the Control UI URL and falls back to SSH/copy-paste hints when browser launch fails. */
 async function showControlUiDashboardNote(params: {
   prompter: WizardPrompter;
   settings: GatewayWizardSettings;
@@ -98,6 +99,7 @@ async function showControlUiDashboardNote(params: {
   return { opened };
 }
 
+/** Localizes daemon runtime choices without changing the underlying install values. */
 function getLocalizedGatewayDaemonRuntimeOptions() {
   return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
     hint:
@@ -109,11 +111,13 @@ function getLocalizedGatewayDaemonRuntimeOptions() {
   }));
 }
 
+/** Lazy-loads web-search helpers because finalize often exits before web-search summaries. */
 function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
   onboardSearchModulePromise ??= import("../commands/onboard-search.js");
   return onboardSearchModulePromise;
 }
 
+/** Finishes onboarding by installing/restarting gateway, checking health, and showing next steps. */
 export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
@@ -131,6 +135,7 @@ export async function finalizeSetupWizard(
     try {
       return await work(progress);
     } finally {
+      // Always stop spinners, even when daemon/service work throws.
       progress.stop(
         typeof optionsLocal.doneMessage === "function"
           ? optionsLocal.doneMessage()
@@ -166,6 +171,7 @@ export async function finalizeSetupWizard(
   } else if (process.platform === "linux" && !systemdAvailable) {
     installDaemon = false;
   } else if (flow === "quickstart") {
+    // Quickstart should leave users with a running gateway unless platform support blocks it.
     installDaemon = true;
   } else {
     installDaemon = await prompter.confirm({
@@ -537,6 +543,7 @@ export async function finalizeSetupWizard(
           timeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
       } finally {
+        // The setup wizard owns the terminal; restore it even if the TUI exits with an error.
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
       }
       launchedTui = true;
@@ -632,6 +639,7 @@ export async function finalizeSetupWizard(
             : providerAuthProfileAvailable && authProviderLabel
               ? t("wizard.finalize.webSearchAuthProfile", { provider: authProviderLabel })
               : undefined;
+    // Web search may be backed by API keys or provider auth profiles; summarize the active source.
     if (!entry) {
       await prompter.note(
         [

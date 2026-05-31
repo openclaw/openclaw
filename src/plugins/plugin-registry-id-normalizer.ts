@@ -2,6 +2,7 @@ import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 
+/** Optional manifest metadata used to avoid reloading registry aliases. */
 export type PluginRegistryIdNormalizerOptions = {
   manifestRegistry?: PluginManifestRegistry;
   lookUpTable?: Pick<{ manifestRegistry: PluginManifestRegistry }, "manifestRegistry">;
@@ -20,6 +21,8 @@ function collectObjectKeys(value: Record<string, unknown> | undefined): readonly
 }
 
 function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): readonly string[] {
+  // Plugin-owned provider/channel/model ids are accepted as lookup aliases so
+  // config and CLI inputs can resolve to the owning plugin id consistently.
   return [
     plugin.id,
     ...(plugin.providers ?? []),
@@ -34,6 +37,7 @@ function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): read
   ];
 }
 
+/** Builds a normalizer that maps plugin aliases and legacy ids to canonical ids. */
 export function createPluginRegistryIdNormalizer(
   index: InstalledPluginIndex,
   options: PluginRegistryIdNormalizerOptions = {},

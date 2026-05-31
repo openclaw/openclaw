@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
+/** Lists provider auth ids that can satisfy the selected model under its harness policy. */
 function resolveAuthProviderCandidates(params: {
   config: OpenClawConfig;
   provider: string;
@@ -36,6 +37,7 @@ function resolveAuthProviderCandidates(params: {
   ];
 }
 
+/** Restricts OpenAI auth checks when the selected route cannot consume Codex OAuth profiles. */
 function resolveAcceptedAuthProfileTypes(params: {
   config: OpenClawConfig;
   provider: string;
@@ -51,6 +53,7 @@ function resolveAcceptedAuthProfileTypes(params: {
   return params.provider === "openai" ? ["api_key"] : undefined;
 }
 
+/** Checks whether the auth profile store has a usable profile for the provider/type set. */
 function hasProfileForProvider(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
   provider: string;
@@ -67,6 +70,7 @@ function hasProfileForProvider(params: {
   });
 }
 
+/** Warns after setup when the selected default model or its auth looks unusable. */
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
   prompter: WizardPrompter,
@@ -83,6 +87,7 @@ export async function warnIfModelConfigLooksOff(
       useCache: false,
     });
     if (catalog.length > 0) {
+      // Empty catalogs can happen offline; only warn when we have real catalog evidence.
       const known = catalog.some(
         (entry) => entry.provider === ref.provider && entry.id === ref.model,
       );

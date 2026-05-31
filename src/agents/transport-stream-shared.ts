@@ -25,6 +25,7 @@ type TransportOutputShape = {
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+/** Removes invalid lone surrogate code units before text enters provider transport payloads. */
 export function sanitizeTransportPayloadText(text: string): string {
   return text.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
@@ -32,6 +33,7 @@ export function sanitizeTransportPayloadText(text: string): string {
   );
 }
 
+/** Sanitizes transport text and substitutes a stable fallback when the result is empty. */
 export function sanitizeNonEmptyTransportPayloadText(
   text: string,
   fallback = EMPTY_TOOL_RESULT_TEXT,
@@ -40,6 +42,7 @@ export function sanitizeNonEmptyTransportPayloadText(
   return sanitized.trim().length > 0 ? sanitized : fallback;
 }
 
+/** Coerces provider tool-call argument payloads into object form for transports that require it. */
 export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {
   if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
     return argumentsValue as Record<string, unknown>;
@@ -58,6 +61,7 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
   return {};
 }
 
+/** Merges transport header sources in order, with later sources overriding earlier ones. */
 export function mergeTransportHeaders(
   ...headerSources: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
@@ -70,6 +74,7 @@ export function mergeTransportHeaders(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+/** Adds metadata to a transport payload without discarding existing metadata fields. */
 export function mergeTransportMetadata<T extends Record<string, unknown>>(
   payload: T,
   metadata?: Record<string, string>,
@@ -90,6 +95,7 @@ export function mergeTransportMetadata<T extends Record<string, unknown>>(
   };
 }
 
+/** Creates a zeroed usage/cost object for transports that do not report accounting. */
 export function createEmptyTransportUsage(): TransportUsage {
   return {
     input: 0,
@@ -101,6 +107,7 @@ export function createEmptyTransportUsage(): TransportUsage {
   };
 }
 
+/** Creates a model event stream plus a writable facade for transport adapters. */
 export function createWritableTransportEventStream() {
   const eventStream = createAssistantMessageEventStream();
   return {
@@ -109,6 +116,7 @@ export function createWritableTransportEventStream() {
   };
 }
 
+/** Emits the final done event for successful transport output and closes the stream. */
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
   output: TransportOutputShape;
@@ -178,6 +186,7 @@ function normalizeTransportErrorBody(value: unknown): string | undefined {
   return truncateErrorDetail(redactSensitiveText(text), 500);
 }
 
+/** Extracts redacted provider error metadata from common nested error shapes. */
 export function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
   const errorObject = error && typeof error === "object" ? error : undefined;
   const nestedError = readObjectProperty(errorObject, "error");
@@ -202,6 +211,7 @@ export function extractTransportErrorDetails(error: unknown): TransportErrorDeta
   };
 }
 
+/** Writes normalized failure details onto a transport output object. */
 export function assignTransportErrorDetails(
   output: TransportOutputShape,
   error: unknown,
@@ -212,6 +222,7 @@ export function assignTransportErrorDetails(
   Object.assign(output, extractTransportErrorDetails(error));
 }
 
+/** Emits an error event, runs cleanup, and closes the writable transport stream. */
 export function failTransportStream(params: {
   stream: WritableTransportStream;
   output: TransportOutputShape;

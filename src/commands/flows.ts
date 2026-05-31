@@ -89,6 +89,8 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
   for (const flow of flows) {
     const taskSummary = getFlowTaskSummary(flow.flowId);
     const counts = `${taskSummary.active} active/${taskSummary.total} total`;
+    // Flow ids and controller/goal text can originate from runtime state; keep
+    // table cells short and sanitized so rows stay aligned.
     lines.push(
       [
         shortToken(flow.flowId).padEnd(ID_PAD),
@@ -146,6 +148,7 @@ function summarizeFlowState(flow: TaskFlowRecord): string | null {
   return null;
 }
 
+/** Lists TaskFlow records with task counts and optional status filtering. */
 export async function flowsListCommand(
   opts: { json?: boolean; status?: string },
   runtime: RuntimeEnv,
@@ -194,6 +197,7 @@ export async function flowsListCommand(
   }
 }
 
+/** Shows one TaskFlow plus linked tasks, accepting full or shortened lookup tokens. */
 export async function flowsShowCommand(
   opts: { json?: boolean; lookup: string },
   runtime: RuntimeEnv,
@@ -254,6 +258,7 @@ export async function flowsShowCommand(
   }
 }
 
+/** Requests cancellation for one TaskFlow and reports the persisted final status. */
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
@@ -266,6 +271,7 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
     flowId: flow.flowId,
   });
   if (!result.found) {
+    // The flow may have disappeared between lookup-token resolution and cancel.
     runtime.error(result.reason ?? formatFlowLookupMiss(opts.lookup));
     runtime.exit(1);
     return;

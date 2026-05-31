@@ -43,10 +43,12 @@ type BundleManifestFileLoadResult =
   | { ok: true; raw: Record<string, unknown>; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
+/** Normalizes bundle manifest path fields that may be a string or string array. */
 export function normalizeBundlePathList(value: unknown): string[] {
   return normalizeUniqueSingleOrTrimmedStringList(value);
 }
 
+/** Merges ordered path lists while preserving the first occurrence of each path. */
 export function mergeBundlePathLists(...groups: string[][]): string[] {
   const merged: string[] = [];
   const seen = new Set<string>();
@@ -161,6 +163,8 @@ function resolveCursorCommandRootDirs(raw: Record<string, unknown>, rootDir: str
 }
 
 function resolveCursorSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  // Cursor commands and skills both map to OpenClaw skill bundle entries, but
+  // command roots stay after skills so explicit skill dirs win duplicate paths.
   return mergeBundlePathLists(
     resolveCursorSkillsRootDirs(raw, rootDir),
     resolveCursorCommandRootDirs(raw, rootDir),
@@ -212,6 +216,8 @@ function resolveClaudeCommandRootDirs(raw: Record<string, unknown>, rootDir: str
 }
 
 function resolveClaudeSkillDirs(raw: Record<string, unknown>, rootDir: string): string[] {
+  // Claude commands, agents, and output styles are consumed through the same
+  // skill pipeline, keeping the bundle loader format-agnostic downstream.
   return mergeBundlePathLists(
     resolveClaudeSkillsRootDirs(raw, rootDir),
     resolveClaudeCommandRootDirs(raw, rootDir),
@@ -320,6 +326,7 @@ function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string):
   return capabilities;
 }
 
+/** Loads a Codex, Claude, or Cursor bundle manifest into the OpenClaw bundle shape. */
 export function loadBundleManifest(params: {
   rootDir: string;
   rootRealPath?: string;
@@ -411,6 +418,7 @@ export function loadBundleManifest(params: {
   };
 }
 
+/** Detects the bundle format from known manifest files or manifestless Claude markers. */
 export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat | null {
   if (fs.existsSync(path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH))) {
     return "codex";
@@ -429,6 +437,8 @@ export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat 
       fs.existsSync(path.join(rootDir, candidate)),
     )
   ) {
+    // A normal OpenClaw plugin root is not a bundle even if it lacks
+    // openclaw.plugin.json; runtime entry points take precedence.
     return null;
   }
   const manifestlessClaudeMarkers = [

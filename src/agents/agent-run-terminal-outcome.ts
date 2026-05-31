@@ -6,8 +6,10 @@ import {
   type AgentRunTimeoutPhase,
 } from "./run-timeout-attribution.js";
 
+/** Normalized wait-layer status used when deriving terminal run outcomes. */
 export type AgentRunWaitStatus = "ok" | "error" | "timeout";
 
+/** Stable terminal reason used for persistence, status, and merge precedence. */
 export type AgentRunTerminalReason =
   | "completed"
   | "hard_timeout"
@@ -17,6 +19,7 @@ export type AgentRunTerminalReason =
   | "blocked"
   | "failed";
 
+/** Normalized run terminal state with optional diagnostic provenance. */
 export type AgentRunTerminalOutcome = {
   reason: AgentRunTerminalReason;
   status: AgentRunWaitStatus;
@@ -29,6 +32,7 @@ export type AgentRunTerminalOutcome = {
   endedAt?: number;
 };
 
+/** Raw terminal state payload accepted from run/wait/lifecycle paths. */
 export type AgentRunTerminalInput = {
   status: AgentRunWaitStatus;
   error?: unknown;
@@ -40,6 +44,7 @@ export type AgentRunTerminalInput = {
   endedAt?: unknown;
 };
 
+/** Wait-result variant where pending or absent status means no terminal outcome yet. */
 export type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
   status?: unknown;
 };
@@ -59,12 +64,14 @@ export function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTim
   return phase !== undefined && HARD_TIMEOUT_PHASES.has(phase);
 }
 
+/** Returns true when the normalized outcome represents a provider-owned timeout. */
 export function isHardAgentRunTimeoutOutcome(
   outcome: AgentRunTerminalOutcome | undefined | null,
 ): boolean {
   return outcome?.reason === "hard_timeout";
 }
 
+/** Returns true for terminal outcomes that late cleanup events must not replace. */
 export function isStickyAgentRunTerminalOutcome(
   outcome: AgentRunTerminalOutcome | undefined | null,
 ): boolean {
@@ -81,6 +88,7 @@ function asAgentRunWaitStatus(value: unknown): AgentRunWaitStatus | "pending" | 
     : undefined;
 }
 
+/** Classifies raw wait/lifecycle metadata into a normalized terminal run outcome. */
 export function buildAgentRunTerminalOutcome(
   input: AgentRunTerminalInput,
 ): AgentRunTerminalOutcome {
@@ -142,6 +150,7 @@ export function buildAgentRunTerminalOutcome(
   };
 }
 
+/** Converts a wait result into a terminal outcome, ignoring pending/invalid states. */
 export function buildAgentRunTerminalOutcomeFromWaitResult(
   wait: AgentRunTerminalWaitInput | undefined,
 ): AgentRunTerminalOutcome | undefined {
@@ -173,6 +182,7 @@ function completedBeforeOrAtTimeout(params: {
   );
 }
 
+/** Merges competing terminal events while preserving hard timeout/cancel precedence. */
 export function mergeAgentRunTerminalOutcome(
   current: AgentRunTerminalOutcome | undefined,
   incoming: AgentRunTerminalOutcome,

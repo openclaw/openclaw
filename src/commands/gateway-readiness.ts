@@ -45,6 +45,7 @@ export type GatewayReadinessOptions = {
   deps?: GatewayReadinessDeps;
 };
 
+/** Gathers daemon status with the probe settings needed for readiness checks. */
 async function defaultGatherStatus(params: {
   requireRpc: boolean;
   probeUrl?: string;
@@ -70,6 +71,8 @@ function activeProbePortStatus(status: DaemonStatus): DaemonStatus["port"] {
       })()
     : Number.NaN;
   if (Number.isFinite(probePort) && status.portCli?.port === probePort) {
+    // Prefer the CLI probe for explicit RPC URLs; the default port check may be
+    // watching a different configured gateway.
     return status.portCli;
   }
   return status.port;
@@ -87,6 +90,8 @@ function gatewayProbeSawGateway(status: DaemonStatus): boolean {
   if (rpc.ok) {
     return true;
   }
+  // Auth/pairing failures still prove a gateway process answered the probe even
+  // though the current client cannot complete RPC.
   if (rpc.auth?.capability && rpc.auth.capability !== "unknown") {
     return true;
   }
@@ -191,6 +196,7 @@ async function waitForGatewayReady(params: {
   return latest;
 }
 
+/** Ensures the gateway can serve an operation, optionally installing/starting it. */
 export async function ensureGatewayReadyForOperation(
   options: GatewayReadinessOptions,
 ): Promise<GatewayReadinessResult> {
@@ -245,6 +251,8 @@ export async function ensureGatewayReadyForOperation(
   }
 
   if (shouldInstall) {
+    // Installers also start managed services; otherwise start the existing
+    // service without rewriting launchd/systemd assets.
     await installGateway();
   } else {
     await startGateway();

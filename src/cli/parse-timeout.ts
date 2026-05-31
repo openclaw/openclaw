@@ -1,5 +1,6 @@
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 
+/** Parses an optional timeout value, returning undefined instead of throwing. */
 export function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -26,6 +27,7 @@ function invalidTimeout(value?: string): Error {
   );
 }
 
+/** Parses a timeout value with a fallback for absent input and optional type strictness. */
 export function parseTimeoutMsWithFallback(
   raw: unknown,
   fallbackMs: number,
@@ -48,6 +50,7 @@ export function parseTimeoutMsWithFallback(
     if (options.invalidType === "error") {
       throw invalidTimeout();
     }
+    // Commander can pass unexpected objects from tests/mocks; default to CLI fallback behavior.
     return fallbackMs;
   }
 

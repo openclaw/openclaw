@@ -36,10 +36,12 @@ type ChannelMessageActionDiscoveryParams = {
 
 const channelAgentToolMeta = new WeakMap<ChannelAgentTool, ChannelAgentToolMeta>();
 
+/** Returns the channel id attached when a channel-owned agent tool was discovered. */
 export function getChannelAgentToolMeta(tool: ChannelAgentTool): ChannelAgentToolMeta | undefined {
   return channelAgentToolMeta.get(tool);
 }
 
+/** Preserves channel ownership metadata when wrappers replace the original tool object. */
 export function copyChannelAgentToolMeta(source: ChannelAgentTool, target: ChannelAgentTool): void {
   const meta = channelAgentToolMeta.get(source);
   if (meta) {
@@ -96,6 +98,7 @@ export function listAllChannelSupportedActions(
   return Array.from(actions);
 }
 
+/** Lists channel-owned tools and tags each tool with its source channel for later policy checks. */
 export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[] {
   // Channel docking: aggregate channel-owned tools (login, etc.).
   const tools: ChannelAgentTool[] = [];
@@ -115,6 +118,7 @@ export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): Channel
   return tools;
 }
 
+/** Resolves channel-specific message tool hints for agent prompts. */
 export function resolveChannelMessageToolHints(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
@@ -132,6 +136,7 @@ export function resolveChannelMessageToolHints(params: {
   return normalizeStringEntries(resolve({ cfg, accountId: params.accountId }));
 }
 
+/** Resolves channel prompt capabilities, including runtime-native approval UI support. */
 export function resolveChannelPromptCapabilities(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
@@ -156,6 +161,7 @@ function normalizePromptCapabilities(capabilities?: readonly string[] | null): s
   return normalizeStringEntries(capabilities ?? []);
 }
 
+/** Resolves channel-specific reaction guidance for prompt/runtime behavior. */
 export function resolveChannelReactionGuidance(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
@@ -180,6 +186,7 @@ export function resolveChannelReactionGuidance(params: {
   };
 }
 
+/** Test hooks for resetting channel message-action discovery state. */
 export const testing = {
   resetLoggedListActionErrors() {
     messageActionTesting.resetLoggedMessageActionErrors();

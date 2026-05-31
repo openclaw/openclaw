@@ -19,6 +19,7 @@ import {
 
 export type ImageGenerateActionResult = MediaGenerateActionResult;
 
+/** Builds the auth setup hint shown beside an image-generation provider listing. */
 export function formatImageGenerationAuthHint(provider: {
   id: string;
   authEnvVars: readonly string[];
@@ -32,10 +33,12 @@ export function formatImageGenerationAuthHint(provider: {
   return `set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`;
 }
 
+/** Lists model modes exposed by the provider, adding edit only when supported. */
 export function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
   return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
 }
 
+/** Formats provider capabilities into the compact list action text. */
 export function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
   const caps: string[] = [];
   if (provider.capabilities.edit.enabled) {
@@ -62,6 +65,7 @@ export function summarizeImageGenerationCapabilities(provider: ImageGenerationPr
   return caps.join("; ");
 }
 
+/** Creates the image-generation provider list action result with auth and capability metadata. */
 export function createImageGenerateListActionResult(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -95,6 +99,7 @@ export function createImageGenerateStatusActionResult(
 ): ImageGenerateActionResult {
   const activeTasks = listActiveImageGenerationTasksForSession(sessionKey);
   if (activeTasks.length > 1) {
+    // Image generation can launch multiple refs/edits at once, so status needs a list view.
     return {
       content: [{ type: "text", text: buildImageGenerationTaskStatusListText(activeTasks) }],
       details: {
@@ -106,6 +111,7 @@ export function createImageGenerateStatusActionResult(
   return imageGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
+/** Returns active/recent image task status when a request duplicates an in-flight prompt. */
 export function createImageGenerateDuplicateGuardResult(
   sessionKey?: string,
   params?: { prompt?: string; requestKey?: string },

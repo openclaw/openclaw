@@ -48,6 +48,8 @@ function hasExplicitStatusJsonChannelConfig(cfg: OpenClawConfig): boolean {
   }
   for (const [key, value] of Object.entries(cfg.channels)) {
     if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
+      // Defaults/model routing do not imply a real channel integration for
+      // status --json cold-start decisions.
       continue;
     }
     if (hasMeaningfulStatusJsonChannelConfig(value)) {
@@ -66,6 +68,8 @@ function hasStatusJsonChannelEnvConfig(env: NodeJS.ProcessEnv = process.env): bo
       STATUS_JSON_CHANNEL_ENV_VARS.has(key) ||
       STATUS_JSON_CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
     ) {
+      // Env-only channel credentials should keep fast JSON from skipping
+      // channel-aware status work even when the config file is absent.
       return true;
     }
   }
@@ -76,6 +80,7 @@ function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): boole
   return hasExplicitStatusJsonChannelConfig(cfg) || hasStatusJsonChannelEnvConfig();
 }
 
+/** Runs the fast status JSON path with an injected policy for command variants. */
 export async function scanStatusJsonWithPolicy(
   opts: {
     timeoutMs?: number;
@@ -112,6 +117,7 @@ export async function scanStatusJsonWithPolicy(
   });
 }
 
+/** Fast `status --json` path that avoids broad probes unless `--all` is requested. */
 export async function scanStatusJsonFast(
   opts: {
     timeoutMs?: number;

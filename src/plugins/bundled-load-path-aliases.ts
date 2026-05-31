@@ -25,6 +25,7 @@ const PACKAGED_BUNDLED_ROOTS = [
   path.join("dist-runtime", "extensions"),
 ] as const;
 
+/** Normalizes bundled plugin lookup paths for stable config/doctor comparisons. */
 export function normalizeBundledLookupPath(targetPath: string): string {
   const normalized = path.normalize(targetPath);
   const root = path.parse(normalized).root;
@@ -58,6 +59,7 @@ function findPackagedBundledRoot(localPath: string): {
   return null;
 }
 
+/** Parses a packaged bundled plugin path under dist/extensions or dist-runtime/extensions. */
 export function parsePackagedBundledPluginPath(
   localPath: string,
 ): PackagedBundledPluginPath | null {
@@ -75,6 +77,7 @@ export function parsePackagedBundledPluginPath(
   };
 }
 
+/** Converts a packaged bundled plugin path to the legacy source-tree alias path. */
 export function buildLegacyBundledPath(localPath: string): string | null {
   const packaged = parsePackagedBundledPluginPath(localPath);
   if (!packaged) {
@@ -83,11 +86,13 @@ export function buildLegacyBundledPath(localPath: string): string | null {
   return path.join(packaged.packageRoot, "extensions", packaged.bundledLeaf);
 }
 
+/** Converts a packaged bundled root to the legacy source-tree bundled root. */
 export function buildLegacyBundledRootPath(localPath: string): string | null {
   const packaged = findPackagedBundledRoot(localPath);
   return packaged ? path.join(packaged.packageRoot, "extensions") : null;
 }
 
+/** Parses a legacy source-tree bundled plugin path under extensions/. */
 export function parseLegacyBundledPluginPath(localPath: string): LegacyBundledPluginPath | null {
   const normalized = normalizeBundledLookupPath(localPath);
   const marker = `${path.sep}extensions`;
@@ -106,6 +111,7 @@ export function parseLegacyBundledPluginPath(localPath: string): LegacyBundledPl
   };
 }
 
+/** Builds current and legacy path aliases for packaged bundled plugin load paths. */
 export function buildBundledPluginLoadPathAliases(localPath: string): BundledPluginLoadPathAlias[] {
   const legacyPath = buildLegacyBundledPath(localPath);
   if (!legacyPath) {
@@ -123,6 +129,7 @@ function isSameOrInside(baseDir: string, targetPath: string): boolean {
   return target === base || isPathInside(base, target);
 }
 
+/** Classifies a load path as current or legacy for a packaged bundled root. */
 export function resolvePackagedBundledLoadPathAlias(params: {
   bundledRoot?: string;
   loadPath: string;

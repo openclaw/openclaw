@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 export { resolveSessionStoreTargets, type SessionStoreSelectionOptions, type SessionStoreTarget };
 
+/** Resolves session store targets for commands and exits consistently on bad filters. */
 export function resolveSessionStoreTargetsOrExit(params: {
   cfg: OpenClawConfig;
   opts: SessionStoreSelectionOptions;
@@ -16,6 +17,8 @@ export function resolveSessionStoreTargetsOrExit(params: {
   try {
     return resolveSessionStoreTargets(params.cfg, params.opts);
   } catch (error) {
+    // Command handlers expect a nullable result after runtime.exit so tests and
+    // embedded callers can observe the formatted error path.
     params.runtime.error(formatErrorMessage(error));
     params.runtime.exit(1);
     return null;

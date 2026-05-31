@@ -57,6 +57,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
   throw new Error("Unsupported backup asset kind");
 }
 
+/** Formats a filesystem-safe local timestamp for backup archive names. */
 export function formatBackupArchiveTimestamp(
   nowMs = Date.now(),
   offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
@@ -77,14 +78,17 @@ export function formatBackupArchiveTimestamp(
   return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}`;
 }
 
+/** Builds the root directory name stored inside a backup tarball. */
 export function buildBackupArchiveRoot(nowMs = Date.now()): string {
   return `${formatBackupArchiveTimestamp(nowMs)}-openclaw-backup`;
 }
 
+/** Builds the default backup archive basename for the current local time. */
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {
   return `${buildBackupArchiveRoot(nowMs)}.tar.gz`;
 }
 
+/** Encodes an absolute or relative source path into a portable archive-relative path. */
 export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   const normalized = sourcePath.replaceAll("\\", "/");
   const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
@@ -99,10 +103,12 @@ export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   return path.posix.join("relative", normalized);
 }
 
+/** Maps a source path to its payload path under the backup archive root. */
 export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
   return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }
 
+/** Resolves backup assets from explicit paths, de-duping and marking covered/missing inputs. */
 export async function resolveBackupPlanFromPaths(params: {
   stateDir: string;
   configPath: string;
@@ -191,6 +197,8 @@ export async function resolveBackupPlanFromPaths(params: {
   const uniqueCandidates: BackupAssetCandidate[] = [];
   const seenCanonicalPaths = new Set<string>();
   for (const candidate of [...candidates].toSorted(compareCandidates)) {
+    // Realpath de-dupe handles symlinks before coverage checks decide whether a
+    // parent asset already includes a child path.
     if (seenCanonicalPaths.has(candidate.canonicalPath)) {
       continue;
     }
@@ -215,6 +223,8 @@ export async function resolveBackupPlanFromPaths(params: {
       isPathWithin(candidate.canonicalPath, asset.sourcePath),
     );
     if (coveredBy) {
+      // A parent directory payload makes the child redundant; keep the skip in
+      // the manifest so operators can see why it was not archived separately.
       skipped.push({
         kind: candidate.kind,
         sourcePath: candidate.canonicalPath,
@@ -263,6 +273,7 @@ async function canonicalizeExistingPath(targetPath: string): Promise<string> {
   }
 }
 
+/** Resolves the live backup plan from current config and runtime paths. */
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;

@@ -27,6 +27,7 @@ type BundledCandidateResolution = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
+/** Applies plugin allowlists while preserving the shipped compat discovery mode. */
 function filterAllowlistedBundledPluginIds(
   config: PluginLoadOptions["config"] | undefined,
   pluginIds: readonly string[],
@@ -46,6 +47,7 @@ function filterAllowlistedBundledPluginIds(
   return pluginIds.filter((pluginId) => allowedPluginIds.has(pluginId));
 }
 
+/** Resolves bundled plugin ids that are allowed to expose web provider sidecars. */
 function resolveBundledCandidatePluginIds(params: {
   contract: "webSearchProviders" | "webFetchProviders";
   configKey: "webSearch" | "webFetch";
@@ -80,6 +82,7 @@ function resolveBundledCandidatePluginIds(params: {
   };
 }
 
+/** Reuses manifest records from candidate resolution before loading a snapshot. */
 function resolveBundledManifestRecordsByPluginId(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -102,6 +105,10 @@ function resolveBundledManifestRecordsByPluginId(params: {
   );
 }
 
+/**
+ * Loads bundled web-search providers from explicit sidecars first, then falls
+ * back to manifest-owned plugin directories when every requested id resolves.
+ */
 export function resolveBundledWebSearchProvidersFromPublicArtifacts(
   params: BundledWebProviderPublicArtifactParams,
 ): PluginWebSearchProviderEntry[] | null {
@@ -133,6 +140,7 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
   for (const pluginId of pluginIds.pluginIds) {
     const record = recordsByPluginId.get(pluginId);
     if (!record) {
+      // Returning null tells callers to use the normal runtime registry path.
       return null;
     }
     const loadedProviders = loadBundledWebSearchProviderEntriesFromDir({
@@ -147,6 +155,10 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
   return providers;
 }
 
+/**
+ * Loads bundled web-fetch providers from public artifacts without activating the
+ * full plugin runtime, mirroring the web-search fast path.
+ */
 export function resolveBundledWebFetchProvidersFromPublicArtifacts(
   params: BundledWebProviderPublicArtifactParams,
 ): PluginWebFetchProviderEntry[] | null {

@@ -15,6 +15,7 @@ export type PluginConfigContractMetadata = {
   configContracts: PluginManifestConfigContracts;
 };
 
+/** Resolves config contract metadata for a normalized set of plugin ids. */
 export function resolvePluginConfigContractsById(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -40,6 +41,8 @@ export function resolvePluginConfigContractsById(params: {
     if (bundledContractFallbacks.has(pluginId)) {
       return bundledContractFallbacks.get(pluginId);
     }
+    // Bundled metadata is the authoritative fallback for config repair/doctor
+    // paths when an installed or external manifest is missing contract details.
     const discovery =
       params.discovery ??
       discoverOpenClawPlugins({
@@ -93,6 +96,8 @@ export function resolvePluginConfigContractsById(params: {
       if (shouldHydrateBundledMatch) {
         const bundledConfigContracts = findBundledConfigContracts(pluginId);
         if (bundledConfigContracts) {
+          // Preserve installed manifest fields while taking secret-input rules
+          // from bundled metadata, which owns migration/repair compatibility.
           matches.set(pluginId, {
             origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
             configContracts: {

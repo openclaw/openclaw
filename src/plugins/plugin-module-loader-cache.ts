@@ -80,6 +80,9 @@ function recordSourceTransformTarget(target: string): void {
   }
 }
 
+/**
+ * Snapshot native-vs-transform loader usage for diagnostics and tests.
+ */
 export function getPluginModuleLoaderStats(): PluginModuleLoaderStatsSnapshot {
   return {
     calls: pluginModuleLoaderStats.calls,
@@ -94,6 +97,9 @@ export function getPluginModuleLoaderStats(): PluginModuleLoaderStatsSnapshot {
   };
 }
 
+/**
+ * Reset process-local loader stats between tests.
+ */
 export function resetPluginModuleLoaderStatsForTest(): void {
   pluginModuleLoaderStats.calls = 0;
   pluginModuleLoaderStats.nativeHits = 0;
@@ -169,6 +175,8 @@ export function resolvePluginModuleLoaderCacheEntry(
       tryNative,
       aliasMap,
     });
+  // Scope by the loader filename first: jiti binds resolution to that caller,
+  // so equivalent alias maps still need separate loader instances per caller.
   const scopedCacheKey = `${loaderFilename}::${
     params.sharedCacheScopeKey ??
     (params.cacheScopeKey ? `${params.cacheScopeKey}::${cacheKey}` : cacheKey)
@@ -294,6 +302,8 @@ export function getCachedPluginModuleLoader(
     createLoader?: PluginModuleLoaderFactory;
   },
 ): PluginModuleLoader {
+  // Install before cache lookup: native require paths can run without creating
+  // a new loader, but still need OpenClaw internal package aliases registered.
   installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
   const cacheEntry = resolvePluginModuleLoaderCacheEntry(params);
   const cached = params.cache.get(cacheEntry.scopedCacheKey);
@@ -310,6 +320,9 @@ export function getCachedPluginModuleLoader(
   return loader;
 }
 
+/**
+ * Get a cached loader that always routes through jiti/source transforms.
+ */
 export function getCachedPluginSourceModuleLoader(
   params: Omit<Parameters<typeof getCachedPluginModuleLoader>[0], "tryNative">,
 ): PluginModuleLoader {

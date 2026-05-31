@@ -22,6 +22,10 @@ function resolvePluginNativeName(
   return command.name;
 }
 
+/**
+ * Return native command specs only when the channel currently allows native
+ * plugin commands, including read-only defaults before the plugin is loaded.
+ */
 export function getPluginCommandSpecs(
   provider?: string,
   options: {
@@ -54,7 +58,9 @@ export function getPluginCommandSpecs(
   return listProviderPluginCommandSpecs(provider);
 }
 
-/** Resolve plugin command specs for a provider's native naming surface without support gating. */
+/**
+ * Resolve plugin command specs for a provider's native naming surface without support gating.
+ */
 export function listProviderPluginCommandSpecs(provider?: string): Array<{
   name: string;
   description: string;

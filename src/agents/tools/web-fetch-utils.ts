@@ -1,5 +1,6 @@
 import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 
+/** Output mode for basic web content extraction. */
 export type ExtractMode = "markdown" | "text";
 
 function decodeEntities(value: string): string {
@@ -27,6 +28,10 @@ export function normalizeWhitespace(value: string): string {
     .trim();
 }
 
+/**
+ * Converts simple sanitized HTML into lightweight Markdown while preserving a
+ * page title for web-fetch result metadata.
+ */
 export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
@@ -58,6 +63,7 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
   return { text, title };
 }
 
+/** Converts Markdown-like extracted content into plain text for text-mode fetches. */
 export function markdownToText(markdown: string): string {
   let text = markdown;
   text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
@@ -72,6 +78,7 @@ export function markdownToText(markdown: string): string {
   return normalizeWhitespace(text);
 }
 
+/** Truncates text to a hard character limit and reports whether content was cut. */
 export function truncateText(
   value: string,
   maxChars: number,
@@ -82,6 +89,10 @@ export function truncateText(
   return { text: value.slice(0, maxChars), truncated: true };
 }
 
+/**
+ * Performs the built-in HTML extraction fallback used when no plugin extractor
+ * is available for a web-fetch response.
+ */
 export async function extractBasicHtmlContent(params: {
   html: string;
   extractMode: ExtractMode;
@@ -91,6 +102,8 @@ export async function extractBasicHtmlContent(params: {
   if (params.extractMode === "text") {
     const text =
       stripInvisibleUnicode(markdownToText(rendered.text)) ||
+      // If Markdown conversion stripped everything, fall back to raw text from
+      // sanitized HTML so sparse pages still produce useful output.
       stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
     return text ? { text, title: rendered.title } : null;
   }

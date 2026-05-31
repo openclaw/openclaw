@@ -33,6 +33,8 @@ type StateRemovalOptions = {
 function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   const dirs = new Set<string>();
   if (!cfg) {
+    // Without config, cleanup can still preview/remove the default workspace
+    // path instead of silently omitting workspace state.
     dirs.add(resolveDefaultAgentWorkspaceDir());
     return [...dirs];
   }
@@ -42,6 +44,7 @@ function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   return [...dirs];
 }
 
+/** Builds the concrete cleanup targets and notes which linked paths are nested under state. */
 export function buildCleanupPlan(params: {
   cfg: OpenClawConfig | undefined;
   stateDir: string;
@@ -59,6 +62,7 @@ export function buildCleanupPlan(params: {
   };
 }
 
+/** Returns true when a child path is inside or equal to a parent path. */
 export function isPathWithin(child: string, parent: string): boolean {
   return isPathInside(parent, child);
 }
@@ -79,6 +83,7 @@ function isUnsafeRemovalTarget(target: string): boolean {
   return false;
 }
 
+/** Removes one path with dry-run support and guardrails for root/home targets. */
 export async function removePath(
   target: string,
   runtime: RuntimeEnv,
@@ -155,6 +160,8 @@ async function removePathPreserving(
   if (!pathContainsPreservedPath(resolved, preservePaths)) {
     return removePath(resolved, runtime, opts);
   }
+  // When preserved paths sit below the target, delete siblings recursively
+  // rather than removing the parent directory itself.
   if (opts?.dryRun) {
     const preserved = preservePaths
       .filter((preservePath) => isPathWithin(preservePath, resolved))
@@ -180,6 +187,7 @@ async function removePathPreserving(
   }
 }
 
+/** Removes state plus linked config/oauth paths while preserving requested descendants. */
 export async function removeStateAndLinkedPaths(
   cleanup: CleanupResolvedPaths,
   runtime: RuntimeEnv,
@@ -191,6 +199,8 @@ export async function removeStateAndLinkedPaths(
       ? (opts.preservePaths ?? []).map((target) => path.resolve(target))
       : await existingPaths(opts?.preservePaths ?? [])
   ).filter((target) => isPathWithin(target, stateDir));
+  // Only descendants of the state directory affect state removal; external
+  // preserve paths should not block config/oauth cleanup decisions.
   if (preservePaths.length > 0) {
     await removePathPreserving(stateDir, preservePaths, runtime, {
       dryRun: opts?.dryRun,
@@ -216,6 +226,7 @@ export async function removeStateAndLinkedPaths(
   }
 }
 
+/** Removes all configured agent workspace directories. */
 export async function removeWorkspaceDirs(
   workspaceDirs: readonly string[],
   runtime: RuntimeEnv,
@@ -229,6 +240,7 @@ export async function removeWorkspaceDirs(
   }
 }
 
+/** Lists per-agent session directories under a state directory, ignoring missing state. */
 export async function listAgentSessionDirs(stateDir: string): Promise<string[]> {
   const root = path.join(stateDir, "agents");
   try {

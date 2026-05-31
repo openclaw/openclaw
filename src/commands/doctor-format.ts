@@ -31,6 +31,7 @@ export function formatGatewayRuntimeSummary(
   return formatRuntimeStatus(runtime);
 }
 
+/** Builds platform-specific repair hints for gateway service runtime failures. */
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
   options: RuntimeHintOptions = {},
@@ -50,6 +51,8 @@ export function buildGatewayRuntimeHints(
     }
   })();
   if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
+    // Systemd-unavailable failures need environment-specific guidance before
+    // generic install/restart hints.
     hints.push(
       ...renderSystemdUnavailableHints({
         wsl: isWSLEnv(),
@@ -63,6 +66,8 @@ export function buildGatewayRuntimeHints(
     return hints;
   }
   if (runtime.cachedLabel && platform === "darwin") {
+    // launchd can cache labels after plist removal; bootout clears that stale
+    // runtime state before reinstalling.
     const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
     hints.push(
       `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${label}`,
@@ -104,6 +109,8 @@ export function buildGatewayRuntimeHints(
       runtime.systemd?.unit ?? `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
     const summary = getSystemdCgroupHygieneSummary(runtime.systemd);
     if (summary) {
+      // Elevated cgroup resource counts usually mean child processes survived
+      // service restarts; include inspection commands before recommending restart.
       hints.push(
         `Systemd cgroup hygiene looks elevated: ${summary}.`,
         "This usually means old helper or browser processes may still be attached to the gateway service.",

@@ -306,6 +306,8 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
         continue;
       }
       if (Object.hasOwn(params.durableEnvironment, key)) {
+        // Durable service config already owns this key; passEnv may not
+        // override persisted operator intent.
         continue;
       }
       const value = params.env[key]?.trim();
@@ -427,6 +429,8 @@ function mergeServicePath(
   };
   addPath(nextPath);
   if (platform !== "darwin") {
+    // launchd has a tightly controlled PATH; other service managers can safely
+    // retain minimal existing PATH entries after generated entries.
     addPath(existingPath, { preserve: true });
   }
   return segments.length > 0 ? segments.join(path.delimiter) : undefined;
@@ -457,6 +461,8 @@ function collectPreservedExistingServiceEnvVars(
     if (managedServiceEnvKeys.has(upper)) {
       continue;
     }
+    // Preserve unmanaged custom service variables, but never carry host-control
+    // or OpenClaw-managed keys across installs.
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
       continue;
     }
@@ -587,6 +593,7 @@ async function buildGatewayInstallEnvironment(params: {
   };
 }
 
+/** Builds program arguments and service environment for installing the gateway daemon. */
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -625,6 +632,8 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtWindowsTaskScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
+  // On Windows the task script is itself a wrapper; do not feed it back into
+  // OPENCLAW_WRAPPER or the service command can recurse through gateway.cmd.
   const serviceInputEnv: Record<string, string | undefined> = wrapperPath
     ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
     : wrapperPointsAtWindowsTaskScript
@@ -670,7 +679,8 @@ export async function buildGatewayInstallPlan(params: {
     platform,
   });
 
-  // Lowest to highest: preserved custom vars, durable config, SecretRef env, generated service env.
+  // Lowest to highest: preserved custom vars, durable config, SecretRef env,
+  // generated service env.
   return {
     programArguments,
     workingDirectory: resolveGatewayInstallWorkingDirectory({
@@ -713,6 +723,7 @@ function omitEnvKey(
   return next;
 }
 
+/** Returns a platform-specific hint for daemon install failures. */
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."

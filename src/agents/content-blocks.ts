@@ -1,3 +1,4 @@
+/** Returns the text payloads from provider-style content blocks, ignoring malformed blocks. */
 export function collectTextContentBlocks(content: unknown): string[] {
   if (!Array.isArray(content)) {
     return [];

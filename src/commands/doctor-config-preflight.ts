@@ -19,6 +19,8 @@ type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js")
 let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
 
 function loadDoctorStateMigrations(): Promise<DoctorStateMigrationsModule> {
+  // State migration code touches more filesystem/runtime modules; keep it lazy
+  // so lightweight doctor preflight imports stay cheap.
   doctorStateMigrationsPromise ??= import("./doctor-state-migrations.js");
   return doctorStateMigrationsPromise;
 }
@@ -134,6 +136,8 @@ export async function runDoctorConfigPreflight(
   };
   let snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
   if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
+    // Try non-destructive config recovery before warning; both paths preserve
+    // the original file as a clobbered copy.
     if (await recoverConfigFromJsonRootSuffix(snapshot)) {
       note("Removed non-JSON prefix from openclaw.json; original saved as .clobbered.*.", "Config");
       snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
@@ -175,6 +179,8 @@ export async function runDoctorConfigPreflight(
           recoverCorruptTargetStore: options.recoverCorruptTargetStore,
         })
       : await autoMigrateLegacyTaskStateSidecars({ env: process.env });
+    // Invalid config can still repair task sidecars because they do not require
+    // trusted parsed config.
     noteStateMigrationResult(stateResult);
   }
 

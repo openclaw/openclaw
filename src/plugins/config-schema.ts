@@ -75,10 +75,13 @@ function normalizeJsonSchema(schema: unknown): unknown {
     !Array.isArray(propertyNames) &&
     (propertyNames as Record<string, unknown>).type === "string"
   ) {
+    // Zod emits propertyNames for record keys, but plugin config schemas expose
+    // ordinary JSON object shapes and validate keys through the runtime parser.
     delete record.propertyNames;
   }
 
   if (Array.isArray(record.required) && record.required.length === 0) {
+    // Empty required arrays are noise in generated schemas and churn docs/tests.
     delete record.required;
   }
 
@@ -119,6 +122,7 @@ function safeParseJsonSchema(
   };
 }
 
+/** Builds a plugin config schema from a JSON Schema object plus runtime validation. */
 export function buildJsonPluginConfigSchema(
   schema: JsonSchemaObject,
   options?: BuildJsonPluginConfigSchemaOptions,
@@ -134,6 +138,7 @@ export function buildJsonPluginConfigSchema(
   };
 }
 
+/** Builds a plugin config schema from a Zod runtime schema and optional JSON Schema support. */
 export function buildPluginConfigSchema(
   schema: ZodTypeAny,
   options?: BuildPluginConfigSchemaOptions,
@@ -164,6 +169,7 @@ export function buildPluginConfigSchema(
   };
 }
 
+/** Schema contract for plugins that accept no config keys. */
 export function emptyPluginConfigSchema(): OpenClawPluginConfigSchema {
   return {
     safeParse(value: unknown): SafeParseResult {

@@ -29,6 +29,10 @@ const getState = () =>
 
 const getPluginCommandMap = () => getState().pluginCommands;
 
+/**
+ * Process-wide command map shared across duplicate module instances in tests,
+ * bundled plugin loaders, and SDK facades.
+ */
 export const pluginCommands = new Proxy(new Map<string, RegisteredPluginCommand>(), {
   get(_target, property) {
     const value = Reflect.get(getPluginCommandMap(), property, getPluginCommandMap());
@@ -36,18 +40,30 @@ export const pluginCommands = new Proxy(new Map<string, RegisteredPluginCommand>
   },
 });
 
+/**
+ * Return whether command registration is frozen during command dispatch.
+ */
 export function isPluginCommandRegistryLocked(): boolean {
   return getState().registryLocked;
 }
 
+/**
+ * Freeze or reopen registration around command dispatch.
+ */
 export function setPluginCommandRegistryLocked(locked: boolean): void {
   getState().registryLocked = locked;
 }
 
+/**
+ * Remove all registered plugin commands from the shared process registry.
+ */
 export function clearPluginCommands(): void {
   pluginCommands.clear();
 }
 
+/**
+ * Remove every command owned by one plugin id.
+ */
 export function clearPluginCommandsForPlugin(pluginId: string): void {
   for (const [key, cmd] of pluginCommands.entries()) {
     if (cmd.pluginId === pluginId) {
@@ -56,10 +72,16 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
   }
 }
 
+/**
+ * Return whether a command is allowed to occupy a built-in command name.
+ */
 export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
   return command.ownership === "reserved";
 }
 
+/**
+ * Return whether command handlers may receive owner-status context.
+ */
 export function canExposeSenderIsOwner(command: RegisteredPluginCommand): boolean {
   return (
     (Array.isArray(command.requiredScopes) && command.requiredScopes.length > 0) ||
@@ -67,10 +89,16 @@ export function canExposeSenderIsOwner(command: RegisteredPluginCommand): boolea
   );
 }
 
+/**
+ * Snapshot the currently registered plugin commands.
+ */
 export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
   return Array.from(pluginCommands.values());
 }
 
+/**
+ * Gather deduped agent prompt guidance lines for the requested prompt surface.
+ */
 export function listRegisteredPluginAgentPromptGuidance(params?: {
   surface?: AgentPromptSurfaceKind;
   includeLegacyGlobalGuidance?: boolean;
@@ -93,6 +121,10 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
   return lines;
 }
 
+/**
+ * Resolve legacy string guidance and surface-scoped object guidance consistently
+ * for system prompts, compact prompts, and subagent prompt construction.
+ */
 function resolveAgentPromptGuidanceTextForSurface(
   entry: AgentPromptGuidance,
   params: {
@@ -113,6 +145,9 @@ function resolveAgentPromptGuidanceTextForSurface(
   return entry.surfaces.includes(params.surface) ? text : undefined;
 }
 
+/**
+ * Restore a previously captured command snapshot into the process registry.
+ */
 export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
   pluginCommands.clear();
   for (const command of commands) {

@@ -18,10 +18,12 @@ export type ModelManifestNormalizationContext = {
   manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 };
 
+/** Builds the canonical provider/model key used by config, registry, and model-list paths. */
 export function modelKey(provider: string, model: string) {
   return sharedModelKey(provider, model);
 }
 
+/** Returns the pre-normalized key when callers need to preserve legacy config aliases. */
 export function legacyModelKey(provider: string, model: string): string | null {
   const providerId = provider.trim();
   const modelId = model.trim();
@@ -33,14 +35,17 @@ export function legacyModelKey(provider: string, model: string): string | null {
   return rawKey === canonicalKey ? null : rawKey;
 }
 
+/** Normalizes provider ids for model identity and config lookup. */
 export function normalizeProviderId(provider: string): string {
   return normalizeProviderIdCore(provider);
 }
 
+/** Normalizes provider ids for auth lookup, where provider aliases can intentionally collapse. */
 export function normalizeProviderIdForAuth(provider: string): string {
   return normalizeProviderIdForAuthCore(provider);
 }
 
+/** Finds a provider value by normalized id while preserving the original map keys. */
 export function findNormalizedProviderValue<T>(
   entries: Record<string, T> | undefined,
   provider: string,
@@ -48,6 +53,7 @@ export function findNormalizedProviderValue<T>(
   return findNormalizedProviderValueCore(entries, provider);
 }
 
+/** Finds the original provider key that matches a normalized provider id. */
 export function findNormalizedProviderKey(
   entries: Record<string, unknown> | undefined,
   provider: string,
@@ -86,6 +92,7 @@ type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
   allowPluginNormalization?: boolean;
 };
 
+/** Normalizes provider/model parts using static, manifest, and optional plugin model-id rules. */
 export function normalizeModelRef(
   provider: string,
   model: string,
@@ -99,6 +106,7 @@ export function normalizeModelRef(
 type ParseModelRefOptions = ModelRefNormalizeOptions;
 const OPENROUTER_AUTO_COMPAT_ALIAS = "openrouter:auto";
 
+/** Parses `provider/model` or bare model refs, applying the default provider when omitted. */
 export function parseModelRef(
   raw: string,
   defaultProvider: string,
@@ -108,6 +116,7 @@ export function parseModelRef(
   if (!trimmed) {
     return null;
   }
+  // Preserve the historical colon spelling while canonicalizing to the normal openrouter/auto key.
   if (normalizeLowercaseStringOrEmpty(trimmed) === OPENROUTER_AUTO_COMPAT_ALIAS) {
     return normalizeModelRef("openrouter", "auto", options);
   }

@@ -38,14 +38,18 @@ function listConfiguredChannelRemovalChoices(
   const labelsById = new Map(
     listChatChannels().map((meta) => [meta.id, formatChannelRemovalLabel(meta.label, meta.id)]),
   );
-  return Object.keys(channels)
-    .filter((id) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
-    .filter((id) => !isBlockedObjectKey(id))
-    .map((id) => ({
-      id,
-      label: labelsById.get(id) ?? formatUnknownChannelRemovalLabel(id),
-    }))
-    .toSorted(compareChannelRemovalChoices);
+  return (
+    Object.keys(channels)
+      .filter((id) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
+      // Channel config keys come from user JSON; block prototype keys before using
+      // them as dynamic object fields in the removal flow.
+      .filter((id) => !isBlockedObjectKey(id))
+      .map((id) => ({
+        id,
+        label: labelsById.get(id) ?? formatUnknownChannelRemovalLabel(id),
+      }))
+      .toSorted(compareChannelRemovalChoices)
+  );
 }
 
 function formatChannelRemovalLabel(label: string, fallback: string): string {
@@ -66,6 +70,7 @@ function compareChannelRemovalChoices(
   );
 }
 
+/** Interactive wizard for deleting channel config entries while preserving disk credentials. */
 export async function removeChannelConfigWizard(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -122,6 +127,8 @@ export async function removeChannelConfigWizard(
     if (Object.keys(nextChannels).length) {
       next.channels = nextChannels as OpenClawConfig["channels"];
     } else {
+      // Remove the whole object when the last channel entry is gone so config
+      // stays minimal and default channel config does not linger as `{}`.
       delete next.channels;
     }
 

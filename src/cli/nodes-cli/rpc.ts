@@ -22,6 +22,7 @@ async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
   return nodesCliRpcRuntimeLoader.load();
 }
 
+/** Adds common gateway connection flags to node CLI subcommands. */
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
@@ -29,6 +30,7 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
+/** Calls a node gateway method through the lazily loaded runtime transport. */
 export const callGatewayCli = async (
   method: string,
   opts: NodesRpcOpts,
@@ -39,6 +41,7 @@ export const callGatewayCli = async (
   return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
 };
 
+/** Calls pairing approval methods with explicit operator scopes. */
 export const callNodePairApprovalGatewayCli = async (
   method: "node.pair.list" | "node.pair.approve",
   opts: NodesRpcOpts,
@@ -49,6 +52,7 @@ export const callNodePairApprovalGatewayCli = async (
   return await runtime.callNodePairApprovalGatewayCliRuntime(method, opts, params, callOpts);
 };
 
+/** Builds node.invoke params with a stable caller-provided or generated idempotency key. */
 export function buildNodeInvokeParams(params: {
   nodeId: string;
   command: string;
@@ -72,6 +76,7 @@ function hasOptionalValue(value: unknown): boolean {
   return value !== undefined && value !== null && value !== "";
 }
 
+/** Parses an optional positive integer node flag. */
 export function parseOptionalNodePositiveInteger(value: unknown, flag: string): number | undefined {
   if (!hasOptionalValue(value)) {
     return undefined;
@@ -83,6 +88,7 @@ export function parseOptionalNodePositiveInteger(value: unknown, flag: string): 
   return parsed;
 }
 
+/** Parses an optional non-negative integer node flag. */
 export function parseOptionalNodeNonNegativeInteger(
   value: unknown,
   flag: string,
@@ -97,6 +103,7 @@ export function parseOptionalNodeNonNegativeInteger(
   return parsed;
 }
 
+/** Parses an optional finite numeric node flag with optional bounds. */
 export function parseOptionalNodeFiniteNumber(
   value: unknown,
   flag: string,
@@ -125,6 +132,7 @@ export function parseOptionalNodeFiniteNumber(
   return parsed;
 }
 
+/** Returns the local signing hint for known bridge authorization failures. */
 export function unauthorizedHintForMessage(message: string): string | null {
   const haystack = normalizeLowercaseStringOrEmpty(message);
   if (
@@ -141,16 +149,19 @@ export function unauthorizedHintForMessage(message: string): string | null {
   return null;
 }
 
+/** Resolves a user-facing node query to a node id. */
 export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
   return (await resolveNode(opts, query)).nodeId;
 }
 
+/** Resolves a node from live node.list, falling back to paired nodes on older gateways. */
 export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[] = [];
   try {
     const res = await callGatewayCli("node.list", opts, {});
     nodes = parseNodeList(res);
   } catch {
+    // Older or restricted gateways may expose only the pairing list.
     const res = await callGatewayCli("node.pair.list", opts, {});
     const { paired } = parsePairingList(res);
     nodes = paired.map((n) => ({

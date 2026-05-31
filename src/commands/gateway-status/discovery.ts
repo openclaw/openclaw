@@ -5,6 +5,7 @@ import {
   serializeGatewayDiscoveryBeacon,
 } from "../../infra/gateway-discovery-targets.js";
 
+/** Infers an SSH target from a configured remote gateway URL using the local username when available. */
 export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | null {
   if (typeof rawUrl !== "string") {
     return null;
@@ -40,6 +41,7 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
   return base;
 }
 
+/** Resolves a raw SSH target through ssh config, preserving explicit identity overrides. */
 export async function resolveSshTarget(params: {
   rawTarget: string;
   identity: string | null;
@@ -77,6 +79,7 @@ export async function resolveSshTarget(params: {
   return { target, identity: identityFile };
 }
 
+/** Picks the first Bonjour-discovered SSH target that the tunnel parser accepts. */
 export function pickAutoSshTargetFromDiscovery(params: {
   discovery: GatewayBonjourBeacon[];
   parseSshTarget: (target: string) => unknown;

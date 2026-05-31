@@ -85,6 +85,7 @@ export type {
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
 
+/** File fingerprint used by process memos to avoid full registry reloads. */
 function fileFingerprint(filePath: string): unknown {
   try {
     const stat = fs.statSync(filePath, { bigint: true });
@@ -494,6 +495,7 @@ function freezeOwnerMap(owners: Map<string, string[]>): ReadonlyMap<string, read
   );
 }
 
+/** Builds lookup maps from manifest-owned surfaces to owning plugin ids. */
 function buildPluginMetadataOwnerMaps(
   plugins: readonly PluginManifestRecord[],
 ): PluginMetadataSnapshotOwnerMaps {
@@ -566,6 +568,7 @@ function buildPluginMetadataOwnerMaps(
   };
 }
 
+/** Lists plugin origins without exposing the full metadata snapshot shape. */
 export function listPluginOriginsFromMetadataSnapshot(
   snapshot: Pick<PluginMetadataSnapshot, "plugins">,
 ): ReadonlyMap<string, PluginManifestRecord["origin"]> {

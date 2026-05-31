@@ -7,6 +7,7 @@ import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
+/** Normalized plugin config used by activation, registry, and runtime code. */
 export type NormalizedPluginsConfig = {
   enabled: boolean;
   allow: string[];
@@ -42,6 +43,7 @@ export type NormalizedPluginsConfig = {
   >;
 };
 
+/** Hook for callers that need registry-aware plugin id canonicalization. */
 export type NormalizePluginId = (id: string) => string;
 
 export const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
@@ -67,6 +69,8 @@ function normalizeSlotValue(value: unknown): string | null | undefined {
 }
 
 function normalizeHookTimeoutMs(value: unknown): number | undefined {
+  // Hook timeouts are bounded to keep plugin hook execution from becoming an
+  // accidental long-running process control surface.
   if (
     typeof value !== "number" ||
     !Number.isInteger(value) ||
@@ -220,6 +224,7 @@ function normalizePluginEntries(
   return normalized;
 }
 
+/** Normalizes plugin config with caller-supplied id canonicalization. */
 export function normalizePluginsConfigWithResolver(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
@@ -238,6 +243,7 @@ export function normalizePluginsConfigWithResolver(
   };
 }
 
+/** Detects whether config contains any operator-authored plugin surface. */
 export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): boolean {
   if (!plugins) {
     return false;
@@ -263,6 +269,7 @@ export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): bo
   return false;
 }
 
+/** Allows bundled channel plugins when their channel config explicitly exists. */
 export function isBundledChannelEnabledByChannelConfig(
   cfg: OpenClawConfig | undefined,
   pluginId: string,

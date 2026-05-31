@@ -24,6 +24,7 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
   setCurrentManifestModelIdNormalizationRecords(undefined);
 });
 
+/** Builds the control-plane fingerprint used to decide snapshot reuse. */
 export function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
   options: Omit<ResolvePluginControlPlaneContextParams, "config"> = {},
@@ -122,10 +123,12 @@ export function clearCurrentPluginMetadataSnapshot(): void {
   clearCurrentPluginMetadataSnapshotState();
 }
 
+/** Captures the process-local current snapshot slot for scoped test restores. */
 export function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
   return getCurrentPluginMetadataSnapshotState();
 }
 
+/** Restores the current snapshot slot and related model-id normalization records. */
 export function restoreCurrentPluginMetadataSnapshotState(
   state: CurrentPluginMetadataSnapshotState,
 ): void {
@@ -185,6 +188,8 @@ export function getCurrentPluginMetadataSnapshot(
     params.pluginIds ?? params.pluginIdScope?.resolve({ index: snapshot.index }),
   );
   const snapshotPluginIds = normalizePluginIdScope(snapshot.pluginIds);
+  // Scoped snapshots are exact-scope artifacts unless the caller explicitly
+  // opts into accepting a scoped snapshot for an unscoped request.
   if (
     requestedPluginIds !== undefined &&
     serializePluginIdScope(snapshotPluginIds) !== serializePluginIdScope(requestedPluginIds)
@@ -241,6 +246,8 @@ export function getCurrentPluginMetadataSnapshot(
     }
   }
   if (params.requireDefaultDiscoveryContext === true) {
+    // Default-discovery callers need proof that this snapshot came from the
+    // unconfigured discovery context, not merely a policy-compatible config.
     const defaultDiscoveryConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(
       {},
       {

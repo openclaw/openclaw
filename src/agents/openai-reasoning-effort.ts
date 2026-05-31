@@ -30,11 +30,13 @@ function normalizeModelId(id: string | null | undefined): string {
   return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
 }
 
+/** Returns true for GPT-5.4 mini model ids that need special tool-routing handling. */
 export function isOpenAIGpt54MiniModel(model: OpenAIReasoningModel): boolean {
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
   return /^gpt-5\.4-mini(?:-|$)/u.test(id);
 }
 
+/** Normalizes reasoning effort aliases before comparing them with model capabilities. */
 export function normalizeOpenAIReasoningEffort(effort: string): string {
   return effort === "minimal" ? "minimal" : effort;
 }
@@ -60,6 +62,10 @@ function isDisabledReasoningEffort(effort: string): boolean {
   return effort === "none" || effort === "off";
 }
 
+/**
+ * Resolves the reasoning effort values accepted by an OpenAI-compatible model,
+ * honoring explicit compat metadata before applying built-in model-family rules.
+ */
 export function resolveOpenAISupportedReasoningEfforts(
   model: OpenAIReasoningModel,
 ): readonly OpenAIApiReasoningEffort[] {
@@ -96,6 +102,7 @@ export function resolveOpenAISupportedReasoningEfforts(
   return GENERIC_REASONING_EFFORTS;
 }
 
+/** Checks whether the model accepts the requested OpenAI reasoning effort. */
 export function supportsOpenAIReasoningEffort(
   model: OpenAIReasoningModel,
   effort: string,
@@ -105,6 +112,10 @@ export function supportsOpenAIReasoningEffort(
   );
 }
 
+/**
+ * Chooses the nearest supported reasoning effort for a model, returning
+ * undefined when reasoning is explicitly disabled.
+ */
 export function resolveOpenAIReasoningEffortForModel(params: {
   model: OpenAIReasoningModel;
   effort: string;
@@ -120,6 +131,8 @@ export function resolveOpenAIReasoningEffortForModel(params: {
   if (isDisabledReasoningEffort(requested) || isDisabledReasoningEffort(normalized)) {
     return undefined;
   }
+  // Preserve intent by stepping unsupported efforts toward the closest weaker
+  // model-supported value before falling back to the provider default.
   if (requested === "minimal" && supported.includes("low")) {
     return "low";
   }

@@ -16,6 +16,7 @@ export type BundledPluginLookup =
   | { kind: "npmSpec"; value: string }
   | { kind: "pluginId"; value: string };
 
+/** Finds bundled plugin source metadata from an existing id-indexed source map. */
 export function findBundledPluginSourceInMap(params: {
   bundled: ReadonlyMap<string, BundledPluginSource>;
   lookup: BundledPluginLookup;
@@ -35,6 +36,7 @@ export function findBundledPluginSourceInMap(params: {
   return undefined;
 }
 
+/** Discovers bundled plugin roots and returns install/source metadata by plugin id. */
 export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
   /** Use an explicit env when bundled roots should resolve independently from process.env. */
@@ -56,6 +58,8 @@ export function resolveBundledPluginSources(params: {
     }
     const pluginId = manifest.manifest.id;
     if (bundled.has(pluginId)) {
+      // Discovery order defines precedence; later duplicate bundled ids are
+      // ignored so install hints stay stable across source and built trees.
       continue;
     }
 
@@ -92,6 +96,7 @@ function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {
   return Array.isArray(required) && required.some((entry) => typeof entry === "string");
 }
 
+/** Resolves one bundled plugin source by plugin id or package install spec. */
 export function findBundledPluginSource(params: {
   lookup: BundledPluginLookup;
   workspaceDir?: string;
@@ -108,6 +113,7 @@ export function findBundledPluginSource(params: {
   });
 }
 
+/** Builds the local-path install command shown when a bundled plugin must be installed. */
 export function resolveBundledPluginInstallCommandHint(params: {
   pluginId: string;
   workspaceDir?: string;

@@ -39,6 +39,7 @@ function formatLockLine(lock: SessionLockInspection): string {
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
 }
 
+/** Reports stale session write locks and optionally removes them during doctor --fix. */
 export async function noteSessionLockHealth(params?: {
   shouldRepair?: boolean;
   config?: SessionWriteLockAcquireTimeoutConfig;
@@ -62,6 +63,8 @@ export async function noteSessionLockHealth(params?: {
 
   const allLocks: SessionLockInspection[] = [];
   for (const sessionsDir of sessionDirs) {
+    // cleanStaleLockFiles only removes when requested; doctor without --fix uses
+    // the same inspection path for consistent stale detection.
     const result = await cleanStaleLockFiles({
       sessionsDir,
       staleMs,

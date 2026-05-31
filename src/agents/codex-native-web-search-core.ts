@@ -32,6 +32,7 @@ function isOpenAIAuthProviderId(provider: string | undefined): boolean {
   return OPENAI_AUTH_PROVIDER_IDS.some((candidate) => candidate === provider);
 }
 
+/** Returns whether a model route can accept OpenAI Codex native web_search tools. */
 export function isCodexNativeSearchEligibleModel(params: {
   modelProvider?: string;
   modelApi?: string;
@@ -48,6 +49,7 @@ function hasCodexNativeWebSearchTool(tools: unknown): boolean {
   );
 }
 
+/** Detects OAuth/token auth that can satisfy Codex native web-search requests. */
 export function hasAvailableCodexAuth(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -79,12 +81,18 @@ export function hasAvailableCodexAuth(params: {
         return true;
       }
     } catch {
+      // Auth discovery can touch local stores/keychain-backed profiles; setup
+      // relevance must degrade to config-only checks instead of failing.
       // Fall back to config-based detection below.
     }
   }
   return false;
 }
 
+/**
+ * Decides whether Codex native web search should replace the managed web-search
+ * tool for a specific model route.
+ */
 export function resolveCodexNativeSearchActivation(params: {
   config?: OpenClawConfig;
   modelProvider?: string;
@@ -157,6 +165,7 @@ export function resolveCodexNativeSearchActivation(params: {
   };
 }
 
+/** Builds the OpenAI web_search tool payload from normalized Codex config. */
 export function buildCodexNativeWebSearchTool(
   config: OpenClawConfig | undefined,
 ): Record<string, unknown> {
@@ -186,6 +195,7 @@ export function buildCodexNativeWebSearchTool(
   return tool;
 }
 
+/** Injects a Codex native web_search tool into a mutable OpenAI payload when absent. */
 export function patchCodexNativeWebSearchPayload(params: {
   payload: unknown;
   config?: OpenClawConfig;
@@ -205,6 +215,7 @@ export function patchCodexNativeWebSearchPayload(params: {
   return { status: "injected" };
 }
 
+/** Returns true when the managed web-search tool should be hidden for this route. */
 export function shouldSuppressManagedWebSearchTool(params: {
   config?: OpenClawConfig;
   modelProvider?: string;

@@ -42,6 +42,7 @@ export type StatusScanResult = {
   pluginCompatibility: PluginCompatibilityNotice[];
 };
 
+/** Flattens gateway scan data and expensive status sections into one result object. */
 export function buildStatusScanResult(params: {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;

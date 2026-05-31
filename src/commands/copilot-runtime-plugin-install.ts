@@ -17,6 +17,7 @@ const COPILOT_RUNTIME_PLUGIN_DESCRIPTOR = {
 
 export type CopilotRuntimePluginInstallResult = RuntimePluginInstallResult;
 
+/** Returns true when the selected model requires the GitHub Copilot runtime plugin. */
 export function selectedModelShouldEnsureCopilotRuntimePlugin(params: {
   cfg: OpenClawConfig;
   model?: string;
@@ -32,6 +33,8 @@ const copilotRuntimePluginInstall = createRuntimePluginModelSelectionHelpers({
   shouldEnsure: selectedModelShouldEnsureCopilotRuntimePlugin,
 });
 
+/** Installs/enables the Copilot runtime plugin when a model selection needs it. */
 export const ensureCopilotRuntimePluginForModelSelection = copilotRuntimePluginInstall.ensure;
+/** Repairs an existing Copilot runtime plugin install when model selection exposes a broken setup. */
 export const repairCopilotRuntimePluginInstallForModelSelection =
   copilotRuntimePluginInstall.repair;

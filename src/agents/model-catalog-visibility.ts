@@ -20,6 +20,7 @@ const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
   "gpt-5.4-mini",
 ]);
 
+/** Accepts sync or async auth probes so gateway read-only callers can inject cheap checks. */
 function isPromiseLike(value: boolean | Promise<boolean>): value is Promise<boolean> {
   return typeof value === "object" && value !== null && typeof value.then === "function";
 }
@@ -81,6 +82,7 @@ function dedupeModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEn
   return next;
 }
 
+/** Returns the catalog rows visible for a caller after config allowlists and auth discovery. */
 export async function resolveVisibleModelCatalog(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
@@ -99,6 +101,7 @@ export async function resolveVisibleModelCatalog(params: {
   }
 
   const buildDefaultVisibleCatalog = async () => {
+    // Default visibility is configured models plus catalog rows backed by discovered auth.
     const configuredCatalog = sortModelCatalogEntries(
       buildConfiguredModelCatalog({ cfg: params.cfg }),
     );

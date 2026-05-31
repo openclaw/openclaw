@@ -25,6 +25,7 @@ export type DiscoverAuthStorageOptions = {
   syntheticAuthProviderRefs?: Iterable<string>;
 } & AgentDiscoveryAuthLookupOptions;
 
+/** Builds the credential map used by model/auth discovery without triggering interactive prompts. */
 export function resolveAgentCredentialsForDiscovery(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
@@ -62,6 +63,7 @@ export function resolveAgentCredentialsForDiscovery(
     if (credentials[provider]) {
       continue;
     }
+    // Plugin-owned synthetic auth fills discovery gaps only when no stored/env credential exists.
     const resolved = resolveProviderSyntheticAuthWithPlugin({
       provider,
       context: {

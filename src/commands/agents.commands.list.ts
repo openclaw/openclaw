@@ -21,6 +21,7 @@ type AgentsListOptions = {
   bindings?: boolean;
 };
 
+/** Formats one agent summary for human `agents list` output. */
 function formatSummary(summary: AgentSummary) {
   const defaultTag = summary.isDefault ? " (default)" : "";
   const header =
@@ -73,6 +74,7 @@ function formatSummary(summary: AgentSummary) {
   return lines.join("\n");
 }
 
+/** Lists configured agents with optional routing/provider enrichment. */
 export async function agentsListCommand(
   opts: AgentsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -95,6 +97,8 @@ export async function agentsListCommand(
     for (const summary of summaries) {
       const bindings = bindingMap.get(summary.id) ?? [];
       if (bindings.length > 0) {
+        // Binding detail strings are human-facing only; JSON callers get the
+        // structured summary fields without this formatting pass.
         summary.bindingDetails = bindings.map((binding) => describeBinding(binding));
       }
     }

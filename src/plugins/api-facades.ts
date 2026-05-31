@@ -4,6 +4,7 @@ type PluginApiFacadeFields = Pick<
   OpenClawPluginApi,
   "agent" | "lifecycle" | "runContext" | "session"
 >;
+/** Flat plugin API shape before grouped facade namespaces are attached. */
 export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof PluginApiFacadeFields>;
 type PluginApiFacadeSource = Pick<
   OpenClawPluginApi,
@@ -23,9 +24,12 @@ type PluginApiFacadeSource = Pick<
   | "unscheduleSessionTurnsByTag"
 >;
 
+/** Attaches grouped plugin API facades that delegate to the canonical flat methods. */
 export function attachPluginApiFacades<T extends object>(
   api: T & PluginApiFacadeSource & Partial<PluginApiFacadeFields>,
 ): T & PluginApiFacadeFields {
+  // Facades are thin aliases over the flat API, keeping old callers and grouped
+  // namespaces pointed at the same runtime handlers.
   api.session = {
     state: {
       registerSessionExtension: (...args) => api.registerSessionExtension(...args),

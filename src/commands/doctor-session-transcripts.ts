@@ -127,6 +127,7 @@ function selectActivePath(entries: TranscriptEntry[]): TranscriptEntry[] | null 
   while (current) {
     const id = getEntryId(current);
     if (!id || seen.has(id)) {
+      // Cycles or missing ids mean we cannot prove the active branch safely.
       return null;
     }
     seen.add(id);
@@ -167,6 +168,8 @@ function hasBrokenPromptRewriteBranch(entries: TranscriptEntry[], activePath: Tr
       continue;
     }
     const visibleText = stripInternalRuntimeContext(text).trim();
+    // Broken prompt rewrites left an internal-context sibling beside the active
+    // visible user message with the same parent.
     if (
       visibleText &&
       activeUserByParentAndText.has(`${getParentId(entry) ?? ""}\0${visibleText}`)
@@ -219,6 +222,7 @@ export async function repairBrokenSessionTranscriptFile(params: {
     const activePath = selectActivePath(entries);
     if (!activePath) {
       if (legacyOpenAICodexEntries > 0 && params.shouldRepair) {
+        // Metadata-only repair is still safe when branch pruning is not.
         const backupPath = await writeTranscriptEntries({ filePath: params.filePath, entries });
         return {
           filePath: params.filePath,
@@ -329,6 +333,8 @@ export async function noteSessionTranscriptHealth(params?: {
 
   const results: TranscriptRepairResult[] = [];
   for (const filePath of files) {
+    // Each transcript is repaired independently so one corrupt file does not
+    // suppress findings for the rest of the session directory.
     results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
   }
   const broken = results.filter((result) => result.broken);

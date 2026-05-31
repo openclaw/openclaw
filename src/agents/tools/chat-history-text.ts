@@ -2,6 +2,7 @@ import { extractAssistantTextForPhase } from "../../shared/chat-message-content.
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 
+/** Removes tool/toolResult messages before rendering chat history to user-facing tools. */
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {
     if (!msg || typeof msg !== "object") {
@@ -13,13 +14,17 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
 }
 
 /**
- * Sanitize text content to strip tool call markers and thinking tags.
- * This ensures user-facing text doesn't leak internal tool representations.
+ * Sanitizes assistant text for history surfaces by stripping thinking tags,
+ * tool-call markers, and other provider-visible control text.
  */
 export function sanitizeTextContent(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "history");
 }
 
+/**
+ * Extracts the final user-visible assistant text from a chat-history message,
+ * preferring final-answer content when phase metadata is present.
+ */
 export function extractAssistantText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;

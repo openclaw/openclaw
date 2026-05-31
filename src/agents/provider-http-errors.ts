@@ -8,20 +8,24 @@ export { normalizeOptionalString as trimToUndefined } from "../../packages/norma
 const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
+/** Narrows unknown provider payloads to object records. */
 export function asObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
 }
 
+/** Truncates provider error snippets while preserving a visible truncation marker. */
 export function truncateErrorDetail(detail: string, limit = 220): string {
   return detail.length <= limit ? detail : `${detail.slice(0, limit - 1)}…`;
 }
 
+/** Redacts and bounds raw provider error bodies before storing them in metadata. */
 export function redactProviderErrorBody(body: string): string {
   return truncateErrorDetail(redactSensitiveText(body), ERROR_BODY_METADATA_LIMIT);
 }
 
+/** Reads at most limitBytes from a response body, canceling the stream after the cap. */
 export async function readResponseTextLimited(
   response: Response,
   limitBytes = 16 * 1024,
@@ -71,6 +75,7 @@ export async function readResponseTextLimited(
   return text;
 }
 
+/** Formats common provider/OAuth JSON error payload shapes into one readable detail. */
 export function formatProviderErrorPayload(payload: unknown): string | undefined {
   const root = asObject(payload);
   const detailObject = asObject(root?.detail);
@@ -140,6 +145,7 @@ export type ProviderHttpErrorInfo = {
   requestId?: string;
 };
 
+/** Extracts redacted provider error detail, code/type/body, and request id from a response. */
 export async function extractProviderErrorInfo(response: Response): Promise<ProviderHttpErrorInfo> {
   const rawBody = trimToUndefined(await readResponseTextLimited(response).catch(() => ""));
   const requestId = extractProviderRequestId(response);
@@ -165,10 +171,12 @@ export async function extractProviderErrorInfo(response: Response): Promise<Prov
   }
 }
 
+/** Convenience wrapper returning only the formatted provider error detail. */
 export async function extractProviderErrorDetail(response: Response): Promise<string | undefined> {
   return (await extractProviderErrorInfo(response)).detail;
 }
 
+/** Reads provider request ids from the common response header variants. */
 export function extractProviderRequestId(response: Response): string | undefined {
   return (
     trimToUndefined(response.headers.get("x-request-id")) ??
@@ -207,6 +215,7 @@ export class ProviderHttpError extends Error {
   }
 }
 
+/** Builds the user-facing provider HTTP error message from status/detail/request metadata. */
 export function formatProviderHttpErrorMessage(params: {
   label: string;
   status: number;
@@ -222,6 +231,7 @@ export function formatProviderHttpErrorMessage(params: {
   );
 }
 
+/** Creates a ProviderHttpError with parsed/redacted response metadata attached. */
 export async function createProviderHttpError(
   response: Response,
   label: string,
@@ -246,6 +256,7 @@ export async function createProviderHttpError(
   );
 }
 
+/** Throws a provider-aware HTTP error when the response status is not ok. */
 export async function assertOkOrThrowProviderError(
   response: Response,
   label: string,
@@ -256,6 +267,7 @@ export async function assertOkOrThrowProviderError(
   throw await createProviderHttpError(response, label);
 }
 
+/** Throws a legacy HTTP-prefixed provider error when the response status is not ok. */
 export async function assertOkOrThrowHttpError(response: Response, label: string): Promise<void> {
   if (response.ok) {
     return;
@@ -263,6 +275,7 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
   throw await createProviderHttpError(response, label, { statusPrefix: "HTTP " });
 }
 
+/** Parses JSON responses and wraps malformed JSON with provider context. */
 export async function readProviderJsonResponse<T>(response: Response, label: string): Promise<T> {
   try {
     return (await response.json()) as T;
@@ -271,6 +284,7 @@ export async function readProviderJsonResponse<T>(response: Response, label: str
   }
 }
 
+/** Parses a JSON response and requires the top-level value to be an object. */
 export async function readProviderJsonObjectResponse(
   response: Response,
   label: string,
@@ -283,6 +297,7 @@ export async function readProviderJsonObjectResponse(
   return object;
 }
 
+/** Parses a JSON response and requires the named field to be an array. */
 export async function readProviderJsonArrayFieldResponse(
   response: Response,
   label: string,
@@ -319,6 +334,7 @@ export function assertProviderBinaryResponseContent(
   }
 }
 
+/** Reads a bounded non-empty binary response after rejecting text/JSON content types. */
 export async function readProviderBinaryResponse(
   response: Response,
   label: string,

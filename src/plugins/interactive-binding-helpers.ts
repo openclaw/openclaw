@@ -15,6 +15,9 @@ type PluginBindingConversation = Parameters<
   typeof requestPluginConversationBinding
 >[0]["conversation"];
 
+/**
+ * Build conversation-binding helpers for interactive handler contexts.
+ */
 export function createInteractiveConversationBindingHelpers(params: {
   registration: RegisteredInteractiveMetadata;
   senderId?: string;
@@ -26,6 +29,8 @@ export function createInteractiveConversationBindingHelpers(params: {
   return {
     requestConversationBinding: async (binding: PluginConversationBindingRequestParams = {}) => {
       if (!pluginRoot) {
+        // Inline handlers can be registered without a resolved plugin root in
+        // tests or legacy host contexts; those cannot safely persist ownership.
         return {
           status: "error" as const,
           message: "This interaction cannot bind the current conversation.",

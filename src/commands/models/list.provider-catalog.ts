@@ -95,6 +95,8 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   if (pluginIds.length > 0) {
     return sortUniqueStrings(pluginIds);
   }
+  // Disabled matches mean the provider is known but unavailable; return an
+  // empty scope so callers avoid falling through to unrelated bundled aliases.
   const disabledPluginIds = [
     ...collectMatchingContributionOwners(index, "providers", params.providerFilter, params.cfg, {
       includeDisabled: true,
@@ -106,6 +108,7 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   return disabledPluginIds.length > 0 ? [] : undefined;
 }
 
+/** Resolves installed, manifest, or bundled plugin ids that can answer a provider filter. */
 export async function resolveProviderCatalogPluginIdsForFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -144,6 +147,7 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   return undefined;
 }
 
+/** Checks whether a provider filter has a trusted static catalog without running probes. */
 export async function hasProviderStaticCatalogForFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -174,6 +178,8 @@ export async function hasProviderStaticCatalogForFilter(params: {
   if (scopedPluginIds.length === 0) {
     return false;
   }
+  // Static catalog checks only inspect bundled/trusted discovery entries; a
+  // provider-filtered list must not execute untrusted workspace plugins.
   const providers = await resolveRuntimePluginDiscoveryProviders({
     config: params.cfg,
     env,
@@ -190,6 +196,7 @@ export async function hasProviderStaticCatalogForFilter(params: {
   );
 }
 
+/** Converts provider catalog config into list-compatible model rows. */
 function modelFromProviderCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -212,6 +219,7 @@ function modelFromProviderCatalog(params: {
   } as Model;
 }
 
+/** Loads static/runtime provider catalog models for `models list --all`. */
 export async function loadProviderCatalogModelsForList(params: {
   cfg: OpenClawConfig;
   agentDir: string;
@@ -249,6 +257,8 @@ export async function loadProviderCatalogModelsForList(params: {
     return [];
   }
 
+  // Provider catalog rows come from bundled compatibility plugins only; external
+  // workspace plugins contribute through manifest/provider-index paths instead.
   const providers = (
     await resolveRuntimePluginDiscoveryProviders({
       config: params.cfg,
@@ -282,6 +292,8 @@ export async function loadProviderCatalogModelsForList(params: {
             env,
           });
         } else {
+          // Runtime catalogs need credential resolvers scoped to the command's
+          // agent auth store so provider hooks see the same auth as model runs.
           const authStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
           const resolveProviderApiKey = createProviderApiKeyResolver(env, authStore, params.cfg);
           const resolveProviderAuth = createProviderAuthResolver(env, authStore, params.cfg);
@@ -314,6 +326,8 @@ export async function loadProviderCatalogModelsForList(params: {
           if (seen.has(key)) {
             continue;
           }
+          // Multiple discovery orders can report the same model; first match
+          // wins to preserve preferred simple/profile/paired/late precedence.
           seen.add(key);
           rows.push(
             modelFromProviderCatalog({

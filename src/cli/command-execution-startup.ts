@@ -12,6 +12,7 @@ const hasJsonFlag = (argv: readonly string[]) =>
 const hasVersionFlag = (argv: readonly string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V");
 
+/** Resolves argv, command path, and startup policy before Commander dispatch. */
 export function resolveCliExecutionStartupContext(params: {
   argv: string[];
   jsonOutputMode: boolean;
@@ -33,6 +34,7 @@ export function resolveCliExecutionStartupContext(params: {
   };
 }
 
+/** Applies startup presentation policy before command execution can write output. */
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];
   routeLogsToStderrOnSuppress?: boolean;
@@ -47,6 +49,7 @@ export async function applyCliExecutionStartupPresentation(params: {
     return;
   }
   if (params.argv && (hasJsonFlag(params.argv) || hasVersionFlag(params.argv))) {
+    // Machine-readable and version paths must not get banner text mixed into stdout.
     return;
   }
   const { emitCliBanner } = await import("./banner.js");
@@ -57,6 +60,7 @@ export async function applyCliExecutionStartupPresentation(params: {
   emitCliBanner(params.version);
 }
 
+/** Runs config/plugin bootstrap using the already-resolved startup policy. */
 export async function ensureCliExecutionBootstrap(params: {
   runtime: RuntimeEnv;
   commandPath: string[];

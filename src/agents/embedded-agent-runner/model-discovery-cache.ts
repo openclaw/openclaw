@@ -67,6 +67,7 @@ function discoveryFingerprint(
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): string {
+  // Include both local and inherited auth files so child agents see main-agent auth changes.
   const inheritedAuthDir =
     params.inheritedAuthDir && params.inheritedAuthDir !== params.agentDir
       ? params.inheritedAuthDir
@@ -135,6 +136,7 @@ function discoverFreshAgentStores(
   return { authStorage, modelRegistry };
 }
 
+/** Discovers auth/model stores with a file-fingerprint cache for stable embedded-agent runs. */
 export function discoverCachedAgentStores(
   options: DiscoverCachedAgentStoresOptions,
 ): DiscoveryStores {
@@ -143,6 +145,7 @@ export function discoverCachedAgentStores(
     options.inheritedAuthDir ?? resolveDefaultAgentDir({}),
   );
   if (hasAnyRuntimeAuthProfileStoreSource(agentDir) || hasRuntimePluginAuthSources()) {
+    // Runtime auth overlays are process state, not files; bypass cache so overlays stay current.
     return discoverFreshAgentStores(
       agentDir,
       options,
@@ -173,6 +176,7 @@ export function discoverCachedAgentStores(
   return stores;
 }
 
+/** Clears the process-local discovery cache between tests. */
 export function resetModelDiscoveryCacheForTest(): void {
   DISCOVERY_STORE_CACHE.clear();
 }

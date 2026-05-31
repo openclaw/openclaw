@@ -28,6 +28,7 @@ function hasExplicitAllowAll(list?: string[]): boolean {
   return Array.isArray(list) && list.some((entry) => entry.trim() === "*");
 }
 
+/** Converts config allow/alsoAllow/deny fields into the runtime sandbox policy shape. */
 export function pickSandboxToolPolicy(
   config?: SandboxToolPolicyConfig,
 ): SandboxToolPolicy | undefined {

@@ -22,8 +22,10 @@ const log = createSubsystemLogger("embedded-agent-settings");
 export const DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY = "sanitize";
 const SANITIZED_PROJECT_AGENT_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
+/** Controls whether embedded agents inherit workspace-local settings. */
 export type EmbeddedAgentProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
+/** Agent settings captured before an embedded-agent run, including bundle-provided MCP servers. */
 export type AgentSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]> & {
   mcpServers?: Record<string, BundleMcpServerConfig>;
 };
@@ -53,6 +55,7 @@ function resolveUnscopedCurrentPluginMetadataSnapshot(params: {
   if (!canReuseUnscopedCurrentPluginMetadataSnapshot(params.config)) {
     return undefined;
   }
+  // Unscoped snapshots are only valid when plugin load paths do not depend on the workspace.
   return getCurrentPluginMetadataSnapshot({
     env: params.env,
     workspaceDir: params.workspaceDir,
@@ -83,6 +86,7 @@ function loadBundleSettingsFile(params: {
   return sanitizeAgentSettingsSnapshot(result.value as AgentSettingsSnapshot);
 }
 
+/** Loads settings files exposed by enabled bundle plugins for the embedded-agent runtime. */
 export function loadEnabledBundleAgentSettingsSnapshot(params: {
   cwd: string;
   cfg?: OpenClawConfig;
@@ -174,6 +178,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
   return snapshot;
 }
 
+/** Resolves the project-settings policy, defaulting to sanitized inheritance for unknown values. */
 export function resolveEmbeddedAgentProjectSettingsPolicy(
   cfg?: OpenClawConfig,
 ): EmbeddedAgentProjectSettingsPolicy {
@@ -184,6 +189,7 @@ export function resolveEmbeddedAgentProjectSettingsPolicy(
   return DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY;
 }
 
+/** Builds the final embedded-agent settings snapshot in global, plugin, then project order. */
 export function buildEmbeddedAgentSettingsSnapshot(params: {
   globalSettings: AgentSettingsSnapshot;
   pluginSettings?: AgentSettingsSnapshot;

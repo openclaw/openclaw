@@ -15,12 +15,14 @@ const modelCatalogBrowseDeps = {
   clearTimeout: globalThis.clearTimeout,
 };
 
+/** Overrides timer hooks for deterministic model-catalog browse timeout tests. */
 export function setModelCatalogBrowseTestDeps(
   overrides: Partial<typeof modelCatalogBrowseDeps>,
 ): void {
   Object.assign(modelCatalogBrowseDeps, overrides);
 }
 
+/** Restores real timer hooks after model-catalog browse timeout tests. */
 export function restoreModelCatalogBrowseTestDeps(): void {
   modelCatalogBrowseDeps.setTimeout = globalThis.setTimeout;
   modelCatalogBrowseDeps.clearTimeout = globalThis.clearTimeout;
@@ -33,6 +35,7 @@ function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
   );
 }
 
+/** Loads the model catalog for UI browse views, falling back quickly for read-only discovery. */
 export async function loadModelCatalogForBrowse(params: {
   cfg: OpenClawConfig;
   view?: ModelCatalogBrowseView;
@@ -45,6 +48,7 @@ export async function loadModelCatalogForBrowse(params: {
     return await params.loadCatalog({ readOnly: false });
   }
   if (parseConfiguredModelVisibilityEntries({ cfg: params.cfg }).providerWildcards.size > 0) {
+    // Provider wildcards need the full catalog so visibility policy can match every model row.
     return await params.loadCatalog({ readOnly: false });
   }
 
@@ -60,6 +64,7 @@ export async function loadModelCatalogForBrowse(params: {
   try {
     const result = await Promise.race([catalogPromise, timeoutPromise]);
     if (result === timedOut) {
+      // The slow read-only load may still reject later; consume it after returning fallback rows.
       catalogPromise.catch(() => undefined);
       params.onTimeout?.(timeoutMs);
       return [];

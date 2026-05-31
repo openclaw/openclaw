@@ -178,6 +178,7 @@ function expandResolvedPolicy(policy: SandboxToolPolicy): SandboxToolPolicy {
   };
 }
 
+/** Reports whether a tool is blocked by deny rules or by a restrictive allowlist. */
 export function classifyToolAgainstSandboxToolPolicy(name: string, policy?: SandboxToolPolicy) {
   if (!policy) {
     return {
@@ -204,11 +205,13 @@ export function classifyToolAgainstSandboxToolPolicy(name: string, policy?: Sand
   };
 }
 
+/** Returns whether the sandbox policy allows the named tool after group/alias expansion. */
 export function isToolAllowed(policy: SandboxToolPolicy, name: string) {
   const { blockedByDeny, blockedByAllow } = classifyToolAgainstSandboxToolPolicy(name, policy);
   return !blockedByDeny && !blockedByAllow;
 }
 
+/** Resolves global/agent sandbox policy with defaults, source metadata, and group expansion. */
 export function resolveSandboxToolPolicyForAgent(
   cfg?: OpenClawConfig,
   agentId?: string,

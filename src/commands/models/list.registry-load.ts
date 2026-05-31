@@ -7,6 +7,7 @@ import { loadModelRegistry } from "./list.registry.js";
 import type { ConfiguredEntry } from "./list.types.js";
 import { modelKey } from "./shared.js";
 
+/** Loads the full model registry for list output and precomputes discovered model keys. */
 export async function loadListModelRegistry(
   cfg: OpenClawConfig,
   opts?: {
@@ -40,11 +41,14 @@ function findConfiguredRegistryModel(params: {
       config: params.cfg,
     })
   ) {
+    // Configured-mode registry probes should not resurrect models hidden by the
+    // same suppression rules used by normal list output.
     return undefined;
   }
   return model;
 }
 
+/** Loads only configured model entries, filtering suppressed models and tracking auth-backed availability. */
 export function loadConfiguredListModelRegistry(
   cfg: OpenClawConfig,
   entries: ConfiguredEntry[],

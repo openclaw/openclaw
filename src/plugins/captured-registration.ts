@@ -85,6 +85,7 @@ export type CapturedPluginRegistration = {
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
 
+/** Creates an in-memory plugin API harness that records registration calls. */
 export function createCapturedPluginRegistration(params?: {
   config?: OpenClawConfig;
   id?: string;
@@ -176,6 +177,8 @@ export function createCapturedPluginRegistration(params?: {
       handlers: {
         registerCli(registrar, opts) {
           const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
+          // Descriptor-only CLI registrations are normalized into command names
+          // so tests can assert one command list regardless of registration style.
           const descriptors = (opts?.descriptors ?? [])
             .map((descriptor) => ({
               name: descriptor.name.trim(),
@@ -302,6 +305,8 @@ export function createCapturedPluginRegistration(params?: {
         sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
         scheduleSessionTurn: async (schedule) => {
           capturedSessionTurnCount += 1;
+          // Stable synthetic ids let callers verify scheduling without starting
+          // real session workers or mutating gateway state.
           return {
             id: `captured-session-turn-${capturedSessionTurnCount}`,
             pluginId,
@@ -320,6 +325,7 @@ export function createCapturedPluginRegistration(params?: {
   };
 }
 
+/** Runs a plugin register() function against the captured in-memory API harness. */
 export function capturePluginRegistration(
   params: NonNullable<Parameters<typeof createCapturedPluginRegistration>[0]> & {
     register(api: OpenClawPluginApi): void;

@@ -60,6 +60,7 @@ type ManifestModelCatalogSuppressionPlan = {
   suppressions: readonly ManifestModelCatalogSuppressionEntry[];
 };
 
+/** Plans normalized manifest catalog rows and reports duplicate provider/model ownership conflicts. */
 export function planManifestModelCatalogRows(params: {
   registry: ManifestModelCatalogRegistry;
   providerFilter?: string;
@@ -82,6 +83,7 @@ export function planManifestModelCatalogRows(params: {
     for (const row of entry.rows) {
       const seen = seenRows.get(row.mergeKey);
       if (seen) {
+        // Conflicted rows are excluded entirely so no plugin silently wins duplicate ownership.
         if (!conflicts.has(row.mergeKey)) {
           conflicts.set(row.mergeKey, {
             mergeKey: row.mergeKey,
@@ -112,6 +114,7 @@ export function planManifestModelCatalogRows(params: {
   };
 }
 
+/** Plans provider rows for one plugin, including explicit alias-provider filters. */
 function planManifestModelCatalogPluginEntries(params: {
   plugin: ManifestModelCatalogPlugin;
   providerFilter: string | undefined;
@@ -214,6 +217,7 @@ function applyModelCatalogAliasOverrides(params: {
   }));
 }
 
+/** Plans model suppressions declared by plugins for providers they own or alias. */
 export function planManifestModelCatalogSuppressions(params: {
   registry: ManifestModelCatalogRegistry;
   providerFilter?: string;

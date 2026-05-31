@@ -1,13 +1,24 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-export { asFiniteNumber as asNumber } from "../../packages/normalization-core/src/number-coercion.js";
+import { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
+import { asRecord as coerceRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { readStringValue } from "../../packages/normalization-core/src/string-coerce.js";
-export { asRecord } from "../../packages/normalization-core/src/record-coerce.js";
-export { asBoolean } from "../utils/boolean.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { asBoolean as coerceBoolean } from "../utils/boolean.js";
 
+/** Numeric coercion helper for node media payloads. */
+export const asNumber = asFiniteNumber;
+
+/** Record coercion helper for node media payloads. */
+export const asRecord = coerceRecord;
+
+/** Boolean coercion helper for node media payloads. */
+export const asBoolean = coerceBoolean;
+
+/** String coercion helper for node media payloads. */
 export const asString = readStringValue;
 
+/** Resolves a safe temp directory, id, and extension for node media outputs. */
 export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: string }): {
   ext: string;
   tmpDir: string;
@@ -16,6 +27,7 @@ export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: 
   const tmpDir = opts.tmpDir ?? resolvePreferredOpenClawTmpDir();
   const rawExt = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
   if (!/^\.[A-Za-z0-9][A-Za-z0-9_-]{0,15}$/u.test(rawExt)) {
+    // Extensions become path suffixes, so reject traversal, slashes, and oversized values.
     throw new Error("invalid media format");
   }
   if (!opts.tmpDir) {

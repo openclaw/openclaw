@@ -1,13 +1,22 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
+/**
+ * Build the per-channel key used for interactive callback namespace lookups.
+ */
 export function toPluginInteractiveRegistryKey(channel: string, namespace: string): string {
   return `${normalizeOptionalLowercaseString(channel) ?? ""}:${namespace.trim()}`;
 }
 
+/**
+ * Normalize the namespace segment before validation and registry storage.
+ */
 export function normalizePluginInteractiveNamespace(namespace: string): string {
   return namespace.trim();
 }
 
+/**
+ * Validate a plugin-owned interactive callback namespace.
+ */
 export function validatePluginInteractiveNamespace(namespace: string): string | null {
   if (!namespace.trim()) {
     return "Interactive handler namespace cannot be empty";
@@ -18,6 +27,9 @@ export function validatePluginInteractiveNamespace(namespace: string): string | 
   return null;
 }
 
+/**
+ * Resolve `namespace:payload` callback data to a registered handler and payload.
+ */
 export function resolvePluginInteractiveMatch<TRegistration>(params: {
   interactiveHandlers: Map<string, TRegistration>;
   channel: string;

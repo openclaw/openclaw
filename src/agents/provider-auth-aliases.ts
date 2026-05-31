@@ -51,6 +51,7 @@ function buildProviderAuthAliasMapCacheKey(
   });
 }
 
+/** Clears process-local alias discovery state for tests that mutate plugin metadata/env. */
 export function resetProviderAuthAliasMapCacheForTest(): void {
   providerAuthAliasMapCache = new WeakMap<NodeJS.ProcessEnv, Map<string, Record<string, string>>>();
 }
@@ -165,6 +166,7 @@ export function resolveProviderAuthAliasMap(
     if (!shouldUsePluginAuthAliases(plugin, params)) {
       continue;
     }
+    // Auth aliases are trust-sensitive; deterministic ordering keeps the winner stable.
     for (const [alias, target] of Object.entries(plugin.providerAuthAliases ?? {}).toSorted(
       ([left], [right]) => left.localeCompare(right),
     )) {
@@ -195,6 +197,7 @@ export function resolveProviderAuthAliasMap(
   return aliases;
 }
 
+/** Normalizes deprecated/provider-owned auth ids to the canonical provider id. */
 export function resolveProviderIdForAuth(
   provider: string,
   params?: ProviderAuthAliasLookupParams,

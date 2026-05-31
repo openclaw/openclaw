@@ -238,6 +238,8 @@ function resolveAliasTargetForParentPath(
   if (!entries || !parentFilename) {
     return undefined;
   }
+  // Aliases are root-scoped so one plugin's native require hook cannot leak
+  // SDK resolution into another plugin or into unrelated app code.
   return entries.find((entry) => isWithinRoot(parentFilename, entry.parentRoot))?.target;
 }
 
@@ -375,6 +377,9 @@ function clearNativeAliasesForParentRoots(parentRoots: readonly string[]): void 
   }
 }
 
+/**
+ * Install root-scoped native aliases for plugin-sdk imports used by native-loaded plugins.
+ */
 export function installOpenClawPluginSdkNativeResolver(
   options: InstallOpenClawPluginSdkNativeResolverOptions = {},
 ): string[] {
@@ -390,6 +395,9 @@ export function installOpenClawPluginSdkNativeResolver(
   return [...pluginSdkNativeAliases.keys()].toSorted();
 }
 
+/**
+ * Install native aliases for OpenClaw internal packages used by core loader code.
+ */
 export function installOpenClawInternalCorePackageNativeResolver(
   options: Pick<InstallOpenClawPluginSdkNativeResolverOptions, "moduleUrl"> = {},
 ): string[] {
@@ -400,6 +408,9 @@ export function installOpenClawInternalCorePackageNativeResolver(
   return [...pluginSdkNativeAliases.keys()].toSorted();
 }
 
+/**
+ * Reset native resolver hooks and alias state for isolated tests.
+ */
 export function resetOpenClawPluginSdkNativeResolverForTest(): void {
   pluginSdkNativeAliases.clear();
   esmHooks?.deregister();

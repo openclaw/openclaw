@@ -1,5 +1,6 @@
 import { isMcpConfigRecord, toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
 
+/** Normalized stdio MCP launch settings accepted by local MCP transports. */
 export type StdioMcpServerLaunchConfig = {
   command: string;
   args?: string[];
@@ -11,6 +12,7 @@ type StdioMcpServerLaunchResult =
   | { ok: true; config: StdioMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
+/** Converts raw MCP server config into a stdio launch config, rejecting HTTP-style servers. */
 export function resolveStdioMcpServerLaunchConfig(
   raw: unknown,
   options?: { onDroppedEnv?: (key: string, value: unknown) => void },
@@ -44,6 +46,7 @@ export function resolveStdioMcpServerLaunchConfig(
   };
 }
 
+/** Formats a stdio launch config for logs and diagnostics. */
 export function describeStdioMcpServerLaunchConfig(config: StdioMcpServerLaunchConfig): string {
   const args =
     Array.isArray(config.args) && config.args.length > 0 ? ` ${config.args.join(" ")}` : "";

@@ -13,6 +13,7 @@ export type CliArgvInvocation = {
   isRootHelpInvocation: boolean;
 };
 
+/** Summarizes raw CLI argv for startup policy and root-help fast paths. */
 export function resolveCliArgvInvocation(argv: string[]): CliArgvInvocation {
   return {
     argv,

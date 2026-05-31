@@ -23,6 +23,7 @@ export type PluginActivationBundledCompatMode = {
   vitest?: boolean;
 };
 
+/** Normalized activation inputs passed through lazy plugin registry loaders. */
 export type PluginActivationInputs = {
   rawConfig?: OpenClawConfig;
   config?: OpenClawConfig;
@@ -32,6 +33,7 @@ export type PluginActivationInputs = {
   autoEnabledReasons: Record<string, string[]>;
 };
 
+/** Snapshot before bundled compatibility overrides mutate plugin config. */
 export type PluginActivationSnapshot = Pick<
   PluginActivationInputs,
   | "rawConfig"
@@ -91,6 +93,8 @@ export function withActivatedPluginIds(params: {
       continue;
     }
     if (originalAllowSet && !originalAllowSet.has(normalized)) {
+      // Existing allowlists stay restrictive; compatibility activation cannot
+      // introduce plugins the operator did not already allow.
       continue;
     }
     allow.add(normalized);
@@ -174,6 +178,8 @@ function applyPluginAutoEnableForActivation(params: {
       : undefined;
   const currentManifestRegistry =
     currentSnapshot?.manifestRegistry ?? defaultDiscoverySnapshot?.manifestRegistry;
+  // Auto-enable should use the already discovered manifest registry when
+  // available so activation does not perform another broad metadata scan.
   return applyPluginAutoEnable({
     config: params.config,
     env: params.env,
@@ -182,6 +188,7 @@ function applyPluginAutoEnableForActivation(params: {
   });
 }
 
+/** Resolves raw/resolved activation config before compatibility overrides. */
 export function resolvePluginActivationSnapshot(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
@@ -219,6 +226,10 @@ export function resolvePluginActivationSnapshot(params: {
   };
 }
 
+/**
+ * Resolves plugin activation inputs after auto-enable and optional bundled
+ * compatibility patches, preserving the raw config as the activation source.
+ */
 export function resolvePluginActivationInputs(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
@@ -255,6 +266,7 @@ export function resolvePluginActivationInputs(params: {
   };
 }
 
+/** Resolves activation inputs plus bundled compatibility plugin ids in one pass. */
 export function resolveBundledPluginCompatibleActivationInputs(
   params: BundledPluginCompatibleActivationParams,
 ): BundledPluginCompatibleActivationInputs {
@@ -297,6 +309,7 @@ export function resolveBundledPluginCompatibleActivationInputs(
   };
 }
 
+/** Returns the smaller load-value shape used by provider/web runtime loaders. */
 export function resolveBundledPluginCompatibleLoadValues(
   params: BundledPluginCompatibleActivationParams,
 ): BundledPluginCompatibleLoadValues {

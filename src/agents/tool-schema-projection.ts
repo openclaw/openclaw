@@ -1,5 +1,6 @@
 import type { AnyAgentTool } from "./tools/common.js";
 
+/** JSON value shape accepted after schema serialization for runtime compatibility checks. */
 export type RuntimeToolInputSchemaJson =
   | null
   | boolean
@@ -8,17 +9,20 @@ export type RuntimeToolInputSchemaJson =
   | RuntimeToolInputSchemaJson[]
   | { [key: string]: RuntimeToolInputSchemaJson };
 
+/** Serialized runtime tool schema plus compatibility violations found during projection. */
 export type RuntimeToolInputSchemaProjection = {
   readonly schema: RuntimeToolInputSchemaJson;
   readonly violations: readonly string[];
 };
 
+/** Tool-level schema compatibility diagnostic for runtime/tool inventory filtering. */
 export type RuntimeToolSchemaDiagnostic = {
   readonly toolName: string;
   readonly toolIndex: number;
   readonly violations: readonly string[];
 };
 
+/** Compatible tool list plus diagnostics for tools dropped from runtime use. */
 export type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "parameters">> = {
   readonly tools: readonly TTool[];
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
@@ -122,6 +126,7 @@ const schemaMapKeywords = new Set([
   "properties",
 ]);
 
+/** Serializes and validates a tool parameter schema against runtime-safe JSON Schema limits. */
 export function projectRuntimeToolInputSchema(
   schema: unknown,
   path = "parameters",
@@ -140,6 +145,7 @@ export function projectRuntimeToolInputSchema(
   };
 }
 
+/** Collects schema compatibility diagnostics for a tool list without dropping tools. */
 export function inspectRuntimeToolInputSchemas(
   tools: readonly Pick<AnyAgentTool, "name" | "parameters">[],
 ): RuntimeToolSchemaDiagnostic[] {
@@ -153,6 +159,7 @@ export function inspectRuntimeToolInputSchemas(
   });
 }
 
+/** Drops tools with incompatible parameter schemas and returns diagnostics for the drop. */
 export function filterRuntimeCompatibleTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {

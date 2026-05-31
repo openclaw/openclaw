@@ -22,6 +22,7 @@ function providerFromModelRef(value: string | undefined): string | undefined {
   return provider || undefined;
 }
 
+/** Resolves provider/model refs used to scope provider discovery for a selected model. */
 export function resolveModelCatalogScope(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -36,6 +37,7 @@ export function resolveModelCatalogScope(params: {
   };
 }
 
+/** Derives provider ids from explicit provider refs and provider-qualified model refs. */
 export function resolveProviderDiscoveryProviderIdsForCatalogScope(params: {
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];

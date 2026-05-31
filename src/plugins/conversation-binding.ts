@@ -447,6 +447,9 @@ function buildBindingMetadata(params: {
   };
 }
 
+/**
+ * Identify conversation binding metadata written by plugin-owned binding flows.
+ */
 export function isPluginOwnedBindingMetadata(metadata: unknown): metadata is PluginBindingMetadata {
   if (!metadata || typeof metadata !== "object") {
     return false;
@@ -459,6 +462,9 @@ export function isPluginOwnedBindingMetadata(metadata: unknown): metadata is Plu
   );
 }
 
+/**
+ * Return whether a stored session binding record belongs to the plugin binder.
+ */
 export function isPluginOwnedSessionBindingRecord(
   record:
     | {
@@ -470,6 +476,9 @@ export function isPluginOwnedSessionBindingRecord(
   return isPluginOwnedBindingMetadata(record?.metadata);
 }
 
+/**
+ * Convert a stored core binding record into the plugin-facing binding shape.
+ */
 export function toPluginConversationBinding(
   record:
     | {
@@ -662,6 +671,9 @@ export function buildPluginBindingErrorText(binding: PluginConversationBinding):
   return `The bound plugin ${resolvePluginBindingDisplayName(binding)} hit an error handling this message. This conversation is still bound to that plugin.${buildDetachHintSuffix(binding.detachHint)}`;
 }
 
+/**
+ * Return whether this process has already warned about fallback for a binding.
+ */
 export function hasShownPluginBindingFallbackNotice(bindingId: string): boolean {
   const normalized = bindingId.trim();
   if (!normalized) {
@@ -670,6 +682,9 @@ export function hasShownPluginBindingFallbackNotice(bindingId: string): boolean 
   return getPluginBindingGlobalState().fallbackNoticeBindingIds.has(normalized);
 }
 
+/**
+ * Remember fallback notice emission so a missing/declining plugin does not spam a conversation.
+ */
 export function markPluginBindingFallbackNoticeShown(bindingId: string): void {
   const normalized = bindingId.trim();
   if (!normalized) {
@@ -705,6 +720,9 @@ export function buildPluginBindingApprovalCustomId(
   return `${PLUGIN_BINDING_CUSTOM_ID_PREFIX}:${encodeCustomIdValue(approvalId)}:${decisionCode}`;
 }
 
+/**
+ * Decode an interactive approval custom id back into the pending request action.
+ */
 export function parsePluginBindingApprovalCustomId(
   value: string,
 ): PluginBindingApprovalAction | null {
@@ -739,6 +757,10 @@ export function parsePluginBindingApprovalCustomId(
   };
 }
 
+/**
+ * Request or refresh a plugin-owned conversation binding, creating an approval
+ * prompt unless the same plugin already owns the conversation or has a saved approval.
+ */
 export async function requestPluginConversationBinding(params: {
   pluginId: string;
   pluginName?: string;
@@ -753,6 +775,8 @@ export async function requestPluginConversationBinding(params: {
   });
   if (state.record && !state.binding) {
     if (state.isLegacyForeignBinding) {
+      // Older app-server thread bindings used the same storage surface without
+      // plugin metadata; let the plugin claim them so upgrades keep routing.
       logPluginBindingLifecycleEvent({
         event: "migrating legacy record",
         pluginId: params.pluginId,
@@ -848,6 +872,9 @@ export async function requestPluginConversationBinding(params: {
   };
 }
 
+/**
+ * Return the current binding only when it belongs to the requesting plugin root.
+ */
 export async function getCurrentPluginConversationBinding(params: {
   pluginRoot: string;
   conversation: PluginBindingConversation;
@@ -855,6 +882,9 @@ export async function getCurrentPluginConversationBinding(params: {
   return resolveOwnedPluginConversationBinding(params);
 }
 
+/**
+ * Remove the plugin-owned binding for this conversation if the requester owns it.
+ */
 export async function detachPluginConversationBinding(params: {
   pluginRoot: string;
   conversation: PluginBindingConversation;
@@ -878,6 +908,9 @@ export async function detachPluginConversationBinding(params: {
   return { removed: true };
 }
 
+/**
+ * Apply an interactive approval decision to the pending plugin binding request.
+ */
 export async function resolvePluginConversationBindingApproval(params: {
   approvalId: string;
   decision: PluginBindingApprovalDecision;
@@ -989,6 +1022,9 @@ async function notifyPluginConversationBindingResolved(params: {
   }
 }
 
+/**
+ * Build the user-facing acknowledgement for an approval decision.
+ */
 export function buildPluginBindingResolvedText(params: PluginBindingResolveResult): string {
   if (params.status === "expired") {
     return "That plugin bind approval expired. Retry the bind command.";

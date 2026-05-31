@@ -17,6 +17,7 @@ const CODEX_RUNTIME_PLUGIN_DESCRIPTOR = {
 
 export type CodexRuntimePluginInstallResult = RuntimePluginInstallResult;
 
+/** Returns true when the selected model requires the bundled Codex runtime plugin. */
 export function selectedModelShouldEnsureCodexRuntimePlugin(params: {
   cfg: OpenClawConfig;
   model?: string;
@@ -32,5 +33,7 @@ const codexRuntimePluginInstall = createRuntimePluginModelSelectionHelpers({
   shouldEnsure: selectedModelShouldEnsureCodexRuntimePlugin,
 });
 
+/** Installs/enables the Codex runtime plugin when a model selection needs it. */
 export const ensureCodexRuntimePluginForModelSelection = codexRuntimePluginInstall.ensure;
+/** Repairs an existing Codex runtime plugin install when model selection exposes a broken setup. */
 export const repairCodexRuntimePluginInstallForModelSelection = codexRuntimePluginInstall.repair;

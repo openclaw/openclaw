@@ -99,6 +99,7 @@ const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
+/** Synthetic auth evidence shown by `models status` alongside profiles/env/models.json. */
 type StatusSyntheticAuth = {
   value: string;
   source: string;
@@ -123,6 +124,7 @@ function loadListProbeRuntime(): Promise<ListProbeRuntime> {
   return listProbeRuntimeLoader.load();
 }
 
+/** Parses optional numeric CLI settings while preserving command defaults. */
 function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
   if (raw === undefined || raw === null || raw === "") {
     return fallback;
@@ -157,6 +159,7 @@ function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetada
   );
 }
 
+/** Installs a one-command plugin metadata snapshot for downstream auth/provider lookups. */
 function installCommandPluginMetadataSnapshot(params: {
   snapshot: PluginMetadataSnapshot;
   config: Awaited<ReturnType<typeof loadModelsConfig>>;
@@ -185,6 +188,7 @@ function installCommandPluginMetadataSnapshot(params: {
   };
 }
 
+/** Resolves provider config entries using both literal and normalized provider ids. */
 function resolveProviderConfigForStatus(
   cfg: Awaited<ReturnType<typeof loadModelsConfig>>,
   provider: string,
@@ -201,6 +205,7 @@ function resolveProviderConfigForStatus(
   );
 }
 
+/** Converts plugin synthetic auth into a transient credential for health summaries. */
 function syntheticAuthCredential(
   provider: string,
   auth: StatusSyntheticAuth,
@@ -372,6 +377,7 @@ export async function modelsStatusCommand(
       }
     }
     for (const raw of [defaultLabel, ...fallbacks]) {
+      // Text model routes can use Codex runtime auth fallback; image model routes cannot.
       addProviderUse(raw, true);
     }
     for (const raw of [imageModel, ...imageFallbacks]) {
@@ -433,6 +439,7 @@ export async function modelsStatusCommand(
         openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }),
     );
     if (codexRuntimeAuthUsages.length > 0) {
+      // Surface OpenAI/Codex synthetic auth when an OpenAI-compatible model routes via Codex.
       syntheticProvidersToProbe.add(codexProvider);
       syntheticProvidersToProbe.add(codexProviderAlias);
       syntheticProvidersToProbe.add("codex");
@@ -552,6 +559,7 @@ export async function modelsStatusCommand(
         const profileId = orderedProfiles[0];
         const credential = profileId ? store.profiles[profileId] : undefined;
         if (profileId && credential) {
+          // Ordered profiles can point at aliased providers; report the actual source credential.
           const sourceProvider = resolveProviderAuthHealthId(credential.provider);
           const source = providerAuthMap.get(sourceProvider)?.effective;
           return source && source.kind !== "missing"
@@ -811,9 +819,11 @@ export async function modelsStatusCommand(
           !hasUsableNonProfileAuth(provider.provider),
       );
       if (hasExpiredOrMissing) {
+        // Exit 1 is reserved for currently broken auth, so CI/scripts can fail hard.
         return 1;
       }
       if (hasExpiring) {
+        // Exit 2 warns about soon-to-expire auth without marking the status unusable yet.
         return 2;
       }
       return 0;

@@ -16,6 +16,8 @@ export async function modelsAliasesListCommand(
   ensureFlagCompatibility(opts);
   const cfg = await loadModelsConfig({ commandName: "models aliases list", runtime });
   const models = cfg.agents?.defaults?.models ?? {};
+  // Alias names are unique user-facing shortcuts; the target remains the
+  // canonical model key stored in defaults.models.
   const aliases = Object.entries(models).reduce<Record<string, string>>(
     (acc, [modelKey, entry]) => {
       const alias = entry?.alias?.trim();
@@ -48,6 +50,7 @@ export async function modelsAliasesListCommand(
   }
 }
 
+/** Adds or replaces a model alias after resolving the target model reference. */
 export async function modelsAliasesAddCommand(
   aliasRaw: string,
   modelRaw: string,
@@ -62,6 +65,8 @@ export async function modelsAliasesAddCommand(
     for (const [key, entry] of Object.entries(nextModels)) {
       const existing = entry?.alias?.trim();
       if (existing && existing === alias && key !== modelKey) {
+        // One alias may not point at two models; callers should remove first to
+        // make intentional retargeting explicit.
         throw new Error(`Alias ${alias} already points to ${key}.`);
       }
     }
@@ -83,6 +88,7 @@ export async function modelsAliasesAddCommand(
   runtime.log(`Alias ${alias} -> ${resolved.provider}/${resolved.model}`);
 }
 
+/** Removes an alias from whichever configured model currently owns it. */
 export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: RuntimeEnv) {
   const alias = normalizeAlias(aliasRaw);
   const updated = await updateConfig((cfg) => {

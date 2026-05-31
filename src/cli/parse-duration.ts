@@ -29,6 +29,7 @@ function roundSafeDurationMs(raw: string, value: number): number {
   return ms;
 }
 
+/** Parses CLI duration values like `500ms`, `30s`, or composite `1h30m` into milliseconds. */
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
   const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
   if (!trimmed) {
@@ -57,6 +58,7 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
       throw invalidDuration(raw);
     }
     if (index !== consumed) {
+      // A gap means text like "1h30" or "1h-30m"; bare numbers are only allowed as single tokens.
       throw invalidDuration(raw, "each composite segment needs a unit");
     }
     const value = Number(valueRaw);

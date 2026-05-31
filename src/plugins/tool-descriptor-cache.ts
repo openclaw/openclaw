@@ -20,10 +20,16 @@ let nextDescriptorCacheObjectId = 1;
 
 export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;
 
+/**
+ * Create a per-resolution memo so repeated config objects hash once across plugins.
+ */
 export function createPluginToolDescriptorConfigCacheKeyMemo(): PluginToolDescriptorConfigCacheKeyMemo {
   return new WeakMap();
 }
 
+/**
+ * Clear descriptor cache state for tests and plugin loader resets.
+ */
 export function resetPluginToolDescriptorCache(): void {
   descriptorCache.clear();
   descriptorCacheObjectIds = new WeakMap();
@@ -61,6 +67,8 @@ function stripDescriptorVolatileConfigFields(
   if (!("meta" in value) && !("wizard" in value)) {
     return value;
   }
+  // Config bookkeeping changes should not invalidate tool descriptors because
+  // they do not affect plugin registration or tool schemas.
   const { meta: _meta, wizard: _wizard, ...stableConfig } = value as Record<string, unknown>;
   return stableConfig as NonNullable<PluginLoadOptions["config"]>;
 }
@@ -113,6 +121,9 @@ function buildDescriptorContextCacheKey(params: {
   });
 }
 
+/**
+ * Build the cache key for descriptors produced by one plugin/context pair.
+ */
 export function buildPluginToolDescriptorCacheKey(params: {
   pluginId: string;
   source: string;
@@ -141,6 +152,9 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+/**
+ * Capture a plugin tool as the stable descriptor shape consumed by agents.
+ */
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
@@ -162,12 +176,18 @@ export function capturePluginToolDescriptor(params: {
   };
 }
 
+/**
+ * Read cached descriptors for a previously built descriptor cache key.
+ */
 export function readCachedPluginToolDescriptors(
   cacheKey: string,
 ): readonly CachedPluginToolDescriptor[] | undefined {
   return descriptorCache.get(cacheKey);
 }
 
+/**
+ * Write descriptor cache entries with simple oldest-entry eviction.
+ */
 export function writeCachedPluginToolDescriptors(params: {
   cacheKey: string;
   descriptors: readonly CachedPluginToolDescriptor[];

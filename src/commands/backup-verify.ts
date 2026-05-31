@@ -74,6 +74,8 @@ function normalizeArchivePath(entryPath: string, label: string): string {
   if (trimmed.includes("\\")) {
     throw new Error(`${label} must use forward slashes: ${entryPath}`);
   }
+  // Tar entry names must stay archive-relative even after normalization; this
+  // blocks absolute paths and traversal before any extraction-style use.
   if (trimmed.split("/").some((segment) => segment === "." || segment === "..")) {
     throw new Error(`${label} contains path traversal segments: ${entryPath}`);
   }
@@ -223,6 +225,8 @@ async function extractManifest(params: {
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           totalBytes += buffer.byteLength;
           if (totalBytes > MAX_MANIFEST_BYTES) {
+            // The manifest is small by contract; stop buffering once the cap is
+            // crossed so a malformed archive cannot force unbounded memory use.
             exceededLimit = true;
             chunks.length = 0;
             return;
@@ -284,6 +288,8 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
+    // Directory assets may be represented by nested entries instead of a
+    // separate directory entry, so accept either exact or descendant payloads.
     const exact = normalizedEntrySet.has(assetArchivePath);
     const nested = normalizedEntries.some(
       (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
@@ -338,6 +344,7 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
+/** Verifies a backup tarball's manifest, payload entries, and hardlink targets. */
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: BackupVerifyOptions,
@@ -369,6 +376,8 @@ export async function backupVerifyCommand(
   }
   const duplicateEntryPath = findDuplicateNormalizedEntryPath(entries);
   if (duplicateEntryPath) {
+    // Normalized duplicates can hide archive contents behind alternate spellings
+    // such as trailing slashes; reject them before trusting manifest paths.
     throw new Error(`Archive contains duplicate entry path: ${duplicateEntryPath}`);
   }
   const manifestEntryPath = manifestMatches[0]?.raw;

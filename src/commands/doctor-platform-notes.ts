@@ -17,6 +17,7 @@ function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
 }
 
+/** Warns when a local marker disables macOS LaunchAgent writes. */
 export function collectMacLaunchAgentOverrideWarning(deps?: {
   platform?: NodeJS.Platform;
   homeDir?: string;
@@ -41,6 +42,7 @@ export function collectMacLaunchAgentOverrideWarning(deps?: {
   ].join("\n");
 }
 
+/** Emits the macOS LaunchAgent override warning for doctor output. */
 export async function noteMacLaunchAgentOverrides() {
   const warning = collectMacLaunchAgentOverrideWarning();
   if (warning) {
@@ -48,6 +50,7 @@ export async function noteMacLaunchAgentOverrides() {
   }
 }
 
+/** Finds stale OpenClaw updater launchd jobs that can interfere with gateway restarts. */
 export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
@@ -75,6 +78,7 @@ export async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(deps?: {
   ].join("\n");
 }
 
+/** Emits stale updater launchd job guidance when applicable. */
 export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
   platform?: NodeJS.Platform;
   findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
@@ -120,6 +124,8 @@ export async function collectMacLaunchctlGatewayEnvOverrideWarning(
     return null;
   }
   if (!hasConfigGatewayCreds(cfg)) {
+    // launchctl env only conflicts when config already has explicit gateway
+    // credentials that managed clients should use.
     return null;
   }
 
@@ -157,6 +163,7 @@ export async function collectMacLaunchctlGatewayEnvOverrideWarning(
     .join("\n");
 }
 
+/** Emits host-wide launchctl gateway auth override guidance when applicable. */
 export async function noteMacLaunchctlGatewayEnvOverrides(
   cfg: OpenClawConfig,
   deps?: {
@@ -171,6 +178,7 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   }
 }
 
+/** Collects all macOS-specific gateway platform warnings for status/doctor. */
 export async function collectMacGatewayPlatformWarnings(
   cfg: OpenClawConfig,
 ): Promise<readonly string[]> {
@@ -224,6 +232,8 @@ export function noteStartupOptimizationHints(
     platform === "linux" && totalMemBytes > 0 && totalMemBytes <= 8 * 1024 ** 3;
   const isStartupTuneTarget = platform === "linux" && (isArmHost || isLowMemoryLinux);
   if (!isStartupTuneTarget) {
+    // Startup env hints are aimed at small Linux hosts where compile cache and
+    // respawn behavior have measurable CLI/gateway impact.
     return;
   }
 

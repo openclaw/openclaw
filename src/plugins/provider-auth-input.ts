@@ -27,6 +27,7 @@ export {
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
+/** Normalizes setup API-key text, including copied shell assignments such as `export FOO=bar`. */
 export function normalizeApiKeyInput(raw: string): string {
   const trimmed = normalizeStringifiedOptionalString(raw) ?? "";
   if (!trimmed) {
@@ -52,6 +53,7 @@ export function normalizeApiKeyInput(raw: string): string {
 export const validateApiKeyInput = (value: string) =>
   normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
 
+/** Formats a redacted key preview that still distinguishes short and long keys in prompts. */
 export function formatApiKeyPreview(
   raw: string,
   opts: { head?: number; tail?: number } = {},
@@ -73,12 +75,14 @@ export function formatApiKeyPreview(
   return `${trimmed.slice(0, head)}…${trimmed.slice(-tail)}`;
 }
 
+/** Normalizes `--token-provider` style input before matching it against setup aliases. */
 export function normalizeTokenProviderInput(
   tokenProvider: string | null | undefined,
 ): string | undefined {
   return normalizeOptionalLowercaseString(tokenProvider);
 }
 
+/** Parses the public secret-input-mode option; unknown values are ignored by callers. */
 export function normalizeSecretInputModeInput(
   secretInputMode: string | null | undefined,
 ): SecretInputMode | undefined {
@@ -89,6 +93,7 @@ export function normalizeSecretInputModeInput(
   return undefined;
 }
 
+/** Applies an explicit token only when its provider selector matches the current setup flow. */
 export async function maybeApplyApiKeyFromOption(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
@@ -109,6 +114,7 @@ export async function maybeApplyApiKeyFromOption(params: {
   return apiKey;
 }
 
+/** Handles provider setup precedence: explicit option first, then env/prompt fallback. */
 export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
@@ -156,6 +162,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   });
 }
 
+/** Ensures setup stores either a plaintext key or a validated secret reference. */
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -177,6 +184,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
 
   if (selectedMode === "ref") {
     if (typeof params.prompter.select !== "function") {
+      // Non-interactive setup cannot choose a provider, so it can only store a trusted env ref.
       const fallback = resolveRefFallbackInput({
         config: params.config,
         provider: params.provider,

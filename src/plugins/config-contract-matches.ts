@@ -28,6 +28,7 @@ function parseCanonicalArrayIndex(segment: string, length: number): number | nul
   return index !== undefined && index < length ? index : null;
 }
 
+/** Collects values that match a dot-separated config path pattern with `*` wildcards. */
 export function collectPluginConfigContractMatches(params: {
   root: unknown;
   pathPattern: string;
@@ -42,6 +43,8 @@ export function collectPluginConfigContractMatches(params: {
     const nextStates: TraversalState[] = [];
     for (const state of states) {
       if (segment === "*") {
+        // Wildcards expand across both arrays and objects while preserving the
+        // concrete path so doctor/repair messages can point at exact entries.
         if (Array.isArray(state.value)) {
           for (const [index, value] of state.value.entries()) {
             nextStates.push({
@@ -64,6 +67,7 @@ export function collectPluginConfigContractMatches(params: {
       if (Array.isArray(state.value)) {
         const index = parseCanonicalArrayIndex(segment, state.value.length);
         if (index !== null) {
+          // Keep the caller's canonical segment text for stable output paths.
           nextStates.push({
             segments: [...state.segments, segment],
             value: state.value[index],

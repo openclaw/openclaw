@@ -27,6 +27,9 @@ const moduleWithResolver = Module as typeof Module & {
   }) => { deregister: () => void };
 };
 
+/**
+ * Return whether a path can be attempted through Node's native require loader.
+ */
 export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
 }
@@ -55,6 +58,10 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
   );
 }
 
+/**
+ * Try loading a compiled JavaScript module natively, returning `ok: false`
+ * when jiti/source-transform fallback should handle the path instead.
+ */
 export function tryNativeRequireJavaScriptModule(
   modulePath: string,
   options: {
@@ -87,6 +94,9 @@ export function tryNativeRequireJavaScriptModule(
   }
 }
 
+/**
+ * Clear one native-loaded module and its dependency subtree under the dependency root.
+ */
 export function clearNativeRequireJavaScriptModuleCache(
   modulePath: string,
   options: { dependencyRoot?: string } = {},
@@ -146,6 +156,9 @@ function requireWithOptionalAliases(
   return withNativeRequireAliases(aliasMap, () => nodeRequire(modulePath));
 }
 
+/**
+ * Temporarily install native require aliases while running one load operation.
+ */
 export function withNativeRequireAliases<T>(
   aliasMap: Record<string, string> | undefined,
   run: () => T,
@@ -154,6 +167,8 @@ export function withNativeRequireAliases<T>(
     return run();
   }
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
+  // Patch both CommonJS and Node 22+ ESM hook paths so native require() and
+  // require(esm) resolve the same plugin-sdk aliases during this critical section.
   const esmHooks = moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
       const aliasTarget = aliasMap[specifier];

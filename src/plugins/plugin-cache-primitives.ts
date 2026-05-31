@@ -2,6 +2,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
 
+/**
+ * Small insertion-ordered LRU cache for process-local plugin metadata.
+ */
 export class PluginLruCache<T> {
   readonly #defaultMaxEntries: number;
   #maxEntries: number;
@@ -42,6 +45,8 @@ export class PluginLruCache<T> {
       return { hit: false };
     }
     const cached = this.#entries.get(cacheKey) as T;
+    // Refresh recency through delete+set because Map iteration order is the
+    // eviction source of truth.
     this.#entries.delete(cacheKey);
     this.#entries.set(cacheKey, cached);
     return { hit: true, value: cached };
@@ -68,11 +73,18 @@ export class PluginLruCache<T> {
 
 export type ConfigScopedRuntimeCache<T> = WeakMap<OpenClawConfig, Map<string, T>>;
 
+/**
+ * Promise loader that dedupes work globally and per live config object.
+ */
 export type ConfigScopedPromiseLoader<T> = {
   load(config?: OpenClawConfig): Promise<T>;
   clear(): void;
 };
 
+/**
+ * Resolve a cached value for a config-owned runtime key, preserving undefined
+ * values as real cache hits.
+ */
 export function resolveConfigScopedRuntimeCacheValue<T>(params: {
   cache: ConfigScopedRuntimeCache<T>;
   config?: OpenClawConfig;
@@ -95,10 +107,16 @@ export function resolveConfigScopedRuntimeCacheValue<T>(params: {
   return loaded;
 }
 
+/**
+ * Build a stable JSON cache key from plugin cache dimensions.
+ */
 export function createPluginCacheKey(parts: readonly unknown[]): string {
   return JSON.stringify(parts);
 }
 
+/**
+ * Create a promise cache that dedupes concurrent loads and evicts failures for retry.
+ */
 export function createConfigScopedPromiseLoader<T>(
   load: (config?: OpenClawConfig) => T | Promise<T>,
 ): ConfigScopedPromiseLoader<T> {
@@ -108,6 +126,8 @@ export function createConfigScopedPromiseLoader<T>(
   const createPromise = (config?: OpenClawConfig): Promise<T> => {
     const promise = Promise.resolve().then(() => load(config));
     void promise.catch(() => {
+      // Rejected loads should not poison startup/runtime caches; the next call
+      // gets a fresh attempt for transient filesystem or package-loader errors.
       if (config) {
         promisesByConfig.delete(config);
       } else if (defaultPromise === promise) {

@@ -39,6 +39,7 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
     displaySummary?: string;
   };
 
+/** Coerces tool params to a plain record, treating malformed params as empty. */
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)
     ? (params as Record<string, unknown>)
@@ -75,6 +76,7 @@ export class ToolAuthorizationError extends ToolInputError {
   }
 }
 
+/** Creates a permission gate for action maps where missing entries default to allowed. */
 export function createActionGate<T extends Record<string, boolean | undefined>>(
   actions: T | undefined,
 ): ActionGate<T> {
@@ -91,6 +93,7 @@ function readParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
 }
 
+/** Reads a string tool parameter with snake_case fallback and required/empty handling. */
 export function readStringParam(
   params: Record<string, unknown>,
   key: string,
@@ -163,6 +166,7 @@ export function readStringOrNumberParam(
   return undefined;
 }
 
+/** Reads a finite numeric tool parameter, optionally enforcing integer/range constraints. */
 export function readNumberParam(
   params: Record<string, unknown>,
   key: string,
@@ -211,6 +215,7 @@ export function readNumberParam(
   return integer ? Math.trunc(value) : value;
 }
 
+/** Reads a strict positive integer parameter and reports invalid present values. */
 export function readPositiveIntegerParam(
   params: Record<string, unknown>,
   key: string,
@@ -232,6 +237,7 @@ export function readPositiveIntegerParam(
   return value;
 }
 
+/** Reads a strict non-negative integer parameter and reports invalid present values. */
 export function readNonNegativeIntegerParam(
   params: Record<string, unknown>,
   key: string,
@@ -253,6 +259,7 @@ export function readNonNegativeIntegerParam(
   return value;
 }
 
+/** Reads a strict finite number parameter with optional inclusive/exclusive bounds. */
 export function readFiniteNumberParam(
   params: Record<string, unknown>,
   key: string,
@@ -288,6 +295,7 @@ export function readFiniteNumberParam(
   return value;
 }
 
+/** Reads a string array parameter, accepting either an array of strings or one string. */
 export function readStringArrayParam(
   params: Record<string, unknown>,
   key: string,
@@ -337,6 +345,7 @@ export type ReactionParams = {
   isEmpty: boolean;
 };
 
+/** Reads emoji/remove reaction params while enforcing remove-specific emoji requirements. */
 export function readReactionParams(
   params: Record<string, unknown>,
   options: {
@@ -358,6 +367,7 @@ export function readReactionParams(
   return { emoji, remove, isEmpty: !emoji };
 }
 
+/** Converts tool details to text for model-facing result content. */
 export function stringifyToolPayload(payload: unknown): string {
   if (typeof payload === "string") {
     return payload;
@@ -373,6 +383,7 @@ export function stringifyToolPayload(payload: unknown): string {
   return String(payload);
 }
 
+/** Builds a text tool result with structured details preserved separately. */
 export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
   return {
     content: [
@@ -385,6 +396,7 @@ export function textResult<TDetails>(text: string, details: TDetails): AgentTool
   };
 }
 
+/** Builds a failed text result while preserving the status-bearing details type. */
 export function failedTextResult<TDetails extends { status: "failed" }>(
   text: string,
   details: TDetails,
@@ -392,10 +404,12 @@ export function failedTextResult<TDetails extends { status: "failed" }>(
   return textResult(text, details);
 }
 
+/** Serializes a structured payload into text content while retaining the original details. */
 export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
   return textResult(stringifyToolPayload(payload), payload);
 }
 
+/** Builds a JSON-formatted text result for structured tool payloads. */
 export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   return textResult(JSON.stringify(payload, null, 2), payload);
 }
@@ -497,6 +511,7 @@ export async function imageResult(params: {
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
 
+/** Reads an image from disk, detects its MIME type, and returns sanitized image content. */
 export async function imageResultFromFile(params: {
   label: string;
   path: string;

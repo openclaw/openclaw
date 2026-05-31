@@ -380,6 +380,7 @@ function buildCoreToolGroupMap() {
     (tool) => tool.id,
   );
   return {
+    // Keep generated group ids aligned with the same definitions that drive profile policies.
     "group:openclaw": openclawTools,
     ...Object.fromEntries(sectionToolMap.entries()),
   };
@@ -394,6 +395,7 @@ export const PROFILE_OPTIONS = [
   { id: "full", label: "Full" },
 ] as const;
 
+/** Returns a defensive copy of the built-in tool policy for a named profile. */
 export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   if (!profile) {
     return undefined;
@@ -411,6 +413,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   };
 }
 
+/** Lists core tools grouped by their UI/help sections in stable display order. */
 export function listCoreToolSections(): CoreToolSection[] {
   return CORE_TOOL_SECTION_ORDER.map((section) => ({
     id: section.id,
@@ -423,6 +426,7 @@ export function listCoreToolSections(): CoreToolSection[] {
   })).filter((section) => section.tools.length > 0);
 }
 
+/** Returns the built-in profiles that include a core tool id. */
 export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   const tool = CORE_TOOL_BY_ID.get(toolId);
   if (!tool) {
@@ -431,6 +435,7 @@ export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   return [...tool.profiles];
 }
 
+/** Checks whether a tool id belongs to the static core tool catalog. */
 export function isKnownCoreToolId(toolId: string): boolean {
   return CORE_TOOL_BY_ID.has(toolId);
 }

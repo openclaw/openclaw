@@ -7,12 +7,14 @@ import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js
 
 export type { ToolFsPolicy } from "./tool-fs-policy.types.js";
 
+/** Creates the effective filesystem policy object consumed by filesystem tools. */
 export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
   return {
     workspaceOnly: params.workspaceOnly === true,
   };
 }
 
+/** Resolves global/agent tools.fs config with agent settings taking precedence. */
 export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }): {
   workspaceOnly?: boolean;
 } {
@@ -25,6 +27,7 @@ export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: st
   };
 }
 
+/** Returns whether filesystem tools must stay inside the agent workspace. */
 export function resolveEffectiveToolFsWorkspaceOnly(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -32,6 +35,7 @@ export function resolveEffectiveToolFsWorkspaceOnly(params: {
   return resolveToolFsConfig(params).workspaceOnly === true;
 }
 
+/** Returns whether filesystem tools may expand beyond workspace roots for this agent. */
 export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   cfg?: OpenClawConfig;
   agentId?: string;

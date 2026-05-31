@@ -66,6 +66,7 @@ const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
   ["sso", "SSO"],
 ] as const);
 
+/** Orders colliding manifest auth choices by trust, with config overrides highest priority. */
 function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefined): number {
   if (!origin) {
     return Number.MAX_SAFE_INTEGER;
@@ -73,6 +74,7 @@ function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefine
   return PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
 }
 
+/** Converts explicit manifest auth-choice metadata into the setup-facing shape. */
 function toProviderAuthChoiceCandidate(params: {
   pluginId: string;
   origin: PluginOrigin;
@@ -104,6 +106,7 @@ function toProviderAuthChoiceCandidate(params: {
   };
 }
 
+/** Builds human labels from manifest descriptors after terminal-control sanitization. */
 function formatDescriptorLabel(value: string): string {
   return sanitizeForLog(value)
     .trim()
@@ -120,10 +123,12 @@ function formatDescriptorLabel(value: string): string {
     .join(" ");
 }
 
+/** Normalizes manifest descriptor ids before they become CLI/prompt choice identifiers. */
 function normalizeManifestAuthDescriptorId(value: string): string {
   return sanitizeForLog(value).trim();
 }
 
+/** Derives a generic auth choice from static setup provider descriptors. */
 function toSetupProviderAuthChoiceCandidate(params: {
   plugin: PluginManifestRecord;
   providerId: string;
@@ -145,6 +150,7 @@ function toSetupProviderAuthChoiceCandidate(params: {
   };
 }
 
+/** Lists descriptor-derived choices only when setup can run without a runtime entrypoint. */
 function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
   if (plugin.setup?.requiresRuntime !== false && plugin.setupSource) {
     return [];
@@ -200,6 +206,7 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
         rootConfig: params?.config,
       }).enabled
     ) {
+      // Workspace plugin choices can hijack common ids; require explicit enablement before use.
       return [];
     }
     const choices: ProviderAuthChoiceCandidate[] = [];
@@ -217,6 +224,7 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
   });
 }
 
+/** Picks the highest-trust candidate when several plugins advertise the same choice. */
 function pickPreferredManifestAuthChoice(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate | undefined {
@@ -236,6 +244,7 @@ function pickPreferredManifestAuthChoice(
   return preferred;
 }
 
+/** Deduplicates advertised choices by choice id using the origin trust order. */
 function resolvePreferredManifestAuthChoicesByChoiceId(
   candidates: readonly ProviderAuthChoiceCandidate[],
 ): ProviderAuthChoiceCandidate[] {
@@ -257,6 +266,7 @@ function resolvePreferredManifestAuthChoicesByChoiceId(
   return [...preferredByChoiceId.values()];
 }
 
+/** Resolves a filtered manifest choice and strips internal origin metadata from the result. */
 function resolvePreferredManifestAuthChoiceMetadata(params: {
   config?: ManifestProviderAuthChoiceParams;
   matches: (choice: ProviderAuthChoiceCandidate) => boolean;
@@ -268,6 +278,7 @@ function resolvePreferredManifestAuthChoiceMetadata(params: {
   return preferred ? stripChoiceOrigin(preferred) : undefined;
 }
 
+/** Lists manifest/provider-descriptor auth choices after trust-order dedupe. */
 export function resolveManifestProviderAuthChoices(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderAuthChoiceMetadata[] {
@@ -276,6 +287,7 @@ export function resolveManifestProviderAuthChoices(
   ).map(stripChoiceOrigin);
 }
 
+/** Resolves one concrete auth choice id from manifest metadata. */
 export function resolveManifestProviderAuthChoice(
   choiceId: string,
   params?: ManifestProviderAuthChoiceParams,
@@ -290,6 +302,7 @@ export function resolveManifestProviderAuthChoice(
   });
 }
 
+/** Resolves the preferred API-key choice for a provider after auth alias normalization. */
 export function resolveManifestProviderApiKeyChoice(params: {
   providerId: string;
   config?: OpenClawConfig;
@@ -309,6 +322,7 @@ export function resolveManifestProviderApiKeyChoice(params: {
   });
 }
 
+/** Resolves legacy/deprecated auth-choice ids to the current manifest choice. */
 export function resolveManifestDeprecatedProviderAuthChoice(
   choiceId: string,
   params?: ManifestProviderAuthChoiceParams,
@@ -323,6 +337,7 @@ export function resolveManifestDeprecatedProviderAuthChoice(
   });
 }
 
+/** Lists non-interactive onboard flags derived from preferred manifest auth choices. */
 export function resolveManifestProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
@@ -345,6 +360,7 @@ export function resolveManifestProviderOnboardAuthFlags(
       resolveProviderAuthChoiceOriginPriority(normalizedChoice.origin) >=
         resolveProviderAuthChoiceOriginPriority(existing.origin)
     ) {
+      // Keep the highest-trust flag owner for duplicated CLI option surfaces.
       continue;
     }
     preferredByFlag.set(dedupeKey, normalizedChoice);

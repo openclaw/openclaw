@@ -10,6 +10,7 @@ import {
 
 export type ActiveRuntimePluginRegistrySurface = "active" | "channel" | "http-route";
 
+/** Returns the process-active plugin registry when one has been loaded. */
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
 }
@@ -21,6 +22,7 @@ function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefin
   return normalizeSortedUniqueStringEntries(ids);
 }
 
+/** Checks whether a registry has the required plugin ids loaded on any runtime surface. */
 export function registryContainsRuntimePluginIds(
   registry: PluginRegistry,
   pluginIds: readonly string[] | undefined,
@@ -45,6 +47,8 @@ export function registryContainsRuntimePluginIds(
     if (!Array.isArray(value)) {
       continue;
     }
+    // Some runtime surfaces store plugin ownership on contribution arrays rather
+    // than registry.plugins, so include loaded contribution pluginIds as present.
     for (const entry of value) {
       if (entry && typeof entry === "object" && "pluginId" in entry) {
         const pluginId = entry.pluginId;
@@ -78,6 +82,7 @@ function resolveSurfaceRegistry(
   return null;
 }
 
+/** Returns a loaded runtime registry only when workspace and required ids match. */
 export function getLoadedRuntimePluginRegistry(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -92,6 +97,8 @@ export function getLoadedRuntimePluginRegistry(
     params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
   );
   if (surface === "active" && params.loadOptions && requiredPluginIds?.length !== 0) {
+    // Compatible registries can be reused for active-surface loads, but only
+    // when the caller did not request an explicit empty plugin set.
     const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
     if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
       return undefined;

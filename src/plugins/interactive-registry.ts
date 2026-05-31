@@ -18,6 +18,9 @@ export type InteractiveRegistrationResult = {
   error?: string;
 };
 
+/**
+ * Resolve incoming channel callback data against the current interactive handler registry.
+ */
 export function resolvePluginInteractiveNamespaceMatch(
   channel: string,
   data: string,
@@ -29,6 +32,9 @@ export function resolvePluginInteractiveNamespaceMatch(
   });
 }
 
+/**
+ * Register one plugin-owned interactive callback namespace for a channel.
+ */
 export function registerPluginInteractiveHandler(
   pluginId: string,
   registration: PluginInteractiveHandlerRegistration,
@@ -59,14 +65,23 @@ export function registerPluginInteractiveHandler(
   return { ok: true };
 }
 
+/**
+ * Clear interactive registrations and dedupe state.
+ */
 export function clearPluginInteractiveHandlers(): void {
   clearPluginInteractiveHandlersState();
 }
 
+/**
+ * Clear only interactive handler registrations, preserving callback dedupe state.
+ */
 export function clearPluginInteractiveHandlerRegistrations(): void {
   clearPluginInteractiveHandlerRegistrationsState();
 }
 
+/**
+ * Remove interactive handler registrations owned by one plugin id.
+ */
 export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
   const interactiveHandlers = getPluginInteractiveHandlersState();
   for (const [key, value] of interactiveHandlers.entries()) {
@@ -76,10 +91,16 @@ export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void 
   }
 }
 
+/**
+ * Snapshot registered interactive handlers for plugin loader cache reuse.
+ */
 export function listPluginInteractiveHandlers(): RegisteredInteractiveHandler[] {
   return Array.from(getPluginInteractiveHandlersState().values());
 }
 
+/**
+ * Restore cached interactive handlers into the process registry.
+ */
 export function restorePluginInteractiveHandlers(
   registrations: readonly RegisteredInteractiveHandler[],
 ): void {

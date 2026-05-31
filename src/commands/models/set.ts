@@ -5,6 +5,7 @@ import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runti
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { applyDefaultModelPrimaryUpdate, updateConfig } from "./shared.js";
 
+/** Updates the default model and repairs any runtime plugin required by that model. */
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
   const updated = await updateConfig((cfg, context) => {
     return applyDefaultModelPrimaryUpdate({
@@ -23,6 +24,7 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
     cfg: updated,
     model: selectedModel,
   });
+  // Model aliases can switch runtimes; surface repair warnings without hiding the model update.
   const warnings = [...repaired.warnings, ...copilotRepaired.warnings];
   for (const warning of warnings) {
     runtime.error?.(warning);

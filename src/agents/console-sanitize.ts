@@ -1,3 +1,4 @@
+/** Sanitizes log/console snippets by removing control chars, folding whitespace, and capping length. */
 export function sanitizeForConsole(text: string | undefined, maxChars = 200): string | undefined {
   const trimmed = text?.trim();
   if (!trimmed) {

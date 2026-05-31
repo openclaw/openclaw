@@ -67,6 +67,7 @@ function parseIntOrNull(value: unknown): number | null {
   return parseStrictInteger(s) ?? null;
 }
 
+/** Parses CLI timeout values with the gateway-status fallback contract. */
 export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
   return parseTimeoutMsWithFallback(raw, fallbackMs);
 }
@@ -82,6 +83,7 @@ function normalizeWsUrl(value: string): string | null {
   return trimmed;
 }
 
+/** Builds the ordered probe target list from explicit URL, remote config, and local loopback fallback. */
 export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
@@ -129,6 +131,7 @@ function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">
   }
 }
 
+/** Caps probe time by target kind so inactive or remote checks cannot consume the whole status budget. */
 export function resolveProbeBudgetMs(
   overallMs: number,
   target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
@@ -148,6 +151,7 @@ export function resolveProbeBudgetMs(
   return overallMs;
 }
 
+/** Normalizes SSH targets from CLI-style input while rejecting empty or non-string values. */
 export function sanitizeSshTarget(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -159,6 +163,7 @@ export function sanitizeSshTarget(value: unknown): string | null {
   return trimmed.replace(/^ssh\s+/, "");
 }
 
+/** Resolves token/password auth for a status probe, with explicit CLI overrides taking precedence. */
 export async function resolveAuthForTarget(
   cfg: OpenClawConfig,
   target: GatewayStatusTarget,
@@ -178,6 +183,7 @@ export async function resolveAuthForTarget(
 
 export { pickGatewaySelfPresence };
 
+/** Projects a raw config snapshot into the stable gateway-status JSON/text summary shape. */
 export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSummary {
   const snap = snapshotUnknown as Partial<ConfigFileSnapshot> | null;
   const path = typeof snap?.path === "string" ? snap.path : null;
@@ -244,6 +250,7 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   };
 }
 
+/** Builds local gateway URL hints from configured port/TLS and best-effort tailnet discovery. */
 export function buildNetworkHints(cfg: OpenClawConfig) {
   const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const port = resolveGatewayPort(cfg);
@@ -255,6 +262,7 @@ export function buildNetworkHints(cfg: OpenClawConfig) {
   };
 }
 
+/** Renders a human-readable target heading while preserving the probed URL. */
 export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   const kindLabel =
     target.kind === "localLoopback"
@@ -269,6 +277,7 @@ export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 
+/** Detects read-probe failures caused by missing operator scopes after a successful connection. */
 export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   if (probe.ok || probe.connectLatencyMs == null) {
     return false;
@@ -276,10 +285,12 @@ export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
 }
 
+/** Returns true when the gateway connected but a follow-up detail probe failed. */
 export function isPostConnectProbeFailure(probe: GatewayProbeResult): boolean {
   return !probe.ok && probe.connectLatencyMs != null;
 }
 
+/** Treats successful WebSocket connection as reachable even when read diagnostics degrade. */
 export function isProbeReachable(probe: GatewayProbeResult): boolean {
   return probe.ok || probe.connectLatencyMs != null;
 }
@@ -291,6 +302,7 @@ function getGatewayProbeCapability(probe: GatewayProbeResult): GatewayProbeCapab
 export function summarizeGatewayProbeCapability(
   probes: GatewayProbeResult[],
 ): GatewayProbeCapability {
+  // Highest observed capability wins so a weaker duplicate target cannot downgrade the overall status.
   const priority: GatewayProbeCapability[] = [
     "admin_capable",
     "write_capable",
@@ -347,6 +359,7 @@ function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
   );
 }
 
+/** Renders the compact connect/read/capability line used by gateway-status text output. */
 export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   const capability = renderProbeCapabilityLine(probe, rich);
   if (probe.ok) {

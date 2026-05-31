@@ -5,6 +5,10 @@ import { normalizeProviderId } from "./model-selection.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 
+/**
+ * Produces stable hashes for CLI-session invalidation inputs while treating
+ * blank strings as absent state.
+ */
 export function hashCliSessionText(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -13,6 +17,10 @@ export function hashCliSessionText(value: string | undefined): string | undefine
   return crypto.createHash("sha256").update(trimmed).digest("hex");
 }
 
+/**
+ * Reads the normalized CLI session binding for a provider, including legacy
+ * per-provider and Claude-only session id storage.
+ */
 export function getCliSessionBinding(
   entry: SessionEntry | undefined,
   provider: string,
@@ -51,6 +59,10 @@ export function getCliSessionBinding(
   return undefined;
 }
 
+/**
+ * Returns only the provider's reusable CLI session id for callers that do not
+ * need invalidation metadata.
+ */
 export function getCliSessionId(
   entry: SessionEntry | undefined,
   provider: string,
@@ -58,10 +70,18 @@ export function getCliSessionId(
   return getCliSessionBinding(entry, provider)?.sessionId;
 }
 
+/**
+ * Stores a bare provider session id and mirrors it through the structured
+ * binding path.
+ */
 export function setCliSessionId(entry: SessionEntry, provider: string, sessionId: string): void {
   setCliSessionBinding(entry, provider, { sessionId });
 }
 
+/**
+ * Persists the provider's CLI session id plus the hashes that decide whether a
+ * future run may safely resume that process-native session.
+ */
 export function setCliSessionBinding(
   entry: SessionEntry,
   provider: string,
@@ -109,6 +129,10 @@ export function setCliSessionBinding(
   }
 }
 
+/**
+ * Removes a provider's stored CLI session state from every supported storage
+ * shape so stale bindings cannot be resurrected by older readers.
+ */
 export function clearCliSession(entry: SessionEntry, provider: string): void {
   const normalized = normalizeProviderId(provider);
   if (entry.cliSessionBindings?.[normalized] !== undefined) {
@@ -126,12 +150,20 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   }
 }
 
+/**
+ * Clears all CLI session bindings from the session entry after broad invalidation
+ * events such as reset or destructive config changes.
+ */
 export function clearAllCliSessions(entry: SessionEntry): void {
   entry.cliSessionBindings = undefined;
   entry.cliSessionIds = undefined;
   entry.claudeCliSessionId = undefined;
 }
 
+/**
+ * Decides whether a stored CLI session can be reused for the current auth,
+ * prompt, working-directory, and MCP state.
+ */
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
@@ -169,6 +201,8 @@ export function resolveCliSessionReuse(params: {
     currentAuthEpoch !== undefined &&
     storedAuthEpoch === currentAuthEpoch;
   if (storedAuthProfileId !== currentAuthProfileId) {
+    // Versioned auth epochs survive profile-name churn when they still point at
+    // the same effective credential generation.
     if (!hasMatchingVersionedAuthEpoch) {
       return { invalidatedReason: "auth-profile" };
     }

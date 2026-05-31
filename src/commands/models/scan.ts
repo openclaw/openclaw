@@ -43,6 +43,8 @@ function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
   return results.slice().toSorted((a, b) => {
+    // Prefer image-capable models, then low tool latency, then larger/newer
+    // metadata so default fallback suggestions are useful without prompting.
     const aImage = a.image.ok ? 1 : 0;
     const bImage = b.image.ok ? 1 : 0;
     if (aImage !== bImage) {
@@ -61,6 +63,7 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
 
 function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
   return results.slice().toSorted((a, b) => {
+    // Image model suggestions only care about image latency before metadata.
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
     if (aLatency !== bLatency) {
@@ -103,6 +106,7 @@ function buildScanHint(result: ModelScanResult): string {
   return [toolLabel, imageLabel, ctxLabel, paramLabel].filter(Boolean).join(" | ");
 }
 
+/** Prints aggregate scan counts before the candidate table. */
 function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
   const toolOk = results.filter((r) => r.tool.ok);
   const imageOk = results.filter((r) => r.image.ok);
@@ -113,6 +117,7 @@ function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
   );
 }
 
+/** Explains the metadata-only path when probes are disabled or unavailable. */
 function printMetadataOnlyNotice(params: {
   results: ModelScanResult[];
   runtime: RuntimeEnv;
@@ -190,6 +195,7 @@ function parsePositiveIntegerOption(raw: unknown, label: string, fallback: numbe
   return parsed;
 }
 
+/** Runs OpenRouter free-model scan and optionally writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -244,6 +250,8 @@ export async function modelsScanCommand(
           "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
         );
       }
+      // Without credentials, downgrade to catalog metadata but do not mutate
+      // defaults because tool/image capability has not been verified.
       probe = false;
     }
   }
@@ -303,6 +311,8 @@ export async function modelsScanCommand(
   const imageSorted = sortImageResults(imageOk);
   const imagePreferred = toolSorted.filter((entry) => entry.image.ok);
   const preselectPool = imagePreferred.length > 0 ? imagePreferred : toolSorted;
+  // Text fallbacks prefer models that also passed image probes when available;
+  // image defaults use the independently sorted image-capable list.
   const preselected = preselectPool
     .slice(0, Math.floor(maxCandidates))
     .map((entry) => entry.modelRef);
@@ -369,6 +379,8 @@ export async function modelsScanCommand(
       }
     }
     const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
+    // Preserve existing primaries unless the caller explicitly opts into setting
+    // the scanned winner as the new default.
     const nextImageModel =
       selectedImages.length > 0
         ? {

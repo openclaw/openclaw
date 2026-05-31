@@ -56,12 +56,15 @@ function resolveBundleMcpConfigPaths(params: {
 }): string[] {
   const declared = normalizeBundlePathList(params.raw.mcpServers);
   const defaults = fs.existsSync(path.join(params.rootDir, ".mcp.json")) ? [".mcp.json"] : [];
+  // File-backed config is loaded before inline manifest config so inline MCP
+  // declarations can override or patch server entries from .mcp.json.
   if (params.bundleFormat === "claude") {
     return mergeBundlePathLists(defaults, declared);
   }
   return mergeBundlePathLists(defaults, declared);
 }
 
+/** Extracts MCP server definitions from bundle-native or OpenClaw-style config shapes. */
 export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
   if (!isRecord(raw)) {
     return {};
@@ -111,12 +114,16 @@ function absolutizeBundleMcpServer(params: {
   const next: BundleMcpServerConfig = { ...params.server };
 
   if (typeof next.cwd !== "string" && typeof next.workingDirectory !== "string") {
+    // MCP clients execute relative commands from cwd, so file-backed entries get
+    // a stable base even when the source config omitted working-directory data.
     next.cwd = params.baseDir;
   }
 
   const command = next.command;
   if (typeof command === "string") {
     const expanded = expandBundleRootPlaceholders(command, params.rootDir);
+    // Only explicit relative command paths are rooted in the config file's
+    // directory; bare commands remain PATH lookups for bundle compatibility.
     next.command = isExplicitRelativePath(expanded)
       ? path.resolve(params.baseDir, expanded)
       : normalizeExpandedAbsolutePath(expanded);
@@ -271,6 +278,7 @@ function loadBundleMcpConfig(params: {
   return { config: merged, diagnostics };
 }
 
+/** Inspects whether a bundle exposes runnable MCP stdio server definitions. */
 export function inspectBundleMcpRuntimeSupport(params: {
   pluginId: string;
   rootDir: string;
@@ -288,6 +296,7 @@ export function inspectBundleMcpRuntimeSupport(params: {
   };
 }
 
+/** Loads merged MCP server config from all activated bundle plugins. */
 export function loadEnabledBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;

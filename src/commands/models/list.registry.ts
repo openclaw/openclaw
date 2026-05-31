@@ -21,6 +21,7 @@ function createAvailabilityUnavailableError(message: string): Error {
   return err;
 }
 
+/** Wraps unexpected availability failures in the list-command fallback code. */
 function normalizeAvailabilityError(err: unknown): Error {
   if (shouldFallbackToAuthHeuristics(err) && err instanceof Error) {
     return err;
@@ -30,6 +31,7 @@ function normalizeAvailabilityError(err: unknown): Error {
   );
 }
 
+/** Validates provider availability output before it controls auth markers. */
 function validateAvailableModels(availableModels: unknown): Model[] {
   if (!Array.isArray(availableModels)) {
     throw createAvailabilityUnavailableError(
@@ -84,6 +86,7 @@ function loadAvailableModels(
   }
 }
 
+/** Loads the runtime model registry plus optional model-level availability keys. */
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
   opts?: {

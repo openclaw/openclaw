@@ -12,31 +12,38 @@ export type CacheEntry<T> = {
   insertedAt: number;
 };
 
+/** Default request timeout for built-in web tools, in seconds. */
 export const DEFAULT_TIMEOUT_SECONDS = 30;
+/** Default in-memory response cache TTL for built-in web tools, in minutes. */
 export const DEFAULT_CACHE_TTL_MINUTES = 15;
 const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
+/** Coerces a timeout value into the timer-safe web-tool timeout range. */
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
   return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
 }
 
+/** Coerces only positive timeout overrides, falling back for zero or invalid values. */
 export function resolvePositiveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed =
     typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
   return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
 }
 
+/** Converts cache TTL minutes into milliseconds, preserving zero as disabled caching. */
 export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): number {
   const minutes =
     typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallbackMinutes;
   return Math.round(minutes * 60_000);
 }
 
+/** Normalizes cache keys so equivalent web query/input strings share entries. */
 export function normalizeCacheKey(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+/** Reads an unexpired in-memory web-tool cache entry and evicts stale values. */
 export function readCache<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
@@ -53,6 +60,7 @@ export function readCache<T>(
   return { value: entry.value, cached: true };
 }
 
+/** Writes a bounded in-memory cache entry, dropping the oldest key at capacity. */
 export function writeCache<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
@@ -80,6 +88,7 @@ export function writeCache<T>(
   });
 }
 
+/** Returns an AbortSignal that aborts when either the parent signal or timeout fires. */
 export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   if (timeoutMs <= 0) {
     return signal ?? new AbortController().signal;
@@ -213,6 +222,8 @@ function responseContentType(res: Response): string | null {
 function decodeResponseBytes(res: Response, bytes: Uint8Array): string {
   const contentType = responseContentType(res);
   const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
+  // Try declared or sniffed charsets first; malformed/unsupported labels fall
+  // back to UTF-8 so error handling can still surface response text.
   try {
     return new TextDecoder(charset ?? "utf-8").decode(bytes);
   } catch {
@@ -220,6 +231,10 @@ function decodeResponseBytes(res: Response, bytes: Uint8Array): string {
   }
 }
 
+/**
+ * Reads response text with optional byte limiting while preserving charset
+ * handling and best-effort partial output for streaming bodies.
+ */
 export async function readResponseText(
   res: Response,
   options?: { maxBytes?: number },

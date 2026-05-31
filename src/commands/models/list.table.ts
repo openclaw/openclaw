@@ -18,11 +18,14 @@ function formatContextLabel(row: ModelRow): string {
     row.contextTokens > 0 &&
     row.contextTokens !== row.contextWindow
   ) {
+    // Show effective/runtime context beside advertised window when providers
+    // expose both values.
     return `${formatTokenK(row.contextTokens)}/${formatTokenK(row.contextWindow)}`;
   }
   return formatTokenK(row.contextWindow);
 }
 
+/** Prints model-list rows as JSON, plain keys, or the terminal table. */
 export function printModelTable(
   rows: ModelRow[],
   runtime: RuntimeEnv,
@@ -55,6 +58,8 @@ export function printModelTable(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
+    // Sanitize every user/provider-controlled cell before padding/coloring so
+    // terminal control characters cannot affect following columns.
     const keyLabel = pad(truncate(sanitizeTerminalText(row.key), MODEL_PAD), MODEL_PAD);
     const inputLabel = pad(sanitizeTerminalText(row.input) || "-", INPUT_PAD);
     const ctxLabel = pad(formatContextLabel(row), CTX_PAD);

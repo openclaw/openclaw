@@ -21,11 +21,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 
+/** Auth lookup facade used while annotating model-list rows. */
 export type ModelListAuthIndex = {
   hasProviderAuth(provider: string): boolean;
   allowsProviderAuthAvailabilityFallback(provider: string): boolean;
 };
 
+/** Inputs needed to combine profiles, env, config, and plugin synthetic auth. */
 export type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
@@ -200,6 +202,8 @@ export function createModelListAuthIndex(
     return hasAuth;
   };
 
+  // OpenAI OAuth/token auth can satisfy Codex-routed providers only when the
+  // provider is currently configured to use the Codex runtime.
   const hasOpenAICodexRuntimeAuth = (provider: string): boolean => {
     const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
     return (

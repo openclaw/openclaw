@@ -64,6 +64,7 @@ const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
 let followIntervalMsForTests: number | undefined;
 
+/** Overrides the follow polling interval for deterministic session-tail tests. */
 export function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
   followIntervalMsForTests = intervalMs;
 }
@@ -144,6 +145,8 @@ function eventCursor(event: TrajectoryEvent): TrajectoryCursor {
 
 function compareCursors(left: TrajectoryCursor, right: TrajectoryCursor): number {
   if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
+    // Sequence numbers are the strongest ordering signal when both events have
+    // them; timestamps are only a fallback for older trajectory rows.
     return left.seq - right.seq;
   }
   const byTimestamp = left.tsMs - right.tsMs;
@@ -405,6 +408,8 @@ function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
     fileState.size === state.offset && state.fileState?.mtimeMs !== fileState.mtimeMs;
 
   if (replaced || truncated || possiblyRewrittenSameSize) {
+    // Rotation, truncation, or rewrite invalidates the byte offset. Rescan the
+    // file and use the cursor to avoid replaying events already shown.
     const snapshot = readTrajectorySnapshot(state.selection.trajectoryPath);
     state.fileState = snapshot.fileState;
     state.offset = snapshot.offset;
@@ -425,6 +430,8 @@ function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
     state.fileState = fileState;
     const combined = `${state.pending}${buffer.toString("utf8")}`;
     const lines = combined.split(/\r?\n/u);
+    // Keep an incomplete trailing JSONL record until the next poll appends the
+    // rest of the line.
     state.pending = lines.pop() ?? "";
     return parseTrajectoryEventLines(lines);
   } finally {
@@ -492,6 +499,7 @@ function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
   return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;
 }
 
+/** Prints recent trajectory events for selected sessions and optionally follows new events. */
 export async function sessionsTailCommand(
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,

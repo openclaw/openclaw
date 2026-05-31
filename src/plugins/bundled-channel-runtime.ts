@@ -42,6 +42,8 @@ function resolveBundledMetadataScope(params?: {
   if (!fs.existsSync(overrideDir)) {
     return { kind: "empty" };
   }
+  // The registry loader only trusts explicit bundled-dir overrides in tests, so
+  // metadata scans use an env scope that opts into that trust for fixture roots.
   return {
     kind: "env",
     env: {
@@ -92,6 +94,7 @@ function toBundledChannelPluginMetadata(
   };
 }
 
+/** Lists bundled channel plugin metadata from the manifest registry. */
 export function listBundledChannelPluginMetadata(params?: {
   rootDir?: string;
   scanDir?: string;
@@ -108,6 +111,7 @@ export function listBundledChannelPluginMetadata(params?: {
   }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
 }
 
+/** Resolves a generated channel entry path using the shared bundled plugin resolver. */
 export function resolveBundledChannelGeneratedPath(
   rootDir: string,
   entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"],
@@ -117,6 +121,7 @@ export function resolveBundledChannelGeneratedPath(
   return resolveBundledPluginGeneratedPath(rootDir, entry, pluginDirName, scanDir);
 }
 
+/** Resolves the workspace/source directory for a bundled channel plugin id. */
 export function resolveBundledChannelWorkspacePath(params: {
   rootDir: string;
   scanDir?: string;

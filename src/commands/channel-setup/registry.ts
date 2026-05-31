@@ -31,6 +31,7 @@ function isDeclarativeChannelSetupWizard(
   );
 }
 
+/** Resolves either an imperative setup adapter or a cached adapter for a declarative channel wizard. */
 export function resolveChannelSetupWizardAdapterForPlugin(
   plugin?: ChannelPlugin,
 ): ChannelSetupWizardAdapter | undefined {
@@ -46,6 +47,7 @@ export function resolveChannelSetupWizardAdapterForPlugin(
     if (cached) {
       return cached;
     }
+    // Declarative wizards are wrapped once per plugin object so repeated setup prompts share adapter state.
     const adapter = buildChannelSetupWizardAdapterFromSetupWizard({
       plugin,
       wizard: setupWizard,
@@ -68,6 +70,7 @@ const getChannelSetupWizardAdapterMap = () => {
   return adapters;
 };
 
+/** Looks up the setup wizard adapter for a channel from the current channel plugin registry snapshot. */
 export function getChannelSetupWizardAdapter(
   channel: ChannelChoice,
 ): ChannelSetupWizardAdapter | undefined {

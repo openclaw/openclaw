@@ -6,6 +6,7 @@ function normalizeLegacyAuthChoice(choice: string, env?: NodeJS.ProcessEnv): str
   return normalizeLegacyOnboardAuthChoice(choice, { env }) ?? choice;
 }
 
+/** Resolves the provider implied by an auth-choice id without running the auth flow. */
 export async function resolvePreferredProviderForAuthChoice(params: {
   choice: string;
   config?: OpenClawConfig;
@@ -19,6 +20,7 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     return manifestResolved.providerId;
   }
 
+  // Load runtime providers only after manifest metadata fails; this keeps cold setup paths cheap.
   const { resolveProviderPluginChoice, resolvePluginProviders } =
     await import("./provider-auth-choice.runtime.js");
   const providers = resolvePluginProviders({

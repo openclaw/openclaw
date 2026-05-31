@@ -7,12 +7,14 @@ import {
 } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
+/** Detects source-checkout gateway installs that should run through the TS entrypoint. */
 export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
   return normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts");
 }
 
+/** Resolves daemon install runtime inputs after applying dev-mode and Node path defaults. */
 export async function resolveDaemonInstallRuntimeInputs(params: {
   env: Record<string, string | undefined>;
   runtime: GatewayDaemonRuntime;
@@ -29,6 +31,7 @@ export async function resolveDaemonInstallRuntimeInputs(params: {
   return { devMode, nodePath };
 }
 
+/** Emits runtime warnings using the resolved service program arguments. */
 export async function emitDaemonInstallRuntimeWarning(params: {
   env: Record<string, string | undefined>;
   runtime: GatewayDaemonRuntime;
@@ -45,6 +48,7 @@ export async function emitDaemonInstallRuntimeWarning(params: {
   });
 }
 
+/** Returns the directory containing an absolute Node executable path. */
 export function resolveDaemonNodeBinDir(nodePath?: string): string[] | undefined {
   const trimmed = nodePath?.trim();
   if (!trimmed || !path.isAbsolute(trimmed)) {
@@ -86,6 +90,7 @@ function addUniquePathDir(dirs: string[], dir: string | undefined): void {
   dirs.push(dir);
 }
 
+/** Finds PATH directories that expose the active OpenClaw command. */
 export function resolveDaemonOpenClawBinDir(
   params: {
     argv?: string[];
@@ -124,6 +129,8 @@ export function resolveDaemonOpenClawBinDir(
       continue;
     }
     const candidateRealpath = safeRealpathSync(candidate, realpathSync);
+    // Only preserve shims that resolve to the currently running OpenClaw
+    // entrypoint; unrelated installs on PATH should not leak into the service.
     if (argvRealpath && candidateRealpath && candidateRealpath !== argvRealpath) {
       continue;
     }
@@ -133,6 +140,7 @@ export function resolveDaemonOpenClawBinDir(
   return dirs.length > 0 ? dirs : undefined;
 }
 
+/** Resolves extra PATH directories needed by the installed gateway service. */
 export function resolveDaemonServicePathDirs(params: {
   nodePath?: string;
   argv?: string[];
@@ -141,6 +149,8 @@ export function resolveDaemonServicePathDirs(params: {
 }): string[] | undefined {
   const dirs: string[] = [];
   for (const dir of resolveDaemonNodeBinDir(params.nodePath) ?? []) {
+    // Put the selected Node runtime first so service managers do not rediscover
+    // a different node from their minimal default PATH.
     addUniquePathDir(dirs, dir);
   }
   for (const dir of resolveDaemonOpenClawBinDir(params) ?? []) {

@@ -59,6 +59,8 @@ function normalizeStoredOverrideModel(params: {
   const providerPrefix = `${providerOverride.toLowerCase()}/`;
   return {
     providerOverride,
+    // Older rows may persist provider/model both separately and as
+    // provider/model in the model field; display should not duplicate it.
     modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
       ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
       : modelOverride,
@@ -73,6 +75,7 @@ function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionD
   return parseModelRef(primary, DEFAULT_PROVIDER);
 }
 
+/** Resolves default values used when a session row lacks persisted model fields. */
 export function resolveSessionDisplayDefaults(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -91,6 +94,8 @@ function normalizeCliRuntimeDisplayRef(
     return ref;
   }
   if (ref.model.includes("/")) {
+    // CLI runtime rows sometimes store provider/model in the model field;
+    // parse it before falling back to configured provider inference.
     const parsed = parseModelRef(ref.model, defaultRef.provider);
     if (!isCliProvider(parsed.provider, cfg)) {
       return parsed;
@@ -101,6 +106,8 @@ function normalizeCliRuntimeDisplayRef(
     model: ref.model,
   });
   if (inferredProvider && !isCliProvider(inferredProvider, cfg)) {
+    // A unique configured provider gives a clearer display than the generic
+    // CLI provider placeholder.
     return { provider: inferredProvider, model: ref.model };
   }
   const parsed = parseModelRef(ref.model, defaultRef.provider);
@@ -113,6 +120,7 @@ function normalizeCliRuntimeDisplayRef(
   };
 }
 
+/** Returns the model label shown in session list output for one stored row. */
 export function resolveSessionDisplayModel(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
@@ -120,6 +128,7 @@ export function resolveSessionDisplayModel(
   return resolveSessionDisplayModelRef(cfg, row).model;
 }
 
+/** Resolves the provider/model pair represented by persisted session metadata. */
 export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,

@@ -17,6 +17,7 @@ type ProviderIndexModelCatalogPlan = {
   entries: readonly ProviderIndexModelCatalogPlanEntry[];
 };
 
+/** Ensures provider-index preview catalogs never masquerade as installed catalog rows. */
 function withPreviewStatusDefaults(providerCatalog: ModelCatalogProvider): ModelCatalogProvider {
   return {
     ...providerCatalog,
@@ -27,6 +28,7 @@ function withPreviewStatusDefaults(providerCatalog: ModelCatalogProvider): Model
   };
 }
 
+/** Plans normalized preview model rows from installable provider-index metadata. */
 export function planProviderIndexModelCatalogRows(params: {
   index: OpenClawProviderIndex;
   providerFilter?: string;

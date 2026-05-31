@@ -51,10 +51,7 @@ function resolveKnownChannelId(raw: string): string | undefined {
   return normalizeChannelId(raw) ?? undefined;
 }
 
-/**
- * Pass CLI send sources through as-is — both CliOutboundSendSource and
- * OutboundSendDeps are now channel-ID-keyed records.
- */
+/** Converts CLI channel send sources into runtime outbound send dependencies. */
 export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource): OutboundSendDeps {
   const outbound: OutboundSendDeps = { ...deps };
   const sendFactory = deps[CLI_OUTBOUND_SEND_FACTORY];
@@ -66,6 +63,7 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
     }
     const sourceValue = deps[legacySourceKey];
     if (sourceValue !== undefined && outbound[channelId] === undefined) {
+      // Accept old sendMessageTelegram-style CLI mocks while keeping channel IDs canonical.
       outbound[channelId] = sourceValue;
     }
   }
@@ -76,6 +74,7 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
       continue;
     }
     for (const legacyDepKey of resolveLegacyOutboundSendDepKeys(channelId)) {
+      // Runtime callers may still request sendTelegram-style dependency names.
       if (outbound[legacyDepKey] === undefined) {
         outbound[legacyDepKey] = sourceValue;
       }
@@ -91,6 +90,7 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
       outbound[key] === undefined ? (resolveChannelIdFromLegacyOutboundKey(key) ?? key) : key;
     const channelId = resolveKnownChannelId(candidate);
     if (!channelId || channelId === "then" || channelId === "toJSON") {
+      // Avoid promise/JSON protocol probes causing lazy channel imports.
       return undefined;
     }
     const value = sendFactory(channelId);

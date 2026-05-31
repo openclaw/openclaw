@@ -26,6 +26,7 @@ const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 
 type SecretRefChoice = "env" | "provider"; // pragma: allowlist secret
 
+/** Prompt copy for API-key reference setup flows. */
 export type SecretRefSetupPromptCopy = {
   sourceMessage?: string;
   envVarMessage?: string;
@@ -37,6 +38,7 @@ export type SecretRefSetupPromptCopy = {
   providerValidatedMessage?: (provider: string, id: string, source: "file" | "exec") => string;
 };
 
+/** Extracts an env var from resolver source labels such as `env: OPENAI_API_KEY`. */
 export function extractEnvVarFromSourceLabel(source: string): string | undefined {
   const match = ENV_SOURCE_LABEL_RE.exec(source.trim());
   return match?.[1];
@@ -57,6 +59,7 @@ function resolveDefaultFilePointerId(provider: string): string {
   return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
 }
 
+/** Builds the non-interactive ref-mode fallback from trusted provider env-var metadata. */
 export function resolveRefFallbackInput(params: {
   config: OpenClawConfig;
   provider: string;
@@ -264,6 +267,7 @@ async function promptProviderSecretRefForSetup(params: {
   }
 }
 
+/** Prompts for and validates an env/file/exec secret reference without persisting the value. */
 export async function promptSecretRefForSetup(params: {
   provider: string;
   config: OpenClawConfig;
@@ -318,6 +322,7 @@ export async function promptSecretRefForSetup(params: {
         env: params.env,
       });
     } catch (error) {
+      // Provider refs can fail validation; keep the outer source chooser open for recovery.
       if (error instanceof Error && error.message === "retry") {
         continue;
       }

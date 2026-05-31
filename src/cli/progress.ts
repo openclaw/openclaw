@@ -24,6 +24,7 @@ type ProgressOptions = {
   fallback?: "spinner" | "line" | "log" | "none";
 };
 
+/** Mutable progress handle shared by CLI commands and command wrappers. */
 export type ProgressReporter = {
   setLabel: (label: string) => void;
   setPercent: (percent: number) => void;
@@ -31,12 +32,14 @@ export type ProgressReporter = {
   done: () => void;
 };
 
+/** Bounded progress update payload for wrappers that know completed/total counts. */
 export type ProgressTotalsUpdate = {
   completed: number;
   total: number;
   label?: string;
 };
 
+/** Reports whether a readline-backed spinner is safe for the current terminal state. */
 export function shouldUseInteractiveProgressSpinner(params: {
   fallback?: ProgressOptions["fallback"];
   streamIsTty?: boolean;
@@ -53,11 +56,13 @@ const noopReporter: ProgressReporter = {
   done: () => {},
 };
 
+/** Creates the best available CLI progress renderer for the target stream. */
 export function createCliProgress(options: ProgressOptions): ProgressReporter {
   if (options.enabled === false) {
     return noopReporter;
   }
   if (activeProgress > 0) {
+    // Avoid nested spinners/line renderers fighting over the same terminal row.
     return noopReporter;
   }
 
@@ -78,6 +83,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   });
   const allowLine = isTty && options.fallback === "line";
   if (isTty && stdinIsRaw && (options.fallback === undefined || options.fallback === "spinner")) {
+    // Raw TUI input and clack's readline-backed spinner both want terminal control.
     return noopReporter;
   }
 
@@ -102,6 +108,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       })
     : null;
 
+  // Fallbacks are intentionally exclusive; each renderer owns cursor/log behavior differently.
   const spin = allowSpinner ? spinner() : null;
   const renderLine = allowLine
     ? () => {
@@ -223,6 +230,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   return { setLabel, setPercent, tick, done };
 }
 
+/** Runs async work with a progress reporter that is always closed. */
 export async function withProgress<T>(
   options: ProgressOptions,
   work: (progress: ProgressReporter) => Promise<T>,
@@ -235,6 +243,7 @@ export async function withProgress<T>(
   }
 }
 
+/** Runs async work with a helper that translates completed/total counts to percent updates. */
 export async function withProgressTotals<T>(
   options: ProgressOptions,
   work: (update: (update: ProgressTotalsUpdate) => void, progress: ProgressReporter) => Promise<T>,

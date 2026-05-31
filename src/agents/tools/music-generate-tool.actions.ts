@@ -16,6 +16,7 @@ import {
 
 type MusicGenerateActionResult = MediaGenerateActionResult;
 
+/** Formats provider capabilities into the compact music-generation list action text. */
 function summarizeMusicGenerationCapabilities(
   provider: ReturnType<typeof listRuntimeMusicGenerationProviders>[number],
 ): string {
@@ -56,6 +57,7 @@ function summarizeMusicGenerationCapabilities(
   return capabilities;
 }
 
+/** Creates the music-generation provider list action result with auth and capability metadata. */
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
   options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
@@ -87,6 +89,7 @@ export function createMusicGenerateStatusActionResult(
   return musicGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
+/** Returns active/recent music task status when a request duplicates an in-flight prompt. */
 export function createMusicGenerateDuplicateGuardResult(
   sessionKey?: string,
   params?: { prompt?: string; requestKey?: string },

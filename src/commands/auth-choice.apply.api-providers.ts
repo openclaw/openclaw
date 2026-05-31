@@ -5,6 +5,7 @@ import { normalizeTokenProviderInput } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
 import type { AuthChoice } from "./onboard-types.js";
 
+/** Finds a provider-specific wizard choice that matches a generic auth method kind. */
 function resolveProviderAuthChoiceByKind(params: {
   providerId: string;
   kind: ProviderAuthKind;
@@ -25,6 +26,7 @@ function resolveProviderAuthChoiceByKind(params: {
   return choiceId as AuthChoice | undefined;
 }
 
+/** Rewrites generic apiKey/token choices when --token-provider identifies a plugin provider. */
 export function normalizeApiKeyTokenProviderAuthChoice(params: {
   authChoice: AuthChoice;
   tokenProvider?: string;
@@ -64,6 +66,7 @@ export function normalizeApiKeyTokenProviderAuthChoice(params: {
   );
 }
 
+/** Reserved extension point for legacy built-in API provider auth choices. */
 export async function applyAuthChoiceApiProviders(
   _params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {

@@ -4,10 +4,12 @@ import type { StreamFn } from "./runtime/index.js";
 
 const CUSTOM_API_SOURCE_PREFIX = "openclaw-custom-api:";
 
+/** Builds the source id used when OpenClaw registers a dynamic provider API. */
 export function getCustomApiRegistrySourceId(api: Api): string {
   return `${CUSTOM_API_SOURCE_PREFIX}${api}`;
 }
 
+/** Registers a stream function for an API only when no provider already owns that API. */
 export function ensureCustomApiRegistered(api: Api, streamFn: StreamFn): boolean {
   if (getApiProvider(api)) {
     return false;

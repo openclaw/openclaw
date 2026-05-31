@@ -16,6 +16,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
+/** Resolves a provider by id or alias using the same normalized ids setup choices use. */
 export function resolveProviderMatch(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -35,6 +36,7 @@ export function resolveProviderMatch(
   );
 }
 
+/** Selects an auth method by id first, then display label for legacy choice metadata. */
 export function pickAuthMethod(
   provider: ProviderPlugin,
   rawMethod?: string,
@@ -253,6 +255,7 @@ function normalizeConfigModelRefsForWrite(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/** Merges a provider auth config patch while preserving safe model-ref write normalization. */
 export function applyProviderAuthConfigPatch(
   cfg: OpenClawConfig,
   patch: unknown,
@@ -308,6 +311,7 @@ export function restorePriorAgentsDefaultsModelUnlessOptIn(params: {
   };
 }
 
+/** Writes the selected default model and keeps the defaults allowlist in sync. */
 export function applyDefaultModel(
   cfg: OpenClawConfig,
   model: string,

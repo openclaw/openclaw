@@ -50,6 +50,7 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
   return missing;
 }
 
+/** Validates and normalizes a channel plugin registration before registry insertion. */
 export function normalizeRegisteredChannelPlugin(params: {
   pluginId: string;
   source: string;
@@ -98,6 +99,8 @@ export function normalizeRegisteredChannelPlugin(params: {
 
   const missingFields = collectMissingChannelMetaFields(rawMeta);
   if (missingFields.length > 0) {
+    // Incomplete channel metadata is repairable: bundled/generated metadata can
+    // fill UI fields while diagnostics keep plugin authors aware of the gap.
     pushPluginValidationDiagnostic({
       level: "warn",
       pluginId: params.pluginId,

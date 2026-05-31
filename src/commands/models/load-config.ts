@@ -14,6 +14,7 @@ export type LoadedModelsConfig = {
   diagnostics: string[];
 };
 
+/** Loads model-command config while preserving both authored source and secret-resolved views. */
 export async function loadModelsConfigWithSource(params: {
   commandName: string;
   runtime?: RuntimeEnv;
@@ -35,6 +36,7 @@ export async function loadModelsConfigWithSource(params: {
   };
 }
 
+/** Loads the secret-resolved config view for model commands that do not rewrite config. */
 export async function loadModelsConfig(params: {
   commandName: string;
   runtime?: RuntimeEnv;

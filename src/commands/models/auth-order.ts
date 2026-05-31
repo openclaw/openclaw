@@ -32,6 +32,7 @@ function describeOrder(store: AuthProfileStore, provider: string): string[] {
   return Array.isArray(order) ? order : [];
 }
 
+/** Resolves shared context for auth-order commands and validates the provider flag. */
 async function resolveAuthOrderContext(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
@@ -48,6 +49,7 @@ async function resolveAuthOrderContext(
   return { cfg, agentId, agentDir, provider };
 }
 
+/** Prints the per-agent auth profile order override for a provider. */
 export async function modelsAuthOrderGetCommand(
   opts: { provider: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
@@ -75,6 +77,7 @@ export async function modelsAuthOrderGetCommand(
   runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
 }
 
+/** Clears the per-agent provider auth order override. */
 export async function modelsAuthOrderClearCommand(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
@@ -96,6 +99,7 @@ export async function modelsAuthOrderClearCommand(
   runtime.log("Cleared per-agent order override.");
 }
 
+/** Replaces provider auth order with an explicit list of profile ids. */
 export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,
@@ -121,6 +125,8 @@ export async function modelsAuthOrderSetCommand(
       );
     }
     if (normalizeProviderId(cred.provider) !== providerKey) {
+      // Order overrides are provider-scoped; accepting cross-provider ids would
+      // make unrelated credentials invisible to their own provider.
       throw new Error(`Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`);
     }
   }

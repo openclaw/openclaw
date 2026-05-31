@@ -14,6 +14,7 @@ import type { WizardPrompter } from "./prompts.js";
 
 const SKIP_VALUE = "__skip__";
 
+/** Optional official plugin entry shown during onboarding. */
 export type OfficialPluginOnboardingInstallEntry = {
   pluginId: string;
   label: string;
@@ -22,10 +23,12 @@ export type OfficialPluginOnboardingInstallEntry = {
   trustedSourceLinkedOfficialInstall?: boolean;
 };
 
+/** Detects plugins already present through config entries or install records. */
 function isInstalledOrConfigured(config: OpenClawConfig, pluginId: string): boolean {
   return Boolean(config.plugins?.entries?.[pluginId] || config.plugins?.installs?.[pluginId]);
 }
 
+/** Keeps this prompt to generic plugins, excluding channels/providers/search-owned entries. */
 function isGenericOfficialPluginEntry(entry: { source?: string; kind?: string }): boolean {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
   return (
@@ -38,6 +41,7 @@ function isGenericOfficialPluginEntry(entry: { source?: string; kind?: string })
   );
 }
 
+/** Describes the install source preference for multiselect hints. */
 function formatInstallHint(install: PluginPackageInstall): string {
   if (install.clawhubSpec && install.npmSpec) {
     return install.defaultChoice === "clawhub"
@@ -60,6 +64,7 @@ export const testing = {
   formatInstallHint,
 };
 
+/** Lists optional official plugins that onboarding can offer before setup completes. */
 export function resolveOfficialPluginOnboardingInstallEntries(params: {
   config: OpenClawConfig;
 }): OfficialPluginOnboardingInstallEntry[] {
@@ -84,6 +89,7 @@ export function resolveOfficialPluginOnboardingInstallEntries(params: {
   return entries.toSorted((left, right) => left.label.localeCompare(right.label));
 }
 
+/** Prompts for optional official plugins and installs selected entries without a second prompt. */
 export async function setupOfficialPluginInstalls(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;
@@ -117,6 +123,7 @@ export async function setupOfficialPluginInstalls(params: {
   for (const pluginId of selected.filter((value) => value !== SKIP_VALUE)) {
     const entry = installEntries.find((candidate) => candidate.pluginId === pluginId);
     if (!entry) {
+      // Ignore stale UI values so catalog changes between prompt and install do not crash setup.
       continue;
     }
     const result = await ensureOnboardingPluginInstalled({

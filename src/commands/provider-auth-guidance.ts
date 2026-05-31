@@ -37,10 +37,13 @@ function resolveProviderAuthLoginCommand(params: {
   if (!choice) {
     return undefined;
   }
+  // Suggest the manifest's canonical auth provider so aliases route to the
+  // provider id accepted by `models auth login`.
   const providerId = normalizeProviderIdForAuth(choice.providerId, aliases);
   return formatCliCommand(`openclaw models auth login --provider ${providerId}`);
 }
 
+/** Builds a short recovery hint for missing provider authentication. */
 export function buildProviderAuthRecoveryHint(params: {
   provider: string;
   config?: OpenClawConfig;

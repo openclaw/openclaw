@@ -29,6 +29,7 @@ const publicSurfaceLocationCache = new Map<
 >();
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
+/** Detects source artifacts that can use the require hook fast path in tests. */
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
     case ".ts":
@@ -53,6 +54,8 @@ function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: bo
 
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
+  // The active bundled root changes resolution semantics, so include it in the
+  // location cache key instead of caching only by plugin/artifact name.
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
 }
 
@@ -113,6 +116,10 @@ function loadPublicSurfaceModule(modulePath: string): unknown {
   return getModuleLoader(modulePath)(modulePath);
 }
 
+/**
+ * Loads a bundled plugin public artifact through the narrow sidecar path, with
+ * boundary validation before executing source or built plugin code.
+ */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
@@ -146,6 +153,8 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   const validatedStat = opened.stat;
   fs.closeSync(opened.fd);
 
+  // Recheck after boundary validation so an artifact swap cannot redirect the
+  // loader from the approved path to a different inode.
   const currentStat = fs.statSync(validatedPath);
   if (!sameFileIdentity(validatedStat, currentStat)) {
     throw new Error(
@@ -154,6 +163,8 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   }
 
   const sentinel = {} as T;
+  // Publish a shared placeholder before module execution so recursive imports
+  // get a stable object and failed loads can cleanly remove both cache keys.
   publicSurfaceModuleCache.set(location.modulePath, sentinel);
   publicSurfaceModuleCache.set(validatedPath, sentinel);
   try {

@@ -9,6 +9,7 @@ export type SecretInputModePromptCopy = {
   refHint?: string;
 };
 
+/** Resolves whether setup should persist a plaintext key or a validated external reference. */
 export async function resolveSecretInputModeForEnvSelection(params: {
   prompter: Pick<WizardPrompter, "select">;
   explicitMode?: SecretInputMode;

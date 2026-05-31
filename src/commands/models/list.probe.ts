@@ -56,6 +56,7 @@ export type AuthProbeStatus =
   | "unknown"
   | "no_model";
 
+/** Machine-readable reason for probe targets that cannot be executed. */
 export type AuthProbeReasonCode =
   | "excluded_by_auth_order"
   | "missing_credential"
@@ -65,6 +66,7 @@ export type AuthProbeReasonCode =
   | "ineligible_profile"
   | "no_model";
 
+/** One auth/profile/env/model probe result rendered by `models status --probe`. */
 export type AuthProbeResult = {
   provider: string;
   model?: string;
@@ -102,6 +104,7 @@ export type AuthProbeSummary = {
   results: AuthProbeResult[];
 };
 
+/** Runtime knobs for building and executing auth probes. */
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -186,6 +189,8 @@ function selectProbeModel(params: {
   if (direct && direct.length > 0) {
     return { provider, model: direct[0] };
   }
+  // Catalog fallback chooses cheap Anthropic probe models first but preserves
+  // catalog order for equal priorities.
   const fromCatalog = catalog
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => normalizeProviderId(entry.provider) === provider)
@@ -344,6 +349,8 @@ export async function buildProbeTargets(params: {
         const mode = profile?.type;
         const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
         if (explicitOrder && !explicitOrder.includes(profileId)) {
+          // Explicit order excludes profiles by id before broader eligibility
+          // checks so status explains the operator's configured precedence.
           results.push({
             provider: providerKey,
             profileId,
@@ -384,6 +391,8 @@ export async function buildProbeTargets(params: {
           cache: refResolveCache,
         });
         if (unresolvedRefIssue) {
+          // Resolve SecretRefs during planning so bad references show as
+          // status rows instead of hidden runtime probe failures.
           results.push({
             provider: providerKey,
             model: model ? `${model.provider}/${model.model}` : undefined,
@@ -525,6 +534,8 @@ async function probeTarget(params: {
       timeoutMs,
       runId: `probe-${crypto.randomUUID()}`,
       lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
+      // Auth probes should exercise model auth only; tools/reasoning would add
+      // unrelated provider, MCP, or prompt-token failure modes.
       thinkLevel: "off",
       reasoningLevel: "off",
       verboseLevel: "off",

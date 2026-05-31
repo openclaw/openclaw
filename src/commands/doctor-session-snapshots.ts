@@ -97,6 +97,8 @@ function collectCachedSnapshotPaths(entry: SessionEntry): CachedSnapshotPath[] {
   const snapshot = entry.skillsSnapshot as Record<string, unknown> | undefined;
   const report = entry.systemPromptReport as Record<string, unknown> | undefined;
   const paths: CachedSnapshotPath[] = [];
+  // Skill paths can live in inline XML prompts, resolved skill metadata, or
+  // injected workspace file reports depending on when the session was created.
   for (const location of extractSkillLocations(snapshot?.prompt)) {
     paths.push({ field: "skillsSnapshot.prompt", path: location });
   }
@@ -146,6 +148,7 @@ function isBundledRuntimeSkillsPath(cachedPath: string, skillRootIndex: number):
     ) || isTempBackedOpenClawRoot(beforeSkillRoot)
   );
 }
+
 function extractBundledSkillRelativeSegments(cachedPath: string): string[] | undefined {
   const segments = splitPathSegments(cachedPath);
   const skillRootIndex = segments.lastIndexOf("skills");
@@ -158,6 +161,7 @@ function extractBundledSkillRelativeSegments(cachedPath: string): string[] | und
   }
   return relativeSegments;
 }
+
 function isInsidePath(baseDir: string, candidatePath: string): boolean {
   const baseIsWindows = isWindowsAbsolutePath(baseDir);
   const candidateIsWindows = isWindowsAbsolutePath(candidatePath);
@@ -171,11 +175,13 @@ function isInsidePath(baseDir: string, candidatePath: string): boolean {
     (relative !== "" && !relative.startsWith("..") && !pathApi.isAbsolute(relative))
   );
 }
+
 function joinPathForRoot(root: string, ...segments: string[]): string {
   return isWindowsAbsolutePath(root)
     ? path.win32.join(root, ...segments)
     : path.join(root, ...segments);
 }
+
 function resolveExpectedBundledSkillPath(params: {
   cachedPath: string;
   bundledSkillsDir: string;
@@ -193,6 +199,8 @@ function resolveExpectedBundledSkillPath(params: {
   if (isInsidePath(params.bundledSkillsDir, expandedCachedPath)) {
     return undefined;
   }
+  // Only rewrite paths that look like bundled runtime skills from old temp,
+  // dist, node_modules, or versioned package roots.
   const relativeSegments = extractBundledSkillRelativeSegments(expandedCachedPath);
   if (!relativeSegments) {
     return undefined;
@@ -201,6 +209,7 @@ function resolveExpectedBundledSkillPath(params: {
   return params.pathExists(expectedPath) ? expectedPath : undefined;
 }
 
+/** Scans session stores for stale bundled skill paths cached in prompt snapshots. */
 export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
@@ -232,6 +241,8 @@ export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
       }
       const key = `${sessionKey}\0${cached.field}\0${cached.path}`;
       if (seen.has(key)) {
+        // A path can appear in multiple serialized forms for one field; report
+        // it once so repair output stays readable.
         continue;
       }
       seen.add(key);
@@ -366,7 +377,6 @@ export async function noteSessionSnapshotHealth(params?: {
     ),
   );
 
-  // Auto-repair stale paths when shouldRepair is enabled
   if (params?.shouldRepair) {
     let repairedStores = 0;
     let totalReplacements = 0;
@@ -377,6 +387,8 @@ export async function noteSessionSnapshotHealth(params?: {
         const raw = fs.readFileSync(storePath, "utf-8");
         const sessions = JSON.parse(raw) as Record<string, Record<string, unknown>>;
         let modified = false;
+        // Repair raw store JSON first; blob-backed skill prompts are repaired
+        // below using the same finding list.
 
         let storeCount = 0;
         for (const finding of findings) {

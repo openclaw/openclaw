@@ -47,6 +47,7 @@ const loadConfigPathsModule = async () => {
   return await configPathsModulePromise;
 };
 
+/** Finds migration providers owned by plugins installed in this onboarding step. */
 async function resolveCandidates(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -100,6 +101,7 @@ async function resolveCandidates(params: {
         ...(detection.source ? { source: detection.source } : {}),
       });
     } catch (error) {
+      // Detection is advisory during onboarding; failures should not block setup completion.
       logger.debug?.(
         `Post-install migration detect for ${provider.id} failed: ${formatErrorMessage(error)}`,
       );
@@ -108,6 +110,7 @@ async function resolveCandidates(params: {
   return candidates;
 }
 
+/** Formats a migration candidate with source detail when detection reported one. */
 function describeCandidate(candidate: ResolvedProviderCandidate): string {
   const parts = [candidate.provider.label];
   if (candidate.source) {
@@ -116,11 +119,13 @@ function describeCandidate(candidate: ResolvedProviderCandidate): string {
   return parts.join(" ");
 }
 
+/** Emits the dry-run command instead of prompting/applying migration state. */
 function logMigrationHint(runtime: RuntimeEnv, candidate: ResolvedProviderCandidate): void {
   const command = formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`);
   runtime.log(`Detected ${describeCandidate(candidate)}. Preview migration with ${command}.`);
 }
 
+/** Applies config merge patches returned by migration providers to the in-memory config. */
 function applyMigrationConfigPatches(
   config: OpenClawConfig,
   result: { items?: readonly unknown[] } | undefined,

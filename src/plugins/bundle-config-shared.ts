@@ -18,6 +18,7 @@ export type BundleServerRuntimeSupport = {
   diagnostics: string[];
 };
 
+/** Reads a bundle-owned JSON object while keeping traversal inside the plugin root. */
 export function readBundleJsonObject(params: {
   rootDir: string;
   relativePath: string;
@@ -38,6 +39,7 @@ export function readBundleJsonObject(params: {
   return { ok: false, error: result.error };
 }
 
+/** Converts open failures into bundle-config load results with optional missing-file tolerance. */
 export function resolveBundleJsonOpenFailure(params: {
   failure: RootFileOpenFailure;
   relativePath: string;
@@ -57,6 +59,7 @@ export function resolveBundleJsonOpenFailure(params: {
   });
 }
 
+/** Classifies bundle servers by whether they expose a runnable command. */
 export function inspectBundleServerRuntimeSupport<TConfig>(params: {
   loaded: { config: TConfig; diagnostics: string[] };
   resolveServers: (config: TConfig) => Record<string, Record<string, unknown>>;
@@ -80,6 +83,7 @@ export function inspectBundleServerRuntimeSupport<TConfig>(params: {
   };
 }
 
+/** Loads and merge-patches enabled bundle plugin config from active bundle manifests. */
 export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -121,6 +125,8 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
       continue;
     }
 
+    // Bundle configs are merged in registry order so later active bundles can
+    // intentionally override defaults from earlier bundle manifests.
     const loaded = params.loadBundleConfig({
       pluginId: record.id,
       rootDir: record.rootDir,

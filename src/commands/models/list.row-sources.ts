@@ -26,6 +26,7 @@ type AppendAllModelRowSourcesResult = {
   requiresRegistryFallback: boolean;
 };
 
+/** Appends rows from the source plan while preserving configured-model visibility. */
 export async function appendAllModelRowSources(
   params: AllModelRowSources,
 ): Promise<AppendAllModelRowSourcesResult> {
@@ -63,6 +64,8 @@ export async function appendAllModelRowSources(
     if (params.entries && params.entries.length > 0) {
       const missingEntries = params.entries.filter((entry) => !seenKeys.has(entry.key));
       if (missingEntries.length > 0) {
+        // Even catalog-authoritative filtered lists must include configured
+        // defaults/fallbacks that the catalog did not report.
         await appendConfiguredRows({
           rows: params.rows,
           entries: missingEntries,
@@ -85,6 +88,8 @@ export async function appendAllModelRowSources(
       params.sourcePlan.fallbackToRegistryWhenEmpty
     ) {
       if (!params.modelRegistry) {
+        // Caller can cheaply load the registry only when the provider-specific
+        // source produced no rows.
         return { requiresRegistryFallback: true };
       }
       await appendDiscoveredRows({
@@ -118,6 +123,8 @@ export async function appendAllModelRowSources(
         context: params.context,
       });
       for (const row of params.rows.slice(appendedRowsStart)) {
+        // Only mark newly appended configured rows; earlier rows may have been
+        // from registry/runtime sources and already represented in seenKeys.
         seenKeys.add(row.key);
       }
     }
@@ -167,6 +174,7 @@ export async function appendAllModelRowSources(
   return { requiresRegistryFallback: false };
 }
 
+/** Appends configured/default rows plus auth-backed catalog rows for configured mode. */
 export async function appendConfiguredModelRowSources(params: {
   rows: ModelRow[];
   entries: ConfiguredEntry[];

@@ -35,10 +35,12 @@ type CoerceDisplayValueOptions = {
   maxArrayEntries?: number;
 };
 
+/** Normalizes a tool name for display, falling back to a generic label. */
 export function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
+/** Converts a raw tool id into a human-readable title while preserving short acronyms. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
   if (!cleaned) {
@@ -75,6 +77,7 @@ function resolveActionArg(args: unknown): string | undefined {
   return action || undefined;
 }
 
+/** Resolves the action verb and concise detail text for a tool call argument payload. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -183,6 +186,7 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
+/** Converts dotted or camelCase argument paths into compact detail labels. */
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
   let last = "";
   for (const segment of raw.split(".")) {
@@ -452,6 +456,7 @@ function parseToolSearchCallArgs(raw: string | undefined): Record<string, unknow
   const args: Record<string, unknown> = {};
   const propertyPattern =
     /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?)/gi;
+  // This is a display-only parser: keep it shallow and ignore dynamic expressions.
   for (const match of source.matchAll(propertyPattern)) {
     const key = match[1];
     const value = match[2];
@@ -565,6 +570,7 @@ function summarizeToolSearchCallInput(raw: string | undefined): string | undefin
   return undefined;
 }
 
+/** Extracts a native-looking display target from tool-search bridge code when possible. */
 export function resolveToolSearchCodeDisplayTarget(
   args: unknown,
 ): ToolSearchCodeDisplayTarget | undefined {
@@ -771,6 +777,7 @@ function resolveToolVerbAndDetail(params: {
   return { verb, detail };
 }
 
+/** Formats resolved detail text for UI/log surfaces, optionally adding the "with" prefix. */
 export function formatToolDetailText(
   detail: string | undefined,
   opts: { prefixWithWith?: boolean } = {},

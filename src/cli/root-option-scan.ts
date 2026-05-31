@@ -8,6 +8,7 @@ type CliRootOptionVisitResult =
   | { kind: "handled"; consumedNext?: boolean }
   | { kind: "error"; error: string };
 
+/** Rewrites root options while letting callers intercept command-specific tokens. */
 export function scanCliRootOptions(
   argv: string[],
   visit: (params: {
@@ -44,6 +45,7 @@ export function scanCliRootOptions(
       continue;
     }
 
+    // Preserve known root flags in their original position before command parsing sees argv.
     const consumedRootOption = forwardConsumedCliRootOption(args, i, out);
     if (consumedRootOption > 0) {
       i += consumedRootOption - 1;

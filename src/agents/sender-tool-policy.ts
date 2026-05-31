@@ -14,6 +14,7 @@ type SenderToolPolicyParams = {
   senderE164?: string | null;
 };
 
+/** Resolves the sandbox policy for a sender, preferring agent-local rules over global tool rules. */
 export function resolveSenderToolPolicy(
   params: SenderToolPolicyParams,
 ): SandboxToolPolicy | undefined {
@@ -39,6 +40,7 @@ export function resolveSenderToolPolicy(
   if (agentPolicy) {
     return pickSandboxToolPolicy(agentPolicy);
   }
+  // Global sender rules are fallback only; an agent-local match owns the decision even if it narrows tools.
   const globalPolicy = resolveToolsBySender({
     toolsBySender: cfg.tools?.toolsBySender,
     ...sender,

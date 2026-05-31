@@ -37,6 +37,8 @@ function loadManifestCatalogRowsForPluginIds(params: {
     registry,
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
   });
+  // Static mode only trusts manifest-owned catalogs; supplemental mode can add
+  // non-runtime rows alongside registry results without claiming authority.
   const eligibleProviders = new Set(
     plan.entries
       .filter((entry) =>
@@ -130,6 +132,8 @@ function loadManifestCatalogRowsForList(params: {
   if (conventionRows.length > 0) {
     return conventionRows;
   }
+  // Fall back to declared contribution ownership for aliases whose plugin id
+  // does not match the normalized provider filter.
   return loadManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
     env: params.env,
@@ -145,6 +149,7 @@ function loadManifestCatalogRowsForList(params: {
   });
 }
 
+/** Loads manifest catalog rows that can replace runtime registry discovery. */
 export function loadStaticManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;
@@ -157,6 +162,7 @@ export function loadStaticManifestCatalogRowsForList(params: {
   });
 }
 
+/** Loads manifest catalog rows that supplement registry or runtime discovery. */
 export function loadSupplementalManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;

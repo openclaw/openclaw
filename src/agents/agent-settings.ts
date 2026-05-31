@@ -5,6 +5,7 @@ import type { ContextEngineInfo } from "../context-engine/types.js";
 import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
+/** Default minimum reserve kept for agent compaction unless config or context-budget caps override it. */
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
 type AgentSettingsManagerLike = {
@@ -43,6 +44,7 @@ export function ensureAgentCompactionReserveTokens(params: {
   return { didOverride: true, reserveTokens: minReserveTokens };
 }
 
+/** Resolves the configured compaction reserve floor, falling back to the product default for invalid values. */
 export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
@@ -65,6 +67,7 @@ function toPositiveInt(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
+/** Applies config-driven compaction reserve/keepRecent settings to a runtime settings manager. */
 export function applyAgentCompactionSettingsFromConfig(params: {
   settingsManager: AgentSettingsManagerLike;
   cfg?: OpenClawConfig;

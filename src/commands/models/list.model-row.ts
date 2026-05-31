@@ -12,8 +12,10 @@ export type ListRowModel = {
   contextTokens?: number | null;
 };
 
+/** Provider-level availability fallback used when model-level availability is incomplete. */
 export type ModelAuthAvailabilityResolver = (provider: string) => boolean;
 
+/** Projects a registry/configured model into the stable row shape used by model-list renderers. */
 export function toModelRow(params: {
   model?: ListRowModel;
   key: string;
@@ -57,6 +59,8 @@ export function toModelRow(params: {
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {
+    // Replace generic alias tags with the concrete alias list so rows do not
+    // show both stale and canonical alias metadata.
     for (const tag of mergedTags) {
       if (tag === "alias" || tag.startsWith("alias:")) {
         mergedTags.delete(tag);

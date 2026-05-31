@@ -35,17 +35,20 @@ export type PluginLookUpTable = Pick<
   "index" | "manifestRegistry" | "plugins" | "normalizePluginId" | "owners"
 >;
 
+/** Shared options for contribution-owner reads, with optional prebuilt metadata. */
 export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   lookUpTable?: PluginLookUpTable;
 };
 
+/** Registry load params for callers that need manifest records, not runtimes. */
 export type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   pluginIds?: readonly string[];
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
 };
 
+/** Manifest contribution families that can be resolved back to owning plugins. */
 export type PluginRegistryContributionKey =
   | "providers"
   | "channels"
@@ -205,6 +208,8 @@ function listContributionManifestPlugins(
 ): readonly PluginManifestRecord[] {
   const plugins = params.lookUpTable?.plugins;
   if (plugins) {
+    // Lookup tables are already materialized from a metadata snapshot; filter
+    // them with the current enablement policy instead of reloading manifests.
     const enabledPluginIds = new Set(
       resolveContributionPluginIds({
         index: params.index,
@@ -264,6 +269,8 @@ function filterContributionOwnerIds(params: {
 }
 
 function canReuseCurrentManifestRegistry(params: LoadPluginRegistryManifestParams): boolean {
+  // Reuse the process-current metadata snapshot only for ordinary reads. Test,
+  // repair, and explicit-index callers need their exact supplied inputs.
   return (
     params.bundledChannelConfigCollector === undefined &&
     params.index === undefined &&
@@ -360,6 +367,8 @@ export function resolvePluginContributionOwners(
 ): readonly string[] {
   const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
   if (params.lookUpTable && typeof params.matches === "string") {
+    // Exact id matches can use the snapshot owner maps directly; predicate
+    // matches still need a manifest scan because ids may require normalization.
     const ownerMap = resolveContributionOwnerMap(params.lookUpTable, params.contribution);
     const owners = ownerMap?.get(params.matches);
     if (owners) {

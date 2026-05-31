@@ -56,12 +56,15 @@ function resolveProfileSourceAgentDir(params: {
   if (params.profileIds.some((profileId) => Boolean(localStore?.profiles[profileId]))) {
     return params.agentDir;
   }
+  // Profiles can be inherited from the main auth store; report the source path
+  // that actually contains every profile used for this provider.
   const mainStore = loadPersistedAuthProfileStore(undefined);
   return params.profileIds.every((profileId) => Boolean(mainStore?.profiles[profileId]))
     ? undefined
     : params.agentDir;
 }
 
+/** Summarizes profile/env/models.json/synthetic auth evidence for one provider. */
 export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -150,6 +153,8 @@ export function resolveProviderAuthOverview(params: {
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (profiles.length > 0) {
+      // Profile auth wins over env/config because it is the explicit per-agent
+      // credential source used by model runs.
       return {
         kind: "profiles",
         detail: shortenHomePath(
@@ -175,6 +180,8 @@ export function resolveProviderAuthOverview(params: {
       return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
     if (params.syntheticAuth) {
+      // Synthetic auth is last real evidence before marker-only config because
+      // it comes from plugin/runtime ownership instead of a stored secret.
       return { kind: "synthetic", detail: params.syntheticAuth.source };
     }
     if (customKey && isOAuthApiKeyMarker(customKey)) {

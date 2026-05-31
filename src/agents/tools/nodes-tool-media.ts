@@ -27,6 +27,7 @@ import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
 import { resolveNode, resolveNodeId } from "./nodes-utils.js";
 
+/** Maps raw node.invoke media commands to the safer dedicated agent-tool action. */
 export const MEDIA_INVOKE_ACTIONS = {
   "camera.snap": "camera_snap",
   "camera.clip": "camera_clip",
@@ -50,6 +51,7 @@ export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
   "file.write",
 ]);
 
+/** Media-producing node actions that normalize payloads into files and optional image content. */
 export type NodeMediaAction = "camera_snap" | "photos_latest" | "camera_clip" | "screen_record";
 const MAX_RECORDING_DURATION_MS = 300_000;
 
@@ -61,6 +63,7 @@ type ExecuteNodeMediaActionParams = {
   imageSanitization: ImageSanitizationLimits;
 };
 
+/** Executes a dedicated node media action and returns sanitized tool content plus file metadata. */
 export async function executeNodeMediaAction(
   input: ExecuteNodeMediaActionParams,
 ): Promise<AgentToolResult<unknown>> {
@@ -268,6 +271,7 @@ async function executePhotosLatest({
     });
   }
 
+  // Keep image bytes available only when the model can use vision; file URLs remain in metadata.
   return await sanitizeToolResultImages(
     {
       content,

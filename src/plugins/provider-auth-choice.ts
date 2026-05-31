@@ -31,6 +31,7 @@ import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
+/** Inputs for applying a selected provider auth choice during setup/onboarding. */
 export type ApplyProviderAuthChoiceParams = {
   authChoice: string;
   config: OpenClawConfig;
@@ -44,12 +45,14 @@ export type ApplyProviderAuthChoiceParams = {
   opts?: Partial<ProviderAuthOptionBag>;
 };
 
+/** Config changes and retry/agent-model signals produced by applying an auth choice. */
 export type ApplyProviderAuthChoiceResult = {
   config: OpenClawConfig;
   agentModelOverride?: string;
   retrySelection?: boolean;
 };
 
+/** Static metadata for legacy plugin-backed auth choices. */
 export type PluginProviderAuthChoiceOptions = {
   authChoice: string;
   pluginId: string;
@@ -253,6 +256,7 @@ export const testing = {
   },
 } as const;
 
+/** Runs a plugin auth method and persists any returned auth profiles/config patches. */
 export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -334,6 +338,7 @@ export async function runProviderPluginAuthMethod(params: {
   };
 }
 
+/** Resolves and applies a manifest/catalog-backed provider auth choice. */
 export async function applyAuthChoiceLoadedPluginProvider(
   params: ApplyProviderAuthChoiceParams,
 ): Promise<ApplyProviderAuthChoiceResult | null> {
@@ -408,6 +413,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     choice: params.authChoice,
   });
   if (!resolved && setupProvider) {
+    // Manifest setup providers can be narrower than the full runtime list; fall back before install.
     providers = resolveScopedRuntimeProviders(enabledConfig);
     resolved = resolveProviderPluginChoice({
       providers,
@@ -497,6 +503,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
   return { config: nextConfig, agentModelOverride };
 }
 
+/** Applies a legacy statically-declared plugin provider auth choice. */
 export async function applyAuthChoicePluginProvider(
   params: ApplyProviderAuthChoiceParams,
   options: PluginProviderAuthChoiceOptions,

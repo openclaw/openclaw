@@ -101,6 +101,8 @@ async function buildRow(params: {
     params.allowProviderAvailabilityFallback === true ||
     (configured !== undefined &&
       params.context.authIndex.allowsProviderAuthAvailabilityFallback(params.model.provider));
+  // Provider-level auth fallback is expensive/loose, so only ask for it when a
+  // row is missing exact availability or the configured model explicitly needs it.
   const shouldResolveProviderAuth =
     params.context.availableKeys === undefined || allowProviderAvailabilityFallback;
   return toModelRow({
@@ -155,6 +157,8 @@ function normalizeListRowWithProviderPlugin(params: {
   if (!normalized) {
     return params.model;
   }
+  // Provider plugins may rewrite catalog ids/base URLs into the runtime model
+  // actually invoked by the embedded runner.
   return {
     ...params.model,
     id: normalized.id,
@@ -327,6 +331,8 @@ export async function appendDiscoveredRows(params: {
             agentDir: params.context.agentDir,
           })
         : undefined;
+    // Keep the discovered key stable; only enrich with registry metadata when
+    // resolution still points at the same provider/model pair.
     const rowModel =
       resolvedModel && modelKey(resolvedModel.provider, resolvedModel.id) === key
         ? resolvedModel
@@ -484,6 +490,8 @@ export async function appendCatalogSupplementRows(params: {
     return;
   }
 
+  // Provider-filtered lists should still show static provider-catalog entries
+  // even when the general manifest catalog had no matching runtime model.
   await appendProviderCatalogRows({
     rows: params.rows,
     context: params.context,
@@ -566,6 +574,8 @@ export async function appendConfiguredRows(params: {
       model &&
       (!params.context.discoveredKeys.has(modelKey(model.provider, model.id)) ||
         params.context.authIndex.allowsProviderAuthAvailabilityFallback(model.provider));
+    // Configured rows may be aliases or fallbacks, so exact discovered keys do
+    // not always prove whether provider-level auth can satisfy them.
     const shouldResolveProviderAuth =
       model && (params.context.availableKeys === undefined || allowProviderAvailabilityFallback);
     params.rows.push(

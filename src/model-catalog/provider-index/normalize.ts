@@ -1,12 +1,12 @@
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
-import { parseClawHubPluginSpec } from "../../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
-import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { asFiniteNumber } from "../../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString } from "../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeUniqueTrimmedStringList } from "../../../packages/normalization-core/src/string-normalization.js";
+import { parseClawHubPluginSpec } from "../../infra/clawhub-spec.js";
+import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
+import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { isRecord } from "../../utils.js";
 import type {
   OpenClawProviderIndex,
@@ -86,6 +86,7 @@ function normalizePreviewCatalog(params: {
   if (!provider) {
     return undefined;
   }
+  // Provider-index catalogs are previews; installed manifests or config can override them later.
   for (const model of provider.models) {
     model.status ??= "preview";
   }
@@ -207,6 +208,7 @@ function normalizeProvider(
   };
 }
 
+/** Normalizes the bundled provider index and drops unsafe or malformed provider entries. */
 export function normalizeOpenClawProviderIndex(value: unknown): OpenClawProviderIndex | undefined {
   if (!isRecord(value) || value.version !== OPENCLAW_PROVIDER_INDEX_VERSION) {
     return undefined;

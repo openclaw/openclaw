@@ -2,9 +2,12 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
+/** Codex native web-search execution mode forwarded to OpenAI-compatible APIs. */
 export type CodexNativeSearchMode = "cached" | "live";
+/** OpenAI web-search context size hint accepted by Codex native search. */
 export type CodexNativeSearchContextSize = "low" | "medium" | "high";
 
+/** Optional user location hint passed to Codex native web search. */
 export type CodexNativeSearchUserLocation = {
   country?: string;
   region?: string;
@@ -12,6 +15,7 @@ export type CodexNativeSearchUserLocation = {
   timezone?: string;
 };
 
+/** Normalized Codex native web-search config consumed by tool/payload builders. */
 export type ResolvedCodexNativeWebSearchConfig = {
   enabled: boolean;
   mode: CodexNativeSearchMode;
@@ -51,6 +55,10 @@ function normalizeUserLocation(value: unknown): CodexNativeSearchUserLocation | 
     : undefined;
 }
 
+/**
+ * Resolves Codex native web-search config with defaults and validation so
+ * downstream payload code can avoid rechecking raw config shapes.
+ */
 export function resolveCodexNativeWebSearchConfig(
   config: OpenClawConfig | undefined,
 ): ResolvedCodexNativeWebSearchConfig {
@@ -64,6 +72,7 @@ export function resolveCodexNativeWebSearchConfig(
   };
 }
 
+/** Returns the setup/configure summary text when Codex native search is enabled. */
 export function describeCodexNativeWebSearch(
   config: OpenClawConfig | undefined,
 ): string | undefined {

@@ -53,6 +53,7 @@ function listKnownEnvApiKeyMarkers(): Set<string> {
   return knownEnvApiKeyMarkersCache;
 }
 
+/** Lists non-secret placeholders that may appear where real API keys would normally live. */
 export function listKnownNonSecretApiKeyMarkers(): string[] {
   knownNonSecretApiKeyMarkersCache ??= uniqueStrings([
     ...CORE_NON_SECRET_API_KEY_MARKERS,
@@ -65,35 +66,43 @@ export function listKnownNonSecretApiKeyMarkers(): string[] {
   return [...knownNonSecretApiKeyMarkersCache];
 }
 
+/** Returns true for AWS SDK env markers that authorize through ambient AWS configuration. */
 export function isAwsSdkAuthMarker(value: string): boolean {
   return AWS_SDK_ENV_MARKERS.has(value.trim());
 }
 
+/** Returns true for persisted env-var auth markers that should not be treated as literal keys. */
 export function isKnownEnvApiKeyMarker(value: string): boolean {
   const trimmed = value.trim();
   return listKnownEnvApiKeyMarkers().has(trimmed) && !isAwsSdkAuthMarker(trimmed);
 }
 
+/** Encodes provider-owned OAuth auth as an API-key placeholder for legacy model config slots. */
 export function resolveOAuthApiKeyMarker(providerId: string): string {
   return `${OAUTH_API_KEY_MARKER_PREFIX}${providerId.trim()}`;
 }
 
+/** Detects OAuth placeholders created by resolveOAuthApiKeyMarker. */
 export function isOAuthApiKeyMarker(value: string): boolean {
   return value.trim().startsWith(OAUTH_API_KEY_MARKER_PREFIX);
 }
 
+/** Encodes non-env secret references as a non-secret API-key placeholder. */
 export function resolveNonEnvSecretRefApiKeyMarker(_source: SecretRefSource): string {
   return NON_ENV_SECRETREF_MARKER;
 }
 
+/** Encodes non-env secret references for auth headers without exposing secret material. */
 export function resolveNonEnvSecretRefHeaderValueMarker(_source: SecretRefSource): string {
   return NON_ENV_SECRETREF_MARKER;
 }
 
+/** Encodes an env-backed secret reference for auth headers while preserving the env var name. */
 export function resolveEnvSecretRefHeaderValueMarker(envVarName: string): string {
   return `${SECRETREF_ENV_HEADER_MARKER_PREFIX}${envVarName.trim()}`;
 }
 
+/** Detects header placeholders that stand in for secret-ref-backed auth values. */
 export function isSecretRefHeaderValueMarker(value: string): boolean {
   const trimmed = value.trim();
   return (
@@ -101,6 +110,7 @@ export function isSecretRefHeaderValueMarker(value: string): boolean {
   );
 }
 
+/** Classifies placeholder values that are safe to persist or display as non-secret auth markers. */
 export function isNonSecretApiKeyMarker(
   value: string,
   opts?: { includeEnvVarName?: boolean },

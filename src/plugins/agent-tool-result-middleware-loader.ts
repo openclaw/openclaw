@@ -38,6 +38,7 @@ function listMiddlewareOwnerPluginIds(params: {
   return pluginIds;
 }
 
+/** Loads tool-result middleware handlers for one agent runtime, reusing active handlers first. */
 export async function loadAgentToolResultMiddlewaresForRuntime(params: {
   runtime: AgentToolResultMiddlewareRuntime;
   config?: OpenClawConfig;
@@ -47,6 +48,8 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
 }): Promise<AgentToolResultMiddleware[]> {
   const activeHandlers = listAgentToolResultMiddlewares(params.runtime);
   if (activeHandlers.length > 0) {
+    // A running registry already owns lifecycle state, so prefer active handlers
+    // over manifest-driven lazy loads when available.
     return activeHandlers;
   }
 
@@ -68,6 +71,8 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
       return [];
     }
 
+    // Only load bundled middleware owner plugins; unrelated plugins stay out of
+    // this lazy path so tool-result handling remains cheap and deterministic.
     const runtimeRegistry =
       getLoadedRuntimePluginRegistry({
         workspaceDir: params.workspaceDir,

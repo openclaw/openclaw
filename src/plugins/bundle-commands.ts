@@ -20,6 +20,7 @@ import {
 } from "./config-state.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
+/** Markdown command imported from an activated Claude bundle. */
 export type ClaudeBundleCommandSpec = {
   pluginId: string;
   rawName: string;
@@ -68,6 +69,8 @@ function resolveClaudeCommandRootDirs(rootDir: string): string[] {
   const raw = readClaudeBundleManifest(rootDir);
   const declared = normalizeBundlePathList(raw.commands);
   const defaults = fs.existsSync(path.join(rootDir, "commands")) ? ["commands"] : [];
+  // The conventional commands/ directory loads first; declared manifest paths
+  // can add or override command names later in discovery order.
   return mergeBundlePathLists(defaults, declared);
 }
 
@@ -142,6 +145,8 @@ function loadBundleCommandsFromRoot(params: {
     if (!rawName) {
       continue;
     }
+    // Missing descriptions fall back to the first prompt line so command
+    // discovery can still present useful text without inventing a label.
     const description =
       normalizeOptionalString(frontmatter.description) ||
       toDefaultDescription(rawName, promptTemplate);
@@ -156,6 +161,7 @@ function loadBundleCommandsFromRoot(params: {
   return entries;
 }
 
+/** Loads enabled Claude bundle markdown commands from activated bundle plugins. */
 export function loadEnabledClaudeBundleCommands(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -194,6 +200,8 @@ export function loadEnabledClaudeBundleCommands(params: {
         continue;
       }
       if (!isPathInsideWithRealpath(record.rootDir, commandRoot, { requireRealpath: true })) {
+        // Manifest-declared command roots must resolve inside the plugin root;
+        // symlink escapes are ignored rather than exposed as command sources.
         continue;
       }
       commands.push(...loadBundleCommandsFromRoot({ pluginId: record.id, commandRoot }));

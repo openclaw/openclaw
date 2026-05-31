@@ -28,6 +28,9 @@ export {
 } from "./interactive-registry.js";
 export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
+/**
+ * Dispatch an interactive callback payload to the registered namespace handler.
+ */
 export async function dispatchPluginInteractiveHandler<
   TRegistration extends PluginInteractiveDispatchRegistration,
   TResult extends { handled?: boolean } | void = { handled?: boolean } | void,
@@ -54,6 +57,8 @@ export async function dispatchPluginInteractiveHandler<
     if (dedupeKey) {
       commitPluginInteractiveCallbackDedupe(dedupeKey);
     }
+    // Keep default handled-only replies compact; expose result only when the
+    // handler returned extra payload fields for the channel adapter.
     const shouldExposeResult =
       Boolean(resolved) &&
       typeof resolved === "object" &&

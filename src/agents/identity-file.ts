@@ -12,6 +12,10 @@ export type AgentIdentityFile = {
   avatar?: string;
 };
 
+/**
+ * Identity fields the gateway is allowed to rewrite while preserving richer
+ * prose and future fields in the same Markdown file.
+ */
 const WRITABLE_IDENTITY_FIELDS = [
   ["name", "Name"],
   ["theme", "Theme"],
@@ -48,6 +52,10 @@ function isIdentityPlaceholder(value: string): boolean {
   return IDENTITY_PLACEHOLDER_VALUES.has(normalized);
 }
 
+/**
+ * Parses user-editable identity Markdown into structured identity metadata,
+ * ignoring starter-template placeholder values.
+ */
 export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const identity: AgentIdentityFile = {};
   const lines = content.split(/\r?\n/);
@@ -90,6 +98,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   return identity;
 }
 
+/** Returns whether the parsed identity contains any usable display metadata. */
 export function identityHasValues(identity: AgentIdentityFile): boolean {
   return Boolean(
     identity.name ||
@@ -153,6 +162,10 @@ function resolveIdentityInsertIndex(lines: string[]): number {
   return insertIndex;
 }
 
+/**
+ * Upserts writable identity fields into existing Markdown while preserving
+ * headings, comments, prose, and non-writable identity details.
+ */
 export function mergeIdentityMarkdownContent(
   content: string | undefined,
   identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">,
@@ -176,6 +189,8 @@ export function mergeIdentityMarkdownContent(
     if (matchingIndexes.length > 0) {
       const [firstIndex, ...duplicateIndexes] = matchingIndexes;
       nextLines[firstIndex] = buildIdentityLine(label, value);
+      // Keep a single canonical line per writable field so repeated UI saves do
+      // not accumulate stale identity values.
       for (const duplicateIndex of duplicateIndexes.toReversed()) {
         nextLines.splice(duplicateIndex, 1);
       }
@@ -202,6 +217,7 @@ function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   }
 }
 
+/** Loads a workspace identity file, returning null when it is missing or empty. */
 export function loadAgentIdentityFromWorkspace(workspace: string): AgentIdentityFile | null {
   const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
   return loadIdentityFromFile(identityPath);

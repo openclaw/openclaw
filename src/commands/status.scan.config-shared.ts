@@ -9,6 +9,7 @@ export function shouldSkipStatusScanMissingConfigFastPath(
   return env.VITEST === "true" || env.VITEST_POOL_ID !== undefined || env.NODE_ENV === "test";
 }
 
+/** Detects status cold-start mode before loading/validating the normal config file. */
 export function resolveStatusScanColdStart(params?: {
   env?: NodeJS.ProcessEnv;
   allowMissingConfigFastPath?: boolean;
@@ -16,9 +17,12 @@ export function resolveStatusScanColdStart(params?: {
   const env = params?.env ?? process.env;
   const skipMissingConfigFastPath =
     params?.allowMissingConfigFastPath === true && shouldSkipStatusScanMissingConfigFastPath(env);
+  // Tests force the normal config path so missing local files do not hide
+  // validation and fixture behavior.
   return !skipMissingConfigFastPath && !existsSync(resolveConfigPath(env));
 }
 
+/** Loads source/resolved config for status, including cold-start and token-conflict diagnostics. */
 export async function loadStatusScanCommandConfig(params: {
   commandName: string;
   readBestEffortConfig: () => Promise<OpenClawConfig>;
@@ -42,6 +46,8 @@ export async function loadStatusScanCommandConfig(params: {
     coldStart && params.allowMissingConfigFastPath === true
       ? {}
       : await params.readBestEffortConfig();
+  // Cold-start fast paths intentionally skip secret/plugin resolution; there is
+  // no user config yet, and status should still render bootstrap guidance.
   const { resolvedConfig, diagnostics } =
     coldStart && params.allowMissingConfigFastPath === true
       ? { resolvedConfig: sourceConfig, diagnostics: [] }

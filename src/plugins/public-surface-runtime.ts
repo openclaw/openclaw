@@ -12,6 +12,7 @@ export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".cjs",
 ] as const;
 
+/** Normalizes sidecar artifact paths while keeping lookup inside one plugin. */
 export function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
   if (
     path.posix.isAbsolute(artifactBasename) ||
@@ -39,6 +40,7 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
   return normalized;
 }
 
+/** Normalizes a bundled plugin directory name before it is joined to roots. */
 export function normalizeBundledPluginDirName(dirName: string): string {
   const normalized = dirName.trim();
   if (
@@ -54,6 +56,10 @@ export function normalizeBundledPluginDirName(dirName: string): string {
   return normalized;
 }
 
+/**
+ * Resolves a plugin-local public sidecar from a source tree before falling back
+ * to built artifacts, preserving the shared extension preference order.
+ */
 export function resolveBundledPluginSourcePublicSurfacePath(params: {
   sourceRoot: string;
   dirName: string;
@@ -86,6 +92,8 @@ function resolvePackageFallbackForBundledDir(params: {
   if (!packageBundledDirs.includes(normalizedBundledDir)) {
     return null;
   }
+  // Dist-only package layouts can point at either runtime output root; try the
+  // sibling output before falling back to source sidecars from a checkout.
   for (const packageBundledDir of packageBundledDirs) {
     if (packageBundledDir === normalizedBundledDir) {
       continue;
@@ -138,6 +146,8 @@ function resolvePublicSurfaceFromBundledDir(params: {
   if (fs.existsSync(packageLocalBuiltCandidate)) {
     return packageLocalBuiltCandidate;
   }
+  // Explicit bundled roots may be either built package roots or source plugin
+  // roots, so keep source sidecars in the same root before package fallbacks.
   return (
     resolveBundledPluginSourcePublicSurfacePath({
       sourceRoot: params.bundledPluginsDir,
@@ -153,6 +163,10 @@ function resolvePublicSurfaceFromBundledDir(params: {
   );
 }
 
+/**
+ * Resolves the public artifact path for a bundled plugin without importing the
+ * plugin runtime barrel, keeping control-plane discovery on narrow sidecars.
+ */
 export function resolveBundledPluginPublicSurfacePath(params: {
   rootDir: string;
   dirName: string;

@@ -1,10 +1,3 @@
-/**
- * Plugin Command Registry
- *
- * Manages commands registered by plugins that bypass the LLM agent.
- * These commands are processed before built-in commands and before agent invocation.
- */
-
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
@@ -42,7 +35,6 @@ import type {
   PluginCommandResult,
 } from "./types.js";
 
-// Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
 
 export {
@@ -73,13 +65,14 @@ export function matchPluginCommand(
     return null;
   }
 
-  // Extract command name and args
   const spaceIndex = trimmed.indexOf(" ");
   const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
   const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
 
   const key = normalizeLowercaseStringOrEmpty(commandName);
   const alternateKeys = [key];
+  // Native chat surfaces historically used both dash and underscore aliases;
+  // keep lookup symmetric so plugins do not depend on channel-specific spelling.
   if (key.includes("_")) {
     alternateKeys.push(key.replace(/_/g, "-"));
   }
@@ -102,7 +95,6 @@ export function matchPluginCommand(
     return null;
   }
 
-  // If command doesn't accept args but args were provided, don't match
   if (args && !command.acceptsArgs) {
     return null;
   }
@@ -176,6 +168,10 @@ type PluginCommandLlmCompleteParams = Parameters<
   NonNullable<PluginCommandRuntimeLlm>["complete"]
 >[0];
 
+/**
+ * Build the command-scoped LLM bridge only when the current command can be tied
+ * to a session or bound agent; plugin commands should not get global model access.
+ */
 function buildPluginCommandRuntimeContext(params: {
   command: RegisteredPluginCommand;
   config: OpenClawConfig;
@@ -254,7 +250,6 @@ export async function executePluginCommand(params: {
 }): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
-  // Check authorization
   if (!pluginCommandSupportsChannel(command, channel)) {
     logVerbose(`Plugin command /${command.name} skipped on unsupported channel ${channel}`);
     return { continueAgent: true };
@@ -294,7 +289,6 @@ export async function executePluginCommand(params: {
     }
   }
 
-  // Sanitize args before passing to handler
   const sanitizedArgs = sanitizeArgs(args);
   const bindingConversation = resolveBindingConversationFromCommand({
     config,
@@ -307,6 +301,8 @@ export async function executePluginCommand(params: {
     threadParentId: params.threadParentId,
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
+  // Owner status and diagnostic flags are privileged host facts. Expose them
+  // only to commands that earned that contract through scopes or reserved ownership.
   const senderIsOwnerForCommand =
     canExposeSenderIsOwner(command) ||
     (isTrustedReservedCommandOwner(command) &&
@@ -408,7 +404,8 @@ export async function executePluginCommand(params: {
     },
   };
 
-  // Lock registry during execution to prevent concurrent modifications
+  // Handler execution sees a stable command registry; plugins can still update
+  // registrations before/after dispatch through normal activation paths.
   setPluginCommandRegistryLocked(true);
   try {
     const result = await command.handler(ctx);

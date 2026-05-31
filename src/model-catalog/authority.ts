@@ -11,6 +11,7 @@ const MODEL_CATALOG_SOURCE_AUTHORITY: Readonly<Record<ModelCatalogSource, number
   "provider-index": 3,
 };
 
+/** Lower authority numbers win when multiple sources publish the same provider/model row. */
 function compareModelCatalogSourceAuthority(
   left: ModelCatalogSource,
   right: ModelCatalogSource,
@@ -18,6 +19,7 @@ function compareModelCatalogSourceAuthority(
   return MODEL_CATALOG_SOURCE_AUTHORITY[left] - MODEL_CATALOG_SOURCE_AUTHORITY[right];
 }
 
+/** Merges normalized catalog rows so user config and installed manifests override previews. */
 export function mergeModelCatalogRowsByAuthority(
   rows: Iterable<NormalizedModelCatalogRow>,
 ): NormalizedModelCatalogRow[] {

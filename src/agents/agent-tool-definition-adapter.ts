@@ -47,6 +47,7 @@ const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
 const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
 
+/** Callback shape used to observe client-hosted tool calls that OpenClaw delegates outward. */
 export type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
   | {
@@ -271,6 +272,7 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
 
 export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
+/** Finds client-hosted tool names that collide with built-ins or each other after normalization. */
 export function findClientToolNameConflicts(params: {
   tools: ClientToolDefinition[];
   existingToolNames?: Iterable<string>;
@@ -305,14 +307,17 @@ export function findClientToolNameConflicts(params: {
   return Array.from(conflicts);
 }
 
+/** Creates the stable conflict error surfaced when client tools shadow existing tool names. */
 export function createClientToolNameConflictError(conflicts: string[]): Error {
   return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
 }
 
+/** Detects client tool name conflict errors created by createClientToolNameConflictError. */
 export function isClientToolNameConflictError(err: unknown): err is Error {
   return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
 }
 
+/** Adapts OpenClaw runtime tools to session ToolDefinition objects with hooks and result coercion. */
 export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
@@ -426,8 +431,7 @@ function coerceParamsRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-// Convert client tools (OpenResponses hosted tools) to ToolDefinition format
-// These tools are intercepted to return a "pending" result instead of executing
+/** Adapts client-hosted tools to pending ToolDefinitions that are executed outside OpenClaw. */
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: ClientToolCallRecorder,
@@ -447,6 +451,7 @@ export function toClientToolDefinitions(
         }
         const initialParamsRecord = coerceParamsRecord(params);
         try {
+          // Hooks still run locally so policy can veto delegated client tools before handoff.
           const outcome = await runBeforeToolCallHook({
             toolName: func.name,
             params: initialParamsRecord,

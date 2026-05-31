@@ -64,6 +64,8 @@ function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
         workspaceDir: resolveWorkspaceDir(cfg),
       })
     : listChannelPluginCatalogEntries({ excludeWorkspace: true });
+  // User-entered channel names may be aliases from the catalog, but only the
+  // catalog entry can tell us which plugin owns installation/setup.
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
@@ -83,6 +85,8 @@ function findScopedChannelPlugin(
   if (runtimePlugin) {
     return runtimePlugin;
   }
+  // Setup-only plugins are valid for configuration flows, but only when the
+  // caller's capability predicate says this command can use them.
   const setupPlugin = snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin;
   return setupPlugin && supports(setupPlugin) ? setupPlugin : undefined;
 }
@@ -105,6 +109,7 @@ function loadScopedChannelPlugin(params: {
   return findScopedChannelPlugin(snapshot, params.channelId, params.supports);
 }
 
+/** Resolves or installs the channel plugin needed for a channel setup command. */
 export async function resolveInstallableChannelPlugin(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -186,7 +191,9 @@ export async function resolveInstallableChannelPlugin(params: {
       nextCfg = installResult.cfg;
       const installedPluginId = installResult.pluginId ?? resolvedPluginId;
       const installedPlugin = installResult.installed
-        ? loadScopedChannelPlugin({
+        ? // Installation changes config on disk; reload from the next config so
+          // auto-enabled or newly installed setup-only plugins are visible.
+          loadScopedChannelPlugin({
             cfg: nextCfg,
             runtime: params.runtime,
             channelId,

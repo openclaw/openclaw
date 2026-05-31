@@ -26,6 +26,7 @@ import { defaultSlotIdForKey } from "./slots.js";
 export type { PluginActivationSource };
 export type PluginActivationState = PluginActivationStateLike;
 
+/** Activation source keeps normalized plugin config tied to its raw root config. */
 export type PluginActivationConfigSource = {
   plugins: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
@@ -77,12 +78,14 @@ export function normalizePluginId(id: string): string {
   return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
 }
 
+/** Normalizes plugin config with built-in bundled alias compatibility. */
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
   return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
 
+/** Builds the activation source used to evaluate raw-vs-effective config state. */
 export function createPluginActivationSource(params: {
   config?: OpenClawConfig;
   plugins?: NormalizedPluginsConfig;
@@ -112,6 +115,8 @@ export function applyTestPluginDefaults(
   const plugins = cfg.plugins;
   const explicitConfig = hasExplicitPluginConfig(plugins);
   if (explicitConfig) {
+    // Tests with explicit plugin config should keep their intent; only default
+    // the memory slot away when the test did not mention memory at all.
     if (hasExplicitMemorySlot(plugins) || hasExplicitMemoryEntry(plugins)) {
       return cfg;
     }
@@ -154,6 +159,7 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
+/** Resolves one plugin's activation state from normalized config and source config. */
 export function resolvePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
@@ -211,6 +217,7 @@ export function resolveEffectivePluginActivationState(params: {
   return resolvePluginActivationState(params);
 }
 
+/** Resolves whether a plugin satisfies a slot selection such as memory. */
 export function resolveMemorySlotDecision(params: {
   id: string;
   kind?: string | string[];

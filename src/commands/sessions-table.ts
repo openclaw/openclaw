@@ -32,6 +32,7 @@ export const SESSION_KEY_PAD = 26;
 export const SESSION_AGE_PAD = 9;
 export const SESSION_MODEL_PAD = 14;
 
+/** Projects a stored session entry into the display row consumed by table renderers. */
 export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDisplayRow {
   const updatedAt = entry?.updatedAt ?? null;
   return {
@@ -60,6 +61,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
   };
 }
 
+/** Builds session display rows sorted newest-first for stable CLI output. */
 export function toSessionDisplayRows(store: Record<string, SessionEntry>): SessionDisplayRow[] {
   return Object.entries(store)
     .map(([key, entry]) => toSessionDisplayRow(key, entry))
@@ -70,26 +72,31 @@ function truncateSessionKey(key: string): string {
   if (key.length <= SESSION_KEY_PAD) {
     return key;
   }
+  // Preserve the tail because provider/session suffixes are often the distinguishing part of long keys.
   const head = Math.max(4, SESSION_KEY_PAD - 10);
   return `${key.slice(0, head)}...${key.slice(-6)}`;
 }
 
+/** Formats the session key cell with fixed width and optional rich coloring. */
 export function formatSessionKeyCell(key: string, rich: boolean): string {
   const label = truncateSessionKey(key).padEnd(SESSION_KEY_PAD);
   return rich ? theme.accent(label) : label;
 }
 
+/** Formats the age cell from updatedAt timestamps, falling back to an explicit unknown label. */
 export function formatSessionAgeCell(updatedAt: number | null | undefined, rich: boolean): string {
   const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
   const padded = ageLabel.padEnd(SESSION_AGE_PAD);
   return rich ? theme.muted(padded) : padded;
 }
 
+/** Formats the model cell with a fixed width so flags and token columns stay aligned. */
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
   const label = (model ?? "unknown").padEnd(SESSION_MODEL_PAD);
   return rich ? theme.info(label) : label;
 }
 
+/** Formats optional session diagnostics and runtime flags into the trailing table cell. */
 export function formatSessionFlagsCell(
   row: Pick<
     SessionDisplayRow,

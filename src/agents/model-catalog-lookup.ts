@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 
+/** Checks whether a catalog entry advertises a specific input modality. */
 export function modelSupportsInput(
   entry: ModelCatalogEntry | undefined,
   input: ModelInputType,
@@ -12,6 +13,7 @@ export function modelSupportsInput(
   return entry?.input?.includes(input) ?? false;
 }
 
+/** Finds a provider/model pair using catalog-normalized provider and model ids. */
 export function findModelInCatalog(
   catalog: ModelCatalogEntry[],
   provider: string,
@@ -26,6 +28,7 @@ export function findModelInCatalog(
   );
 }
 
+/** Finds a catalog row by model id, requiring a unique match when provider is omitted. */
 export function findModelCatalogEntry(
   catalog: ModelCatalogEntry[],
   params: { provider?: string; modelId: string },

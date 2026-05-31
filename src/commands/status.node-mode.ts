@@ -44,6 +44,8 @@ function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
   if (node.externallyManaged === true) {
     return true;
   }
+  // Node host may be managed by launchd/systemd, a foreground process, or an
+  // externally reported runtime string depending on install mode.
   if (node.loaded === true) {
     return true;
   }
@@ -53,6 +55,7 @@ function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
   return typeof node.runtimeShort === "string" && node.runtimeShort.startsWith("running");
 }
 
+/** Reports remote gateway details when this machine intentionally runs only the node host. */
 export async function resolveNodeOnlyGatewayInfo(params: {
   daemon: Pick<NodeOnlyServiceLike, "installed">;
   node: NodeOnlyServiceLike;
@@ -61,6 +64,8 @@ export async function resolveNodeOnlyGatewayInfo(params: {
     return null;
   }
 
+  // Node-only hosts intentionally delegate gateway traffic to a remote target;
+  // status should not report the absent local gateway as a local failure.
   const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfig())?.gateway);
   return {
     gatewayTarget,

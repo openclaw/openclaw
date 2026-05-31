@@ -7,13 +7,13 @@ import {
   type MediaGenerationCatalogKind,
   type MediaGenerationCatalogProvider,
 } from "../../packages/media-generation-core/src/catalog.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   synthesizeVoiceModelCatalogEntries,
   type VoiceModelCapabilities,
   type VoiceModelProvider,
 } from "../../packages/speech-core/voice-models.js";
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { uniqueValues } from "../../packages/normalization-core/src/string-normalization.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { projectProviderCatalogResultToUnifiedTextRows } from "./provider-catalog-unified-text.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -36,11 +36,14 @@ function mergeCatalogHookResults(
   }
   const mergedRows: UnifiedModelCatalogEntry[] = [];
   for (const row of rows) {
+    // Merged hooks inherit the hook source; callers should not have to trust
+    // stale source markers from rows produced by an earlier registration.
     mergedRows.push({ ...row, source });
   }
   return mergedRows;
 }
 
+/** Merges static/live catalog hooks for one plugin-owned provider entry. */
 function mergeModelCatalogHooks(
   source: UnifiedModelCatalogSource,
   left: UnifiedModelCatalogHook | undefined,
@@ -58,6 +61,10 @@ function mergeModelCatalogHooks(
   };
 }
 
+/**
+ * Builds registry mutators for explicit unified catalog providers and the
+ * synthesized catalog adapters attached to text, media, and voice providers.
+ */
 export function createModelCatalogRegistrationHandlers(params: {
   registry: PluginRegistry;
   pushDiagnostic: (diagnostic: PluginDiagnostic) => void;
@@ -105,6 +112,8 @@ export function createModelCatalogRegistrationHandlers(params: {
         entry.provider.kinds.some((kind) => normalizedKinds.includes(kind)),
     );
     if (samePluginOverlapping) {
+      // A single plugin can expose one provider through multiple registration
+      // paths; keep one registry row so catalog lookup sees a unified provider.
       samePluginOverlapping.provider = {
         ...samePluginOverlapping.provider,
         ...provider,

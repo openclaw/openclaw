@@ -28,6 +28,7 @@ function compileGlobPattern(params: {
   };
 }
 
+/** Compiles user-facing glob strings after caller-provided normalization. */
 export function compileGlobPatterns(params: {
   raw?: string[] | undefined;
   normalize: (value: string) => string;
@@ -40,6 +41,7 @@ export function compileGlobPatterns(params: {
     .filter((pattern) => pattern.kind !== "exact" || pattern.value);
 }
 
+/** Matches a normalized value against exact, wildcard, or allow-all compiled patterns. */
 export function matchesAnyGlobPattern(value: string, patterns: CompiledGlobPattern[]): boolean {
   for (const pattern of patterns) {
     if (pattern.kind === "all") {

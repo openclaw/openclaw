@@ -387,6 +387,9 @@ export function resolvePluginSdkAliasCandidateOrder(params: {
   return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
 }
 
+/**
+ * List plugin-sdk root alias candidates in the order the current loader should prefer.
+ */
 export function listPluginSdkAliasCandidates(params: {
   srcFile: string;
   distFile: string;
@@ -429,6 +432,9 @@ export function listPluginSdkAliasCandidates(params: {
   return candidates;
 }
 
+/**
+ * Resolve the first existing plugin-sdk alias file for a loader caller.
+ */
 export function resolvePluginSdkAliasFile(params: {
   srcFile: string;
   distFile: string;
@@ -1857,6 +1863,9 @@ function buildPluginLoaderModuleConfigCacheKey(params: {
   ].join("\0");
 }
 
+/**
+ * Build the full alias map used by jiti and native plugin loaders.
+ */
 export function buildPluginLoaderAliasMap(
   modulePath: string,
   argv1: string | undefined = STARTUP_ARGV1,
@@ -1932,12 +1941,18 @@ export function buildPluginLoaderAliasMap(
   return result;
 }
 
+/**
+ * Resolve the plugin runtime module path without diagnostic detail.
+ */
 export function resolvePluginRuntimeModulePath(
   params: LoaderModuleResolveParams = {},
 ): string | null {
   return resolvePluginRuntimeModulePathWithDiagnostics(params).resolvedPath;
 }
 
+/**
+ * Resolve plugin runtime candidates while retaining the searched paths for diagnostics.
+ */
 export function resolvePluginRuntimeModulePathWithDiagnostics(
   params: LoaderModuleResolveParams = {},
 ): PluginRuntimeModuleResolution {
@@ -1997,6 +2012,9 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
   };
 }
 
+/**
+ * Build jiti options for plugin loaders using normalized alias paths and cache settings.
+ */
 export function buildPluginLoaderJitiOptions(
   aliasMap: Record<string, string>,
   params: LoaderModuleResolveParams = {},
@@ -2027,6 +2045,9 @@ function isBundledPluginDistModulePath(modulePath: string): boolean {
   return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
 }
 
+/**
+ * Return whether this runtime and file type can use the native module loader fast path.
+ */
 export function shouldPreferNativeModuleLoad(modulePath: string): boolean {
   if (!supportsNativeModuleRuntime()) {
     return false;
@@ -2042,6 +2063,9 @@ export function shouldPreferNativeModuleLoad(modulePath: string): boolean {
   }
 }
 
+/**
+ * Decide whether a plugin module load should try native require before source transform.
+ */
 export function resolvePluginLoaderTryNative(
   modulePath: string,
   options?: {
@@ -2059,6 +2083,9 @@ export function resolvePluginLoaderTryNative(
   );
 }
 
+/**
+ * Create the stable cache key for a native/transform loader plus alias map.
+ */
 export function createPluginLoaderModuleCacheKey(params: {
   tryNative: boolean;
   aliasMap: Record<string, string>;
@@ -2070,6 +2097,9 @@ export function createPluginLoaderModuleCacheKey(params: {
   return `${params.tryNative ? "native" : "transform"}\0${aliasMapKey}`;
 }
 
+/**
+ * Resolve and memoize the loader mode, alias map, and cache key for one module.
+ */
 export function resolvePluginLoaderModuleConfig(params: {
   modulePath: string;
   argv1?: string;
@@ -2111,6 +2141,9 @@ export function resolvePluginLoaderModuleConfig(params: {
   return result;
 }
 
+/**
+ * Return whether a module path belongs to a bundled plugin source or dist root.
+ */
 export function isBundledPluginExtensionPath(params: {
   modulePath: string;
   openClawPackageRoot: string;

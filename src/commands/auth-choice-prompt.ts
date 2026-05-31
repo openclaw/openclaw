@@ -18,6 +18,7 @@ function groupToOption(group: AuthChoiceGroup): WizardSelectOption {
   return { value: group.value, label: group.label, hint: group.hint };
 }
 
+/** Prompts for an auth choice using featured provider groups plus a searchable fallback list. */
 export async function promptAuthChoiceGrouped(params: {
   prompter: WizardPrompter;
   store: AuthProfileStore;
@@ -34,6 +35,8 @@ export async function promptAuthChoiceGrouped(params: {
 
   const pickMethod = async (group: AuthChoiceGroup): Promise<AuthChoiceOrBack> => {
     if (group.options.length === 1) {
+      // Single-method providers skip the second prompt; there is no alternate
+      // method to choose or back out from inside the group.
       return group.options[0].value;
     }
     return (await params.prompter.select({
@@ -56,6 +59,8 @@ export async function promptAuthChoiceGrouped(params: {
       }
       const group = groupById.get(selection);
       if (!group) {
+        // Prompter results are external input; ignore stale/unknown values and
+        // keep the user in the searchable provider picker.
         continue;
       }
       const method = await pickMethod(group);
@@ -84,6 +89,8 @@ export async function promptAuthChoiceGrouped(params: {
       }
       const group = groupById.get(selection);
       if (!group || group.options.length === 0) {
+        // Empty groups can appear after dynamic filtering; report and retry
+        // instead of returning an unusable auth choice.
         await params.prompter.note(
           "No auth methods available for that provider.",
           "Model/auth choice",

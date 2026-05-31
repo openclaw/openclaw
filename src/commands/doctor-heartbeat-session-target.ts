@@ -31,6 +31,8 @@ function resolveHeartbeatConfig(cfg: OpenClawConfig, agentId: string): Heartbeat
 
 function listHeartbeatDoctorAgents(cfg: OpenClawConfig) {
   if (hasExplicitHeartbeatAgents(cfg)) {
+    // Agent-level heartbeat config narrows doctor checks to explicitly
+    // configured agents so unrelated defaults do not create noise.
     return listAgentEntries(cfg)
       .filter((entry) => entry?.heartbeat)
       .map((entry) => normalizeAgentId(entry.id))
@@ -85,6 +87,8 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
       continue;
     }
     if (sessionScope === "global") {
+      // In global session scope, configured heartbeat.session is not an
+      // agent-store key, so absence from the per-agent store is not a bug.
       continue;
     }
     const target = normalizeOptionalString(heartbeatConfig.target);
@@ -123,6 +127,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     const store = loadSessionStore(storePath, { skipCache: true, clone: false });
     const entry = store[canonicalSession];
     if (entry) {
+      // Existing store entry proves the runtime can resolve a delivery target.
       continue;
     }
     warnings.push(

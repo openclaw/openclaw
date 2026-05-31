@@ -22,6 +22,7 @@ function buildColdStartAgentLocalStatuses() {
   };
 }
 
+/** Minimal status summary used before a config exists. */
 export function buildColdStartStatusSummary() {
   return {
     runtimeVersion: null,
@@ -89,6 +90,8 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
   const statusTimeoutMs = params.opts.timeoutMs ?? 10_000;
   const updateTimeoutMs = Math.min(params.opts.all ? 6500 : 2500, statusTimeoutMs);
   const tailscaleTimeoutMs = Math.min(1200, statusTimeoutMs);
+  // Tailscale hostname lookup is bounded separately so a slow tailscale CLI does
+  // not consume the whole status timeout.
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
@@ -109,6 +112,8 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)
     : params.getAgentLocalStatuses(params.cfg);
+  // Gateway probing still runs in cold-start mode, but with the network probe
+  // disabled when there are no configured channels.
   const gatewayProbePromise = resolveGatewayProbeSnapshot({
     cfg: params.cfg,
     opts: {

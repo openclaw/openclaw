@@ -15,6 +15,10 @@ export type PluginChannelCatalogEntry = {
   install?: PluginPackageInstall;
 };
 
+/**
+ * Discover channel-capable plugins from workspace, bundled, and installed-plugin
+ * records so channel setup can offer plugins that are not in discovery roots.
+ */
 export function listChannelCatalogEntries(
   params: {
     origin?: PluginOrigin;
@@ -66,6 +70,10 @@ export function listChannelCatalogEntries(
   });
 }
 
+/**
+ * Resolve the owner plugin id for a channel catalog entry across bundled and
+ * external manifest shapes.
+ */
 function resolveChannelCatalogPluginId(
   candidate: PluginDiscoveryResult["candidates"][number],
 ): string | undefined {
@@ -77,6 +85,10 @@ function resolveChannelCatalogPluginId(
   );
 }
 
+/**
+ * Load persisted install records unless the caller supplied records or only
+ * needs bundled plugins, where the ledger read would be wasted.
+ */
 function resolveInstallRecords(params: {
   origin?: PluginOrigin;
   env?: NodeJS.ProcessEnv;

@@ -5,6 +5,7 @@ type PreambleResult = {
   chdirPath?: string;
 };
 
+/** Removes one matching quote pair from a shell token for display heuristics. */
 export function stripOuterQuotes(value: string | undefined): string | undefined {
   if (!value) {
     return value;
@@ -20,6 +21,7 @@ export function stripOuterQuotes(value: string | undefined): string | undefined 
   return trimmed;
 }
 
+/** Splits a shell command into display tokens without executing or fully parsing shell syntax. */
 export function splitShellWords(input: string | undefined, maxWords = 48): string[] {
   if (!input) {
     return [];
@@ -76,6 +78,7 @@ export function splitShellWords(input: string | undefined, maxWords = 48): strin
   return words;
 }
 
+/** Returns the lowercase executable basename from a command token. */
 export function binaryName(token: string | undefined): string | undefined {
   if (!token) {
     return undefined;
@@ -85,6 +88,7 @@ export function binaryName(token: string | undefined): string | undefined {
   return normalizeLowercaseStringOrEmpty(segment);
 }
 
+/** Finds a value passed to a short/long option, including --name=value forms. */
 export function optionValue(words: string[], names: string[]): string | undefined {
   const lookup = new Set(names);
 
@@ -112,6 +116,7 @@ export function optionValue(words: string[], names: string[]): string | undefine
   return undefined;
 }
 
+/** Returns positional arguments while skipping options and their known value operands. */
 export function positionalArgs(
   words: string[],
   from = 1,
@@ -159,6 +164,7 @@ export function positionalArgs(
   return args;
 }
 
+/** Returns the first positional argument after option filtering. */
 export function firstPositional(
   words: string[],
   from = 1,
@@ -167,6 +173,7 @@ export function firstPositional(
   return positionalArgs(words, from, optionsWithValue)[0];
 }
 
+/** Removes leading env assignments/wrappers so command summaries describe the real executable. */
 export function trimLeadingEnv(words: string[]): string[] {
   if (words.length === 0) {
     return words;
@@ -199,6 +206,7 @@ export function trimLeadingEnv(words: string[]): string[] {
   return words.slice(index);
 }
 
+/** Unwraps common shell -c wrappers so display summaries describe the inner command. */
 export function unwrapShellWrapper(command: string): string {
   const words = splitShellWords(command, 10);
   if (words.length < 3) {
@@ -261,6 +269,7 @@ function scanTopLevelChars(
   }
 }
 
+/** Splits command stages on top-level sequencing operators while respecting quoted text. */
 export function splitTopLevelStages(command: string): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -283,6 +292,7 @@ export function splitTopLevelStages(command: string): string[] {
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+/** Splits a pipeline on top-level pipes while leaving logical OR and quoted pipes intact. */
 export function splitTopLevelPipes(command: string): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -348,6 +358,7 @@ export function stripShellPreamble(command: string): PreambleResult {
     }
 
     if (isChdir) {
+      // Track cd/pushd context so exec summaries can show location without treating it as work.
       if (isPopdCommand(head)) {
         chdirPath = undefined;
       } else {

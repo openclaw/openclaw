@@ -18,11 +18,13 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
 
 export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
+/** Normalizes user-facing tool names and legacy aliases to canonical tool ids. */
 export function normalizeToolName(name: string) {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
+/** Returns true when a streamed/partial prefix could still resolve to an allowed tool name. */
 export function couldNormalizeToolNamePrefixToAllowedTool(
   prefix: string,
   allowedToolNames: Set<string>,
@@ -67,6 +69,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
   return false;
 }
 
+/** Normalizes a list of tool names, dropping empty entries. */
 export function normalizeToolList(list?: string[]) {
   if (!list) {
     return [];
@@ -74,6 +77,7 @@ export function normalizeToolList(list?: string[]) {
   return list.map(normalizeToolName).filter(Boolean);
 }
 
+/** Expands named tool groups after normalizing aliases and casing. */
 export function expandToolGroups(list?: string[]) {
   const normalized = normalizeToolList(list);
   const expanded: string[] = [];
@@ -88,6 +92,7 @@ export function expandToolGroups(list?: string[]) {
   return uniqueStrings(expanded);
 }
 
+/** Resolves a built-in profile policy from the shared core tool catalog. */
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   return resolveCoreToolProfilePolicy(profile);
 }

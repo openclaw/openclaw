@@ -12,6 +12,7 @@ export type LinkChannelContext = {
   plugin: ChannelPlugin;
 };
 
+/** Finds the first configured read-only channel that can report linked-account status. */
 export async function resolveLinkChannelContext(
   cfg: OpenClawConfig,
   options: { sourceConfig?: OpenClawConfig } = {},
@@ -45,6 +46,8 @@ export async function resolveLinkChannelContext(
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     if (linked === null) {
+      // Some channel plugins expose account snapshots but no link signal; keep
+      // scanning so status can report a plugin with a real linked/unlinked state.
       continue;
     }
     const authAgeMs =

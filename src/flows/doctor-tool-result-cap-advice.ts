@@ -15,6 +15,7 @@ function formatNumber(value: number): string {
   return String(Math.max(0, Math.floor(value))).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+/** Builds doctor hints when configured live tool-result caps fight model limits. */
 export function buildToolResultCapDoctorAdvice(params: ToolResultCapDoctorAdviceParams): string[] {
   if (!Number.isFinite(params.contextWindowTokens) || params.contextWindowTokens <= 0) {
     return [];
@@ -51,6 +52,7 @@ export function buildToolResultCapDoctorAdvice(params: ToolResultCapDoctorAdvice
   }
 
   if (configuredCap > runtimeCeiling) {
+    // The runtime will clamp above this ceiling, so the configured value is misleading.
     lines.push(
       `- ${prefix}configured toolResultMaxChars is ${formatNumber(
         configuredCap,

@@ -15,6 +15,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER, modelKey } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
+/** Resolves configured/default model refs into ordered rows with tags and aliases. */
 export function resolveConfiguredEntries(
   cfg: OpenClawConfig,
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
@@ -47,6 +48,8 @@ export function resolveConfiguredEntries(
     const key = modelKey(canonicalRef.provider, canonicalRef.model);
     const originalKey = modelKey(ref.provider, ref.model);
     if (originalKey !== key) {
+      // Manifest-owned provider aliases collapse to one row; move user aliases
+      // from the authored key so display tags stay attached after canonicalization.
       const aliases = aliasesByKey.get(originalKey);
       if (aliases) {
         aliasesByKey.set(key, [...new Set([...(aliasesByKey.get(key) ?? []), ...aliases])]);
@@ -91,6 +94,8 @@ export function resolveConfiguredEntries(
 
   for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
     if (key.trim().endsWith("/*")) {
+      // Wildcard provider defaults describe a provider family, not a concrete
+      // selectable model row.
       continue;
     }
     const resolved = resolveModelRefFromString({

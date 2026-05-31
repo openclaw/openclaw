@@ -23,12 +23,14 @@ const NODE_READ_ACTION_COMMANDS = {
   device_health: "device.health",
 } as const;
 
+/** Non-media node actions exposed through the nodes tool command dispatcher. */
 export type NodeCommandAction =
   | keyof typeof NODE_READ_ACTION_COMMANDS
   | "notifications_action"
   | "location_get"
   | "invoke";
 
+/** Dispatches node command actions while preserving dedicated media and shell policy boundaries. */
 export async function executeNodeCommandAction(params: {
   action: NodeCommandAction;
   input: Record<string, unknown>;
@@ -179,5 +181,6 @@ async function invokeNodeCommandPayload(params: {
     params: params.commandParams ?? {},
     idempotencyKey: crypto.randomUUID(),
   });
+  // Read-style node commands return their result under payload; callers expose that as tool JSON.
   return raw?.payload ?? {};
 }

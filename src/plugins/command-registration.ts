@@ -81,11 +81,17 @@ export type CommandRegistrationResult = {
   error?: string;
 };
 
+/**
+ * Return whether a command root is owned by the built-in CLI surface.
+ */
 export function isReservedCommandName(name: string): boolean {
   const trimmed = normalizeOptionalLowercaseString(name) ?? "";
   return Boolean(trimmed && getReservedCommands().has(trimmed));
 }
 
+/**
+ * Validate the public plugin command root before it enters the shared registry.
+ */
 export function validateCommandName(
   name: string,
   opts?: { allowReservedCommandNames?: boolean },
@@ -96,8 +102,6 @@ export function validateCommandName(
     return "Command name cannot be empty";
   }
 
-  // Must start with a letter, contain only letters, numbers, hyphens, underscores
-  // Note: trimmed is already lowercased, so no need for /i flag
   if (!/^[a-z][a-z0-9_-]*$/.test(trimmed)) {
     return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
   }
@@ -256,6 +260,10 @@ function validateAgentPromptGuidance(index: number, guidance: AgentPromptGuidanc
   return null;
 }
 
+/**
+ * Normalize prompt guidance while preserving the string-vs-object shape exposed
+ * by the plugin command contract.
+ */
 function normalizeAgentPromptGuidance(
   guidance: readonly AgentPromptGuidance[] | undefined,
 ): AgentPromptGuidance[] | undefined {
@@ -278,6 +286,9 @@ function normalizeAgentPromptGuidance(
   });
 }
 
+/**
+ * List every slash-command key that can dispatch to this plugin command.
+ */
 export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
   const keys = new Set<string>();
   const push = (value: string | undefined) => {
@@ -298,6 +309,9 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   return [...keys];
 }
 
+/**
+ * Check command availability for channel-scoped native command surfaces.
+ */
 export function pluginCommandSupportsChannel(
   command: OpenClawPluginCommandDefinition,
   channel?: string,
@@ -311,6 +325,9 @@ export function pluginCommandSupportsChannel(
   );
 }
 
+/**
+ * Register a plugin command after normalizing user-facing fields and native aliases.
+ */
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
@@ -321,7 +338,8 @@ export function registerPluginCommand(
     allowOwnerStatusExposure?: boolean;
   },
 ): CommandRegistrationResult {
-  // Prevent registration while commands are being processed
+  // The registry is locked during dispatch so a plugin cannot mutate command
+  // lookup state while the active command set is being evaluated.
   if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
@@ -354,7 +372,8 @@ export function registerPluginCommand(
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
   const key = `/${normalizedName}`;
 
-  // Check for duplicate registration
+  // Native aliases share the same namespace as slash roots; otherwise a chat
+  // lookup could resolve differently depending on which lookup path runs first.
   for (const invocationKey of invocationKeys) {
     const existing =
       pluginCommands.get(invocationKey) ??

@@ -66,6 +66,7 @@ export type StatusOverviewSurface = {
   nodeOnlyGateway?: NodeOnlyGatewayInfo | null;
 };
 
+/** Adapts the full status scan shape into the smaller overview rendering contract. */
 export function buildStatusOverviewSurfaceFromScan(params: {
   scan: Pick<
     StatusScanResult,
@@ -107,6 +108,7 @@ export function buildStatusOverviewSurfaceFromScan(params: {
   };
 }
 
+/** Adapts the fast overview scan shape to the same renderer input as full status. */
 export function buildStatusOverviewSurfaceFromOverview(params: {
   overview: Pick<
     StatusScanOverviewResult,
@@ -136,6 +138,7 @@ export function buildStatusOverviewSurfaceFromOverview(params: {
   };
 }
 
+/** Lets status variants inject extra rows without duplicating gateway/update formatting. */
 export function buildStatusOverviewRowsFromSurface(params: {
   surface: StatusOverviewSurface;
   prefixRows?: StatusOverviewRow[];
@@ -154,6 +157,8 @@ export function buildStatusOverviewRowsFromSurface(params: {
   decorateTailscaleOff?: (value: string) => string;
   decorateTailscaleWarn?: (value: string) => string;
 }) {
+  // Keep all overview variants on the shared row builder so JSON/fast/full
+  // status disagree only through explicitly supplied extra rows or decorators.
   return buildStatusOverviewSurfaceRows({
     cfg: params.surface.cfg,
     update: params.surface.update,
@@ -189,6 +194,7 @@ export function buildStatusOverviewRowsFromSurface(params: {
   });
 }
 
+/** Builds the gateway JSON payload from the same surface used by human-readable status. */
 export function buildStatusGatewayJsonPayloadFromSurface(params: {
   surface: Pick<
     StatusOverviewSurface,
@@ -201,6 +207,8 @@ export function buildStatusGatewayJsonPayloadFromSurface(params: {
     | "gatewayProbeAuthWarning"
   >;
 }) {
+  // Gateway-only JSON intentionally omits service/node rows while using the same
+  // gateway fields as human-readable status output.
   return buildGatewayStatusJsonPayload({
     gatewayMode: params.surface.gatewayMode,
     gatewayConnection: params.surface.gatewayConnection,

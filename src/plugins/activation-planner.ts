@@ -19,6 +19,7 @@ export type PluginActivationPlannerTrigger =
   | { kind: "route"; route: string }
   | { kind: "capability"; capability: PluginManifestActivationCapability };
 
+/** Reason codes preserved in activation plans for diagnostics and status UI. */
 export type PluginActivationPlannerHintReason =
   | "activation-agent-harness-hint"
   | "activation-capability-hint"
@@ -39,12 +40,14 @@ export type PluginActivationPlannerReason =
   | PluginActivationPlannerHintReason
   | PluginActivationPlannerManifestReason;
 
+/** One manifest plugin selected for lazy activation, with all matching reasons. */
 export type PluginActivationPlanEntry = {
   pluginId: string;
   origin: PluginOrigin;
   reasons: readonly PluginActivationPlannerReason[];
 };
 
+/** Deterministic activation plan for one trigger without importing runtimes. */
 export type PluginActivationPlan = {
   trigger: PluginActivationPlannerTrigger;
   pluginIds: readonly string[];
@@ -84,6 +87,8 @@ export function resolveManifestActivationPlan(
       if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) {
         return [];
       }
+      // Activation planning still honors the base manifest owner policy; hints
+      // should not bypass disabled plugins or restrictive allowlists by default.
       if (
         !passesManifestOwnerBasePolicy({
           plugin,
@@ -115,6 +120,7 @@ export function resolveManifestActivationPlan(
   };
 }
 
+/** Convenience wrapper for callers that only need ordered plugin ids. */
 export function resolveManifestActivationPluginIds(
   params: ResolveManifestActivationPlanParams,
 ): string[] {
@@ -270,6 +276,8 @@ function hasValues(values: readonly unknown[] | undefined): boolean {
 function dedupeReasons(
   reasons: readonly (PluginActivationPlannerReason | null)[],
 ): PluginActivationPlannerReason[] {
+  // Some capability triggers can match both explicit hints and manifest
+  // ownership; keep stable first-match ordering while removing duplicates.
   return [
     ...new Set(
       reasons.filter((reason): reason is PluginActivationPlannerReason => Boolean(reason)),

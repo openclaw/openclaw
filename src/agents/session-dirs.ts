@@ -9,6 +9,7 @@ function mapAgentSessionDirs(agentsDir: string, entries: Dirent[]): string[] {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+/** Resolves each agent's session directory from an agents root, treating a missing root as empty. */
 export async function resolveAgentSessionDirsFromAgentsDir(agentsDir: string): Promise<string[]> {
   let entries: Dirent[] = [];
   try {
@@ -24,6 +25,7 @@ export async function resolveAgentSessionDirsFromAgentsDir(agentsDir: string): P
   return mapAgentSessionDirs(agentsDir, entries);
 }
 
+/** Sync variant for startup paths that need session directories before async setup exists. */
 export function resolveAgentSessionDirsFromAgentsDirSync(agentsDir: string): string[] {
   let entries: Dirent[] = [];
   try {
@@ -39,6 +41,7 @@ export function resolveAgentSessionDirsFromAgentsDirSync(agentsDir: string): str
   return mapAgentSessionDirs(agentsDir, entries);
 }
 
+/** Resolves all per-agent session directories under the OpenClaw state directory. */
 export async function resolveAgentSessionDirs(stateDir: string): Promise<string[]> {
   return await resolveAgentSessionDirsFromAgentsDir(path.join(stateDir, "agents"));
 }

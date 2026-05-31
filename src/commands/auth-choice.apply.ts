@@ -3,6 +3,7 @@ import { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-ch
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
 import type { AuthChoice } from "./onboard-types.js";
 
+/** Normalizes old onboard auth-choice names before plugin-backed provider resolution. */
 async function normalizeLegacyChoice(
   authChoice: AuthChoice | undefined,
   params: Pick<ApplyAuthChoiceParams, "config" | "env">,
@@ -17,6 +18,7 @@ async function normalizeLegacyChoice(
   return normalizeLegacyOnboardAuthChoice(authChoice, params);
 }
 
+/** Maps generic apiKey/token choices plus --token-provider to provider-specific choices. */
 async function normalizeTokenProviderChoice(params: {
   authChoice: AuthChoice;
   source: ApplyAuthChoiceParams;
@@ -29,6 +31,7 @@ async function normalizeTokenProviderChoice(params: {
     params.authChoice !== "token" &&
     params.authChoice !== "setup-token"
   ) {
+    // Provider selection only applies to generic credential choices.
     return params.authChoice;
   }
   const { normalizeApiKeyTokenProviderAuthChoice } =
@@ -41,6 +44,7 @@ async function normalizeTokenProviderChoice(params: {
   });
 }
 
+/** Builds a hard error for manifest-deprecated choices that have an explicit replacement. */
 async function formatDeprecatedProviderChoiceError(
   authChoice: AuthChoice | undefined,
   params: Pick<ApplyAuthChoiceParams, "config" | "env">,
@@ -60,6 +64,7 @@ async function formatDeprecatedProviderChoiceError(
   return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead, or run ${formatCliCommand("openclaw onboard")} to choose interactively.`;
 }
 
+/** Applies one onboard/configure auth choice and returns the updated config state. */
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
@@ -76,11 +81,14 @@ export async function applyAuthChoice(
     normalizedProviderAuthChoice === params.authChoice
       ? params
       : { ...params, authChoice: normalizedProviderAuthChoice };
+  // Plugin providers own modern auth choices; built-in fallbacks below only
+  // explain unmatched legacy or generic choices.
   const result = await applyAuthChoiceLoadedPluginProvider(normalizedParams);
   if (result) {
     return result;
   }
 
+  // Deprecated manifest aliases should fail with the new choice id, not silently no-op.
   const deprecatedProviderChoiceError = await formatDeprecatedProviderChoiceError(
     normalizedParams.authChoice,
     {

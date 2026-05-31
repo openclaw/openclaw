@@ -28,6 +28,7 @@ export type BundledProviderPolicySurface = {
   ) => ProviderThinkingProfile | null | undefined;
 };
 
+/** Recognizes provider policy sidecars without importing provider runtimes. */
 function hasProviderPolicyHook(
   mod: Record<string, unknown>,
 ): mod is Record<string, unknown> & BundledProviderPolicySurface {
@@ -62,6 +63,8 @@ function tryLoadBundledProviderPolicySurface(
         error instanceof Error &&
         error.message.startsWith("Unable to resolve bundled plugin public surface ")
       ) {
+        // Missing sidecars are normal for providers without policy hooks; keep
+        // probing candidates and cache the final miss for this bundled root.
         continue;
       }
       throw error;
@@ -85,6 +88,8 @@ function resolveBundledProviderPolicyPluginId(
   }
 
   const registry = options.manifestRegistry ?? loadPluginManifestRegistry();
+  // Manifest ownership is deterministic so provider aliases resolve to the same
+  // plugin no matter how the registry was discovered.
   for (const plugin of registry.plugins.toSorted((left, right) =>
     left.id.localeCompare(right.id),
   )) {
@@ -99,6 +104,7 @@ function resolveBundledProviderPolicyPluginId(
   return null;
 }
 
+/** Checks direct provider ownership and manifest auth aliases for policy hooks. */
 function pluginOwnsProviderPolicyRef(
   plugin: PluginManifestRegistry["plugins"][number],
   normalizedProviderId: string,
@@ -121,6 +127,10 @@ function pluginOwnsProviderPolicyRef(
   return false;
 }
 
+/**
+ * Resolves bundled provider policy hooks by provider id, then by manifest owner
+ * for aliases that should inherit the owner plugin's narrow policy sidecar.
+ */
 export function resolveBundledProviderPolicySurface(
   providerId: string,
   options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},

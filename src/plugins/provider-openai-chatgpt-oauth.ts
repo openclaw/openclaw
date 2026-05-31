@@ -30,6 +30,7 @@ type OpenAICodexOAuthFacade = {
   ) => Promise<OAuthCredentials | null>;
 };
 
+/** Loads the bundled OpenAI public facade for pre-provider-hook compatibility. */
 function loadOpenAICodexOAuthFacade(): OpenAICodexOAuthFacade {
   return loadActivatedBundledPluginPublicSurfaceModuleSync<OpenAICodexOAuthFacade>({
     dirName: "openai",
@@ -37,6 +38,7 @@ function loadOpenAICodexOAuthFacade(): OpenAICodexOAuthFacade {
   });
 }
 
+/** Validates that a provider auth hook returned the OpenAI Codex OAuth credential shape. */
 function isOAuthCredential(value: unknown): value is OAuthCredentials {
   if (!value || typeof value !== "object") {
     return false;
@@ -65,6 +67,7 @@ export async function loginOpenAICodexOAuth(
   });
   const oauth = provider?.auth?.find((method) => method.id === OPENAI_CODEX_OAUTH_METHOD_ID);
   if (!oauth) {
+    // Older bundled/plugin layouts still expose the facade but not the provider auth hook.
     return await loadOpenAICodexOAuthFacade().loginOpenAICodexOAuth({
       ...params,
       oauth: oauthHandlers,

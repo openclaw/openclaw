@@ -3,6 +3,7 @@ import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
+/** Minimal writable stdin surface used by process send-keys handlers and tests. */
 export type WritableStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
@@ -36,6 +37,7 @@ async function writeToStdin(stdin: WritableStdin, data: string) {
   });
 }
 
+/** Encodes and writes key input into a live process session stdin stream. */
 export async function handleProcessSendKeys(params: {
   sessionId: string;
   session: ProcessSession;
@@ -50,6 +52,7 @@ export async function handleProcessSendKeys(params: {
     literal: params.literal,
   };
   if (params.session.cursorKeyMode === "unknown" && hasCursorModeSensitiveKeys(request)) {
+    // Arrow/navigation encodings differ by cursor mode; waiting avoids sending the wrong bytes.
     return failText(
       `Session ${params.sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
     );

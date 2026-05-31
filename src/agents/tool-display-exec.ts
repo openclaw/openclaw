@@ -442,6 +442,7 @@ function compactRawCommand(raw: string, maxLength = 120): string {
 
 export type ToolDetailMode = "explain" | "raw";
 
+/** Summarizes exec/bash command arguments into a compact, redacted display detail. */
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },
@@ -489,6 +490,7 @@ export function resolveExecDetail(
     compact !== displaySummary &&
     compact !== summary
   ) {
+    // Raw command context stays available when the heuristic summary may hide important args.
     return `${displaySummary}${nodeFragment} · \`${compact}\``;
   }
 

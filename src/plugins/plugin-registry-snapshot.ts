@@ -39,6 +39,7 @@ export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
 export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
 export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+/** Diagnostic categories emitted when a persisted registry cannot be reused. */
 export type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-disabled"
   | "persisted-registry-missing"
@@ -51,6 +52,7 @@ export type PluginRegistrySnapshotDiagnostic = {
   message: string;
 };
 
+/** Registry snapshot plus provenance and non-fatal fallback diagnostics. */
 export type PluginRegistrySnapshotResult = {
   snapshot: PluginRegistrySnapshot;
   source: PluginRegistrySnapshotSource;
@@ -99,6 +101,7 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     preferPersisted?: boolean;
   };
 
+/** Registry load params for a single plugin lookup. */
 export type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
@@ -118,6 +121,8 @@ function pickRegistrySnapshotMemoEnv(env: NodeJS.ProcessEnv): Record<string, str
 }
 
 function canMemoizePluginRegistrySnapshot(params: LoadPluginRegistryParams): boolean {
+  // Synthetic inputs describe one-off test/repair states; memo only plain
+  // filesystem/config lookups whose invalidation is represented by the key.
   return (
     params.index === undefined &&
     params.candidates === undefined &&
@@ -218,6 +223,8 @@ function rememberPluginRegistrySnapshotMemo(
 }
 
 function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
+  // The current metadata slot already owns a validated registry index; reuse it
+  // only for the default read path where caller-supplied overrides are absent.
   return (
     params.preferPersisted !== false &&
     params.stateDir === undefined &&
@@ -419,6 +426,8 @@ function hasRecoveredInstallRecordsMissingFromPersistedIndex(
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
+  // Explicit indexes are caller-provided snapshots and should not be validated
+  // against persisted registry state.
   if (params.index) {
     return {
       snapshot: params.index,
@@ -446,6 +455,8 @@ export function loadPluginRegistrySnapshotWithMetadata(
   if (persistedInstallRecordReadsEnabled) {
     persistedIndex = readPersistedInstalledPluginIndexSync(params);
     if (persistedReadsEnabled && persistedIndex) {
+      // Persisted reads are fast, but every fallback here protects against using
+      // stale owner metadata after config, root, manifest, or install changes.
       if (
         params.config &&
         persistedIndex.policyHash !== resolveInstalledPluginIndexPolicyHash(params.config)

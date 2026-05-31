@@ -5,6 +5,7 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
 
+/** Resolves the workspace used for model discovery, preserving explicit caller overrides. */
 export function resolveModelWorkspaceDir(
   cfg: OpenClawConfig | undefined,
   explicitWorkspaceDir: string | undefined,
@@ -15,6 +16,7 @@ export function resolveModelWorkspaceDir(
   return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
 }
 
+/** Resolves plugin metadata for model catalogs without throwing into model fallback paths. */
 export function resolveModelPluginMetadataSnapshot(params: {
   allowWorkspaceScopedCurrent?: boolean;
   config?: OpenClawConfig;
@@ -29,6 +31,7 @@ export function resolveModelPluginMetadataSnapshot(params: {
   const env = params.env ?? process.env;
   try {
     const config = params.config ?? (params.useRuntimeConfig ? getRuntimeConfig() : undefined);
+    // Prefer the process snapshot; fall back to loading a compatible snapshot from disk.
     return (
       getCurrentPluginMetadataSnapshot({
         allowWorkspaceScopedSnapshot: true,

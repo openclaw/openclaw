@@ -15,6 +15,10 @@ const FALLBACK_DOCS_TEMPLATE_DIR = path.resolve(
 let cachedTemplateDir: string | undefined;
 let resolvingTemplateDir: Promise<string> | undefined;
 
+/**
+ * Locates the writable workspace template source, preferring the package root
+ * but falling back to source-tree paths for linked and test checkouts.
+ */
 export async function resolveWorkspaceTemplateDir(opts?: {
   cwd?: string;
   argv1?: string;
@@ -27,6 +31,8 @@ export async function resolveWorkspaceTemplateDir(opts?: {
     return resolvingTemplateDir;
   }
 
+  // Share the filesystem probe across concurrent callers; template discovery is
+  // process-stable until tests explicitly reset the cache.
   resolvingTemplateDir = (async () => {
     const moduleUrl = opts?.moduleUrl ?? import.meta.url;
     const argv1 = opts?.argv1 ?? process.argv[1];
@@ -58,6 +64,7 @@ export async function resolveWorkspaceTemplateDir(opts?: {
   }
 }
 
+/** Clears cached template discovery state for tests that swap package roots. */
 export function resetWorkspaceTemplateDirCache() {
   cachedTemplateDir = undefined;
   resolvingTemplateDir = undefined;
@@ -89,6 +96,10 @@ async function resolveExistingTemplateDirs(candidates: readonly string[]): Promi
   return dirs;
 }
 
+/**
+ * Returns all template directories that should be searched when copying
+ * workspace assets, with docs/reference templates layered after the primary set.
+ */
 export async function resolveWorkspaceTemplateSearchDirs(opts?: {
   cwd?: string;
   argv1?: string;

@@ -4,6 +4,7 @@ import { deriveSessionName } from "./bash-tools.shared.js";
 const DEFAULT_ACTIVE_PROCESS_LIMIT = 8;
 const MAX_COMMAND_LABEL_CHARS = 140;
 
+/** Compact prompt-facing reference for a background process session still running in scope. */
 export type ActiveProcessSessionReference = {
   sessionId: string;
   status: "running";
@@ -27,6 +28,7 @@ function truncate(value: string, maxChars: number): string {
   return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
 }
 
+/** Lists recent running background process sessions for a scope so prompts can reference them. */
 export function listActiveProcessSessionReferences(params: {
   scopeKey?: string;
   now?: number;

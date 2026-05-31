@@ -14,6 +14,7 @@ export type ResolvedProviderAuth = {
 
 export type ProviderAuthErrorCode = "missing-api-key" | "missing-provider-auth";
 
+/** Error type used by model runtimes to expose provider and auth-failure class without parsing text. */
 export class ProviderAuthError extends Error {
   readonly code: ProviderAuthErrorCode;
   readonly provider: string;
@@ -26,6 +27,7 @@ export class ProviderAuthError extends Error {
   }
 }
 
+/** Narrows provider auth failures, optionally matching one stable error code. */
 export function isProviderAuthError(
   err: unknown,
   code?: ProviderAuthErrorCode,
@@ -33,6 +35,7 @@ export function isProviderAuthError(
   return err instanceof ProviderAuthError && (!code || err.code === code);
 }
 
+/** Chooses the AWS SDK env var that best explains available Bedrock credentials. */
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env[AWS_BEARER_ENV]?.trim()) {
     return AWS_BEARER_ENV;
@@ -46,10 +49,12 @@ export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): s
   return undefined;
 }
 
+/** Builds the standard missing-auth message used before throwing ProviderAuthError. */
 export function formatMissingAuthError(auth: ResolvedProviderAuth, provider: string): string {
   return `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`;
 }
 
+/** Returns a normalized API key or throws a typed provider auth error for callers to handle. */
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
   const key = normalizeSecretInput(auth.apiKey);
   if (key) {

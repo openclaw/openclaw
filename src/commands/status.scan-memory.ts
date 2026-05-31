@@ -19,10 +19,12 @@ function loadStatusScanDepsRuntimeModule() {
   return statusScanDepsRuntimeModuleLoader.load();
 }
 
+/** Returns the conventional per-agent memory database path for status fallbacks. */
 export function resolveDefaultMemoryStorePath(agentId: string): string {
   return path.join(resolveStateDir(process.env, os.homedir), "memory", `${agentId}.sqlite`);
 }
 
+/** Resolves memory health lazily so ordinary status imports stay cold-start friendly. */
 export async function resolveStatusMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;

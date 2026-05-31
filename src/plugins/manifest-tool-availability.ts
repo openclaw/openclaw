@@ -52,6 +52,8 @@ function readEffectiveConfigs(params: {
     if (!isRecord(overlayMap)) {
       return [];
     }
+    // Overlay maps represent per-account/provider variants; sort keys so tool
+    // availability stays deterministic across object insertion order.
     return Object.entries(overlayMap)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .flatMap(([, mapOverlay]) =>
@@ -108,6 +110,9 @@ function hasConfiguredValue(params: {
   return params.value !== undefined && params.value !== null;
 }
 
+/**
+ * Return whether a manifest config signal is satisfied by current config/env.
+ */
 export function manifestConfigSignalPasses(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -183,6 +188,9 @@ function normalizeBaseUrlForManifestGuard(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
+/**
+ * Check provider base-url restrictions attached to a manifest auth signal.
+ */
 export function manifestProviderBaseUrlGuardPasses(params: {
   config?: OpenClawConfig;
   guard: ManifestAuthAvailabilitySignal["providerBaseUrl"];
@@ -205,6 +213,9 @@ export function manifestProviderBaseUrlGuardPasses(params: {
   );
 }
 
+/**
+ * List setup env vars for a provider with legacy providerAuthEnvVars fallback.
+ */
 export function manifestPluginSetupProviderEnvVars(
   plugin: PluginManifestRecord,
   providerId: string,
@@ -216,6 +227,9 @@ export function manifestPluginSetupProviderEnvVars(
   return plugin.providerAuthEnvVars?.[providerId] ?? [];
 }
 
+/**
+ * Return whether any candidate env var has a non-empty value.
+ */
 export function hasNonEmptyManifestEnvCandidate(
   env: NodeJS.ProcessEnv,
   envVars: readonly string[],
@@ -281,6 +295,9 @@ function toolMetadataPasses(params: {
   return false;
 }
 
+/**
+ * Return whether at least one requested tool is currently available from manifest metadata.
+ */
 export function hasManifestToolAvailability(params: {
   plugin: PluginManifestRecord;
   toolNames: readonly string[];

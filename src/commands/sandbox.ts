@@ -18,8 +18,6 @@ import {
   displaySummary,
 } from "./sandbox-display.js";
 
-// --- Types ---
-
 type SandboxListOptions = {
   browser: boolean;
   json: boolean;
@@ -40,8 +38,7 @@ type FilteredContainers = {
   browsers: SandboxBrowserInfo[];
 };
 
-// --- List Command ---
-
+/** Lists current sandbox containers or browser containers. */
 export async function sandboxListCommand(
   opts: SandboxListOptions,
   runtime: RuntimeEnv,
@@ -63,8 +60,7 @@ export async function sandboxListCommand(
   displaySummary(containers, browsers, runtime);
 }
 
-// --- Recreate Command ---
-
+/** Removes sandbox runtimes for a selected all/session/agent scope. */
 export async function sandboxRecreateCommand(
   opts: SandboxRecreateOptions,
   runtime: RuntimeEnv,
@@ -97,8 +93,6 @@ export async function sandboxRecreateCommand(
   }
 }
 
-// --- Validation ---
-
 function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
     runtime.error(
@@ -117,8 +111,6 @@ function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeE
 
   return true;
 }
-
-// --- Filtering ---
 
 async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<FilteredContainers> {
   const allContainers = await listSandboxContainers().catch(() => []);
@@ -141,11 +133,11 @@ async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<F
 
 function createAgentMatcher(agentId: string) {
   const agentPrefix = `agent:${agentId}`;
+  // Agent-scoped cleanup matches the agent's main session plus any nested
+  // session keys under that agent prefix.
   return (item: ContainerItem) =>
     item.sessionKey === agentPrefix || item.sessionKey.startsWith(`${agentPrefix}:`);
 }
-
-// --- Container Operations ---
 
 async function confirmRecreate(): Promise<boolean> {
   const result = await clackConfirm({
@@ -166,6 +158,8 @@ async function removeContainers(
   let failCount = 0;
 
   for (const container of filtered.containers) {
+    // Process regular sandboxes and browser sandboxes separately because they
+    // have different removal backends.
     const result = await removeContainer(container.containerName, removeSandboxContainer, runtime);
     if (result.success) {
       successCount++;

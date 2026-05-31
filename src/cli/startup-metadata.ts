@@ -7,12 +7,14 @@ const startupMetadataByPath = new Map<string, Record<string, unknown> | null>();
 
 function resolveStartupMetadataPathCandidates(moduleUrl: string): string[] {
   const moduleDir = path.dirname(fileURLToPath(moduleUrl));
+  // Source and bundled builds place the metadata one directory apart.
   return [
     path.resolve(moduleDir, STARTUP_METADATA_FILE),
     path.resolve(moduleDir, "..", STARTUP_METADATA_FILE),
   ];
 }
 
+/** Reads precomputed CLI startup metadata from source or bundled layout paths. */
 export function readCliStartupMetadata(moduleUrl: string): Record<string, unknown> | null {
   for (const metadataPath of resolveStartupMetadataPathCandidates(moduleUrl)) {
     const cached = startupMetadataByPath.get(metadataPath);

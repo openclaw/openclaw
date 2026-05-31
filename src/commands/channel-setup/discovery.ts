@@ -20,6 +20,7 @@ type ChannelCatalogEntry = {
   meta: ChannelMeta;
 };
 
+/** Mirrors channel manifest exposure rules for setup screens and tests. */
 export function shouldShowChannelInSetup(
   meta: Pick<ChannelMeta, "exposure" | "showConfigured" | "showInSetup">,
 ): boolean {
@@ -38,6 +39,7 @@ function resolveWorkspaceDir(cfg: OpenClawConfig, workspaceDir?: string): string
   return workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
 }
 
+/** Returns channel ids contributed by installed manifests after auto-enable config has been applied. */
 export function listManifestInstalledChannelIds(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
@@ -57,6 +59,7 @@ export function listManifestInstalledChannelIds(params: {
   );
 }
 
+/** Checks whether a catalog entry is already installed through manifest-discovered channel contributions. */
 export function isCatalogChannelInstalled(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
@@ -66,6 +69,7 @@ export function isCatalogChannelInstalled(params: {
   return listManifestInstalledChannelIds(params).has(params.entry.id as ChannelChoice);
 }
 
+/** Resolves built-in, installed, and installable channel setup entries for onboarding prompts. */
 export function resolveChannelSetupEntries(params: {
   cfg: OpenClawConfig;
   installedPlugins: ChannelPlugin[];
@@ -137,6 +141,7 @@ export function resolveChannelSetupEntries(params: {
       }),
     );
   }
+  // Catalog metadata fills only missing ids so loaded plugins remain the canonical source for active channels.
   for (const entry of installedCatalogEntries) {
     if (!metaById.has(entry.id)) {
       metaById.set(

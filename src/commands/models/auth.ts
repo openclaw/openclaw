@@ -430,6 +430,7 @@ async function persistProviderAuthResult(params: {
   );
 
   for (const profile of profiles) {
+    // Preserve existing provider order when the login refreshes an already-configured provider.
     const configuredSelection = resolveConfiguredAuthSelectionForProvider(
       params.config,
       profile.credential.provider,
@@ -466,11 +467,13 @@ async function persistProviderAuthResult(params: {
         setDefault: params.setDefault,
       });
       if (params.setDefault && defaultModel) {
+        // `models auth login --set-default` is the only login path allowed to replace primary.
         next = applyDefaultModel(next, defaultModel);
       }
       return next;
     });
     if (defaultModel) {
+      // A provider-recommended model can require a runtime harness; repair it after config writes.
       const repaired = await repairCodexRuntimePluginInstallForModelSelection({
         cfg: updated,
         model: defaultModel,

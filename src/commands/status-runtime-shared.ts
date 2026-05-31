@@ -30,6 +30,7 @@ function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
 }
 
+/** Runs the lightweight status security audit with channel collectors when available. */
 export async function resolveStatusSecurityAudit(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
@@ -41,6 +42,8 @@ export async function resolveStatusSecurityAudit(params: {
     activationSourceConfig: params.sourceConfig,
     includeSetupFallbackPlugins: false,
   });
+  // If configured channel ids are missing, let the audit discover the problem
+  // from config instead of passing a partial plugin list as proof.
   return await runSecurityAudit({
     config: params.config,
     sourceConfig: params.sourceConfig,
@@ -61,6 +64,7 @@ type StatusUsageSummaryOptions = {
   agentDir?: string;
 };
 
+/** Loads provider usage for status without importing provider usage at startup. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
   return await loadProviderUsageSummary({
@@ -70,10 +74,12 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
   });
 }
 
+/** Exposes the lazy provider-usage module for status commands that need details. */
 export async function loadStatusProviderUsageModule() {
   return await loadProviderUsage();
 }
 
+/** Calls gateway health and lets errors propagate to deep status callers. */
 export async function resolveStatusGatewayHealth(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -87,6 +93,7 @@ export async function resolveStatusGatewayHealth(params: {
   });
 }
 
+/** Calls gateway health only when the probe says the gateway is reachable. */
 export async function resolveStatusGatewayHealthSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -99,6 +106,8 @@ export async function resolveStatusGatewayHealthSafe(params: {
   };
 }) {
   if (!params.gatewayReachable) {
+    // Preserve the probe failure as the health error so reports explain the
+    // first failing boundary instead of attempting another RPC.
     return { error: params.gatewayProbeError ?? "gateway unreachable" };
   }
   const { callGateway } = await loadGatewayCallModule();
@@ -111,6 +120,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
   }).catch((err) => ({ error: String(err) }));
 }
 
+/** Fetches optional gateway stability diagnostics without failing status output. */
 export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -134,6 +144,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   }).catch(() => null);
 }
 
+/** Fetches the last heartbeat only when gateway reachability is already proven. */
 export async function resolveStatusLastHeartbeat(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -151,6 +162,7 @@ export async function resolveStatusLastHeartbeat(params: {
   }).catch(() => null);
 }
 
+/** Reads managed gateway and node-host service summaries in parallel. */
 export async function resolveStatusServiceSummaries() {
   return await Promise.all([getDaemonStatusSummary(), getNodeDaemonStatusSummary()]);
 }
@@ -162,6 +174,7 @@ type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSumm
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
+/** Resolves optional deep/usage runtime details plus service summaries. */
 export async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -185,7 +198,9 @@ export async function resolveStatusRuntimeDetails(params: {
     : undefined;
   const health = params.deep
     ? params.suppressHealthErrors
-      ? await resolveGatewayHealthSummary({
+      ? // Fast/summary status wants best-effort health; explicit deep status can
+        // still opt into surfacing gateway health errors.
+        await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
         }).catch(() => undefined)
@@ -218,6 +233,7 @@ export async function resolveStatusRuntimeDetails(params: {
   };
 }
 
+/** Resolves the full optional runtime status payload used by full status scans. */
 export async function resolveStatusRuntimeSnapshot(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;

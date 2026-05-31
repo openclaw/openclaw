@@ -36,6 +36,7 @@ const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
   ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
 );
 
+/** Applies a plugin provider auth choice during non-interactive onboarding. */
 export async function applyNonInteractivePluginProviderChoice(params: {
   nextConfig: OpenClawConfig;
   authChoice: string;
@@ -90,6 +91,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   });
   if (!providerChoice) {
     if (prefixedProviderId) {
+      // Prefixed choices are explicit plugin-provider refs, so mismatch is a hard trust/setup error.
       params.runtime.error(
         [
           `Auth choice "${params.authChoice}" was not matched to a trusted provider plugin.`,
@@ -139,6 +141,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
 
   const method = providerChoice.method;
   if (!method.runNonInteractive) {
+    // Interactive-only providers must fail here; non-interactive mode cannot fall back to prompts.
     params.runtime.error(
       [
         `Auth choice "${params.authChoice}" requires interactive mode.`,
@@ -167,6 +170,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   if (!selectedModel) {
     return result;
   }
+  // Provider auth can choose a model that requires a runtime harness; install/repair it now.
   const nonInteractivePrompter = createNonInteractiveLoggingPrompter(
     params.runtime,
     (message) => `Non-interactive setup cannot prompt for plugin install: ${message}`,

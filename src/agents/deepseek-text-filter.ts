@@ -10,11 +10,16 @@ const DSML_CLOSE_TOKENS = DSML_BARS.flatMap((bar) =>
 const MAX_OPEN_TOKEN_LEN = Math.max(...DSML_OPEN_TOKENS.map((token) => token.length));
 const MAX_CLOSE_TOKEN_LEN = Math.max(...DSML_CLOSE_TOKENS.map((token) => token.length));
 
+/** Stateful text filter that removes DeepSeek DSML tool-call markup across chunks. */
 export interface DeepSeekTextFilter {
   push(chunk: string): string[];
   flush(): string[];
 }
 
+/**
+ * Creates a streaming filter for DeepSeek DSML spans so provider text deltas can
+ * be forwarded without leaking raw tool-call markup to users.
+ */
 export function createDeepSeekTextFilter(): DeepSeekTextFilter {
   let buffer = "";
   let insideDsml = false;
@@ -36,6 +41,8 @@ export function createDeepSeekTextFilter(): DeepSeekTextFilter {
           continue;
         }
         const keep = final ? 0 : Math.min(buffer.length, MAX_CLOSE_TOKEN_LEN - 1);
+        // Keep a suffix long enough to match a closing token that may arrive in
+        // the next text delta.
         buffer = buffer.slice(buffer.length - keep);
         if (final) {
           insideDsml = false;
@@ -59,6 +66,8 @@ export function createDeepSeekTextFilter(): DeepSeekTextFilter {
 
       const keep = longestDsmlOpenPrefixSuffixLength(buffer);
       const emitLength = buffer.length - keep;
+      // Do not emit a suffix that could still become a DSML opening token after
+      // the next chunk arrives.
       if (emitLength <= 0) {
         return output;
       }

@@ -11,6 +11,7 @@ import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
 
+/** CLI flags needed to route one native hook invocation through OpenClaw. */
 export type NativeHookRelayCliOptions = {
   provider?: string;
   relayId?: string;
@@ -27,6 +28,7 @@ type NativeHookRelayCliDeps = {
   callGateway?: typeof callGateway;
 };
 
+/** Runs a provider native-hook relay command and returns the provider-facing exit code. */
 export async function runNativeHookRelayCli(
   opts: NativeHookRelayCliOptions,
   deps: NativeHookRelayCliDeps = {},
@@ -72,6 +74,7 @@ export async function runNativeHookRelayCli(
     return response.exitCode;
   } catch (error) {
     if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
+      // A stale direct bridge should fail closed without invoking an unrelated gateway relay.
       writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
       const response = renderNativeHookRelayUnavailableResponse({
         provider,
@@ -123,6 +126,7 @@ async function readStreamText(stream: NodeJS.ReadableStream, maxBytes: number): 
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.byteLength;
     if (total > maxBytes) {
+      // Hook payloads are command input, so bound them before JSON parsing allocates more state.
       throw new Error(`native hook input exceeds ${maxBytes} bytes`);
     }
     chunks.push(buffer);
@@ -141,10 +145,12 @@ function formatRelayCliError(prefix: string, error: unknown): string {
   return `${prefix}: ${message}\n`;
 }
 
+/** Creates a readable stream for tests that exercise stdin payload handling. */
 export function createReadableTextStream(text: string): NodeJS.ReadableStream {
   return Readable.from([text]);
 }
 
+/** Creates a writable stream buffer for tests that assert stdout/stderr payloads. */
 export function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => string } {
   const chunks: Buffer[] = [];
   const stream = new Writable({

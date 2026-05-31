@@ -3,6 +3,7 @@ import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
+/** Inputs needed to build the plugin API object passed to register(). */
 export type BuildPluginApiParams = {
   id: string;
   name: string;
@@ -179,6 +180,7 @@ const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbe
   () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
 
+/** Builds a complete plugin API, filling unwired extension points with no-op handlers. */
 export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
   const handlers = params.handlers ?? {};
   const registerCli = handlers.registerCli ?? noopRegisterCli;
@@ -202,6 +204,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerChannel: handlers.registerChannel ?? noopRegisterChannel,
     registerGatewayMethod: handlers.registerGatewayMethod ?? noopRegisterGatewayMethod,
     registerCli,
+    // Node CLI features are modeled as child CLI registrations beneath the
+    // `nodes` command, sharing the same handler as ordinary CLI extensions.
     registerNodeCliFeature: (registrar, opts) =>
       registerCli(registrar, {
         ...opts,

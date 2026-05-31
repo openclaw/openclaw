@@ -42,6 +42,7 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
 };
 const MAX_DETAIL_ENTRIES = 8;
 
+/** Builds the normalized display model used by logs/UI for a tool invocation. */
 export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
@@ -82,11 +83,13 @@ export function resolveToolDisplay(params: {
   };
 }
 
+/** Returns redacted detail text for a resolved tool display, or undefined when empty. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
   return formatToolDetailText(detailRaw);
 }
 
+/** Formats the one-line visible summary for a resolved tool invocation. */
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   if (detail && (display.name === "bash" || display.name === "exec")) {

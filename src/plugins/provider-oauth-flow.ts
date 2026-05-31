@@ -1,10 +1,12 @@
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
+/** Prompt contract used when OAuth providers need a manual code or redirect URL. */
 export type OAuthPrompt = { message: string; placeholder?: string };
 
 const validateRequiredInput = (value: string) => (value.trim().length > 0 ? undefined : "Required");
 
+/** Builds OAuth callbacks that open a local browser or switch remote/VPS runs to copy-paste mode. */
 export function createVpsAwareOAuthHandlers(params: {
   isRemote: boolean;
   prompter: WizardPrompter;
@@ -23,6 +25,7 @@ export function createVpsAwareOAuthHandlers(params: {
   return {
     onAuth: async ({ url }) => {
       if (params.isRemote) {
+        // Remote shells cannot receive local browser redirects; start the manual prompt early.
         params.spin.stop("OAuth URL ready");
         params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
         manualCodePromise = params.prompter.text({
@@ -38,6 +41,7 @@ export function createVpsAwareOAuthHandlers(params: {
     },
     onPrompt: async (prompt) => {
       if (manualCodePromise) {
+        // Reuse the prompt started by onAuth so providers don't ask twice for the same redirect.
         return manualCodePromise;
       }
       const code = await params.prompter.text({

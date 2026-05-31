@@ -26,6 +26,7 @@ const GATEWAY_RUN_BOOLEAN_FLAGS = new Set([
   "--raw-stream",
 ]);
 
+/** Returns how many argv tokens form a supported `openclaw gateway run` option. */
 export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index: number): number {
   const arg = args[index];
   if (!arg || arg === "--" || !arg.startsWith("-")) {
@@ -40,11 +41,13 @@ export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index:
     return 0;
   }
   if (equalsIndex !== -1) {
+    // Empty --flag= is not consumed so the caller can treat it as malformed user input.
     return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
   }
   return isValueToken(args[index + 1]) ? 2 : 0;
 }
 
+/** Returns how many root-level tokens can precede the gateway fast-path command. */
 export function consumeGatewayFastPathRootOptionToken(
   args: ReadonlyArray<string>,
   index: number,
@@ -65,6 +68,7 @@ export function consumeGatewayFastPathRootOptionToken(
   return 0;
 }
 
+/** Extracts the catalog command path from argv that uses the gateway fast path. */
 export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | null {
   const args = argv.slice(2);
   let sawGateway = false;
@@ -84,6 +88,7 @@ export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | nul
         continue;
       }
       if (arg !== "gateway") {
+        // Non-gateway argv belongs to the normal Commander/catalog parser.
         return null;
       }
       sawGateway = true;

@@ -69,6 +69,7 @@ const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   workspace: 3,
 };
 
+/** Compares install sources by trust so config/bundled entries beat global/workspace metadata. */
 function isPreferredOrigin(candidate: PluginOrigin, current: PluginOrigin | undefined): boolean {
   return !current || INSTALL_ORIGIN_PRIORITY[candidate] < INSTALL_ORIGIN_PRIORITY[current];
 }
@@ -77,6 +78,7 @@ function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultCh
   return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
 }
 
+/** Rehydrates install metadata from the durable installed-plugin index. */
 function resolveInstallInfoFromInstallRecord(
   record: InstalledPluginInstallRecordInfo | undefined,
 ): PluginPackageInstall | null {
@@ -107,6 +109,7 @@ function resolveInstallInfoFromInstallRecord(
   return null;
 }
 
+/** Reads package-install metadata from manifests/catalog records that are allowed to advertise it. */
 function resolveInstallInfoFromPackageSource(params: {
   origin: PluginOrigin;
   source?: unknown;
@@ -144,6 +147,7 @@ function resolveInstallInfoFromPackageSource(params: {
   };
 }
 
+/** Prefers the exact installed record before falling back to package-source metadata. */
 function resolveInstallInfoFromRegistryRecord(params: {
   record: PluginRegistryRecord;
   installRecord?: InstalledPluginInstallRecordInfo;
@@ -157,6 +161,7 @@ function resolveInstallInfoFromRegistryRecord(params: {
   );
 }
 
+/** Converts the provider index install block into onboarding install instructions. */
 function resolveInstallInfoFromProviderIndex(
   provider: OpenClawProviderIndexProvider,
 ): PluginPackageInstall | null {
@@ -180,6 +185,7 @@ function resolveInstallInfoFromProviderIndex(
   };
 }
 
+/** Builds preferred install metadata per plugin id while filtering untrusted workspace entries. */
 function resolvePreferredInstallsByPluginId(
   params: ProviderInstallCatalogParams,
 ): PreferredInstallSources {
@@ -203,6 +209,7 @@ function resolvePreferredInstallsByPluginId(
         enabledByDefault: record.enabledByDefault,
       }).enabled
     ) {
+      // Workspace install metadata can target arbitrary packages; require explicit enablement.
       continue;
     }
     const install = resolveInstallInfoFromRegistryRecord({
@@ -224,6 +231,7 @@ function resolvePreferredInstallsByPluginId(
   return { installedPluginIds, installsByPluginId: preferredByPluginId };
 }
 
+/** Adds provider-index catalog choices for official plugins that are not installed yet. */
 function resolveProviderIndexInstallCatalogEntries(params: {
   installedPluginIds: ReadonlySet<string>;
   seenChoiceIds: ReadonlySet<string>;
@@ -369,6 +377,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
   return entries;
 }
 
+/** Lists installable provider auth choices from installed metadata, official catalog, and index. */
 export function resolveProviderInstallCatalogEntries(
   params?: ProviderInstallCatalogParams,
 ): ProviderInstallCatalogEntry[] {
@@ -400,6 +409,7 @@ export function resolveProviderInstallCatalogEntries(
     seenChoiceIds,
   });
   for (const entry of officialEntries) {
+    // Official catalog entries should reserve their choice ids before legacy provider-index rows.
     seenChoiceIds.add(entry.choiceId);
   }
   const indexEntries = resolveProviderIndexInstallCatalogEntries({
@@ -411,6 +421,7 @@ export function resolveProviderInstallCatalogEntries(
   );
 }
 
+/** Resolves one installable provider auth choice by choice id. */
 export function resolveProviderInstallCatalogEntry(
   choiceId: string,
   params?: ProviderInstallCatalogParams,

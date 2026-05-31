@@ -46,6 +46,7 @@ function normalizePluginEventData(params: {
   };
 }
 
+/** Emits a plugin-originated agent event after stream ownership and JSON checks. */
 export function emitPluginAgentEvent(params: {
   pluginId: string;
   pluginName?: string;
@@ -62,6 +63,8 @@ export function emitPluginAgentEvent(params: {
     return { emitted: false, reason: "event data must be JSON-compatible" };
   }
   if (params.origin !== "bundled" && HOST_OWNED_AGENT_EVENT_STREAMS.has(stream)) {
+    // Third-party plugins cannot spoof host-owned streams; bundled plugins may
+    // bridge core workflow events because they ship with the trusted runtime.
     return { emitted: false, reason: `stream ${stream} is reserved for bundled plugins` };
   }
   if (params.origin !== "bundled" && !isPluginOwnedAgentEventStream(params.pluginId, stream)) {

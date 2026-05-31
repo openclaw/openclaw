@@ -14,10 +14,12 @@ const RUNTIME_SIDECAR_ARTIFACTS = new Set([
 
 export { normalizeOptionalString as trimBundledPluginString };
 
+/** Normalizes package-manifest bundled plugin entry lists. */
 export function normalizeBundledPluginStringList(value: unknown): string[] {
   return normalizeTrimmedStringList(value);
 }
 
+/** Rewrites a source entry path to its built JavaScript artifact path. */
 export function rewriteBundledPluginEntryToBuiltPath(
   entry: string | undefined,
 ): string | undefined {
@@ -48,6 +50,7 @@ function isTopLevelPublicSurfaceSource(name: string): boolean {
   return !/(\.test|\.spec)(\.[cm]?[jt]s)$/u.test(name);
 }
 
+/** Builds a stable id hint for package manifests that expose multiple plugin entries. */
 export function deriveBundledPluginIdHint(params: {
   entryPath: string;
   manifestId: string;
@@ -68,6 +71,7 @@ export function deriveBundledPluginIdHint(params: {
   return `${unscoped}/${base}`;
 }
 
+/** Finds top-level public-surface artifacts emitted beside a bundled plugin entry. */
 export function collectBundledPluginPublicSurfaceArtifacts(params: {
   pluginDir: string;
   sourceEntry: string;
@@ -78,6 +82,8 @@ export function collectBundledPluginPublicSurfaceArtifacts(params: {
       path.basename(entry),
     ),
   );
+  // Public surface artifacts are top-level files only; nested files are owned by
+  // runtime loading, while source/setup entries are already tracked separately.
   const artifacts = fs
     .readdirSync(params.pluginDir, { withFileTypes: true })
     .filter((entry) => entry.isFile())
@@ -90,6 +96,7 @@ export function collectBundledPluginPublicSurfaceArtifacts(params: {
   return artifacts.length > 0 ? artifacts : undefined;
 }
 
+/** Narrows public-surface artifacts to runtime sidecars that must ship with bundled plugins. */
 export function collectBundledPluginRuntimeSidecarArtifacts(
   publicSurfaceArtifacts: readonly string[] | undefined,
 ): readonly string[] | undefined {
@@ -102,6 +109,7 @@ export function collectBundledPluginRuntimeSidecarArtifacts(
   return artifacts.length > 0 ? artifacts : undefined;
 }
 
+/** Chooses the bundled plugin tree to scan for generated metadata. */
 export function resolveBundledPluginScanDir(params: {
   packageRoot: string;
   runningFromBuiltArtifact: boolean;
@@ -110,6 +118,8 @@ export function resolveBundledPluginScanDir(params: {
   const runtimeDir = path.join(params.packageRoot, "dist-runtime", "extensions");
   const builtDir = path.join(params.packageRoot, "dist", "extensions");
   if (params.runningFromBuiltArtifact) {
+    // Built runtimes should scan built artifacts first; dist-runtime is the
+    // fallback when packaging split runtime assets away from dist.
     if (fs.existsSync(builtDir)) {
       return builtDir;
     }
