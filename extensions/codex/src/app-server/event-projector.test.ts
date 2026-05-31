@@ -1554,12 +1554,13 @@ describe("CodexAppServerEventProjector", () => {
     const registry = createEmptyPluginRegistry();
     const middleware = vi.fn(
       async (event: {
-        result: { content: Array<{ type: string; text?: string }> };
+        result: { content: Array<{ type: string; text?: string }>; details: unknown };
         toolName: string;
       }) => ({
         result: {
           ...event.result,
           content: [{ type: "text" as const, text: `[compacted:${event.toolName}]` }],
+          details: event.result.details ?? null,
         },
       }),
     );
