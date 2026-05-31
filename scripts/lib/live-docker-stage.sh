@@ -70,16 +70,14 @@ openclaw_live_stage_state_dir() {
   mkdir -p "$dest_dir"
   if [ -d "$source_dir" ]; then
     # Sandbox workspaces can accumulate root-owned artifacts from prior Docker
-    # runs. The persisted plugin registry contains host-absolute paths that are
-    # not portable into Linux containers. Neither is needed for live-test
-    # auth/config staging, so keep them out of the staged state copy.
+    # runs. They are not needed for live-test auth/config staging, so keep them
+    # out of the staged state copy.
     set +e
     tar -C "$source_dir" \
       --warning=no-file-changed \
       --ignore-failed-read \
       --exclude=workspace \
       --exclude=sandboxes \
-      --exclude=plugins/installs.json \
       --exclude=relay.sock \
       --exclude='*.sock' \
       --exclude='*/*.sock' \

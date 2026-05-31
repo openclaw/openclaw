@@ -71,7 +71,7 @@ type Options = {
   recordFps: number;
   recordSeconds: number;
   remoteCommand: string[];
-  sessionFile?: string;
+  sessionStatePath?: string;
   sutUsername?: string;
   target: string;
   tdlibSha256?: string;
@@ -100,7 +100,7 @@ type LocalSut = {
   gatewayLog: string;
 };
 
-type SessionFile = {
+type ProofSessionState = {
   command: "telegram-user-crabbox-session";
   createdAt: string;
   crabbox: {
@@ -195,7 +195,7 @@ function usageText() {
     "  --record-fps <fps>             Desktop recording frames per second. Default: 24.",
     "  --record-seconds <seconds>    Desktop video duration. Default: 35.",
     "  --repo <owner/name>           GitHub repo for publish. Default: openclaw/openclaw.",
-    "  --session <path>              Session file from start. Default: <output-dir>/session.json.",
+    "  --session <path>              Proof session state from start. Default: <output-dir>/session.json.",
     "  --summary <text>              Artifact publish summary.",
     "  --full-artifacts              Publish all session artifacts. Default publishes only the motion GIF.",
     "  --tdlib-sha256 <hex>         Expected SHA-256 for --tdlib-url. Defaults to <url>.sha256.",
@@ -346,7 +346,7 @@ function parseArgs(argvInput: string[]): Options {
     } else if (arg === "--record-seconds") {
       opts.recordSeconds = parsePositiveInteger(readValue(), "--record-seconds");
     } else if (arg === "--session") {
-      opts.sessionFile = readValue();
+      opts.sessionStatePath = readValue();
     } else if (arg === "--summary") {
       opts.publishSummary = readValue();
     } else if (arg === "--full-artifacts") {
@@ -381,7 +381,7 @@ function parseArgs(argvInput: string[]): Options {
   }
   if (
     ["finish", "publish", "run", "screenshot", "send", "status", "view"].includes(command) &&
-    !opts.sessionFile
+    !opts.sessionStatePath
   ) {
     throw new Error(`${command} requires --session.`);
   }
@@ -1643,24 +1643,24 @@ function writeReport(params: {
   return reportPath;
 }
 
-function sessionPath(root: string, opts: Options, outputDir: string) {
-  return opts.sessionFile
-    ? resolveRepoPath(root, opts.sessionFile)
+function sessionStatePath(root: string, opts: Options, outputDir: string) {
+  return opts.sessionStatePath
+    ? resolveRepoPath(root, opts.sessionStatePath)
     : path.join(outputDir, "session.json");
 }
 
-function writeSession(pathname: string, session: SessionFile) {
+function writeSessionState(pathname: string, session: ProofSessionState) {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   fs.writeFileSync(pathname, `${JSON.stringify(session, null, 2)}\n`, { mode: 0o600 });
   fs.chmodSync(pathname, 0o600);
 }
 
-function readSession(root: string, opts: Options, outputDir: string) {
-  const pathname = sessionPath(root, opts, outputDir);
+function readSessionState(root: string, opts: Options, outputDir: string) {
+  const pathname = sessionStatePath(root, opts, outputDir);
   if (!fs.existsSync(pathname)) {
-    throw new Error(`Missing session file: ${path.relative(root, pathname)}`);
+    throw new Error(`Missing proof session state: ${path.relative(root, pathname)}`);
   }
-  const session = readJsonFile(pathname) as SessionFile;
+  const session = readJsonFile(pathname) as ProofSessionState;
   if (session.command !== "telegram-user-crabbox-session") {
     throw new Error(`Invalid Telegram Crabbox session file: ${path.relative(root, pathname)}`);
   }
@@ -1743,7 +1743,11 @@ echo $! >"$pid_file"`;
   };
 }
 
-async function stopRemoteRecording(root: string, inspect: CrabboxInspect, session: SessionFile) {
+async function stopRemoteRecording(
+  root: string,
+  inspect: CrabboxInspect,
+  session: ProofSessionState,
+) {
   await sshRun(
     root,
     inspect,
@@ -1845,7 +1849,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       testerId: credential.testerUserId,
     });
     const recorder = await startRemoteRecording(root, inspect, opts);
-    const session: SessionFile = {
+    const session: ProofSessionState = {
       command: "telegram-user-crabbox-session",
       createdAt: new Date().toISOString(),
       crabbox: {
@@ -1869,8 +1873,8 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       recorder,
       remoteRoot: REMOTE_ROOT,
     };
-    const pathname = sessionPath(root, opts, outputDir);
-    writeSession(pathname, session);
+    const pathname = sessionStatePath(root, opts, outputDir);
+    writeSessionState(pathname, session);
     return {
       session: path.relative(root, pathname),
       status: "pass",
@@ -1902,7 +1906,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
 }
 
 async function sendSessionProbe(root: string, opts: Options, outputDir: string) {
-  const { session } = readSession(root, opts, outputDir);
+  const { session } = readSessionState(root, opts, outputDir);
   const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
   const targetText = buildTargetText(opts.text, session.credential.sutUsername);
   const remoteProbe = `${REMOTE_ROOT}/probe-${stamp}.json`;
@@ -1930,7 +1934,7 @@ async function sendSessionProbe(root: string, opts: Options, outputDir: string) 
 }
 
 async function runSessionCommand(root: string, opts: Options, outputDir: string) {
-  const { session } = readSession(root, opts, outputDir);
+  const { session } = readSessionState(root, opts, outputDir);
   const command = opts.remoteCommand.map(shellQuote).join(" ");
   const logPath = path.join(
     session.outputDir,
@@ -1941,7 +1945,7 @@ async function runSessionCommand(root: string, opts: Options, outputDir: string)
 }
 
 async function screenshotSession(root: string, opts: Options, outputDir: string) {
-  const { session } = readSession(root, opts, outputDir);
+  const { session } = readSessionState(root, opts, outputDir);
   const screenshotPath = path.join(
     session.outputDir,
     `telegram-user-crabbox-${new Date().toISOString().replace(/[:.]/gu, "-")}.png`,
@@ -1966,7 +1970,7 @@ async function screenshotSession(root: string, opts: Options, outputDir: string)
 }
 
 async function statusSession(root: string, opts: Options, outputDir: string) {
-  const { path: pathname, session } = readSession(root, opts, outputDir);
+  const { path: pathname, session } = readSessionState(root, opts, outputDir);
   const inspect = await inspectCrabbox(opts, root, session.crabbox.id);
   return {
     crabbox: {
@@ -2012,7 +2016,7 @@ wmctrl -lxG | awk 'tolower($0) ~ /telegramdesktop/'`;
 }
 
 async function viewSession(root: string, opts: Options, outputDir: string) {
-  const { session } = readSession(root, opts, outputDir);
+  const { session } = readSessionState(root, opts, outputDir);
   const messageId = opts.messageId;
   if (!messageId) {
     throw new Error("view requires --message-id.");
@@ -2035,7 +2039,7 @@ async function viewSession(root: string, opts: Options, outputDir: string) {
 }
 
 async function finishSession(root: string, opts: Options, outputDir: string) {
-  const { path: pathname, session } = readSession(root, opts, outputDir);
+  const { path: pathname, session } = readSessionState(root, opts, outputDir);
   const summary: JsonObject = {
     artifacts: {},
     finishedAt: new Date().toISOString(),
@@ -2177,7 +2181,7 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
 }
 
 async function publishSessionArtifacts(root: string, opts: Options, outputDir: string) {
-  const { session } = readSession(root, opts, outputDir);
+  const { session } = readSessionState(root, opts, outputDir);
   const motionGifPath = path.join(session.outputDir, "telegram-user-crabbox-session-motion.gif");
   const croppedMotionGifPath = path.join(
     session.outputDir,

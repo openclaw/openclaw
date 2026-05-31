@@ -62,14 +62,17 @@ const parseArgs = (): Args => {
 
 const loadAuthProfiles = (agentId: string) => {
   const stateRoot = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
-  const authPath = path.join(stateRoot, "agents", agentId, "agent", "auth-profiles.json");
-  if (!fs.existsSync(authPath)) {
-    throw new Error(`Missing: ${authPath}`);
-  }
-  const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
+  const agentDir = path.join(stateRoot, "agents", agentId, "agent");
+  const store = loadPersistedAuthProfileStore(agentDir, {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateRoot },
+  }) as {
     profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-  };
-  return { authPath, store };
+  } | null;
+  const authLocation = `${resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateRoot })}#table/auth_profile_stores/${agentDir}`;
+  if (!store) {
+    throw new Error(`Missing SQLite auth store: ${authLocation}`);
+  }
+  return { authLocation, store };
 };
 
 const CLAUDE_COOKIE_HOST_SQL =
@@ -414,8 +417,8 @@ const fetchClaudeWebUsage = async (sessionKey: string, options: FetchOptions = {
 
 const main = async () => {
   const opts = parseArgs();
-  const { authPath, store } = loadAuthProfiles(opts.agentId);
-  console.log(`Auth file: ${redactHomePath(authPath)}`);
+  const { authLocation, store } = loadAuthProfiles(opts.agentId);
+  console.log(`Auth store: ${redactHomePath(authLocation)}`);
 
   const keychain = readClaudeCliKeychain();
   if (keychain) {

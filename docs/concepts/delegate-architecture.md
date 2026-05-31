@@ -149,7 +149,7 @@ This creates:
 
 - Workspace: `~/.openclaw/workspace-delegate`
 - State: `~/.openclaw/agents/delegate/agent`
-- Sessions: `~/.openclaw/agents/delegate/sessions`
+- Sessions: `~/.openclaw/agents/delegate/agent/openclaw-agent.sqlite`
 
 Configure the delegate's personality in its workspace files:
 
@@ -247,7 +247,7 @@ Copy or create auth profiles for the delegate's `agentDir`:
 
 ```bash
 # Delegate reads from its own auth store
-~/.openclaw/agents/delegate/agent/auth-profiles.json
+~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<delegateAgentDir>
 ```
 
 Never share the main agent's `agentDir` with the delegate. See [Multi-Agent Routing](/concepts/multi-agent) for auth isolation details.

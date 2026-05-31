@@ -143,7 +143,7 @@ The Docker setup uses three config files on the host. The container never stores
 
 | File                          | Purpose                                                                        |
 | ----------------------------- | ------------------------------------------------------------------------------ |
-| `Dockerfile`                  | Builds the `openclaw:local` image (Node 22, pnpm, non-root `node` user)        |
+| `Dockerfile`                  | Builds the `openclaw:local` image (Node 24, pnpm, non-root `node` user)        |
 | `docker-compose.yml`          | Defines `openclaw-gateway` and `openclaw-cli` services, bind-mounts, ports     |
 | `docker-compose.override.yml` | Standard Docker Compose overrides — auto-loaded by ClawDock helpers if present |
 | `docker-compose.extra.yml`    | Additional overrides — loaded after the standard override if present           |

@@ -90,6 +90,7 @@
   "thread-bindings-session-runtime",
   "text-runtime",
   "text-chunking",
+  "agent-core",
   "agent-runtime",
   "simple-completion-runtime",
   "speech-core",
@@ -327,7 +328,6 @@
   "web-media",
   "zalouser",
   "zod",
-  "agent-core",
   "agent-sessions",
   "llm"
 ]

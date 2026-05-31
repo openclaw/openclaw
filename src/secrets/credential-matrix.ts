@@ -3,7 +3,7 @@ import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-po
 
 type CredentialMatrixEntry = {
   id: string;
-  configFile: "openclaw.json" | "auth-profiles.json";
+  store: "openclaw.json" | "auth-profile-store";
   path: string;
   refPath?: string;
   when?: { type: "api_key" | "token" };
@@ -32,8 +32,10 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
     const canonicalPath = isCanonicalFirecrawlWebFetchEntry
       ? "tools.web.fetch.firecrawl.apiKey"
       : entry.pathPattern;
+    const store =
+      entry.configFile === "auth-profiles.json" ? "auth-profile-store" : "openclaw.json";
     const matrixEntry = Object.assign(
-      { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
+      { id: canonicalId, store, path: canonicalPath },
       entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
       entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
       { secretShape: entry.secretShape, optIn: true as const },
@@ -43,7 +45,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
     );
     entriesByKey.set(
       [
-        matrixEntry.configFile,
+        matrixEntry.store,
         matrixEntry.id,
         matrixEntry.path,
         matrixEntry.refPath ?? "",

@@ -1538,7 +1538,8 @@ test -f "$TMPDIR/docker-cmd-seen"
 
     expect(runner).toContain("scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
     expect(probe).toContain("plugin install record changed unexpectedly");
-    expect(probe).toContain("index.installRecords ?? index.records ?? config.plugins?.installs");
+    expect(probe).toContain("readInstalledPluginRecords()");
+    expect(probe).toContain('records["lossless-claw"] ?? records["@example/lossless-claw"]');
     expect(scenario).toContain("Config changed unexpectedly for modern package");
     expect(scenario).not.toContain("before_hash");
   });

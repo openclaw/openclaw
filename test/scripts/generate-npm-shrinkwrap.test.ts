@@ -11,6 +11,7 @@ import {
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
   packageDependencyInputsChanged,
+  packageJsonForShrinkwrap,
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
@@ -347,6 +348,25 @@ describe("generate-npm-shrinkwrap", () => {
         peerDependenciesMeta: { openclaw: { optional: true } },
       }),
     ).toBe(true);
+  });
+
+  it("keeps direct dependency overrides compatible with npm", () => {
+    expect(
+      packageJsonForShrinkwrap(
+        {
+          dependencies: {
+            "@smithy/node-http-handler": "4.7.3",
+          },
+        },
+        {
+          "@smithy/node-http-handler": "4.7.4",
+          "@smithy/types": "4.14.2",
+        },
+      ).overrides,
+    ).toEqual({
+      "@smithy/node-http-handler": "4.7.3",
+      "@smithy/types": "4.14.2",
+    });
   });
 
   it("applies package extension peer metadata to generated shrinkwrap packages", () => {

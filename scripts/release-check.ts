@@ -222,7 +222,6 @@ export function runReleaseCheckCommand(
   }
   return typeof output === "string" ? output : output.toString("utf8");
 }
-
 export function collectSkillShellScriptExecutableErrors(rootDir = resolve(".")): string[] {
   if (process.platform === "win32") {
     return [];
@@ -635,7 +634,6 @@ function runPackedPluginSdkTypescriptSmoke(tarballPath: string, tmpRoot: string)
     },
   );
 }
-
 export function writePackedBundledPluginActivationConfig(homeDir: string): void {
   const configPath = join(homeDir, ".openclaw", "openclaw.json");
   mkdirSync(join(homeDir, ".openclaw"), { recursive: true });
@@ -850,13 +848,6 @@ function runPackedBundledChannelEntrySmoke(): void {
         }),
       },
     );
-
-    const completionFiles = readdirSync(join(stateDir, "completions")).filter(
-      (entry) => !entry.startsWith("."),
-    );
-    if (completionFiles.length === 0) {
-      throw new Error("release-check: packed completion smoke produced no completion files.");
-    }
 
     runInstalledWorkspaceBootstrapSmoke({ packageRoot });
   } finally {

@@ -50,8 +50,8 @@ Notes:
 
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - `models list` is read-only: it reads config, auth profiles, existing catalog
-  state, and provider-owned catalog rows, but it does not rewrite
-  `models.json`.
+  state, and provider-owned catalog rows, but it does not rewrite the stored
+  model catalog.
 - The `Auth` column is provider-level and read-only. It is computed from local
   auth profile metadata, env markers, configured provider keys, local-provider
   markers, AWS Bedrock env/profile markers, and plugin synthetic-auth metadata;

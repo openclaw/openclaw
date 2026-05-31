@@ -1079,7 +1079,6 @@ jobs:
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton
-
   checks-node-core-test-nondist-shard:
     permissions:
       contents: read

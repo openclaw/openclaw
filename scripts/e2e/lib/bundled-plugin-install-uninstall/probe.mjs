@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readInstalledPluginRecords } from "../installed-plugin-index.mjs";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const normalizePathForProbe = (value) => String(value ?? "").replace(/\\/g, "/");
@@ -172,12 +173,9 @@ async function selectedManifestEntries() {
 }
 
 function assertInstalled(pluginId, pluginDir, requiresConfig) {
-  const stateDir = resolveStateDir();
-  const configPath = path.join(stateDir, "openclaw.json");
-  const indexPath = path.join(stateDir, "plugins", "installs.json");
+  const configPath = path.join(resolveStateDir(), "openclaw.json");
   const config = readJson(configPath);
-  const index = readJson(indexPath);
-  const records = index.installRecords ?? index.records ?? {};
+  const records = readInstalledPluginRecords();
   const record = records[pluginId];
   if (!record) {
     throw new Error(`missing install record for ${pluginId}`);
@@ -220,10 +218,8 @@ function assertInstalled(pluginId, pluginDir, requiresConfig) {
 function assertUninstalled(pluginId, pluginDir) {
   const stateDir = resolveStateDir();
   const configPath = path.join(stateDir, "openclaw.json");
-  const indexPath = path.join(stateDir, "plugins", "installs.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  const records = index.installRecords ?? index.records ?? {};
+  const records = readInstalledPluginRecords();
   if (records[pluginId]) {
     throw new Error(`install record still present after uninstall for ${pluginId}`);
   }

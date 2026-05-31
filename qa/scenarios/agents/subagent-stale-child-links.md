@@ -59,11 +59,7 @@ steps:
                   const now = Date.now();
                   const old = now - 2 * 60 * 60 * 1000;
                   const recent = now - 5000;
-                  const qaSessionsDir = path.join(ctx.stateDir, "agents", "qa", "sessions");
-                  const claudeSessionsDir = path.join(ctx.stateDir, "agents", "claude", "sessions");
                   const subagentDir = path.join(ctx.stateDir, "subagents");
-                  await fs.mkdir(qaSessionsDir, { recursive: true });
-                  await fs.mkdir(claudeSessionsDir, { recursive: true });
                   await fs.mkdir(subagentDir, { recursive: true });
                   await fs.writeFile(path.join(subagentDir, "runs.json"), `${JSON.stringify({
                     version: 2,
@@ -94,43 +90,57 @@ steps:
                       },
                     },
                   }, null, 2)}\n`, "utf8");
-                  await fs.writeFile(path.join(qaSessionsDir, "sessions.json"), `${JSON.stringify({
-                    [mainKey]: {
-                      sessionId: "sess-main",
-                      updatedAt: now,
-                    },
-                    [staleRunKey]: {
-                      sessionId: "sess-stale-run",
-                      updatedAt: old,
-                      spawnedBy: mainKey,
-                      status: "done",
-                      endedAt: old,
-                    },
-                    [staleOrphanKey]: {
-                      sessionId: "sess-orphan",
-                      updatedAt: old,
-                      parentSessionKey: mainKey,
-                    },
-                    [freshDashboardKey]: {
-                      sessionId: "sess-fresh-dashboard",
-                      updatedAt: now,
-                      parentSessionKey: mainKey,
-                    },
-                    [liveRunKey]: {
-                      sessionId: "sess-live-child",
-                      updatedAt: recent,
-                      spawnedBy: mainKey,
-                    },
-                  }, null, 2)}\n`, "utf8");
-                  await fs.writeFile(path.join(claudeSessionsDir, "sessions.json"), `${JSON.stringify({
-                    [staleAcpKey]: {
-                      sessionId: "sess-acp-stale",
-                      updatedAt: old,
-                      spawnedBy: mainKey,
-                      status: "done",
-                      endedAt: old,
-                    },
-                  }, null, 2)}\n`, "utf8");
+                  await seedQaSessionTranscript(env, {
+                    agentId: "qa",
+                    sessionId: "sess-main",
+                    sessionKey: mainKey,
+                    now,
+                    originLabel: "QA seeded subagent stale child parent",
+                  });
+                  await seedQaSessionTranscript(env, {
+                    agentId: "qa",
+                    sessionId: "sess-stale-run",
+                    sessionKey: staleRunKey,
+                    now: old,
+                    spawnedBy: mainKey,
+                    status: "done",
+                    endedAt: old,
+                    originLabel: "QA seeded stale ended subagent run",
+                  });
+                  await seedQaSessionTranscript(env, {
+                    agentId: "qa",
+                    sessionId: "sess-orphan",
+                    sessionKey: staleOrphanKey,
+                    now: old,
+                    parentSessionKey: mainKey,
+                    originLabel: "QA seeded stale orphan subagent link",
+                  });
+                  await seedQaSessionTranscript(env, {
+                    agentId: "qa",
+                    sessionId: "sess-fresh-dashboard",
+                    sessionKey: freshDashboardKey,
+                    now,
+                    parentSessionKey: mainKey,
+                    originLabel: "QA seeded fresh dashboard child",
+                  });
+                  await seedQaSessionTranscript(env, {
+                    agentId: "qa",
+                    sessionId: "sess-live-child",
+                    sessionKey: liveRunKey,
+                    now: recent,
+                    spawnedBy: mainKey,
+                    originLabel: "QA seeded live subagent child",
+                  });
+                  await seedQaSessionTranscript(env, {
+                    agentId: "claude",
+                    sessionId: "sess-acp-stale",
+                    sessionKey: staleAcpKey,
+                    now: old,
+                    spawnedBy: mainKey,
+                    status: "done",
+                    endedAt: old,
+                    originLabel: "QA seeded stale sibling ACP child",
+                  });
                 })()
       - call: waitForGatewayHealthy
         args:

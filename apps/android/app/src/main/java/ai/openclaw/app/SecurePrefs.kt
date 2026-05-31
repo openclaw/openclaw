@@ -442,6 +442,23 @@ class SecurePrefs(
     securePrefs.edit { remove(key) }
   }
 
+  fun keysWithPrefix(prefix: String): Set<String> =
+    securePrefs
+      .all
+      .keys
+      .filter { it.startsWith(prefix) }
+      .toSet()
+
+  fun removeKeysWithPrefix(prefix: String) {
+    val keys = keysWithPrefix(prefix)
+    if (keys.isEmpty()) return
+    securePrefs.edit {
+      for (key in keys) {
+        remove(key)
+      }
+    }
+  }
+
   private fun createSecurePrefs(
     context: Context,
     name: String,

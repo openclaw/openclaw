@@ -12,7 +12,7 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import { resolveGrammyAllowedUpdates } from "./allowed-updates.js";
 import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
@@ -39,7 +39,7 @@ export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unk
         // Match grammY defaults
         timeout: 30,
         // Request reactions without dropping default update types.
-        allowed_updates: resolveTelegramAllowedUpdates(),
+        allowed_updates: resolveGrammyAllowedUpdates(),
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,

@@ -2,13 +2,10 @@
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
 export const KNIP_UNUSED_FILE_ALLOWLIST = [
-  // Per-agent SQLite scaffold is intentionally landed before runtime migration
-  // callers so the schema and scoped cache API can be reviewed together.
+  // Per-agent cache scaffold is intentionally landed before runtime migration
+  // callers so the scoped cache API can be reviewed together.
   "src/agents/cache/agent-cache-store.sqlite.ts",
   "src/agents/cache/agent-cache-store.ts",
-  "src/state/openclaw-agent-db.paths.ts",
-  "src/state/openclaw-agent-db.ts",
-  "src/state/openclaw-agent-schema.generated.ts",
 ];
 
 // Knip can disagree across supported local/CI platforms for files that are
@@ -26,15 +23,25 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/copilot/src/user-input-bridge.ts",
   "extensions/diffs/src/viewer-client.ts",
   "extensions/diffs/src/viewer-payload.ts",
+  "extensions/imessage/src/monitor/reaction-system-event.ts",
   "extensions/matrix/src/plugin-entry.runtime.js",
   "extensions/memory-core/src/memory-tool-manager-mock.ts",
+  "extensions/skill-workshop/src/doctor-legacy-state.ts",
+  "extensions/voice-call/src/utils.ts",
+  "src/agents/json-unsafe-integers.ts",
+  "src/agents/pi-embedded-runner/resource-loader.ts",
+  "src/agents/pi-embedded-runner/run/message-tool-terminal.ts",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/inbound.group-require-mention-test-plugins.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",
+  "src/auto-reply/reply/image-model-override-plan.ts",
   "src/cli/daemon-cli-compat.ts",
+  "src/commands/doctor/e2e-harness.ts",
   "src/commands/doctor/shared/deprecation-compat.ts",
   "src/config/doc-baseline.runtime.ts",
   "src/config/doc-baseline.ts",
+  "src/config/sessions/session-file-rotation.ts",
+  "src/config/sessions/transcript-write-context.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/gateway-cli-backend.live-probe-helpers.ts",
   "src/gateway/gateway-codex-harness.live-helpers.ts",
@@ -42,11 +49,15 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/mcp/plugin-tools-handlers.ts",
   "src/mcp/plugin-tools-serve.ts",
   "src/mcp/tools-stdio-server.ts",
+  "src/memory-host-sdk/dreaming-state-migration.ts",
+  "src/pairing/allow-from-store-read.ts",
   "src/plugins/build-smoke-entry.ts",
   "src/plugins/contracts/host-hook-fixture.ts",
   "src/plugins/contracts/rootdir-boundary-canary.ts",
   "src/plugins/contracts/tts-contract-suites.ts",
+  "src/plugins/installed-plugin-index-store-path.ts",
   "src/plugins/runtime-sidecar-paths-baseline.ts",
+  "src/proxy-capture/schema.generated.ts",
   "src/tasks/task-registry-control.runtime.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",

@@ -109,36 +109,35 @@ steps:
                 - ref: staleMemoryPath
                 - ref: staleAt
                 - ref: staleAt
-            - set: transcriptsDir
-              value:
-                expr: "resolveSessionTranscriptsDirForAgent('qa', env.gateway.runtimeEnv, () => env.gateway.runtimeEnv.HOME ?? path.join(env.gateway.tempRoot, 'home'))"
-            - call: fs.mkdir
-              args:
-                - ref: transcriptsDir
-                - recursive: true
-            - set: transcriptPath
-              value:
-                expr: "path.join(transcriptsDir, `${config.transcriptId}.jsonl`)"
             - set: now
               value:
                 expr: "Date.now()"
-            - call: fs.writeFile
-              args:
-                - ref: transcriptPath
-                - expr: "[JSON.stringify({ type: 'session', id: config.transcriptId, timestamp: new Date(now - 120000).toISOString() }), JSON.stringify({ type: 'message', message: { role: 'user', timestamp: new Date(now - 90000).toISOString(), content: [{ type: 'text', text: config.transcriptQuestion }] } }), JSON.stringify({ type: 'message', message: { role: 'assistant', timestamp: new Date(now - 60000).toISOString(), content: [{ type: 'text', text: config.transcriptAnswer }] } })].join('\\n') + '\\n'"
-                - utf8
-            - call: readRawQaSessionStore
-              saveAs: sessionStore
+            - call: seedQaSessionTranscript
+              saveAs: seededSession
               args:
                 - ref: env
-            - set: sessionStorePath
-              value:
-                expr: "path.join(env.gateway.tempRoot, 'state', 'agents', 'qa', 'sessions', 'sessions.json')"
-            - call: fs.writeFile
-              args:
-                - ref: sessionStorePath
-                - expr: "JSON.stringify({ ...sessionStore, ['agent:qa:seed-session-memory-ranking']: { sessionId: config.transcriptId, updatedAt: now, sessionFile: transcriptPath, origin: { label: 'QA seeded session memory ranking transcript' } } }, null, 2)"
-                - utf8
+                - agentId: qa
+                  sessionId:
+                    expr: config.transcriptId
+                  sessionKey: agent:qa:seed-session-memory-ranking
+                  now:
+                    ref: now
+                  originLabel: QA seeded session memory ranking transcript
+                  messages:
+                    - role: user
+                      timestamp:
+                        expr: "now - 90000"
+                      content:
+                        - type: text
+                          text:
+                            expr: config.transcriptQuestion
+                    - role: assistant
+                      timestamp:
+                        expr: "now - 60000"
+                      content:
+                        - type: text
+                          text:
+                            expr: config.transcriptAnswer
             - call: forceMemoryIndex
               args:
                 - env:

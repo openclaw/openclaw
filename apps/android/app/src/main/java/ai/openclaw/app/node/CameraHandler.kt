@@ -3,7 +3,6 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.gateway.GatewaySession
-import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
@@ -19,7 +18,6 @@ internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
 internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean = rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
 
 class CameraHandler(
-  private val appContext: Context,
   private val camera: CameraCaptureManager,
   private val externalAudioCaptureActive: MutableStateFlow<Boolean>,
   private val showCameraHud: (message: String, kind: CameraHudKind, autoHideMs: Long?) -> Unit,
@@ -54,16 +52,12 @@ class CameraHandler(
     }
 
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
-    val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
-
     fun camLog(msg: String) {
       if (!BuildConfig.DEBUG) return
       val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
-      logFile?.appendText("[$ts] $msg\n")
-      android.util.Log.w("openclaw", "camera.snap: $msg")
+      android.util.Log.w("openclaw", "camera.snap[$ts]: $msg")
     }
     try {
-      logFile?.writeText("") // clear
       camLog("starting, params=$paramsJson")
       camLog("calling showCameraHud")
       showCameraHud("Taking photo…", CameraHudKind.Photo, null)
@@ -93,18 +87,14 @@ class CameraHandler(
   }
 
   suspend fun handleClip(paramsJson: String?): GatewaySession.InvokeResult {
-    val clipLogFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
-
     fun clipLog(msg: String) {
       if (!BuildConfig.DEBUG) return
       val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
-      clipLogFile?.appendText("[CLIP $ts] $msg\n")
-      android.util.Log.w("openclaw", "camera.clip: $msg")
+      android.util.Log.w("openclaw", "camera.clip[$ts]: $msg")
     }
     val includeAudio = parseIncludeAudio(paramsJson) ?: true
     if (includeAudio) externalAudioCaptureActive.value = true
     try {
-      clipLogFile?.writeText("") // clear
       clipLog("starting, params=$paramsJson includeAudio=$includeAudio")
       clipLog("calling showCameraHud")
       showCameraHud("Recording…", CameraHudKind.Recording, null)

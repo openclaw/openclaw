@@ -1,13 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  assertAgentReplyContainsMarker,
-  assertOpenAiRequestLogUsed,
-} from "../agent-turn-output.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { DatabaseSync } from "node:sqlite";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+
+function readAuthProfileStorePayload(stateDir, storeKey) {
+  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing OpenClaw state database: ${dbPath}`);
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
+      .get(storeKey);
+    return typeof row?.store_json === "string" ? JSON.parse(row.store_json) : undefined;
+  } finally {
+    db.close();
+  }
+}
 
 function assertOnboardState() {
   const home = process.argv[3];
@@ -22,15 +34,16 @@ function assertOnboardState() {
   if (!fs.existsSync(agentDir)) {
     throw new Error("onboard did not create main agent dir");
   }
-  if (!fs.existsSync(authPath)) {
-    throw new Error("onboard did not create auth-profiles.json");
-  }
-  const authRaw = fs.readFileSync(authPath, "utf8");
-  if (!authRaw.includes("OPENAI_API_KEY")) {
+  const authStore = readAuthProfileStorePayload(stateDir, agentDir);
+  const authRaw = JSON.stringify(authStore ?? {});
+  if (!authStore || !authRaw.includes("OPENAI_API_KEY")) {
     throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
   }
   if (authRaw.includes("sk-openclaw-npm-onboard-e2e")) {
     throw new Error("auth profile persisted the raw OpenAI test key");
+  }
+  if (fs.existsSync(authPath)) {
+    throw new Error(`auth profile should be SQLite-backed, found legacy file: ${authPath}`);
   }
 }
 
@@ -38,7 +51,51 @@ function configureMockModel() {
   const mockPort = Number(process.argv[3]);
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
-  applyMockOpenAiModelConfig(cfg, { mockPort });
+  const modelRef = "openai/gpt-5.5";
+  const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+  cfg.models = {
+    ...cfg.models,
+    mode: "merge",
+    providers: {
+      ...cfg.models?.providers,
+      openai: {
+        ...cfg.models?.providers?.openai,
+        baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        api: "openai-responses",
+        request: { ...cfg.models?.providers?.openai?.request, allowPrivateNetwork: true },
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "gpt-5.5",
+            api: "openai-responses",
+            reasoning: false,
+            input: ["text", "image"],
+            cost,
+            contextWindow: 128000,
+            contextTokens: 96000,
+            maxTokens: 4096,
+          },
+        ],
+      },
+    },
+  };
+  cfg.agents = {
+    ...cfg.agents,
+    defaults: {
+      ...cfg.agents?.defaults,
+      model: { primary: modelRef },
+      models: {
+        ...cfg.agents?.defaults?.models,
+        [modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
+      },
+    },
+  };
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+  };
   fs.writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
 }
 

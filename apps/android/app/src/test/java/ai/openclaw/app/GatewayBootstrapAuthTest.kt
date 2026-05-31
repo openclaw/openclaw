@@ -130,9 +130,10 @@ class GatewayBootstrapAuthTest {
         android.content.Context.MODE_PRIVATE,
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
-    val runtime = NodeRuntime(app, prefs)
+    val authStore = DeviceAuthStore(app, legacyPrefsOverride = prefs)
+    val runtime = NodeRuntime(app, prefs, deviceAuthStore = authStore)
     val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
-    DeviceAuthStore(prefs).saveToken(deviceId, "operator", "bootstrap-operator-token")
+    authStore.saveToken(deviceId, "operator", "bootstrap-operator-token")
 
     writeField(runtime, "operatorStatusText", "Connecting…")
     invokeMaybeStartOperatorSessionAfterNodeConnect(
@@ -192,6 +193,7 @@ class GatewayBootstrapAuthTest {
           app,
           prefs,
           tlsFingerprintProbe = { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = "fp:1") },
+          deviceAuthStore = DeviceAuthStore(app, legacyPrefsOverride = prefs),
         )
       val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
       val explicitAuth =
@@ -326,9 +328,9 @@ class GatewayBootstrapAuthTest {
         android.content.Context.MODE_PRIVATE,
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
-    val runtime = NodeRuntime(app, prefs)
+    val authStore = DeviceAuthStore(app, legacyPrefsOverride = prefs)
+    val runtime = NodeRuntime(app, prefs, deviceAuthStore = authStore)
     val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
-    val authStore = DeviceAuthStore(prefs)
     prefs.setGatewayToken("stale-shared-token")
     prefs.setGatewayBootstrapToken("stale-bootstrap-token")
     prefs.setGatewayPassword("stale-password")

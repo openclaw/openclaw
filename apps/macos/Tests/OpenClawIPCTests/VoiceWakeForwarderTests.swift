@@ -25,8 +25,8 @@ import Testing
         let entry = VoiceWakeForwarder.SessionRouteEntry(
             key: "agent:main:telegram:group:6812765697",
             channel: "telegram",
-            lastChannel: "telegram",
-            lastTo: "telegram:6812765697",
+            lastChannel: nil,
+            lastTo: nil,
             deliveryContext: .init(channel: "telegram", to: "telegram:6812765697"))
 
         let opts = VoiceWakeForwarder.forwardOptions(
@@ -38,6 +38,23 @@ import Testing
         #expect(opts.channel == .telegram)
         #expect(opts.to == "telegram:6812765697")
         #expect(opts.voiceWakeTrigger == "open claw")
+        #expect(opts.channel.shouldDeliver(opts.deliver) == true)
+    }
+
+    @Test func `selected forward options keep legacy session route fallback`() {
+        let entry = VoiceWakeForwarder.SessionRouteEntry(
+            key: "legacy-session",
+            channel: nil,
+            lastChannel: "telegram",
+            lastTo: "telegram:6812765697",
+            deliveryContext: nil)
+
+        let opts = VoiceWakeForwarder.forwardOptions(
+            sessionKey: entry.key,
+            routeEntry: entry)
+
+        #expect(opts.channel == .telegram)
+        #expect(opts.to == "telegram:6812765697")
         #expect(opts.channel.shouldDeliver(opts.deliver) == true)
     }
 

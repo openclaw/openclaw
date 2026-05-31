@@ -4,6 +4,7 @@ export function createLoggingVitestConfig(env?: Record<string, string | undefine
   return createScopedVitestConfig(["src/logging/**/*.test.ts"], {
     dir: "src",
     env,
+    fileParallelism: false,
     name: "logging",
     passWithNoTests: true,
   });

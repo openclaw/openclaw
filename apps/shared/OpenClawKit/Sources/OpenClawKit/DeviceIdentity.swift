@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SQLite3
 
 public struct DeviceIdentity: Codable, Sendable {
     public var deviceId: String
@@ -17,8 +18,17 @@ public struct DeviceIdentity: Codable, Sendable {
 
 enum DeviceIdentityPaths {
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
+    #if DEBUG
+    nonisolated(unsafe) static var testingStateDirURL: URL?
+    #endif
 
     static func stateDirURL() -> URL {
+        #if DEBUG
+        if let testingStateDirURL {
+            return testingStateDirURL
+        }
+        #endif
+
         for key in self.stateDirEnv {
             if let raw = getenv(key) {
                 let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -28,7 +38,30 @@ enum DeviceIdentityPaths {
             }
         }
 
-        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".openclaw", isDirectory: true)
+    }
+
+    static func legacyStateDirURL() -> URL {
+        #if DEBUG
+        if let testingStateDirURL {
+            return testingStateDirURL
+        }
+        #endif
+
+        for key in self.stateDirEnv {
+            if let raw = getenv(key) {
+                let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return URL(fileURLWithPath: value, isDirectory: true)
+                }
+            }
+        }
+
+        if let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask).first
+        {
             return appSupport.appendingPathComponent("OpenClaw", isDirectory: true)
         }
 
@@ -37,7 +70,7 @@ enum DeviceIdentityPaths {
 }
 
 public enum DeviceIdentityStore {
-    private static let fileName = "device.json"
+    private static let identityKey = "default"
     private static let ed25519SPKIPrefix = Data([
         0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65,
         0x70, 0x03, 0x21, 0x00,
@@ -48,56 +81,140 @@ public enum DeviceIdentityStore {
     ])
 
     public static func loadOrCreate() -> DeviceIdentity {
-        self.loadOrCreate(fileURL: self.fileURL())
-    }
-
-    static func loadOrCreate(fileURL url: URL) -> DeviceIdentity {
-        if let data = try? Data(contentsOf: url) {
-            switch self.decodeStoredIdentity(data) {
+        let row: OpenClawSQLiteDeviceIdentityRow?
+        do {
+            row = try self.readStoredIdentityRow()
+        } catch {
+            preconditionFailure(
+                "OpenClaw device identity SQLite read failed: \(error.localizedDescription). " +
+                    "Run openclaw doctor --fix before starting runtime.")
+        }
+        if let row {
+            switch self.decodeStoredIdentity(self.storedIdentity(from: row)) {
             case .identity(let decoded):
                 return decoded
             case .recognizedInvalid:
-                return self.generate()
-            case .unknown:
-                break
+                preconditionFailure("Stored OpenClaw device identity is invalid. Run openclaw doctor --fix.")
             }
         }
+        switch self.loadLegacyIdentity() {
+        case .some(.identity(let identity)):
+            if self.save(identity) {
+                try? FileManager.default.removeItem(at: self.legacyIdentityURL())
+            }
+            return identity
+        case .some(.recognizedInvalid):
+            preconditionFailure(
+                "Legacy OpenClaw device identity exists at \(self.legacyIdentityURL().path). " +
+                    "Run openclaw doctor --fix before starting runtime.")
+        case nil:
+            break
+        }
         let identity = self.generate()
-        self.save(identity, to: url)
+        _ = self.save(identity)
         return identity
+    }
+
+    static func legacyIdentityMigrationRequired() -> Bool {
+        FileManager.default.fileExists(atPath: self.legacyIdentityURL().path)
+    }
+
+    private static func legacyIdentityURL() -> URL {
+        DeviceIdentityPaths.legacyStateDirURL()
+            .appendingPathComponent("identity", isDirectory: true)
+            .appendingPathComponent("device.json", isDirectory: false)
     }
 
     private enum DecodeResult {
         case identity(DeviceIdentity)
         case recognizedInvalid
-        case unknown
     }
 
-    private static func decodeStoredIdentity(_ data: Data) -> DecodeResult {
+    private static func readStoredIdentityRow() throws -> OpenClawSQLiteDeviceIdentityRow? {
+        try self.withSQLiteRetry {
+            try OpenClawSQLiteStateStore.readDeviceIdentityChecked(key: self.identityKey)
+        }
+    }
+
+    private static func withSQLiteRetry<T>(_ operation: () throws -> T) throws -> T {
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                return try operation()
+            } catch {
+                lastError = error
+                guard attempt < 2, self.isTransientSQLiteError(error) else {
+                    throw error
+                }
+                Thread.sleep(forTimeInterval: 0.05 * Double(attempt + 1))
+            }
+        }
+        throw lastError ?? NSError(
+            domain: "OpenClawSQLiteStateStore",
+            code: Int(SQLITE_ERROR),
+            userInfo: [NSLocalizedDescriptionKey: "SQLite operation failed"])
+    }
+
+    private static func isTransientSQLiteError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == "OpenClawSQLiteStateStore" else { return false }
+        return nsError.code == Int(SQLITE_BUSY) || nsError.code == Int(SQLITE_LOCKED)
+    }
+
+    private static func storedIdentity(from row: OpenClawSQLiteDeviceIdentityRow) -> StoredDeviceIdentity {
+        StoredDeviceIdentity(
+            version: 1,
+            deviceId: row.deviceId,
+            publicKeyPem: row.publicKeyPem,
+            privateKeyPem: row.privateKeyPem,
+            createdAtMs: row.createdAtMs)
+    }
+
+    private static func decodeStoredIdentity(_ decoded: StoredDeviceIdentity) -> DecodeResult {
+        guard decoded.version == 1,
+              let publicKeyData = self.rawPublicKey(fromPEM: decoded.publicKeyPem),
+              let privateKeyData = self.rawPrivateKey(fromPEM: decoded.privateKeyPem),
+              self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
+        else {
+            return .recognizedInvalid
+        }
+        return .identity(DeviceIdentity(
+            deviceId: self.deviceId(publicKeyData: publicKeyData),
+            publicKey: publicKeyData.base64EncodedString(),
+            privateKey: privateKeyData.base64EncodedString(),
+            createdAtMs: decoded.createdAtMs))
+    }
+
+    private static func loadLegacyIdentity() -> DecodeResult? {
+        let url = self.legacyIdentityURL()
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            return .recognizedInvalid
+        }
+        return self.decodeLegacyIdentity(data)
+    }
+
+    private static func decodeLegacyIdentity(_ data: Data) -> DecodeResult {
         let decoder = JSONDecoder()
-        if let decoded = try? decoder.decode(DeviceIdentity.self, from: data) {
-            guard let identity = self.normalizedRawIdentity(decoded) else {
-                return .recognizedInvalid
-            }
-            return .identity(identity)
+        if let stored = try? decoder.decode(StoredDeviceIdentity.self, from: data) {
+            return self.decodeStoredIdentity(stored)
         }
-
-        if let decoded = try? decoder.decode(PemDeviceIdentity.self, from: data) {
-            guard decoded.version == 1,
-                  let publicKeyData = self.rawPublicKey(fromPEM: decoded.publicKeyPem),
-                  let privateKeyData = self.rawPrivateKey(fromPEM: decoded.privateKeyPem),
-                  self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
-            else {
-                return .recognizedInvalid
-            }
-            return .identity(DeviceIdentity(
-                deviceId: self.deviceId(publicKeyData: publicKeyData),
-                publicKey: publicKeyData.base64EncodedString(),
-                privateKey: privateKeyData.base64EncodedString(),
-                createdAtMs: decoded.createdAtMs))
+        guard let decoded = try? decoder.decode(DeviceIdentity.self, from: data),
+              let publicKeyData = Data(base64Encoded: decoded.publicKey),
+              let privateKeyData = Data(base64Encoded: decoded.privateKey),
+              publicKeyData.count == 32,
+              privateKeyData.count == 32,
+              self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
+        else {
+            return .recognizedInvalid
         }
-
-        return self.hasRecognizedIdentityShape(data) ? .recognizedInvalid : .unknown
+        return .identity(DeviceIdentity(
+            deviceId: self.deviceId(publicKeyData: publicKeyData),
+            publicKey: publicKeyData.base64EncodedString(),
+            privateKey: privateKeyData.base64EncodedString(),
+            createdAtMs: decoded.createdAtMs))
     }
 
     public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {
@@ -137,22 +254,6 @@ public enum DeviceIdentityStore {
         return self.base64UrlEncode(data)
     }
 
-    private static func normalizedRawIdentity(_ identity: DeviceIdentity) -> DeviceIdentity? {
-        guard !identity.deviceId.isEmpty,
-              let publicKeyData = Data(base64Encoded: identity.publicKey),
-              let privateKeyData = Data(base64Encoded: identity.privateKey)
-        else { return nil }
-
-        guard publicKeyData.count == 32 && privateKeyData.count == 32,
-              self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
-        else { return nil }
-        return DeviceIdentity(
-            deviceId: self.deviceId(publicKeyData: publicKeyData),
-            publicKey: identity.publicKey,
-            privateKey: identity.privateKey,
-            createdAtMs: identity.createdAtMs)
-    }
-
     private static func rawPublicKey(fromPEM pem: String) -> Data? {
         guard let der = self.derData(fromPEM: pem),
               der.count == self.ed25519SPKIPrefix.count + 32,
@@ -185,41 +286,55 @@ public enum DeviceIdentityStore {
         return Data(base64Encoded: body)
     }
 
-    private static func hasRecognizedIdentityShape(_ data: Data) -> Bool {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
-        }
-        return object.keys.contains("publicKeyPem")
-            || object.keys.contains("privateKeyPem")
-            || object.keys.contains("publicKey")
-            || object.keys.contains("privateKey")
+    private static func pem(label: String, der: Data) -> String {
+        let chunks = stride(from: 0, to: der.count, by: 48)
+            .map { offset -> String in
+                let end = min(offset + 48, der.count)
+                return der.subdata(in: offset..<end).base64EncodedString()
+            }
+            .joined(separator: "\n")
+        return "-----BEGIN \(label)-----\n\(chunks)\n-----END \(label)-----\n"
     }
 
     private static func deviceId(publicKeyData: Data) -> String {
         SHA256.hash(data: publicKeyData).compactMap { String(format: "%02x", $0) }.joined()
     }
 
-    private static func save(_ identity: DeviceIdentity, to url: URL) {
+    @discardableResult
+    private static func save(_ identity: DeviceIdentity) -> Bool {
         do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(identity)
-            try data.write(to: url, options: [.atomic])
+            let stored = self.storedIdentity(from: identity)
+            try self.withSQLiteRetry {
+                try OpenClawSQLiteStateStore.writeDeviceIdentity(
+                    key: self.identityKey,
+                    identity: OpenClawSQLiteDeviceIdentityRow(
+                        deviceId: stored.deviceId,
+                        publicKeyPem: stored.publicKeyPem,
+                        privateKeyPem: stored.privateKeyPem,
+                        createdAtMs: stored.createdAtMs))
+            }
+            return true
         } catch {
-            // best-effort only
+            return false
         }
     }
 
-    private static func fileURL() -> URL {
-        let base = DeviceIdentityPaths.stateDirURL()
-        return base
-            .appendingPathComponent("identity", isDirectory: true)
-            .appendingPathComponent(self.fileName, isDirectory: false)
+    private static func storedIdentity(from identity: DeviceIdentity) -> StoredDeviceIdentity {
+        guard let publicKeyData = Data(base64Encoded: identity.publicKey),
+              let privateKeyData = Data(base64Encoded: identity.privateKey)
+        else {
+            preconditionFailure("Generated OpenClaw device identity contains invalid base64")
+        }
+        return StoredDeviceIdentity(
+            version: 1,
+            deviceId: self.deviceId(publicKeyData: publicKeyData),
+            publicKeyPem: self.pem(label: "PUBLIC KEY", der: self.ed25519SPKIPrefix + publicKeyData),
+            privateKeyPem: self.pem(label: "PRIVATE KEY", der: self.ed25519PKCS8PrivatePrefix + privateKeyData),
+            createdAtMs: identity.createdAtMs)
     }
 }
 
-private struct PemDeviceIdentity: Codable {
+private struct StoredDeviceIdentity: Codable {
     var version: Int
     var deviceId: String
     var publicKeyPem: String

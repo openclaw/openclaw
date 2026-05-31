@@ -76,9 +76,8 @@ Use these in chat:
   configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
-  - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
-    local pricing for the active model. Otherwise it shows tokens only.
-- `/usage cost` → shows a local cost summary from OpenClaw session logs.
+  - OAuth auth **hides cost** (tokens only).
+- `/usage cost` → shows a local cost summary from OpenClaw session transcripts.
 
 Other surfaces:
 

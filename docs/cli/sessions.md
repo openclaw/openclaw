@@ -10,23 +10,18 @@ title: "Sessions"
 List stored conversation sessions.
 
 Session lists are not channel/provider liveness checks. They show persisted
-conversation rows from session stores. A quiet Discord, Slack, Telegram, or
-other channel can reconnect successfully without creating a new session row
-until a message is processed. Use `openclaw channels status --probe`,
-`openclaw status --deep`, or `openclaw health --verbose` when you need live
-channel connectivity.
+conversation rows from the per-agent SQLite databases. A quiet Discord, Slack,
+Telegram, or other channel can reconnect successfully without creating a new
+session row until a message is processed. Use `openclaw channels status
+--probe`, `openclaw status --deep`, or `openclaw health --verbose` when you need
+live channel connectivity.
 
 `openclaw sessions` and Gateway `sessions.list` responses are bounded by
-default so large long-lived stores cannot monopolize the CLI process or Gateway
-event loop. The CLI returns the newest 100 sessions by default; pass
+default so large long-lived databases cannot monopolize the CLI process or
+Gateway event loop. The CLI returns the newest 100 sessions by default; pass
 `--limit <n>` for a smaller/larger window or `--limit all` when you intentionally
 need the full store. JSON responses include `totalCount`, `limitApplied`, and
 `hasMore` when callers need to show that more rows exist.
-
-RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
-discovery source but return only rows for agents currently present in config.
-Control UI uses that mode by default so deleted or disk-only agent stores do
-not reappear in the Sessions view.
 
 ```bash
 openclaw sessions
@@ -40,11 +35,17 @@ openclaw sessions --json
 
 Scope selection:
 
-- default: configured default agent store
+- default: configured default agent database
 - `--verbose`: verbose logging
-- `--agent <id>`: one configured agent store
-- `--all-agents`: aggregate all configured agent stores
-- `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
+- `--agent <id>`: one configured agent database
+- `--all-agents`: aggregate all configured agent databases
+
+Canonical per-agent session rows live in `openclaw-agent.sqlite` under each
+agent. Existing `sessions.json` indexes are imported by the `openclaw doctor`
+fix mode, then removed after SQLite has the rows. Gateway startup does not
+import or rewrite legacy session indexes; run doctor when you intentionally want
+that migration.
+
 - `--limit <n|all>`: max rows to output (default `100`; `all` restores full output)
 
 Tail human-readable trajectory progress for stored sessions:
@@ -72,11 +73,9 @@ This is the command path used by the `/export-trajectory` slash command after
 the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
 
-`openclaw sessions --all-agents` reads configured agent stores. Gateway and ACP
-session discovery are broader: they also include disk-only stores found under
-the default `agents/` root or a templated `session.store` root. Those
-discovered stores must resolve to regular `sessions.json` files inside the
-agent root; symlinks and out-of-root paths are skipped.
+`openclaw sessions --all-agents` reads configured agent databases plus
+registered agent databases. Legacy `sessions.json` files are migration inputs
+only and should disappear after doctor imports them.
 
 JSON examples:
 
@@ -84,10 +83,10 @@ JSON examples:
 
 ```json
 {
-  "path": null,
-  "stores": [
-    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/sessions/sessions.json" },
-    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/sessions/sessions.json" }
+  "databasePath": null,
+  "databases": [
+    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite" },
+    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/agent/openclaw-agent.sqlite" }
   ],
   "allAgents": true,
   "count": 2,
@@ -102,7 +101,7 @@ JSON examples:
 }
 ```
 
-## Cleanup maintenance
+## Repair
 
 Run maintenance now (instead of waiting for the next write cycle):
 

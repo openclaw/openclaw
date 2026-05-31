@@ -128,6 +128,9 @@ export const pluginSdkDocMetadata = {
   "reply-payload": {
     category: "utilities",
   },
+  "agent-core": {
+    category: "runtime",
+  },
 } as const satisfies Record<string, PluginSdkDocMetadata>;
 
 export type PluginSdkDocEntrypoint = keyof typeof pluginSdkDocMetadata;

@@ -261,41 +261,16 @@ Enable it via CLI:
 pnpm gateway:watch --raw-stream
 ```
 
-Optional path override:
-
-```bash
-pnpm gateway:watch --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
-```
-
 Equivalent env vars:
 
 ```bash
 OPENCLAW_RAW_STREAM=1
-OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-stream.jsonl
 ```
 
-Default file:
+Default storage:
 
-`~/.openclaw/logs/raw-stream.jsonl`
-
-## Raw OpenAI-compatible chunk logging
-
-To capture **raw OpenAI-compat chunks** before they are parsed into blocks,
-enable the transport logger:
-
-```bash
-OPENCLAW_RAW_STREAM=1
-```
-
-Optional path:
-
-```bash
-OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-openai-completions.jsonl
-```
-
-Default file:
-
-`~/.openclaw/logs/raw-openai-completions.jsonl`
+SQLite diagnostics (`diagnostics.raw_stream`). Use an explicit export/debug
+command when you need a file artifact.
 
 ## Safety notes
 

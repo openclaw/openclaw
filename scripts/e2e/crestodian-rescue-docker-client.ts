@@ -7,6 +7,7 @@ import path from "node:path";
 import { handleCrestodianCommand } from "../../dist/auto-reply/reply/commands-crestodian.js";
 import { clearConfigCache } from "../../dist/config/config.js";
 import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
+import { listCrestodianAuditEntriesForTests } from "../../dist/crestodian/audit.js";
 import { runCrestodianRescueMessage } from "../../dist/crestodian/rescue-message.js";
 
 type CommandResult = Awaited<ReturnType<typeof handleCrestodianCommand>>;
@@ -226,10 +227,8 @@ async function main() {
     "agent config was not updated",
   );
 
-  const auditPath = path.join(stateDir, "audit", "crestodian.jsonl");
-  const auditLines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
-  assert(auditLines.length >= 2, "audit log did not record both operations");
-  const audits = auditLines.map((line) => JSON.parse(line));
+  const audits = (await listCrestodianAuditEntriesForTests()).map((entry) => entry.value);
+  assert(audits.length >= 2, "audit log did not record both operations");
   assert(
     audits.some((audit) => audit.operation === "config.setDefaultModel"),
     "model audit operation missing",

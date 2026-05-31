@@ -545,9 +545,9 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="streamTo" type='"parent"'>
   `"parent"` streams initial ACP run progress summaries back to the
-  requester session as system events. Accepted responses include
-  `streamLogPath` pointing to a session-scoped JSONL log
-  (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+  requester session as system events. Full relay diagnostics are recorded
+  as structured rows in the child agent database, not as adjacent JSONL
+  sidecars.
 </ParamField>
 <ParamField path="runTimeoutSeconds" type="number">
   Aborts the ACP child turn after N seconds. `0` keeps the turn on the
@@ -782,8 +782,7 @@ backend-level session identifiers. Unsupported-control errors surface
 clearly when a backend lacks a capability. `/acp sessions` reads the
 store for the current bound or requester session; target tokens
 (`session-key`, `session-id`, or `session-label`) resolve through
-gateway session discovery, including custom per-agent `session.store`
-roots.
+gateway session discovery backed by per-agent SQLite metadata.
 
 ### Runtime options mapping
 

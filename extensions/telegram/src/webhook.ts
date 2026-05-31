@@ -29,7 +29,7 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
-import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import { resolveGrammyAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import {
@@ -445,7 +445,7 @@ export async function startTelegramWebhook(opts: {
         fn: () =>
           bot.api.setWebhook(publicUrl, {
             secret_token: secret,
-            allowed_updates: resolveTelegramAllowedUpdates(),
+            allowed_updates: resolveGrammyAllowedUpdates(),
             certificate: opts.webhookCertPath ? new InputFile(opts.webhookCertPath) : undefined,
           }),
       });

@@ -153,20 +153,20 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
 
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let ts: Double?
-    public let path: String?
+    public let databasePath: String?
     public let count: Int?
     public let defaults: OpenClawChatSessionsDefaults?
     public let sessions: [OpenClawChatSessionEntry]
 
     public init(
         ts: Double?,
-        path: String?,
+        databasePath: String?,
         count: Int?,
         defaults: OpenClawChatSessionsDefaults?,
         sessions: [OpenClawChatSessionEntry])
     {
         self.ts = ts
-        self.path = path
+        self.databasePath = databasePath
         self.count = count
         self.defaults = defaults
         self.sessions = sessions

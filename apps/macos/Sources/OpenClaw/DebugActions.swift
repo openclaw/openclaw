@@ -43,15 +43,15 @@ enum DebugActions {
     }
 
     @MainActor
-    static func openSessionStore() {
+    static func openSessionDatabase() {
         if AppStateStore.shared.connectionMode == .remote {
             let alert = NSAlert()
             alert.messageText = "Remote mode"
-            alert.informativeText = "Session store lives on the gateway host in remote mode."
+            alert.informativeText = "Session database lives on the gateway host in remote mode."
             alert.runModal()
             return
         }
-        let path = self.resolveSessionStorePath()
+        let path = self.resolveSessionDatabasePath()
         let url = URL(fileURLWithPath: path)
         if FileManager().fileExists(atPath: path) {
             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -191,19 +191,8 @@ enum DebugActions {
     }
 
     @MainActor
-    private static func resolveSessionStorePath() -> String {
-        let defaultPath = SessionLoader.defaultStorePath
-        let configURL = OpenClawPaths.configURL
-        guard
-            let data = try? Data(contentsOf: configURL),
-            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let session = parsed["session"] as? [String: Any],
-            let path = session["store"] as? String,
-            !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            return defaultPath
-        }
-        return path
+    private static func resolveSessionDatabasePath() -> String {
+        SessionLoader.defaultDatabasePath
     }
 
     // MARK: - Sessions (thinking / verbose)
@@ -244,8 +233,8 @@ enum DebugActions {
     }
 
     @MainActor
-    static func openSessionStoreInCode() {
-        let path = SessionLoader.defaultStorePath
+    static func openSessionDatabaseInCode() {
+        let path = SessionLoader.defaultDatabasePath
         let proc = Process()
         proc.launchPath = "/usr/bin/env"
         proc.arguments = ["code", path]

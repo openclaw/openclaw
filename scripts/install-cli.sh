@@ -54,11 +54,9 @@ PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
 NODE_VERSION_REQUESTED=0
-if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
-  NODE_VERSION_REQUESTED=1
-fi
 MIN_NODE_VERSION="22.19.0"
 APK_NODE_BIN_DIR="/usr/bin"
+SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
 GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
@@ -351,6 +349,21 @@ node_dir() {
 
 node_bin() {
   echo "$(node_dir)/bin/node"
+}
+
+npm_node_version_is_supported() {
+  local raw="$1"
+  local version
+  local major
+  local minor
+
+  version="${raw#v}"
+  major="${version%%.*}"
+  minor="${version#*.}"
+  minor="${minor%%.*}"
+  [[ "$major" =~ ^[0-9]+$ ]] || return 1
+  [[ "$minor" =~ ^[0-9]+$ ]] || minor=0
+  [[ "$major" -gt 22 ]] || { [[ "$major" -eq 22 ]] && [[ "$minor" -ge 19 ]]; }
 }
 
 npm_bin() {
@@ -768,6 +781,10 @@ install_node() {
     return
   fi
 
+  if ! npm_node_version_is_supported "$NODE_VERSION"; then
+    fail "OpenClaw requires Node 22.19.0 or newer; got --node-version ${NODE_VERSION}"
+  fi
+
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"version\":\"${NODE_VERSION}\"}"
   log "Installing Node ${NODE_VERSION} (user-space)..."
 
@@ -799,12 +816,11 @@ install_node() {
 
   ln -sfn "$dir" "${PREFIX}/tools/node"
 
-  if ! linked_node_is_usable; then
-    local installed_version
-    local required_version
-    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
-    required_version="$(required_node_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.0 (or newer)"
+  if ! npm_node_version_is_supported "$("$(node_bin)" -v 2>/dev/null || echo "")"; then
+    fail "Installed Node ${NODE_VERSION} is below the required 22.19.0 minimum"
+  fi
+  if ! "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1; then
+    fail "Installed Node ${NODE_VERSION} is missing node:sqlite; re-run with --node-version 22.22.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }

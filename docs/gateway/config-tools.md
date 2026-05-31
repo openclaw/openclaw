@@ -297,7 +297,7 @@ Configures inbound media understanding (image/audio/video):
 
     - `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc.)
     - `model`: model id override
-    - `profile` / `preferredProfile`: `auth-profiles.json` profile selection
+    - `profile` / `preferredProfile`: SQLite auth-profile selection
 
     **CLI entry** (`type: "cli"`):
 
@@ -311,7 +311,7 @@ Configures inbound media understanding (image/audio/video):
     - `tools.media.image.timeoutSeconds` and matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool.
     - Failures fall back to the next entry.
 
-    Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
+    Provider auth follows standard order: SQLite auth-profile row → env vars → `models.providers.*.apiKey`.
 
     **Async completion fields:**
 
@@ -446,7 +446,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 
 ## Custom providers and base URLs
 
-Provider plugins publish their own model catalog rows. Add custom providers via `models.providers` in config or `~/.openclaw/agents/<agentId>/agent/models.json`.
+OpenClaw uses the built-in model catalog. Add custom providers via `models.providers` in config; doctor imports old `~/.openclaw/agents/<agentId>/agent/models.json` files into the stored model catalog.
 
 Configuring a custom/local provider `baseUrl` is also the narrow network trust decision for model HTTP requests: OpenClaw allows that exact `scheme://host:port` origin through the guarded fetch path, without adding a separate config option or trusting other private origins.
 
@@ -482,15 +482,15 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - Use `authHeader: true` + `headers` for custom auth needs.
     - Override agent config root with `OPENCLAW_AGENT_DIR`.
     - Merge precedence for matching provider IDs:
-      - Non-empty agent `models.json` `baseUrl` values win.
+      - Non-empty stored agent catalog `baseUrl` values win.
       - Non-empty agent `apiKey` values win only when that provider is not SecretRef-managed in current config/auth-profile context.
       - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
       - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
       - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
       - Matching model `contextWindow`/`maxTokens` use the higher value between explicit config and implicit catalog values.
       - Matching model `contextTokens` preserves an explicit runtime cap when present; use it to limit effective context without changing native model metadata.
-      - Provider-plugin catalogs are stored as generated plugin-owned catalog shards under the agent's plugin state.
-      - Use `models.mode: "replace"` when you want config to fully rewrite `models.json` and active plugin catalog shards.
+      - Provider-plugin catalogs are stored as generated plugin-owned catalog shards in SQLite catalog state.
+      - Use `models.mode: "replace"` when you want config to fully rewrite the stored model catalog and active plugin catalog shards.
       - Marker persistence is source-authoritative: markers are written from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 
   </Accordion>

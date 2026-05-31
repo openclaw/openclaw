@@ -1,6 +1,7 @@
 import { API_CONSTANTS } from "grammy";
 
 export type TelegramUpdateType = (typeof API_CONSTANTS.ALL_UPDATE_TYPES)[number];
+export type GrammyTelegramUpdateType = Exclude<TelegramUpdateType, "guest_message">;
 
 export const DEFAULT_TELEGRAM_UPDATE_TYPES: ReadonlyArray<TelegramUpdateType> =
   API_CONSTANTS.DEFAULT_UPDATE_TYPES;
@@ -14,4 +15,10 @@ export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateTyp
     updates.push("channel_post");
   }
   return updates;
+}
+
+export function resolveGrammyAllowedUpdates(): ReadonlyArray<GrammyTelegramUpdateType> {
+  return resolveTelegramAllowedUpdates().filter(
+    (update): update is GrammyTelegramUpdateType => update !== "guest_message",
+  );
 }

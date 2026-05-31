@@ -142,7 +142,7 @@ describe("packed CLI smoke", () => {
     });
   });
 
-  it("skips plugin command discovery during packed completion cache smoke", () => {
+  it("skips plugin command discovery during packed completion smoke", () => {
     expect(
       createPackedCompletionSmokeEnv(
         {

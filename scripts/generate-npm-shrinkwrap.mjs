@@ -380,10 +380,57 @@ function readShrinkwrapOverrides() {
   );
 }
 
+function directDependencySpecs(packageJson) {
+  const specs = {};
+  for (const key of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    const dependencies = packageJson?.[key];
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+      continue;
+    }
+    for (const [name, spec] of Object.entries(dependencies)) {
+      specs[name] = String(spec);
+    }
+  }
+  return specs;
+}
+
+function alignDirectDependencyOverrides(overrides, packageJson) {
+  if (!overrides) {
+    return overrides;
+  }
+  const directSpecs = directDependencySpecs(packageJson);
+  const aligned = { ...overrides };
+  for (const [name, directSpec] of Object.entries(directSpecs)) {
+    if (aligned[name] === undefined || exactVersionFromOverrideSpec(directSpec) === null) {
+      continue;
+    }
+    const override = aligned[name];
+    if (typeof override === "string") {
+      if (!exactOverrideVersionsMatch(override, directSpec)) {
+        aligned[name] = directSpec;
+      }
+      continue;
+    }
+    if (isPlainObject(override)) {
+      const rootOverride = override["."];
+      if (
+        rootOverride === undefined ||
+        !exactOverrideVersionsMatch(String(rootOverride), directSpec)
+      ) {
+        aligned[name] = { ...override, ".": directSpec };
+      }
+    }
+  }
+  return aligned;
+}
+
 function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   const normalized = { ...packageJson };
   delete normalized.devDependencies;
-  normalized.overrides = mergeOverrides(packageJson.overrides, shrinkwrapOverrides, {});
+  normalized.overrides = alignDirectDependencyOverrides(
+    mergeOverrides(packageJson.overrides, shrinkwrapOverrides, {}),
+    packageJson,
+  );
   return normalized;
 }
 
@@ -667,12 +714,15 @@ function generateShrinkwrap(packageDir, options = {}) {
   try {
     const packageJson = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
     const currentShrinkwrap = readCurrentShrinkwrap(packageDir);
-    const shrinkwrapOverrides = mergeOverrides(
-      options.useCurrentShrinkwrapOverrides
-        ? readCurrentShrinkwrapOverrides(packageDir, declaredPackageDependencies(packageJson))
-        : {},
-      readShrinkwrapOverrides(),
-      {},
+    const shrinkwrapOverrides = alignDirectDependencyOverrides(
+      mergeOverrides(
+        options.useCurrentShrinkwrapOverrides
+          ? readCurrentShrinkwrapOverrides(packageDir, declaredPackageDependencies(packageJson))
+          : {},
+        readShrinkwrapOverrides(),
+        {},
+      ),
+      packageJson,
     );
     const peerResolutionArgs = shouldUseLegacyPeerDepsForShrinkwrap(packageJson)
       ? ["--legacy-peer-deps"]

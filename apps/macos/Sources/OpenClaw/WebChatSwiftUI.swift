@@ -76,7 +76,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             mainSessionKey: mainSessionKey)
         return OpenClawChatSessionsListResponse(
             ts: decoded.ts,
-            path: decoded.path,
+            databasePath: decoded.databasePath,
             count: decoded.count,
             defaults: defaults,
             sessions: decoded.sessions)

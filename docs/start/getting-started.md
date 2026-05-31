@@ -12,7 +12,7 @@ and a working chat session.
 
 ## What you need
 
-- **Node.js** — Node 24 recommended (Node 22.19+ also supported)
+- **Node.js** — Node 24 (recommended), or Node 22 LTS (22.19+) for compatibility
 - **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
 
 <Tip>

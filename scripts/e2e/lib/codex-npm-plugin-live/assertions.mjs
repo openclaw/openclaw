@@ -325,12 +325,9 @@ function assertAgentTurn() {
     );
   }
 
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const store = readJson(storePath);
-  const entry = Object.values(store).find((candidate) => candidate?.sessionId === sessionId);
+  const entry = readAgentSessionEntryBySessionId(sessionId);
   if (!entry) {
-    throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
+    throw new Error(`missing SQLite session entry for ${sessionId}`);
   }
   if (entry.agentHarnessId !== "codex") {
     throw new Error(`expected codex harness in session entry, got ${entry.agentHarnessId}`);
@@ -338,12 +335,12 @@ function assertAgentTurn() {
   if (entry.modelOverride && entry.modelOverride !== modelRef) {
     throw new Error(`unexpected session model override: ${entry.modelOverride}`);
   }
-  if (typeof entry.sessionFile !== "string" || !fs.existsSync(entry.sessionFile)) {
-    throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
+  const transcriptEvents = countAgentTranscriptEvents(sessionId);
+  if (transcriptEvents <= 0) {
+    throw new Error(`missing SQLite transcript events for ${sessionId}`);
   }
 
-  const bindingPath = `${entry.sessionFile}.codex-app-server.json`;
-  const binding = readJson(bindingPath);
+  const binding = readPluginStateJson("codex", "app-server-thread-bindings", sessionId);
   if (binding.schemaVersion !== 1 || typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }

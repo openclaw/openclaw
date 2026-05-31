@@ -31,7 +31,6 @@ export { CODEX_MODEL_PROMPT_FIXTURE_DIR, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHO
 
 const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
-const SESSION_FILE = "/tmp/openclaw-happy-path/session.jsonl";
 const MODEL_ID = "gpt-5.5";
 const CODEX_PROMPT_PERSONALITY = "pragmatic";
 const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.join(
@@ -343,7 +342,6 @@ function createAttempt(params: {
     agentId: "main",
     agentDir: AGENT_DIR,
     workspaceDir: WORKSPACE_DIR,
-    sessionFile: SESSION_FILE,
     sessionKey: params.sessionKey,
     sessionId: `session-${params.scenario.id}`,
     runId: `run-${params.scenario.id}`,

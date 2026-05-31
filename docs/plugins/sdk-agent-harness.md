@@ -38,7 +38,7 @@ Before a harness is selected, OpenClaw has already resolved:
 - provider and model
 - runtime auth state
 - thinking level and context budget
-- the OpenClaw transcript/session file
+- the OpenClaw session scope and SQLite transcript rows
 - workspace, sandbox, and tool policy
 - channel reply callbacks and streaming callbacks
 - model fallback and live model switching policy

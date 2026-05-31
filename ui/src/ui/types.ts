@@ -397,7 +397,6 @@ export type SessionCompactionCheckpointReason =
 
 export type SessionCompactionTranscriptReference = {
   sessionId: string;
-  sessionFile?: string;
   leafId?: string;
   entryId?: string;
 };
@@ -619,6 +618,7 @@ export type CronJob = CronJobBase<
 
 export type CronStatus = {
   enabled: boolean;
+  storeKey: string;
   jobs: number;
   nextWakeAtMs?: number | null;
 };
@@ -768,7 +768,7 @@ export type HealthSummary = {
   defaultAgentId: string;
   agents: Array<{ id: string; name?: string }>;
   sessions: {
-    path: string;
+    databasePath: string;
     count: number;
     recent: Array<{
       key: string;

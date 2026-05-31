@@ -1,5 +1,5 @@
 ---
-summary: "OpenClaw logging: rolling diagnostics file log + unified log privacy flags"
+summary: "OpenClaw logging: unified log capture and privacy flags"
 read_when:
   - Capturing macOS logs or investigating private data logging
   - Debugging voice wake/session lifecycle issues
@@ -8,19 +8,13 @@ title: "macOS logging"
 
 # Logging (macOS)
 
-## Rolling diagnostics file log (Debug pane)
+## App Logging
 
-OpenClaw routes macOS app logs through swift-log (unified logging by default) and can write a local, rotating file log to disk when you need a durable capture.
+OpenClaw routes macOS app logs through swift-log into unified logging. The app
+does not write a separate JSONL diagnostics log; use Console.app, `log stream`,
+or `./scripts/clawlog.sh` for durable captures.
 
 - Verbosity: **Debug pane → Logs → App logging → Verbosity**
-- Enable: **Debug pane → Logs → App logging → "Write rolling diagnostics log (JSONL)"**
-- Location: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (rotates automatically; old files are suffixed with `.1`, `.2`, …)
-- Clear: **Debug pane → Logs → App logging → "Clear"**
-
-Notes:
-
-- This is **off by default**. Enable only while actively debugging.
-- Treat the file as sensitive; don't share it without review.
 
 ## Unified logging private data on macOS
 

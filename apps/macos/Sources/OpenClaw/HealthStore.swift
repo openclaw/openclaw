@@ -36,9 +36,37 @@ struct HealthSnapshot: Codable {
     }
 
     struct Sessions: Codable {
-        let path: String
+        let databasePath: String
         let count: Int
         let recent: [SessionInfo]
+
+        private enum CodingKeys: String, CodingKey {
+            case databasePath
+            case path
+            case count
+            case recent
+        }
+
+        init(databasePath: String, count: Int, recent: [SessionInfo]) {
+            self.databasePath = databasePath
+            self.count = count
+            self.recent = recent
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.databasePath = try container.decodeIfPresent(String.self, forKey: .databasePath)
+                ?? container.decode(String.self, forKey: .path)
+            self.count = try container.decode(Int.self, forKey: .count)
+            self.recent = try container.decode([SessionInfo].self, forKey: .recent)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(self.databasePath, forKey: .databasePath)
+            try container.encode(self.count, forKey: .count)
+            try container.encode(self.recent, forKey: .recent)
+        }
     }
 
     let ok: Bool?

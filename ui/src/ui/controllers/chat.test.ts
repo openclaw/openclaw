@@ -1385,7 +1385,7 @@ describe("sendChatMessage", () => {
       file,
     });
     const previewUrl = attachment.previewUrl;
-    expect(previewUrl).toMatch(/^blob:nodedata:/u);
+    expect(previewUrl).toMatch(/^blob:/u);
 
     const result = await sendChatMessage(state, "summarize", [attachment]);
 

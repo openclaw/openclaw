@@ -150,21 +150,22 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
 
-    **Session store helpers** are under `api.runtime.agent.session`:
+    **SQLite session row helpers** are under `api.runtime.agent.session`:
 
     ```typescript
     const entry = api.runtime.agent.session.getSessionEntry({ agentId, sessionKey });
-    for (const { sessionKey, entry } of api.runtime.agent.session.listSessionEntries({ agentId })) {
-      // Iterate session rows without depending on the legacy sessions.json shape.
-    }
     await api.runtime.agent.session.patchSessionEntry({
       agentId,
       sessionKey,
-      update: (entry) => ({ thinkingLevel: "high" }),
+      update: (current) => ({
+        ...current,
+        thinkingLevel: "high",
+      }),
     });
+    const filePath = api.runtime.agent.session.resolveSessionFilePath(cfg, sessionId);
     ```
 
-    Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. `loadSessionStore(...)` remains as a deprecated compatibility escape hatch for callers that intentionally need a mutable whole-store clone.
+    Prefer row helpers such as `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, and `upsertSessionEntry(...)` for runtime writes. They route through the SQLite session row store and preserve concurrent updates. Legacy `sessions.json` parsing belongs in doctor/migration code, not plugin runtime paths.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">

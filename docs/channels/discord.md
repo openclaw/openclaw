@@ -252,7 +252,7 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
 
     In guild channels, normal replies post automatically by default. For shared always-on rooms, opt into `messages.groupChat.visibleReplies: "message_tool"` so the agent can lurk and only post when it decides a channel reply is useful. This works best with latest-generation, tool-reliable models such as GPT 5.5. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
 
-    If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or opted into message-tool visible replies.
+    This means the selected model should reliably call tools. If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event, inspect the gateway verbose log or SQLite transcript for `didSendViaMessagingTool: false`, or use the config below to restore legacy automatic final replies for normal group requests.
 
     <Tabs>
       <Tab title="Ask your agent">

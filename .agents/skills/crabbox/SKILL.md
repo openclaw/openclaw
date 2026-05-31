@@ -307,7 +307,8 @@ Live-provider debug template for direct AWS/Hetzner leases:
 
 ```sh
 mkdir -p .crabbox/logs
-pnpm crabbox:run -- --provider aws \
+CRABBOX_ENV_ALLOW=OPENAI_API_KEY,OPENAI_BASE_URL \
+  pnpm crabbox:run -- --provider aws \
   --preflight \
   --allow-env OPENAI_API_KEY,OPENAI_BASE_URL \
   --timing-json \
@@ -319,10 +320,8 @@ pnpm crabbox:run -- --provider aws \
 ```
 
 Do not pass `--capture-*`, `--download`, `--checksum`, `--force-sync-large`, or
-`--sync-only` to delegated providers. Also do not pass `--script*`,
-`--fresh-pr`, `--full-resync`, or `--env-helper` there. Crabbox rejects these
-because the provider owns sync or command transport. `--keep-on-failure` is OK
-for delegated one-shots when you need to inspect a failed lease.
+`--sync-only` to delegated providers. Crabbox rejects them because the provider
+owns sync or command transport.
 
 ## Efficient Bug E2E Verification
 

@@ -11,7 +11,7 @@ We serialize inbound auto-reply runs (all channels) through a tiny in-process qu
 ## Why
 
 - Auto-reply runs can be expensive (LLM calls) and can collide when multiple inbound messages arrive close together.
-- Serializing avoids competing for shared resources (session files, logs, CLI stdin) and reduces the chance of upstream rate limits.
+- Serializing avoids competing for shared resources (session rows, transcript writes, logs, CLI stdin) and reduces the chance of upstream rate limits.
 
 ## How it works
 

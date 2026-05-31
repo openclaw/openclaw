@@ -226,17 +226,20 @@ enum ExecApprovalsStore {
     private static let defaultAsk: ExecAsk = .onMiss
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
-    private static let secureStateDirPermissions = 0o700
-    private static let fileLock = NSRecursiveLock()
+    private static let storeLock = NSRecursiveLock()
 
-    private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
-        self.fileLock.lock()
-        defer { self.fileLock.unlock() }
+    private static func withStoreLock<T>(_ body: () throws -> T) rethrows -> T {
+        self.storeLock.lock()
+        defer { self.storeLock.unlock() }
         return try body()
     }
 
-    static func fileURL() -> URL {
-        OpenClawPaths.stateDirURL.appendingPathComponent("exec-approvals.json")
+    static func databaseURL() -> URL {
+        ExecApprovalsSQLiteStateStore.databaseURL()
+    }
+
+    static func storeLocationForDisplay() -> String {
+        ExecApprovalsSQLiteStateStore.storeLocationForDisplay()
     }
 
     static func socketPath() -> String {
@@ -277,30 +280,13 @@ enum ExecApprovalsStore {
     }
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
-        self.withFileLock {
-            let url = self.fileURL()
-            guard FileManager().fileExists(atPath: url.path) else {
-                return ExecApprovalsSnapshot(
-                    path: url.path,
-                    exists: false,
-                    hash: self.hashRaw(nil),
-                    file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
-            }
-            let raw = try? String(contentsOf: url, encoding: .utf8)
-            let data = raw.flatMap { $0.data(using: .utf8) }
-            let decoded: ExecApprovalsFile = {
-                if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data),
-                   file.version == 1
-                {
-                    return file
-                }
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-            }()
+        self.withStoreLock {
+            let raw = ExecApprovalsSQLiteStateStore.readRawState()
             return ExecApprovalsSnapshot(
-                path: url.path,
-                exists: true,
+                path: self.storeLocationForDisplay(),
+                exists: raw != nil,
                 hash: self.hashRaw(raw),
-                file: decoded)
+                file: self.parseRawState(raw))
         }
     }
 
@@ -320,54 +306,26 @@ enum ExecApprovalsStore {
             agents: file.agents)
     }
 
-    static func loadFile() -> ExecApprovalsFile {
-        self.withFileLock {
-            let url = self.fileURL()
-            guard FileManager().fileExists(atPath: url.path) else {
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-            }
-            do {
-                let data = try Data(contentsOf: url)
-                let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
-                if decoded.version != 1 {
-                    return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-                }
-                return decoded
-            } catch {
-                self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-            }
+    static func loadState() -> ExecApprovalsFile {
+        self.withStoreLock {
+            self.parseRawState(ExecApprovalsSQLiteStateStore.readRawState())
         }
     }
 
-    static func saveFile(_ file: ExecApprovalsFile) {
-        self.withFileLock {
+    static func saveState(_ file: ExecApprovalsFile) {
+        self.withStoreLock {
             do {
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                let data = try encoder.encode(file)
-                let url = self.fileURL()
-                self.ensureSecureStateDirectory()
-                try FileManager().createDirectory(
-                    at: url.deletingLastPathComponent(),
-                    withIntermediateDirectories: true)
-                try data.write(to: url, options: [.atomic])
-                try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                try ExecApprovalsSQLiteStateStore.writeRawState(self.encodeRawState(file))
             } catch {
                 self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
 
-    static func ensureFile() -> ExecApprovalsFile {
-        self.withFileLock {
-            self.ensureSecureStateDirectory()
-            let url = self.fileURL()
-            let existed = FileManager().fileExists(atPath: url.path)
-            let loaded = self.loadFile()
-            let loadedHash = self.hashFile(loaded)
-
-            var file = self.normalizeIncoming(loaded)
+    static func ensureState() -> ExecApprovalsFile {
+        self.withStoreLock {
+            let snapshot = self.readSnapshot()
+            var file = self.normalizeIncoming(snapshot.file)
             if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
             let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if path.isEmpty {
@@ -378,26 +336,26 @@ enum ExecApprovalsStore {
                 file.socket?.token = self.generateToken()
             }
             if file.agents == nil { file.agents = [:] }
-            if !existed || loadedHash != self.hashFile(file) {
-                self.saveFile(file)
+            if !snapshot.exists || snapshot.hash != self.hashRaw(self.encodeRawState(file)) {
+                self.saveState(file)
             }
             return file
         }
     }
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
-        let file = self.ensureFile()
-        return self.resolveFromFile(file, agentId: agentId)
+        let file = self.ensureState()
+        return self.resolveFromState(file, agentId: agentId)
     }
 
-    /// Read-only resolve: loads file without writing (no ensureFile side effects).
+    /// Read-only resolve: loads SQLite state without writing missing defaults.
     /// Safe to call from background threads / off MainActor.
     static func resolveReadOnly(agentId: String?) -> ExecApprovalsResolved {
-        let file = self.loadFile()
-        return self.resolveFromFile(file, agentId: agentId)
+        let file = self.loadState()
+        return self.resolveFromState(file, agentId: agentId)
     }
 
-    private static func resolveFromFile(_ file: ExecApprovalsFile, agentId: String?) -> ExecApprovalsResolved {
+    private static func resolveFromState(_ file: ExecApprovalsFile, agentId: String?) -> ExecApprovalsResolved {
         let defaults = file.defaults ?? ExecApprovalsDefaults()
         let resolvedDefaults = ExecApprovalsResolvedDefaults(
             security: defaults.security ?? self.defaultSecurity,
@@ -420,7 +378,7 @@ enum ExecApprovalsStore {
         let socketPath = self.expandPath(file.socket?.path ?? self.socketPath())
         let token = file.socket?.token ?? ""
         return ExecApprovalsResolved(
-            url: self.fileURL(),
+            url: self.databaseURL(),
             socketPath: socketPath,
             token: token,
             defaults: resolvedDefaults,
@@ -430,7 +388,7 @@ enum ExecApprovalsStore {
     }
 
     static func resolveDefaults() -> ExecApprovalsResolvedDefaults {
-        let file = self.ensureFile()
+        let file = self.ensureState()
         let defaults = file.defaults ?? ExecApprovalsDefaults()
         return ExecApprovalsResolvedDefaults(
             security: defaults.security ?? self.defaultSecurity,
@@ -440,13 +398,13 @@ enum ExecApprovalsStore {
     }
 
     static func saveDefaults(_ defaults: ExecApprovalsDefaults) {
-        self.updateFile { file in
+        self.updateState { file in
             file.defaults = defaults
         }
     }
 
     static func updateDefaults(_ mutate: (inout ExecApprovalsDefaults) -> Void) {
-        self.updateFile { file in
+        self.updateState { file in
             var defaults = file.defaults ?? ExecApprovalsDefaults()
             mutate(&defaults)
             file.defaults = defaults
@@ -454,7 +412,7 @@ enum ExecApprovalsStore {
     }
 
     static func saveAgent(_ agent: ExecApprovalsAgent, agentId: String?) {
-        self.updateFile { file in
+        self.updateState { file in
             var agents = file.agents ?? [:]
             let key = self.agentKey(agentId)
             if agent.isEmpty {
@@ -476,7 +434,7 @@ enum ExecApprovalsStore {
             return reason
         }
 
-        self.updateFile { file in
+        self.updateState { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
@@ -498,7 +456,7 @@ enum ExecApprovalsStore {
         command: String,
         resolvedPath: String?)
     {
-        self.updateFile { file in
+        self.updateState { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
@@ -520,7 +478,7 @@ enum ExecApprovalsStore {
     @discardableResult
     static func updateAllowlist(agentId: String?, allowlist: [ExecAllowlistEntry]) -> [ExecAllowlistRejectedEntry] {
         var rejected: [ExecAllowlistRejectedEntry] = []
-        self.updateFile { file in
+        self.updateState { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
@@ -535,7 +493,7 @@ enum ExecApprovalsStore {
     }
 
     static func updateAgentSettings(agentId: String?, mutate: (inout ExecApprovalsAgent) -> Void) {
-        self.updateFile { file in
+        self.updateState { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
@@ -549,28 +507,35 @@ enum ExecApprovalsStore {
         }
     }
 
-    private static func updateFile(_ mutate: (inout ExecApprovalsFile) -> Void) {
-        self.withFileLock {
-            var file = self.ensureFile()
+    private static func updateState(_ mutate: (inout ExecApprovalsFile) -> Void) {
+        self.withStoreLock {
+            var file = self.ensureState()
             mutate(&file)
-            self.saveFile(file)
+            self.saveState(file)
         }
     }
 
-    private static func ensureSecureStateDirectory() {
-        let url = OpenClawPaths.stateDirURL
-        do {
-            try FileManager().createDirectory(at: url, withIntermediateDirectories: true)
-            try FileManager().setAttributes(
-                [.posixPermissions: self.secureStateDirPermissions],
-                ofItemAtPath: url.path)
-        } catch {
-            let message =
-                "exec approvals state dir permission hardening failed: \(error.localizedDescription)"
-            self.logger
-                .warning(
-                    "\(message, privacy: .public)")
+    private static func parseRawState(_ raw: String?) -> ExecApprovalsFile {
+        guard let data = raw?.data(using: .utf8) else {
+            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
         }
+        do {
+            let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
+            guard decoded.version == 1 else {
+                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            }
+            return decoded
+        } catch {
+            self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
+            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+        }
+    }
+
+    private static func encodeRawState(_ file: ExecApprovalsFile) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = (try? encoder.encode(file)) ?? Data()
+        return (String(data: data, encoding: .utf8) ?? "{}") + "\n"
     }
 
     private static func generateToken() -> String {
@@ -588,14 +553,6 @@ enum ExecApprovalsStore {
 
     private static func hashRaw(_ raw: String?) -> String {
         let data = Data((raw ?? "").utf8)
-        let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func hashFile(_ file: ExecApprovalsFile) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = (try? encoder.encode(file)) ?? Data()
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
     }
