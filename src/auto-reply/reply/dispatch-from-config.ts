@@ -112,6 +112,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./agent-runner-execution.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
+import { shouldBypassReplyOperationForApproveCommand } from "./dispatch-acp-command-bypass.js";
 import {
   createInternalHookEvent,
   loadSessionStore,
@@ -1131,11 +1132,15 @@ export async function dispatchReplyFromConfig(
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
+  const bypassReplyOperationForCommand = shouldBypassReplyOperationForApproveCommand(ctx);
   // initialSessionStoreEntry is command-target-aware, so native command turns
   // stay target-keyed here. Bound ACP dispatch remains source-key owned while
   // ACP routing uses acpDispatchSessionKey.
-  const dispatchOperationSessionKey =
-    initialSessionStoreEntry.sessionKey ?? sessionKey ?? acpDispatchSessionKey;
+  // Approval commands must resolve while the active tool call owns the lane.
+  // Command authorization still happens in the normal /approve handler.
+  const dispatchOperationSessionKey = bypassReplyOperationForCommand
+    ? undefined
+    : (initialSessionStoreEntry.sessionKey ?? sessionKey ?? acpDispatchSessionKey);
   if (
     params.replyOptions?.isHeartbeat === true &&
     dispatchOperationSessionKey &&

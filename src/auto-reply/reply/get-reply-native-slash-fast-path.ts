@@ -7,7 +7,11 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import {
+  isNativeCommandTurn,
+  isTextSlashCommandTurn,
+  resolveCommandTurnContext,
+} from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -41,8 +45,13 @@ function loadStatusCommandRuntime() {
   return statusCommandRuntimeLoader.load();
 }
 
-function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
-  if (!isNativeCommandTurn(resolveCommandTurnContext(ctx))) {
+function resolveFastPathSlashCommandName(ctx: MsgContext): string | undefined {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  if (
+    !isNativeCommandTurn(commandTurn) &&
+    !isTextSlashCommandTurn(commandTurn) &&
+    ctx.CommandAuthorized !== true
+  ) {
     return undefined;
   }
   const commandText = stripStructuralPrefixes(
@@ -53,9 +62,23 @@ function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
 }
 
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
-  const commandName = resolveNativeSlashCommandName(ctx);
-  return Boolean(commandName && commandName !== "new" && commandName !== "reset");
+  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandName = resolveFastPathSlashCommandName(ctx);
+  if (!commandName || commandName === "new" || commandName === "reset") {
+    return false;
+  }
+  if (isNativeCommandTurn(commandTurn)) {
+    return true;
+  }
+  return (
+    commandName === "approve" &&
+    (isTextSlashCommandTurn(commandTurn) || ctx.CommandAuthorized === true)
+  );
 }
+
+export const testing = {
+  shouldRunNativeSlashCommandFastPath,
+};
 
 async function resolveNativeSlashDefaultThinkingLevel(params: {
   cfg: OpenClawConfig;

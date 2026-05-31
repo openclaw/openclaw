@@ -5,7 +5,10 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { shouldBypassAcpDispatchForCommand } from "./dispatch-acp-command-bypass.js";
+import {
+  shouldBypassAcpDispatchForCommand,
+  shouldBypassReplyOperationForApproveCommand,
+} from "./dispatch-acp-command-bypass.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 describe("shouldBypassAcpDispatchForCommand", () => {
@@ -283,5 +286,43 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     } as OpenClawConfig;
 
     expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(true);
+  });
+
+  it("lets authorized text /approve bypass active reply operation admission", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandSource: "text",
+      CommandAuthorized: true,
+      CommandBody: "/approve plugin:abc deny",
+      BodyForCommands: "/approve plugin:abc deny",
+    });
+
+    expect(shouldBypassReplyOperationForApproveCommand(ctx)).toBe(true);
+  });
+
+  it("lets authorized /approve bypass active reply operation admission without source metadata", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandAuthorized: true,
+      CommandBody: "/approve plugin:abc deny",
+      BodyForCommands: "/approve plugin:abc deny",
+    });
+
+    expect(shouldBypassReplyOperationForApproveCommand(ctx)).toBe(true);
+  });
+
+  it("keeps unauthorized /approve on the normal reply operation lane", () => {
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      CommandSource: "text",
+      CommandAuthorized: false,
+      CommandBody: "/approve plugin:abc deny",
+      BodyForCommands: "/approve plugin:abc deny",
+    });
+
+    expect(shouldBypassReplyOperationForApproveCommand(ctx)).toBe(false);
   });
 });
