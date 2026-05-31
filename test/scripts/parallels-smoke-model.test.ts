@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   modelProviderConfigBatchJson,
   readPositiveIntEnv,
@@ -117,6 +117,33 @@ async function unusedLoopbackPort(): Promise<number> {
 }
 
 describe("Parallels smoke model selection", () => {
+  let invalidProviderResult: ReturnType<typeof spawnNodeEvalSync>;
+  let missingProviderKeyResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidModelTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let invalidHostPortResult: ReturnType<typeof spawnNodeEvalSync>;
+
+  beforeAll(() => {
+    invalidProviderResult = spawnNodeEvalSync(
+      `import { parseProvider } from "./${TS_PATHS.common}"; parseProvider("bogus");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    missingProviderKeyResult = spawnNodeEvalSync(
+      `import { resolveProviderAuth } from "./${TS_PATHS.common}"; resolveProviderAuth({ provider: "openai", apiKeyEnv: "PARALLELS_TEST_MISSING_KEY" });`,
+      {
+        env: { ...process.env, PARALLELS_TEST_MISSING_KEY: "" },
+        imports: ["tsx"],
+      },
+    );
+    invalidModelTimeoutResult = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S = "1800s"; const { resolveParallelsModelTimeoutSeconds } = await import("./${TS_PATHS.common}"); resolveParallelsModelTimeoutSeconds("macos");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    invalidHostPortResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "18425x"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+  });
+
   it("keeps the public shell entrypoints as thin TypeScript launchers", () => {
     for (const [platform, wrapperPath] of Object.entries(WRAPPERS)) {
       const wrapper = readFileSync(wrapperPath, "utf8");
@@ -133,16 +160,12 @@ describe("Parallels smoke model selection", () => {
 
   it("accepts leading package-manager separators and still honors later terminators", () => {
     expect(parseLinuxSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
-    expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe(
-      "fresh",
-    );
+    expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
     expect(parseMacosSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
-    expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe(
-      "fresh",
+    expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
+    expect(parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec).toBe(
+      "openclaw@2026.5.1",
     );
-    expect(
-      parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec,
-    ).toBe("openclaw@2026.5.1");
     expect(
       parseNpmUpdateSmokeArgs([
         "--package-spec",
@@ -155,9 +178,10 @@ describe("Parallels smoke model selection", () => {
     expect(parseWindowsSmokeArgs(["--", "--upgrade-from-packed-main"]).upgradeFromPackedMain).toBe(
       true,
     );
-    expect(parseWindowsSmokeArgs(["--mode", "fresh", "--", "--upgrade-from-packed-main"]).upgradeFromPackedMain).toBe(
-      false,
-    );
+    expect(
+      parseWindowsSmokeArgs(["--mode", "fresh", "--", "--upgrade-from-packed-main"])
+        .upgradeFromPackedMain,
+    ).toBe(false);
   });
 
   it("keeps provider auth and model defaults in the shared TypeScript helper", () => {
@@ -501,22 +525,11 @@ if (isPrlctl) {
   });
 
   it("rejects invalid providers and missing keys before touching guests", () => {
-    const invalidProvider = spawnNodeEvalSync(
-      `import { parseProvider } from "./${TS_PATHS.common}"; parseProvider("bogus");`,
-      { env: process.env, imports: ["tsx"] },
-    );
-    expect(invalidProvider.status).toBe(1);
-    expect(invalidProvider.stderr).toContain("invalid --provider: bogus");
+    expect(invalidProviderResult.status).toBe(1);
+    expect(invalidProviderResult.stderr).toContain("invalid --provider: bogus");
 
-    const missingKey = spawnNodeEvalSync(
-      `import { resolveProviderAuth } from "./${TS_PATHS.common}"; resolveProviderAuth({ provider: "openai", apiKeyEnv: "PARALLELS_TEST_MISSING_KEY" });`,
-      {
-        env: { ...process.env, PARALLELS_TEST_MISSING_KEY: "" },
-        imports: ["tsx"],
-      },
-    );
-    expect(missingKey.status).toBe(1);
-    expect(missingKey.stderr).toContain("PARALLELS_TEST_MISSING_KEY is required");
+    expect(missingProviderKeyResult.status).toBe(1);
+    expect(missingProviderKeyResult.stderr).toContain("PARALLELS_TEST_MISSING_KEY is required");
   });
 
   it("seeds agent workspace state before OS smoke agent turns", () => {
@@ -836,21 +849,13 @@ if (isPrlctl) {
       ),
     ).toBe(42);
 
-    const invalidModelTimeout = spawnNodeEvalSync(
-      `process.env.OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S = "1800s"; const { resolveParallelsModelTimeoutSeconds } = await import("./${TS_PATHS.common}"); resolveParallelsModelTimeoutSeconds("macos");`,
-      { env: process.env, imports: ["tsx"] },
-    );
-    expect(invalidModelTimeout.status).toBe(1);
-    expect(invalidModelTimeout.stderr).toContain(
+    expect(invalidModelTimeoutResult.status).toBe(1);
+    expect(invalidModelTimeoutResult.stderr).toContain(
       "invalid OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: 1800s",
     );
 
-    const invalidHostPort = spawnNodeEvalSync(
-      `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "18425x"]; await import("./${TS_PATHS.macos}");`,
-      { env: process.env, imports: ["tsx"] },
-    );
-    expect(invalidHostPort.status).toBe(1);
-    expect(invalidHostPort.stderr).toContain("invalid --host-port: 18425x");
+    expect(invalidHostPortResult.status).toBe(1);
+    expect(invalidHostPortResult.stderr).toContain("invalid --host-port: 18425x");
 
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
       'this.updateDevTimeoutSeconds = readPositiveIntEnv(\n      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S"',

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
 import { getEmbeddingProvider, registerEmbeddingProvider } from "./embedding-providers.js";
@@ -82,6 +85,14 @@ function requireMemoryEmbeddingProvider(providerId: string) {
     throw new Error(`expected ${providerId} memory embedding provider`);
   }
   return provider;
+}
+
+function makeOpenClawDevSourceRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-loader-dev-source-"));
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.mkdirSync(path.join(root, "extensions"), { recursive: true });
+  return root;
 }
 
 describe("getCompatibleActivePluginRegistry", () => {
@@ -307,6 +318,31 @@ describe("getCompatibleActivePluginRegistry", () => {
     expect(cacheKey).not.toContain("secret-token");
     expect(cacheKey).not.toContain("botToken");
     expect(cacheKey).not.toContain("telegram configured");
+  });
+
+  it("separates dev source root precedence in the loader cache key", () => {
+    const devSourceRoot = makeOpenClawDevSourceRoot();
+    try {
+      const baseOptions = {
+        config: {
+          plugins: {
+            allow: ["demo"],
+            load: { paths: ["/tmp/demo.js"] },
+          },
+        },
+        env: { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: undefined },
+      };
+
+      const base = testing.resolvePluginLoadCacheContext(baseOptions).cacheKey;
+      const dev = testing.resolvePluginLoadCacheContext({
+        ...baseOptions,
+        env: { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot },
+      }).cacheKey;
+
+      expect(dev).not.toBe(base);
+    } finally {
+      fs.rmSync(devSourceRoot, { recursive: true, force: true });
+    }
   });
 
   it("separates raw env substitution mode in the loader cache key", () => {

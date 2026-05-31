@@ -229,6 +229,7 @@ function requireMockCallParam(
 
 describe("loadModelCatalog", () => {
   beforeAll(async () => {
+    vi.resetModules();
     readFileMock = vi.fn();
     vi.doMock("node:fs/promises", async (importOriginal) => ({
       ...(await importOriginal<typeof import("node:fs/promises")>()),
@@ -258,6 +259,25 @@ describe("loadModelCatalog", () => {
     vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
       loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
       resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+        currentPluginMetadataSnapshotMock(...args) ?? loadPluginMetadataSnapshotMock(...args),
+    }));
+    vi.doMock("../plugins/manifest-contract-eligibility.js", () => ({
+      isManifestPluginAvailableForControlPlane: ({
+        plugin,
+        snapshot,
+      }: {
+        plugin: { id: string; origin?: string };
+        snapshot: {
+          index?: { plugins?: Array<{ pluginId?: string; id?: string; enabled?: boolean }> };
+        };
+      }) =>
+        plugin.origin === "bundled" ||
+        Boolean(
+          snapshot.index?.plugins?.some(
+            (entry) => (entry.pluginId ?? entry.id) === plugin.id && entry.enabled !== false,
+          ),
+        ),
+      loadManifestMetadataSnapshot: (...args: unknown[]) =>
         currentPluginMetadataSnapshotMock(...args) ?? loadPluginMetadataSnapshotMock(...args),
     }));
 
@@ -301,6 +321,7 @@ describe("loadModelCatalog", () => {
     vi.doUnmock("../plugins/provider-runtime.runtime.js");
     vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
     vi.doUnmock("../plugins/plugin-metadata-snapshot.js");
+    vi.doUnmock("../plugins/manifest-contract-eligibility.js");
   });
 
   it("retries after import failure without poisoning the cache", async () => {

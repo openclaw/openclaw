@@ -1146,7 +1146,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
 
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
-        sandboxEnabled: !!sandbox?.enabled,
+        sandboxEnabled: Boolean(sandbox?.enabled),
         toolHookContext: {
           agentId: sessionAgentId,
           config: params.config,

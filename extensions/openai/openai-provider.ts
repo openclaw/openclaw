@@ -1,6 +1,6 @@
-import {
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
@@ -389,6 +389,15 @@ export function buildOpenAIProvider(): ProviderPlugin {
     resolveUsageAuth: codexHooks.resolveUsageAuth,
     fetchUsageSnapshot: codexHooks.fetchUsageSnapshot,
     refreshOAuth: codexHooks.refreshOAuth,
+    buildMissingAuthMessage: (ctx) => {
+      if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
+        return undefined;
+      }
+      if (ctx.listProfileIds(PROVIDER_ID).length === 0) {
+        return undefined;
+      }
+      return 'No API key found for provider "openai". You are authenticated with OpenAI ChatGPT/Codex OAuth. Use openai/gpt-5.5 with the ChatGPT/Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.';
+    },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveReasoningOutputMode: () => "native",

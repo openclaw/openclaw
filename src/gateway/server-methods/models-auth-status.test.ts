@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -911,5 +912,19 @@ describe("aggregateOAuthStatus", () => {
     );
     expect(result.expiresAt).toBe(earlier);
     expect(result.remainingMs).toBe(1_000);
+  });
+
+  it("ignores out-of-range OAuth expiry timestamps", () => {
+    const valid = NOW + 5_000;
+    const result = aggregateOAuthStatus(
+      {
+        provider: "openai-codex",
+        status: "ok",
+        profiles: [oauth("ok", MAX_DATE_TIMESTAMP_MS + 1), oauth("ok", valid)],
+      },
+      NOW,
+    );
+    expect(result.expiresAt).toBe(valid);
+    expect(result.remainingMs).toBe(5_000);
   });
 });

@@ -5,6 +5,7 @@ import type { createJiti } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
+import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderModuleCacheKey,
@@ -26,6 +27,7 @@ export type ResolvePluginModuleLoaderCacheEntryParams = {
   loaderFilename?: string;
   aliasMap?: Record<string, string>;
   tryNative?: boolean;
+  devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cacheScopeKey?: string;
   sharedCacheScopeKey?: string;
@@ -58,6 +60,13 @@ const pluginModuleLoaderStats = {
   sourceTransformFallbacks: 0,
   sourceTransformTargets: new Map<string, number>(),
 };
+
+function isJitiLoaderModule(value: unknown): value is { createJiti: PluginModuleLoaderFactory } {
+  const canHaveProperties = (value && typeof value === "object") || typeof value === "function";
+  return Boolean(
+    canHaveProperties && "createJiti" in value && typeof value.createJiti === "function",
+  );
+}
 
 function recordSourceTransformTarget(target: string): void {
   const current = pluginModuleLoaderStats.sourceTransformTargets.get(target) ?? 0;
@@ -105,8 +114,8 @@ function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {
   if (createJitiLoaderFactory) {
     return createJitiLoaderFactory;
   }
-  const loaded = requireForJiti("jiti") as { createJiti?: PluginModuleLoaderFactory };
-  if (typeof loaded.createJiti !== "function") {
+  const loaded: unknown = requireForJiti("jiti");
+  if (!isJitiLoaderModule(loaded)) {
     throw new Error("jiti module did not export createJiti");
   }
   createJitiLoaderFactory = loaded.createJiti;
@@ -133,6 +142,7 @@ function resolveDefaultPluginModuleLoaderConfig(
     modulePath: params.modulePath,
     argv1: params.argvEntry ?? process.argv[1],
     moduleUrl: params.importerUrl,
+    devSourceRoot: params.devSourceRoot,
     ...(params.preferBuiltDist ? { preferBuiltDist: true } : {}),
     ...(params.pluginSdkResolution ? { pluginSdkResolution: params.pluginSdkResolution } : {}),
   });
@@ -291,6 +301,7 @@ export function getCachedPluginModuleLoader(
     createLoader?: PluginModuleLoaderFactory;
   },
 ): PluginModuleLoader {
+  installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
   const cacheEntry = resolvePluginModuleLoaderCacheEntry(params);
   const cached = params.cache.get(cacheEntry.scopedCacheKey);
   if (cached) {

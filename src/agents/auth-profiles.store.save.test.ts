@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveOAuthDir } from "../config/paths.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../shared/number-coercion.js";
 import { resolveAuthStatePath, resolveAuthStorePath } from "./auth-profiles/paths.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
 import {
@@ -1162,6 +1164,63 @@ describe("saveAuthProfileStore", () => {
         type: "oauth",
         access: "main-refreshed-access-token",
         refresh: "main-refreshed-refresh-token",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      vi.unstubAllEnvs();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist inherited OAuth with an out-of-range local expiry", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-invalid-local-"));
+    const stateDir = path.join(root, ".openclaw");
+    const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = resolveAuthStorePath(childAgentDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    try {
+      saveAuthProfileStore({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "main-access-token",
+            refresh: "main-refresh-token",
+            expires: Date.now() + 120_000,
+            accountId: "acct-shared",
+          },
+        },
+      });
+
+      const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
+      localUpdateStore.profiles["openai-codex:default"] = {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-access-token",
+        refresh: "main-refresh-token",
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+        accountId: "acct-shared",
+      };
+      localUpdateStore.profiles["openai:default"] = {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-child-local",
+      };
+
+      saveAuthProfileStore(localUpdateStore, childAgentDir, {
+        filterExternalAuthProfiles: false,
+      });
+
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(child.profiles["openai-codex:default"]).toBeUndefined();
+      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"], {
+        type: "oauth",
+        access: "main-access-token",
+        refresh: "main-refresh-token",
       });
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();

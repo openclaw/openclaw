@@ -1281,6 +1281,9 @@ export const en: TranslationMap = {
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
+    toolCards: {
+      toolError: "Tool error",
+    },
   },
   languages: {
     en: "English",

@@ -161,7 +161,7 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
 /** Prepare branch entries for summarization within an optional token budget. */
 export function prepareBranchEntries(
   entries: SessionTreeEntry[],
-  tokenBudget: number = 0,
+  tokenBudget = 0,
 ): BranchPreparation {
   const messages: AgentMessage[] = [];
   const fileOps = createFileOps();

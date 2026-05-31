@@ -1257,6 +1257,9 @@ export const zh_TW: TranslationMap = {
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
+    toolCards: {
+      toolError: "Tool error",
+    },
   },
   languages: {
     en: "英文",

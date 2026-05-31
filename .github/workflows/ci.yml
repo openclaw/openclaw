@@ -1972,6 +1972,21 @@ jobs:
           done
           exit 1
 
+      - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
+        run: |
+          set -euo pipefail
+          # Guard: chat-only consumers build OpenClawKit with the Talk trait
+          # disabled and must NOT link ElevenLabsKit. Assert that future sources
+          # under OpenClawKit cannot silently reintroduce an unconditional
+          # ElevenLabsKit dependency while the manifest still looks correct.
+          deps="$(swift package --package-path apps/shared/OpenClawKit show-dependencies --disable-default-traits)"
+          echo "$deps"
+          if grep -qi 'elevenlabs' <<<"$deps"; then
+            echo "::error::ElevenLabsKit resolved with the Talk trait disabled; keep it gated behind the Talk trait."
+            exit 1
+          fi
+          swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
+
       - name: Swift test
         run: |
           set -euo pipefail

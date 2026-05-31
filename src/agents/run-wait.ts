@@ -1,6 +1,3 @@
-import { callGateway } from "../gateway/call.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
   addTimerTimeoutGraceMs,
   asDateTimestampMs,
@@ -8,7 +5,10 @@ import {
   parseFiniteNumber,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { callGateway } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   type AgentRunTerminalOutcome,

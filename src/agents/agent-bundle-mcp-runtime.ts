@@ -11,6 +11,7 @@ import type {
   jsonSchemaValidator,
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -20,7 +21,6 @@ import {
   findJsonSchemaShapeError,
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
@@ -58,6 +58,7 @@ const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
 const BUNDLE_MCP_METADATA_TEXT_LIMIT = 1_200;
+let bundleMcpCatalogListTimeoutMs: number | undefined;
 
 type McpToolSelection = {
   include?: readonly string[];
@@ -262,11 +263,20 @@ function hasConfiguredMcpRequestTimeout(rawServer: unknown): boolean {
 }
 
 function getCatalogListTimeoutMs(rawServer: unknown, requestTimeoutMs: number): number {
+  if (bundleMcpCatalogListTimeoutMs !== undefined) {
+    return bundleMcpCatalogListTimeoutMs;
+  }
   return hasConfiguredMcpRequestTimeout(rawServer)
     ? requestTimeoutMs
     : BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS;
 }
 
+function setBundleMcpCatalogListTimeoutMsForTest(timeoutMs?: number): void {
+  bundleMcpCatalogListTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : undefined;
+}
 async function listAllResources(client: Client, timeoutMs: number) {
   const resources: unknown[] = [];
   let cursor: string | undefined;
@@ -1106,10 +1116,12 @@ export const testing = {
   createSessionMcpRuntimeManager,
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();
+    setBundleMcpCatalogListTimeoutMsForTest();
   },
   getCachedSessionIds() {
     return getSessionMcpRuntimeManager().listSessionIds();
   },
+  setBundleMcpCatalogListTimeoutMsForTest,
   resolveSessionMcpRuntimeIdleTtlMs,
 };
 export { testing as __testing };

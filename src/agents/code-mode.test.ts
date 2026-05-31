@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
-import { isRecord } from "../shared/record-coerce.js";
 import {
   clearCodeModeNamespacesForPlugin,
   clearCodeModeNamespacesForTest,
@@ -1061,7 +1061,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 1_000,
+          timeoutMs: 100,
         },
       },
     } as never;

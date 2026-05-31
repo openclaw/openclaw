@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listBundledChannelLegacySessionSurfaces,
@@ -40,7 +41,6 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { expandHomePrefix } from "./home-dir.js";
@@ -979,58 +979,87 @@ async function runLegacyMigrationPlans(
         const expectedKeys = new Set(existingKeys);
         let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
         const entries = await plan.readEntries();
-        const missingEntries = entries.filter(
-          ({ key }) => !existingKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
-        );
+        const candidateEntries: Array<{
+          key: string;
+          targetKey: string;
+          value: unknown;
+          ttlMs?: number;
+          existedBefore: boolean;
+        }> = [];
+        const failedTargetKeys = new Set<string>();
+        let missingEntryCount = 0;
+        for (const entry of entries) {
+          const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
+          const existingValue = existingValuesByKey.get(targetKey);
+          if (existingKeys.has(targetKey)) {
+            const shouldReplace =
+              existingValue !== undefined &&
+              (await plan.shouldReplaceExistingEntry?.({
+                key: entry.key,
+                existingValue,
+                incomingValue: entry.value,
+              }));
+            if (shouldReplace) {
+              candidateEntries.push({ ...entry, targetKey, existedBefore: true });
+            }
+            continue;
+          }
+          candidateEntries.push({ ...entry, targetKey, existedBefore: false });
+          missingEntryCount++;
+        }
         const pluginRemainingCapacity = Math.max(
           0,
           MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - pluginEntryCount,
         );
-        if (missingEntries.length > pluginRemainingCapacity) {
+        if (missingEntryCount > pluginRemainingCapacity) {
           warnings.push(
-            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntries.length} missing entries; left legacy source in place`,
+            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntryCount} missing entries; left legacy source in place`,
           );
           return;
         }
         let imported = 0;
-        const importedKeys: string[] = [];
-        for (const entry of entries) {
-          const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
-          if (existingKeys.has(targetKey)) {
-            continue;
-          }
-          if (remainingCapacity <= 0) {
+        const changedKeys: string[] = [];
+        for (const entry of candidateEntries) {
+          if (!entry.existedBefore && remainingCapacity <= 0) {
             break;
           }
           try {
             await store.register(
-              targetKey,
+              entry.targetKey,
               entry.value,
               entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
             );
             const nextExpectedKeys = new Set(expectedKeys);
-            nextExpectedKeys.add(targetKey);
+            nextExpectedKeys.add(entry.targetKey);
             const liveKeys = new Set((await store.entries()).map(({ key }) => key));
             const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
             if (missingKey) {
-              for (const importedKey of importedKeys.toReversed()) {
-                await store.delete(importedKey);
+              for (const changedKey of changedKeys.toReversed()) {
+                if (existingValuesByKey.has(changedKey)) {
+                  await store.register(changedKey, existingValuesByKey.get(changedKey));
+                } else {
+                  await store.delete(changedKey);
+                }
               }
-              await store.delete(targetKey);
-              if (existingValuesByKey.has(missingKey)) {
-                await store.register(missingKey, existingValuesByKey.get(missingKey));
+              if (existingValuesByKey.has(entry.targetKey)) {
+                await store.register(entry.targetKey, existingValuesByKey.get(entry.targetKey));
+              } else {
+                await store.delete(entry.targetKey);
               }
               warnings.push(
                 `Stopped migrating ${plan.label} because plugin state cap evicted ${missingKey}; left legacy source in place`,
               );
               return;
             }
-            expectedKeys.add(targetKey);
-            existingKeys.add(targetKey);
-            importedKeys.push(targetKey);
-            remainingCapacity--;
+            expectedKeys.add(entry.targetKey);
+            existingKeys.add(entry.targetKey);
+            changedKeys.push(entry.targetKey);
+            if (!entry.existedBefore) {
+              remainingCapacity--;
+            }
             imported++;
           } catch (err) {
+            failedTargetKeys.add(entry.targetKey);
             warnings.push(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
           }
         }
@@ -1045,8 +1074,10 @@ async function runLegacyMigrationPlans(
         }
         const allEntriesCovered =
           entries.length > 0 &&
-          entries.every(({ key }) =>
-            cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+          entries.every(
+            ({ key }) =>
+              cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
+              !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
           );
         if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
           const archivedPath = `${plan.sourcePath}.migrated`;

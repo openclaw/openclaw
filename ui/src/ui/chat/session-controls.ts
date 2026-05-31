@@ -1426,7 +1426,7 @@ export function resolveSessionOptionGroups(
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
       continue;
     }
-    const isSubagent = isSubagentSessionKey(row.key) || !!row.spawnedBy;
+    const isSubagent = isSubagentSessionKey(row.key) || Boolean(row.spawnedBy);
     if (isSubagent && row.key !== sessionKey) {
       continue;
     }

@@ -155,7 +155,7 @@ function resolveConfiguredAuthProfileOrder(params: {
     ...new Set(
       orderedProfileIds
         .map((profileId) => profileId?.trim())
-        .filter((profileId): profileId is string => !!profileId),
+        .filter((profileId): profileId is string => Boolean(profileId)),
     ),
   ];
 }

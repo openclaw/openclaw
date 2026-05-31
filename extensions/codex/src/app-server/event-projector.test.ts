@@ -2124,6 +2124,44 @@ describe("CodexAppServerEventProjector", () => {
     expect(context.toolCallId).toBe("cmd-observed");
   });
 
+  it("omits after_tool_call startedAt when native duration is out of range", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-huge-duration",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.result).toEqual({
+      status: "completed",
+      exitCode: 0,
+      durationMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(event).not.toHaveProperty("durationMs");
+  });
+
   it("does not duplicate native items already covered by PostToolUse relay", async () => {
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(

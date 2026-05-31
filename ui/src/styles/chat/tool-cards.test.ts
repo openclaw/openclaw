@@ -30,6 +30,7 @@ describe("chat tool card styles", () => {
     expect(css).toContain(".chat-tool-msg-summary__preview");
     expect(css).toContain("font-size: var(--control-ui-text-sm);");
     expect(css).toContain("transform: translateY(0.8px);");
+    expect(css).toContain("flex: 0 1 auto;");
     expect(css).toContain("height: 20px;");
     expect(css).toContain("min-height: 20px;");
     expect(css).not.toContain(".chat-tool-msg-summary__names {\n  text-align: center;");

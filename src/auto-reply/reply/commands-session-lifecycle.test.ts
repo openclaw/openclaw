@@ -570,7 +570,7 @@ describe("/session idle and /session max-age", () => {
     expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
   });
 
-  it("falls back when active idle timeout expiry is Date-invalid", async () => {
+  it("falls back to bind time when idle activity timestamp is out of range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
 
@@ -586,7 +586,26 @@ describe("/session idle and /session max-age", () => {
     );
 
     const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
-    expect(result?.reply?.text).toBe("ℹ️ Idle timeout active (2h, next auto-unfocus at n/a).");
+    expect(result?.reply?.text).toContain("Idle timeout active (2h");
+    expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
+  });
+
+  it("treats overflowed idle timeout metadata as disabled", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createThreadBinding({
+        metadata: {
+          boundBy: "user-1",
+          lastActivityAt: Date.now(),
+          idleTimeoutMs: Number.MAX_SAFE_INTEGER,
+          maxAgeMs: 0,
+        },
+      }),
+    );
+
+    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
+    expect(result?.reply?.text).toBe(
+      "ℹ️ Idle timeout is currently disabled for this focused session.",
+    );
   });
 
   it("sets max age for the focused thread-chat session", async () => {

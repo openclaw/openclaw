@@ -553,14 +553,14 @@ describe("plugin gateway gauntlet helpers", () => {
           "const marker = process.argv[1];",
           "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
-          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 50);",
+          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 5);",
         ].join(""),
         markerPath,
       ],
       label: "live-timeout",
       phase: "probe",
-      timeoutMs: 1000,
-      timeoutKillGraceMs: 100,
+      timeoutMs: 100,
+      timeoutKillGraceMs: 10,
     });
 
     expect(row.status).toBe(1);

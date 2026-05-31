@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const discoverAuthStorageMock = vi.fn<(agentDir?: string) => { mocked: true }>(() => ({
   mocked: true,
@@ -43,6 +43,8 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 describe("resolveModelAsync startup retry", () => {
+  let resolveModelAsync: typeof import("./model.js").resolveModelAsync;
+
   const runtimeHooks = {
     buildProviderUnknownModelHintWithPlugin: () => undefined,
     normalizeProviderResolvedModelWithPlugin: () => undefined,
@@ -51,6 +53,10 @@ describe("resolveModelAsync startup retry", () => {
     runProviderDynamicModel: (params: unknown) => runProviderDynamicModelMock(params),
     applyProviderResolvedTransportWithPlugin: () => undefined,
   };
+
+  beforeAll(async () => {
+    ({ resolveModelAsync } = await import("./model.js"));
+  });
 
   beforeEach(() => {
     dynamicAttempts = 0;
@@ -64,8 +70,6 @@ describe("resolveModelAsync startup retry", () => {
   });
 
   it("retries once after a transient provider-runtime miss", async () => {
-    const { resolveModelAsync } = await import("./model.js");
-
     const result = await resolveModelAsync(
       "openai",
       "gpt-5.4",
@@ -86,8 +90,6 @@ describe("resolveModelAsync startup retry", () => {
   });
 
   it("does not retry during steady-state misses", async () => {
-    const { resolveModelAsync } = await import("./model.js");
-
     const result = await resolveModelAsync("openai", "gpt-5.4", "/tmp/agent", {}, { runtimeHooks });
 
     expect(result.model).toBeUndefined();

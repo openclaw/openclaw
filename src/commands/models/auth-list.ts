@@ -1,3 +1,4 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -10,7 +11,6 @@ import {
 } from "../../agents/auth-profiles.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { timestampMsToIsoString } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";

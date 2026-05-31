@@ -296,7 +296,7 @@ async function refreshAccessToken(
 }
 
 async function createAuthorizationFlow(
-  originator: string = "openclaw",
+  originator = "openclaw",
 ): Promise<{ verifier: string; redirectUri: string; state: string; url: string }> {
   const [{ verifier, challenge }, runtime] = await Promise.all([
     generatePKCE(),

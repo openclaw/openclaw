@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   buildWorkspaceSkillStatus,
@@ -980,8 +980,8 @@ function proposalMatchesName(
     }
     const normalizedCandidate = normalizeSkillIndexName(candidate);
     return (
-      !!normalizedName &&
-      !!normalizedCandidate &&
+      Boolean(normalizedName) &&
+      Boolean(normalizedCandidate) &&
       (normalizedCandidate === normalizedName ||
         normalizedCandidate.includes(normalizedName) ||
         normalizedName.includes(normalizedCandidate))

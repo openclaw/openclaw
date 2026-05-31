@@ -1,6 +1,6 @@
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronDeliveryStatus } from "./types.js";
@@ -38,8 +38,8 @@ export function parseCronRunLogEntriesFromJsonl(
   }
   const parsed: CronRunLogEntry[] = [];
   const lines = raw.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]?.trim();
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
     if (!line) {
       continue;
     }

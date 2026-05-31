@@ -30,6 +30,8 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
 const PROC_MEMINFO_PATH = "/proc/meminfo";
 const TERMINATION_GRACE_MS = 5_000;
 const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
+const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
 const DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
@@ -78,11 +80,15 @@ export function cleanTsdownOutputRoots(params = {}) {
           roots,
         })
       : new Set();
+  const protectedPaths = new Set([
+    ...protectedDeclarationPaths,
+    ...listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }),
+  ]);
   for (const root of roots) {
     const rootPath = path.join(cwd, root);
     try {
-      if (hasProtectedChild({ rootPath, protectedPaths: protectedDeclarationPaths })) {
-        cleanOutputRootExcept(rootPath, protectedDeclarationPaths, fsImpl);
+      if (hasProtectedChild({ rootPath, protectedPaths })) {
+        cleanOutputRootExcept(rootPath, protectedPaths, fsImpl);
       } else {
         fsImpl.rmSync(rootPath, { force: true, recursive: true });
       }
@@ -133,6 +139,24 @@ function listExistingDeclarationOutputPaths({ cwd, fs: fsImpl, roots }) {
   const protectedPaths = new Set();
   for (const root of roots) {
     collectDeclarationOutputPaths(path.join(cwd, root), protectedPaths, fsImpl);
+  }
+  return protectedPaths;
+}
+
+function listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }) {
+  const protectedPaths = new Set();
+  if (env[PRESERVE_CLI_STARTUP_METADATA_ENV] !== "1") {
+    return protectedPaths;
+  }
+  for (const relativePath of PRESERVED_TSDOWN_OUTPUT_FILES) {
+    const absolutePath = path.resolve(cwd, relativePath);
+    try {
+      if (fsImpl.statSync(absolutePath).isFile()) {
+        protectedPaths.add(absolutePath);
+      }
+    } catch {
+      // Missing preserved outputs are normal on first build.
+    }
   }
   return protectedPaths;
 }

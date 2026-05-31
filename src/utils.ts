@@ -8,6 +8,7 @@ import {
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
+import { resolveTimerTimeoutMs } from "./shared/number-coercion.js";
 export { escapeRegExp } from "./shared/regexp.js";
 
 export async function ensureDir(dir: string) {
@@ -31,6 +32,7 @@ export const clamp = clampNumber;
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON parsing helper lets callers ascribe the expected payload type.
 export function safeParseJson<T>(raw: string): T | null {
   try {
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- JSON parsing helper lets callers ascribe the expected payload type.
     return JSON.parse(raw) as T;
   } catch {
     return null;
@@ -57,7 +59,7 @@ export function normalizeE164(number: string): string {
 }
 
 export function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0)));
 }
 
 function isHighSurrogate(codeUnit: number): boolean {

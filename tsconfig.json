@@ -106,6 +106,20 @@
       "@openclaw/markdown-core/tables": ["./packages/markdown-core/src/tables.ts"],
       "@openclaw/markdown-core/types": ["./packages/markdown-core/src/types.ts"],
       "@openclaw/markdown-core/*": ["./packages/markdown-core/src/*"],
+      "@openclaw/normalization-core": ["./packages/normalization-core/src/index.ts"],
+      "@openclaw/normalization-core/number-coercion": [
+        "./packages/normalization-core/src/number-coercion.ts"
+      ],
+      "@openclaw/normalization-core/record-coerce": [
+        "./packages/normalization-core/src/record-coerce.ts"
+      ],
+      "@openclaw/normalization-core/string-coerce": [
+        "./packages/normalization-core/src/string-coerce.ts"
+      ],
+      "@openclaw/normalization-core/string-normalization": [
+        "./packages/normalization-core/src/string-normalization.ts"
+      ],
+      "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
       "@openclaw/terminal-core": ["./packages/terminal-core/src/index.ts"],
       "@openclaw/terminal-core/ansi": ["./packages/terminal-core/src/ansi.ts"],
       "@openclaw/terminal-core/decorative-emoji": [

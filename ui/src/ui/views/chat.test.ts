@@ -1250,6 +1250,25 @@ describe("chat sidebar raw content", () => {
       rawText: rawMarkdown,
     });
   });
+
+  it("does not carry full-message requests into raw views", () => {
+    const raw = buildRawSidebarContent({
+      kind: "markdown",
+      content: "Rendered",
+      rawText: "Raw",
+      fullMessageRequest: {
+        sessionKey: "main",
+        messageId: "msg-raw",
+        kind: "assistant_message",
+      },
+    });
+
+    expect(raw).toEqual({
+      kind: "markdown",
+      content: "```\nRaw\n```",
+      rawText: "Raw",
+    });
+  });
 });
 
 describe("chat welcome", () => {
@@ -2014,11 +2033,9 @@ describe("chat session controls", () => {
       includeUnknown: true,
       limit: 50,
     });
-    expect(
-      request.mock.calls.some(([, params]) =>
-        Object.prototype.hasOwnProperty.call(params ?? {}, "agentId"),
-      ),
-    ).toBe(false);
+    expect(request.mock.calls.some(([, params]) => Object.hasOwn(params ?? {}, "agentId"))).toBe(
+      false,
+    );
   });
 
   it("reloads the picker after switching agents", async () => {

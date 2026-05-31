@@ -262,7 +262,7 @@ function installControlUiMockGateway(input: {
   }
 
   function hasOwn(record: Record<string, unknown>, key: string): boolean {
-    return Object.prototype.hasOwnProperty.call(record, key);
+    return Object.hasOwn(record, key);
   }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {

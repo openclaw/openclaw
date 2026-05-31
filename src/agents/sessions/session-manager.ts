@@ -25,7 +25,7 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
   uuidv7,
 } from "../runtime/index.js";
-import { type BashExecutionMessage, type CustomMessage } from "./messages.js";
+import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
 
@@ -685,12 +685,12 @@ async function listSessionsFromDir(
  * handles compaction summaries and follows the path from root to current leaf.
  */
 export class SessionManager {
-  private sessionId: string = "";
+  private sessionId = "";
   private sessionFile: string | undefined;
   private sessionDir: string;
   private cwd: string;
   private shouldPersist: boolean;
-  private flushed: boolean = false;
+  private flushed = false;
   private fileEntries: FileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
   private labelsById: Map<string, string> = new Map();
