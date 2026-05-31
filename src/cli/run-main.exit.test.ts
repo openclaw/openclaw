@@ -426,6 +426,7 @@ describe("runCli exit behavior", () => {
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
+      enabled: true,
     });
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
