@@ -150,6 +150,58 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS));
   });
 
+  it("refuses to recreate a skip-bootstrap workspace after the directory disappears", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await fs.writeFile(path.join(tempDir, "seed.txt"), "preseeded\n");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: false });
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: false }),
+    );
+    await expectPathMissing(tempDir);
+  });
+
+  it("refuses to accept an empty skip-bootstrap workspace after contents are wiped", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await fs.writeFile(path.join(tempDir, "seed.txt"), "preseeded\n");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: false });
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.mkdir(tempDir, { recursive: true });
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: false }),
+    );
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+  });
+
+  it("refuses to accept a wiped skip-bootstrap workspace with only metadata leftovers", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await fs.writeFile(path.join(tempDir, "seed.txt"), "preseeded\n");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: false });
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, "skills"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, ".DS_Store"), "");
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: false }),
+    );
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+  });
+
+  it("allows repeated skip-bootstrap setup for an intentionally empty workspace", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: false });
+    await expect(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: false }),
+    ).resolves.toMatchObject({ dir: tempDir });
+  });
+
   it("keeps ISO-only attestation markers from the previous branch format effective", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const legacyAttestationPath = `${tempDir}.attested`;

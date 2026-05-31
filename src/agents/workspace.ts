@@ -273,6 +273,33 @@ async function hasWorkspaceUserContentEvidence(
   return await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
 }
 
+async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === ".DS_Store" || entry.name === WORKSPACE_STATE_DIRNAME) {
+        continue;
+      }
+      if (entry.name === "skills" && entry.isDirectory()) {
+        try {
+          if ((await fs.readdir(path.join(dir, entry.name))).length === 0) {
+            continue;
+          }
+        } catch {
+          continue;
+        }
+      }
+      return true;
+    }
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+  }
+  return false;
+}
+
 async function workspaceProfileLooksConfigured(params: {
   dir: string;
   includeGitEvidence?: boolean;
@@ -650,20 +677,28 @@ export async function ensureAgentWorkspace(params?: {
   const dir = resolveUserPath(rawDir);
   const [attestationPath, ...legacyAttestationPaths] = resolveWorkspaceAttestationPaths(dir);
   const attestationPaths = [attestationPath, ...legacyAttestationPaths];
+  const recentAttestationPath = await findRecentWorkspaceAttestationPath(attestationPaths);
 
-  if (params?.ensureBootstrapFiles && !(await pathExists(dir))) {
-    const recentAttestationPath = await findRecentWorkspaceAttestationPath(attestationPaths);
-    if (recentAttestationPath) {
-      throw new WorkspaceVanishedError({
-        workspaceDir: dir,
-        attestationPath: recentAttestationPath,
-      });
-    }
+  if (!(await pathExists(dir)) && recentAttestationPath) {
+    throw new WorkspaceVanishedError({
+      workspaceDir: dir,
+      attestationPath: recentAttestationPath,
+    });
   }
 
   await fs.mkdir(dir, { recursive: true });
 
   if (!params?.ensureBootstrapFiles) {
+    const hasContentEvidence = await hasSkipBootstrapWorkspaceContentEvidence(dir);
+    if (recentAttestationPath && !hasContentEvidence) {
+      throw new WorkspaceVanishedError({
+        workspaceDir: dir,
+        attestationPath: recentAttestationPath,
+      });
+    }
+    if (hasContentEvidence) {
+      await maybeWriteWorkspaceAttestation(attestationPath);
+    }
     return { dir };
   }
 
@@ -695,7 +730,6 @@ export async function ensureAgentWorkspace(params?: {
   })();
 
   if (isBrandNewWorkspace) {
-    const recentAttestationPath = await findRecentWorkspaceAttestationPath(attestationPaths);
     if (recentAttestationPath) {
       throw new WorkspaceVanishedError({
         workspaceDir: dir,
