@@ -10,6 +10,7 @@ import {
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import {
   runMemoryFlushIfNeeded,
   runPreflightCompactionIfNeeded,
@@ -616,7 +617,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await writeTestSessionStore(storePath, "main", sessionEntry);
     runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
 
-    const visibleErrorPayloads: { text: string; isError: boolean }[] = [];
+    const visibleErrorPayloads: ReplyPayload[] = [];
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
