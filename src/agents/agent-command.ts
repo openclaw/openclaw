@@ -803,6 +803,7 @@ async function agentCommandInternal(
           ? { isControlUiVisible: false }
           : {
               sessionKey,
+              sessionId,
             },
       );
       attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt });
@@ -980,7 +981,7 @@ async function agentCommandInternal(
 
     if (sessionKey || suppressVisibleSessionEffects) {
       registerAgentRunContext(runId, {
-        ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey } : {}),
+        ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey, sessionId } : {}),
         verboseLevel: resolvedVerboseLevel,
         isControlUiVisible: !suppressVisibleSessionEffects,
       });
