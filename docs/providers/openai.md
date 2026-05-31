@@ -49,6 +49,7 @@ The names are similar but not interchangeable:
 | Name you see                            | Layer             | Meaning                                                                                           |
 | --------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
 | `openai`                                | Provider prefix   | Canonical OpenAI model route; agent turns use the Codex runtime.                                  |
+| `openai-codex`                          | Login flow        | Identifier for the Codex OAuth login flow (`--provider openai-codex`). The resulting auth profile stores `"provider": "openai"` — `openai-codex` is **not** a valid provider ID in auth profiles or config. |
 | legacy OpenAI Codex prefix              | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates it to `openai`.                   |
 | `codex` plugin                          | Plugin            | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls. |
 | provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                            |
@@ -60,6 +61,22 @@ profiles point at either API-key or ChatGPT/Codex OAuth credentials. Use
 `auth.order.openai` for config; `openclaw doctor --fix` rewrites legacy
 legacy Codex model refs, legacy Codex auth profile ids, and
 legacy Codex auth order to the canonical OpenAI route.
+
+<Warning>
+**Auth profile `provider` field after `openai-codex` login.** When you run
+`openclaw models auth login --provider openai-codex`, the resulting auth profile
+in `auth-profiles.json` contains `"provider": "openai"` — **not**
+`"openai-codex"`. The `openai-codex` value identifies the Codex OAuth login
+flow, but the stored provider ID is `openai`. If you manually set or preserve
+`"provider": "openai-codex"` in an auth profile, OpenClaw cannot match it to a
+registered provider at runtime and all OpenAI model requests fail with a cryptic
+error: *"No available auth profile for openai-codex (all in cooldown or
+unavailable)"* — even though the profile exists and the token is valid.
+
+Fix: ensure the `provider` field in your auth profiles is `"openai"`. Run
+`openclaw doctor --fix` to repair legacy `openai-codex` profile entries
+automatically.
+</Warning>
 
 <Note>
 GPT-5.5 is available through both direct OpenAI Platform API-key access and

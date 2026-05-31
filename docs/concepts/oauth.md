@@ -122,6 +122,13 @@ Flow shape:
 
 OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
 
+<Warning>
+When you sign in with `--provider openai-codex`, the resulting auth profile
+stores `"provider": "openai"`. The `openai-codex` value is the login flow
+identifier, not the provider ID. Do not set `"provider": "openai-codex"` in
+auth profiles — it causes a runtime error. See [OpenAI provider docs](/providers/openai) for details.
+</Warning>
+
 Flow shape (PKCE):
 
 1. generate PKCE verifier/challenge + random `state`
