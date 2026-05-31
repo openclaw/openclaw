@@ -48,6 +48,19 @@ function resetSuccessfulUsageStats(
   };
 }
 
+function hasActiveFailureState(stats: ProfileUsageStats | undefined): boolean {
+  if (!stats) {
+    return false;
+  }
+  return (
+    (stats.errorCount != null && stats.errorCount > 0) ||
+    stats.blockedUntil != null ||
+    stats.cooldownUntil != null ||
+    stats.disabledUntil != null ||
+    stats.failureCounts != null
+  );
+}
+
 function updateSuccessfulUsageStatsEntry(
   store: AuthProfileStore,
   profileId: string,
@@ -279,9 +292,15 @@ export async function markAuthProfileSuccess(params: {
       if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
         return false;
       }
+      const lastGoodChanged = freshStore.lastGood?.[providerKey] !== profileId;
+      const failureStateToClear = hasActiveFailureState(freshStore.usageStats?.[profileId]);
       freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
       updateSuccessfulUsageStatsEntry(freshStore, profileId, lastUsed);
-      return true;
+      // Skip file write when only lastUsed changed. Nothing reads lastUsed for
+      // model selection, failover, or rotation. Suppressing the no-op write
+      // keeps auth-profiles.json mtime stable so the models.json resolution
+      // cache is not invalidated on every successful call.
+      return lastGoodChanged || failureStateToClear;
     },
   });
   if (updated) {

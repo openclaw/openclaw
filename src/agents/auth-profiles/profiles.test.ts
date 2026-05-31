@@ -7,6 +7,7 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import { resolveAuthStorePath } from "./paths.js";
 import {
   clearLastGoodProfileWithLock,
+  markAuthProfileSuccess,
   promoteAuthProfileInOrder,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
@@ -726,6 +727,109 @@ describe("promoteAuthProfileInOrder", () => {
       });
 
       expect(loadAuthProfileStoreForRuntime(agentDir).lastGood?.["openai"]).toBe(goodProfileId);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("markAuthProfileSuccess", () => {
+  it("skips file write when lastGood is already set and no failure state exists", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-noop-"));
+    const agentDir = path.join(stateDir, "agents", "main");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const profileId = "anthropic:user@test.example";
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "test-token",
+          },
+        },
+        lastGood: { anthropic: profileId },
+      };
+      saveAuthProfileStore(store, agentDir);
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const authPath = resolveAuthStorePath(agentDir);
+      const mtimeBefore = fs.statSync(authPath).mtimeMs;
+
+      // Wait briefly so any file write would produce a different mtime
+      await new Promise((r) => setTimeout(r, 50));
+
+      await markAuthProfileSuccess({
+        store,
+        provider: "anthropic",
+        profileId,
+        agentDir,
+      });
+
+      const mtimeAfter = fs.statSync(authPath).mtimeMs;
+      expect(mtimeAfter).toBe(mtimeBefore);
+      // In-memory state should still be updated
+      expect(store.lastGood?.["anthropic"]).toBe(profileId);
+      expect(store.usageStats?.[profileId]?.lastUsed).toBeGreaterThan(0);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes file when clearing failure state on success", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-clear-fail-"));
+    const agentDir = path.join(stateDir, "agents", "main");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const profileId = "anthropic:user@test.example";
+      const store: AuthProfileStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "test-token",
+          },
+        },
+        lastGood: { anthropic: profileId },
+        usageStats: {
+          [profileId]: {
+            errorCount: 3,
+            blockedUntil: Date.now() + 60_000,
+            blockedReason: "rate_limit" as never,
+          },
+        },
+      };
+      saveAuthProfileStore(store, agentDir);
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      await markAuthProfileSuccess({
+        store,
+        provider: "anthropic",
+        profileId,
+        agentDir,
+      });
+
+      // Reload from disk to confirm the failure state was cleared
+      clearRuntimeAuthProfileStoreSnapshots();
+      const reloaded = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+      expect(reloaded.usageStats?.[profileId]?.errorCount).toBe(0);
+      expect(reloaded.usageStats?.[profileId]?.blockedUntil).toBeUndefined();
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
