@@ -164,6 +164,7 @@ function webhookError(probe: SmsTwilioWebhookProbe): string | undefined {
     case "url-mismatch":
       return `Twilio number ${probe.phoneNumber} points SMS webhooks at ${probe.configuredUrl}; expected ${probe.expectedUrl}.`;
   }
+  return undefined;
 }
 
 export async function probeSmsAccount(params: {

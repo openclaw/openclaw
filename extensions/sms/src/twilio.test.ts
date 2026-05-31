@@ -184,7 +184,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("lists Twilio phone-number webhook settings", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(
           JSON.stringify({
@@ -231,7 +231,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("lists recent Twilio messages for diagnostics", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(
           JSON.stringify({

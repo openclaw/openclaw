@@ -246,6 +246,19 @@ function basicAuthHeader(account: ResolvedSmsAccount): string {
   return `Basic ${Buffer.from(`${account.accountSid}:${account.authToken}`).toString("base64")}`;
 }
 
+function normalizeRequestHeaders(headers: HeadersInit | undefined): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers.map(([key, value]) => [key, value]));
+  }
+  return Object.fromEntries(Object.entries(headers));
+}
+
 async function requestTwilioApi(params: {
   account: ResolvedSmsAccount;
   path: string;
@@ -258,8 +271,8 @@ async function requestTwilioApi(params: {
   const init = {
     ...params.init,
     headers: {
+      ...normalizeRequestHeaders(params.init?.headers),
       authorization: basicAuthHeader(params.account),
-      ...(params.init?.headers ?? {}),
     },
   } satisfies RequestInit;
   if (params.fetchImpl) {
