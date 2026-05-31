@@ -592,6 +592,7 @@ export async function listDevicePairing(baseDir?: string): Promise<DevicePairing
   return { pending, paired };
 }
 
+/** Return one paired device by normalized device id. */
 export async function getPairedDevice(
   deviceId: string,
   baseDir?: string,
@@ -600,6 +601,7 @@ export async function getPairedDevice(
   return state.pairedByDeviceId[normalizeDeviceId(deviceId)] ?? null;
 }
 
+/** Return one pending pairing request by request id. */
 export async function getPendingDevicePairing(
   requestId: string,
   baseDir?: string,
@@ -608,6 +610,7 @@ export async function getPendingDevicePairing(
   return state.pendingById[requestId] ?? null;
 }
 
+/** Create or refresh a pending device pairing request for owner approval. */
 export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   baseDir?: string,
@@ -666,6 +669,7 @@ export async function requestDevicePairing(
   });
 }
 
+/** Approve a pending request with optional caller-scope checks for operator grants. */
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
@@ -777,6 +781,7 @@ export async function approveDevicePairing(
   });
 }
 
+/** Approve a pending request through a bounded bootstrap profile handoff. */
 export async function approveBootstrapDevicePairing(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
@@ -875,6 +880,7 @@ export async function approveBootstrapDevicePairing(
   });
 }
 
+/** Reject a pending request and revoke matching bootstrap tokens for that device. */
 export async function rejectDevicePairing(
   requestId: string,
   baseDir?: string,
@@ -896,6 +902,7 @@ export async function rejectDevicePairing(
   });
 }
 
+/** Remove a paired device and any pending repair requests for the same device id. */
 export async function removePairedDevice(
   deviceId: string,
   baseDir?: string,
@@ -917,6 +924,7 @@ export async function removePairedDevice(
   });
 }
 
+/** Update non-auth metadata for a paired device presence/status refresh. */
 export async function updatePairedDeviceMetadata(
   deviceId: string,
   patch: Partial<PairedDeviceMetadataPatch>,
@@ -957,6 +965,7 @@ export async function updatePairedDeviceMetadata(
   });
 }
 
+/** Summarize token metadata without exposing bearer token strings. */
 export function summarizeDeviceTokens(
   tokens: Record<string, DeviceAuthToken> | undefined,
 ): DeviceAuthTokenSummary[] | undefined {
@@ -976,6 +985,7 @@ export function summarizeDeviceTokens(
   return summaries.length > 0 ? summaries : undefined;
 }
 
+/** Verify a device role token, scope it to the approval baseline, and mark last use. */
 export async function verifyDeviceToken(params: {
   deviceId: string;
   token: string;
@@ -1043,6 +1053,7 @@ export async function verifyDeviceToken(params: {
   });
 }
 
+/** Return a reusable token for a role or issue one within the approved scope baseline. */
 export async function ensureDeviceToken(params: {
   deviceId: string;
   role: string;
@@ -1132,6 +1143,7 @@ function resolveDeviceTokenUpdateContext(params: {
   return { device, role, tokens, existing };
 }
 
+/** Rotate a role token inside the device's approved scope baseline. */
 export async function rotateDeviceToken(params: {
   deviceId: string;
   role: string;
@@ -1193,6 +1205,7 @@ export async function rotateDeviceToken(params: {
   });
 }
 
+/** Revoke one active role token after optional caller-scope authorization. */
 export async function revokeDeviceToken(params: {
   deviceId: string;
   role: string;
@@ -1232,6 +1245,7 @@ export async function revokeDeviceToken(params: {
   });
 }
 
+/** Delete a paired device record without touching unrelated pending requests. */
 export async function clearDevicePairing(deviceId: string, baseDir?: string): Promise<boolean> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
