@@ -1,9 +1,9 @@
 import type { AcpRuntime, AcpRuntimeCapabilities } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-manager-task-state.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
@@ -42,13 +42,6 @@ export const {
   testing: { resetAcpSessionManagerForTests },
 } = await import("./manager.js");
 export const { AcpRuntimeError } = await import("../runtime/errors.js");
-export const { findTaskByRunId, resetTaskRegistryForTests } =
-  await import("../../tasks/task-registry.js");
-export const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
-export const { configureTaskFlowRegistryRuntime } =
-  await import("../../tasks/task-flow-registry.store.js");
-export const { installInMemoryTaskRegistryRuntime } =
-  await import("../../test-utils/task-registry-runtime.js");
 
 export const baseCfg = {
   acp: {
@@ -58,34 +51,6 @@ export const baseCfg = {
   },
 } as const;
 export const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-
-export async function withAcpManagerTaskStateDir(
-  run: (root: string) => Promise<void>,
-): Promise<void> {
-  await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    installInMemoryTaskRegistryRuntime();
-    configureTaskFlowRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          flows: new Map(),
-        }),
-        saveSnapshot: () => {},
-        upsertFlow: () => {},
-        deleteFlow: () => {},
-        close: () => {},
-      },
-    });
-    try {
-      await run(root);
-    } finally {
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
-    }
-  });
-}
 
 export async function flushMicrotasks(rounds = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
@@ -167,14 +132,6 @@ export function expectNoMockCallFields(
   expected: Record<string, unknown>,
 ) {
   expect(findMockCallFields(mock, expected)).toBeUndefined();
-}
-
-export function requireTaskByRunId(runId: string) {
-  const task = findTaskByRunId(runId);
-  if (!task) {
-    throw new Error(`Expected task for run ${runId}`);
-  }
-  return task;
 }
 
 export function createRuntime(): {
@@ -350,7 +307,6 @@ export function installAcpSessionManagerTestLifecycle(): void {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
     resetHeartbeatWakeStateForTests();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
+    resetAcpManagerTaskStateForTests();
   });
 }

@@ -2,6 +2,11 @@ import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import {
+  findTaskByRunId,
+  requireTaskByRunId,
+  withAcpManagerTaskStateDir,
+} from "../../../test/helpers/acp-manager-task-state.js";
 import { isAcpTurnActive } from "./active-turns.js";
 import {
   type AcpRuntime,
@@ -17,18 +22,15 @@ import {
   extractRuntimeOptionsFromUpserts,
   extractStateUpsertPersistenceOptions,
   extractStatesFromUpserts,
-  findTaskByRunId,
   flushMicrotasks,
   hoisted,
   installAcpSessionManagerTestLifecycle,
   mockCallArg,
   mockCallArgs,
   readySessionMeta,
-  requireTaskByRunId,
   type OpenClawConfig,
   resetAcpSessionManagerForTests,
   type SessionAcpMeta,
-  withAcpManagerTaskStateDir,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager", () => {

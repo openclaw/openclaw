@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  requireTaskByRunId,
+  withAcpManagerTaskStateDir,
+} from "../../../test/helpers/acp-manager-task-state.js";
+import {
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
@@ -11,10 +15,8 @@ import {
   installAcpSessionManagerTestLifecycle,
   mockCallArg,
   readySessionMeta,
-  requireTaskByRunId,
   resetAcpSessionManagerForTests,
   type SessionAcpMeta,
-  withAcpManagerTaskStateDir,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager turn results", () => {
