@@ -955,6 +955,7 @@ async function settleCodeModeResult(params: {
     });
     const ready = await waitForPending(pending, remainingMs);
     if (!ready) {
+      enforceActiveRunLimit();
       return storeSnapshotState({
         pending,
         snapshotBytes: result.snapshotBytes,
