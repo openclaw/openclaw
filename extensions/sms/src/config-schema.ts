@@ -18,6 +18,7 @@ const SmsAccountConfigSchema = z
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),
     messagingServiceSid: z.string().optional(),
+    defaultTo: z.string().optional(),
     webhookPath: z.string().optional(),
     publicWebhookUrl: z.string().optional(),
     dangerouslyDisableSignatureValidation: z.boolean().optional(),
@@ -62,6 +63,10 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     messagingServiceSid: {
       label: "Twilio Messaging Service SID",
       help: "Twilio Messaging Service SID to use instead of a dedicated fromNumber.",
+    },
+    defaultTo: {
+      label: "SMS Default To Number",
+      help: "Optional default outbound phone number used when a send flow omits an explicit SMS target.",
     },
     publicWebhookUrl: {
       label: "SMS Public Webhook URL",

@@ -44,6 +44,7 @@ const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
     "authToken",
     "fromNumber",
     "messagingServiceSid",
+    "defaultTo",
     "webhookPath",
     "publicWebhookUrl",
     "dangerouslyDisableSignatureValidation",
@@ -54,6 +55,7 @@ const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) =>
     normalizeStringEntries(allowFrom.map((entry) => normalizeSmsAllowFrom(String(entry)))),
+  resolveDefaultTo: (account) => account.defaultTo,
 });
 
 const resolveSmsDmPolicy = createScopedDmSecurityResolver<ResolvedSmsAccount>({
@@ -83,6 +85,7 @@ function smsSetupPatch(input: Record<string, unknown>): Record<string, unknown> 
     "authToken",
     "fromNumber",
     "messagingServiceSid",
+    "defaultTo",
     "webhookPath",
     "publicWebhookUrl",
     "dmPolicy",
@@ -117,23 +120,30 @@ function applySmsAccountConfig(params: {
 }
 
 function createSmsReceipt(params: {
-  results: Array<{ sid: string; to: string }>;
-  fallbackTo: string;
+  results: Array<{ sid: string; to: string; from?: string; status?: string }>;
   kind: "text";
 }) {
   const first = params.results[0];
+  if (!first) {
+    throw new Error("SMS send did not return a Twilio Message SID.");
+  }
   return {
     channel: CHANNEL_ID,
-    messageId: first?.sid ?? `sms-${Date.now()}`,
-    chatId: first?.to ?? params.fallbackTo,
+    messageId: first.sid,
+    chatId: first.to,
     receipt: createMessageReceiptFromOutboundResults({
       results: params.results.map((result) => ({
         channel: CHANNEL_ID,
         messageId: result.sid,
         chatId: result.to,
+        toJid: result.to,
         conversationId: result.to,
+        meta: {
+          ...(result.from ? { from: result.from } : {}),
+          ...(result.status ? { status: result.status } : {}),
+        },
       })),
-      threadId: first?.to ?? params.fallbackTo,
+      threadId: first.to,
       kind: params.kind,
     }),
   };
@@ -156,12 +166,12 @@ async function sendSmsText(ctx: {
   text: string;
 }) {
   const account = resolveSmsAccount(ctx.cfg, ctx.accountId);
-  const to = normalizeSmsPhoneNumber(ctx.to);
+  const to = normalizeSmsPhoneNumber(ctx.to) || account.defaultTo;
   if (!looksLikeSmsPhoneNumber(to)) {
     throw new Error(`Invalid SMS target: ${ctx.to}`);
   }
   const results = await sendSmsTextChunks({ account, to, text: ctx.text });
-  return createSmsReceipt({ results, fallbackTo: to, kind: "text" });
+  return createSmsReceipt({ results, kind: "text" });
 }
 
 const smsMessageAdapter = defineChannelMessageAdapter({
@@ -283,6 +293,19 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
     chunkerMode: "text",
     textChunkLimit: 1500,
     resolveEffectiveTextChunkLimit: resolveSmsTextChunkLimit,
+    resolveTarget: ({ cfg, to, accountId }) => {
+      const explicit = normalizeSmsPhoneNumber(to ?? "");
+      if (explicit) {
+        return { ok: true, to: explicit };
+      }
+      if (cfg) {
+        const account = resolveSmsAccount(cfg, accountId);
+        if (account.defaultTo) {
+          return { ok: true, to: account.defaultTo };
+        }
+      }
+      return { ok: false, error: new Error("SMS target must be an E.164 phone number.") };
+    },
     sanitizeText: ({ text }) => toSmsPlainText(text),
     sendText: sendSmsText,
   },

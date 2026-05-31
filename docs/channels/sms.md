@@ -45,7 +45,7 @@ OpenClaw can receive and send SMS through a Twilio phone number or Messaging Ser
 ```
 
     Env fallbacks for the default account:
-    `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` or `TWILIO_MESSAGING_SERVICE_SID`, and `SMS_PUBLIC_WEBHOOK_URL`.
+    `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` or `TWILIO_SMS_FROM` or `TWILIO_MESSAGING_SERVICE_SID`, and `SMS_PUBLIC_WEBHOOK_URL`.
 
   </Step>
 
@@ -93,6 +93,8 @@ openclaw message --to sms:+15551234567 "hello"
 ```
 
 Agent replies from inbound SMS conversations automatically go back to the sender through the configured Twilio sender.
+
+Set `channels.sms.defaultTo` when operator-initiated sends should have a default phone number if no explicit target is provided.
 
 Use `messagingServiceSid` instead of `fromNumber` when Twilio should choose the sender through a Messaging Service:
 

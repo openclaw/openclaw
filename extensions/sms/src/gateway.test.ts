@@ -18,6 +18,7 @@ function createAccount(accountId: string, webhookPath = "/webhooks/sms"): Resolv
     authToken: "secret",
     fromNumber: "+15557654321",
     messagingServiceSid: "",
+    defaultTo: "",
     webhookPath,
     publicWebhookUrl: `https://gateway.example.com${webhookPath}`,
     dangerouslyDisableSignatureValidation: false,

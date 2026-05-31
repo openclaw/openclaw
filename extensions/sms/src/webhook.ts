@@ -6,6 +6,7 @@ import {
   buildTwilioInboundMessage,
   readTwilioWebhookForm,
   respondTwiml,
+  resolveTwilioWebhookSignatureUrl,
   verifyTwilioSignature,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -92,7 +93,10 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     if (!params.account.dangerouslyDisableSignatureValidation) {
       const ok = verifyTwilioSignature({
         signature: headerValue(req.headers["x-twilio-signature"]),
-        url: params.account.publicWebhookUrl,
+        url: resolveTwilioWebhookSignatureUrl({
+          req,
+          publicWebhookUrl: params.account.publicWebhookUrl,
+        }),
         authToken: params.account.authToken,
         form,
       });

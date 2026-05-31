@@ -6,6 +6,7 @@ const ENV_KEYS = [
   "TWILIO_ACCOUNT_SID",
   "TWILIO_AUTH_TOKEN",
   "TWILIO_PHONE_NUMBER",
+  "TWILIO_SMS_FROM",
   "TWILIO_MESSAGING_SERVICE_SID",
   "SMS_PUBLIC_WEBHOOK_URL",
   "SMS_WEBHOOK_PATH",
@@ -28,6 +29,7 @@ describe("SMS account config", () => {
           accountSid: " AC123 ",
           authToken: " token ",
           fromNumber: "(555) 123-4567",
+          defaultTo: "sms:+1 (555) 000-1111",
           publicWebhookUrl: " https://example.com/webhooks/sms ",
         },
       },
@@ -39,6 +41,7 @@ describe("SMS account config", () => {
       authToken: "token",
       fromNumber: "+5551234567",
       messagingServiceSid: "",
+      defaultTo: "+15550001111",
       webhookPath: "/webhooks/sms",
       publicWebhookUrl: "https://example.com/webhooks/sms",
       dmPolicy: "pairing",
@@ -169,13 +172,24 @@ describe("SMS account config", () => {
   it("discovers env-only SMS credentials as the implicit default account", () => {
     process.env.TWILIO_ACCOUNT_SID = "AC-env";
     process.env.TWILIO_AUTH_TOKEN = "env-token";
-    process.env.TWILIO_PHONE_NUMBER = "+15550001111";
+    process.env.TWILIO_SMS_FROM = "+15550001111";
 
     expect(listSmsAccountIds({})).toEqual(["default"]);
     expect(resolveSmsAccount({})).toMatchObject({
       accountId: "default",
       accountSid: "AC-env",
       authToken: "env-token",
+      fromNumber: "+15550001111",
+    });
+  });
+
+  it("uses TWILIO_SMS_FROM when the legacy from-number env var is blank", () => {
+    process.env.TWILIO_ACCOUNT_SID = "AC-env";
+    process.env.TWILIO_AUTH_TOKEN = "env-token";
+    process.env.TWILIO_PHONE_NUMBER = " ";
+    process.env.TWILIO_SMS_FROM = "+15550001111";
+
+    expect(resolveSmsAccount({})).toMatchObject({
       fromNumber: "+15550001111",
     });
   });

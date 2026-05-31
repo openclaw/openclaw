@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveSmsTextChunkLimit, smsPlugin } from "./channel.js";
+
+const sendSmsViaTwilio = vi.hoisted(() =>
+  vi.fn(async ({ to }) => ({
+    sid: "SM-default",
+    to,
+    from: "+15557654321",
+    status: "queued",
+  })),
+);
+
+vi.mock("./twilio.js", () => ({
+  sendSmsViaTwilio,
+}));
 
 describe("smsPlugin outbound", () => {
   it("declares an active text chunker and account-aware chunk limit", () => {
@@ -38,5 +51,54 @@ describe("smsPlugin outbound", () => {
         },
       }),
     ).toBe(700);
+  });
+
+  it("uses defaultTo for targetless sends and preserves Twilio receipt metadata", async () => {
+    const result = await smsPlugin.outbound?.sendText?.({
+      cfg: {
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            defaultTo: "+15551234567",
+          },
+        },
+      },
+      to: "",
+      text: "hello",
+    });
+
+    expect(sendSmsViaTwilio).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "+15551234567", text: "hello" }),
+    );
+    expect(result?.messageId).toBe("SM-default");
+    expect(result?.receipt?.raw?.[0]).toMatchObject({
+      messageId: "SM-default",
+      chatId: "+15551234567",
+      toJid: "+15551234567",
+      meta: {
+        from: "+15557654321",
+        status: "queued",
+      },
+    });
+  });
+
+  it("resolves the configured default SMS target for outbound delivery", () => {
+    expect(
+      smsPlugin.outbound?.resolveTarget?.({
+        cfg: {
+          channels: {
+            sms: {
+              accountSid: "AC123",
+              authToken: "secret",
+              fromNumber: "+15557654321",
+              defaultTo: "+15551234567",
+            },
+          },
+        },
+        to: "",
+      }),
+    ).toEqual({ ok: true, to: "+15551234567" });
   });
 });

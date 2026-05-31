@@ -22,6 +22,13 @@ type TwilioApiResponse = {
   text: string;
 };
 
+type TwilioMessagePayload = {
+  sid?: string;
+  to?: string;
+  from?: string;
+  status?: string;
+};
+
 function firstString(value: unknown): string {
   if (Array.isArray(value)) {
     return firstString(value[0]);
@@ -49,7 +56,7 @@ function parseTwilioApiError(text: string): ParsedTwilioApiError {
   }
 }
 
-function parseTwilioSuccessPayload(text: string): { sid?: string } {
+function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
   if (!text.trim()) {
     return {};
   }
@@ -61,6 +68,9 @@ function parseTwilioSuccessPayload(text: string): { sid?: string } {
     const record = parsed as Record<string, unknown>;
     return {
       sid: typeof record.sid === "string" ? record.sid : undefined,
+      to: typeof record.to === "string" ? record.to : undefined,
+      from: typeof record.from === "string" ? record.from : undefined,
+      status: typeof record.status === "string" ? record.status : undefined,
     };
   } catch (err) {
     if (err instanceof Error && err.message === "Twilio SMS send returned malformed JSON.") {
@@ -68,6 +78,38 @@ function parseTwilioSuccessPayload(text: string): { sid?: string } {
     }
     throw new Error("Twilio SMS send returned malformed JSON.");
   }
+}
+
+function requestSearch(req: IncomingMessage): string {
+  try {
+    return new URL(req.url ?? "/", "http://localhost").search;
+  } catch {
+    return "";
+  }
+}
+
+function configuredUrlHasQuery(url: string): boolean {
+  const hashIndex = url.indexOf("#");
+  const beforeHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
+  return beforeHash.includes("?");
+}
+
+export function resolveTwilioWebhookSignatureUrl(params: {
+  req: IncomingMessage;
+  publicWebhookUrl: string;
+}): string {
+  if (configuredUrlHasQuery(params.publicWebhookUrl)) {
+    return params.publicWebhookUrl;
+  }
+  const search = requestSearch(params.req);
+  if (!search) {
+    return params.publicWebhookUrl;
+  }
+  const hashIndex = params.publicWebhookUrl.indexOf("#");
+  if (hashIndex === -1) {
+    return `${params.publicWebhookUrl}${search}`;
+  }
+  return `${params.publicWebhookUrl.slice(0, hashIndex)}${search}${params.publicWebhookUrl.slice(hashIndex)}`;
 }
 
 export class TwilioSmsApiError extends Error {
@@ -231,8 +273,14 @@ export async function sendSmsViaTwilio(params: {
     throw new TwilioSmsApiError(response.status, response.text);
   }
   const payload = parseTwilioSuccessPayload(response.text);
+  const sid = payload.sid?.trim();
+  if (!sid) {
+    throw new Error("Twilio SMS send response did not include a Message SID.");
+  }
   return {
-    sid: payload.sid ?? `sms-${Date.now()}`,
-    to: params.to,
+    sid,
+    to: payload.to?.trim() || params.to,
+    ...(payload.from?.trim() ? { from: payload.from.trim() } : {}),
+    ...(payload.status?.trim() ? { status: payload.status.trim() } : {}),
   };
 }

@@ -20,6 +20,7 @@ function createAccount(): ResolvedSmsAccount {
     authToken: "secret",
     fromNumber: "+15557654321",
     messagingServiceSid: "",
+    defaultTo: "",
     webhookPath: "/webhooks/sms",
     publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
     dangerouslyDisableSignatureValidation: false,

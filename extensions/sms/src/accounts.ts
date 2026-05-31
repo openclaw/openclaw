@@ -43,6 +43,10 @@ function parseTextChunkLimit(raw: unknown): number {
   return DEFAULT_TEXT_CHUNK_LIMIT;
 }
 
+function firstNonBlankEnv(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => value?.trim());
+}
+
 function hasBaseAccount(channelCfg: SmsChannelConfig | undefined): boolean {
   return Boolean(
     channelCfg?.accountSid ||
@@ -52,6 +56,7 @@ function hasBaseAccount(channelCfg: SmsChannelConfig | undefined): boolean {
     process.env.TWILIO_ACCOUNT_SID ||
     process.env.TWILIO_AUTH_TOKEN ||
     process.env.TWILIO_PHONE_NUMBER ||
+    process.env.TWILIO_SMS_FROM ||
     process.env.TWILIO_MESSAGING_SERVICE_SID,
   );
 }
@@ -96,7 +101,9 @@ export function resolveSmsAccount(
   const useEnvFallbacks = id === DEFAULT_ACCOUNT_ID;
   const envAccountSid = useEnvFallbacks ? process.env.TWILIO_ACCOUNT_SID : undefined;
   const envAuthToken = useEnvFallbacks ? process.env.TWILIO_AUTH_TOKEN : undefined;
-  const envFromNumber = useEnvFallbacks ? process.env.TWILIO_PHONE_NUMBER : undefined;
+  const envFromNumber = useEnvFallbacks
+    ? firstNonBlankEnv(process.env.TWILIO_PHONE_NUMBER, process.env.TWILIO_SMS_FROM)
+    : undefined;
   const envMessagingServiceSid = useEnvFallbacks
     ? process.env.TWILIO_MESSAGING_SERVICE_SID
     : undefined;
@@ -125,6 +132,7 @@ export function resolveSmsAccount(
     authToken,
     fromNumber: normalizeSmsPhoneNumber(String(merged.fromNumber ?? envFromNumber ?? "")),
     messagingServiceSid: String(merged.messagingServiceSid ?? envMessagingServiceSid ?? "").trim(),
+    defaultTo: normalizeSmsPhoneNumber(String(merged.defaultTo ?? "")),
     webhookPath: webhookPath || DEFAULT_WEBHOOK_PATH,
     publicWebhookUrl,
     dangerouslyDisableSignatureValidation:

@@ -3,6 +3,7 @@ import {
   buildTwilioInboundMessage,
   computeTwilioSignature,
   parseTwilioFormBody,
+  resolveTwilioWebhookSignatureUrl,
   sendSmsViaTwilio,
   TwilioSmsApiError,
   verifyTwilioSignature,
@@ -17,6 +18,7 @@ function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSms
     authToken: "secret",
     fromNumber: "+15557654321",
     messagingServiceSid: "",
+    defaultTo: "",
     webhookPath: "/webhooks/sms",
     publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
     dangerouslyDisableSignatureValidation: false,
@@ -105,10 +107,18 @@ describe("Twilio SMS helpers", () => {
   it("sends SMS through Twilio's Messages API", async () => {
     const fetchImpl = vi.fn(
       async () =>
-        new Response(JSON.stringify({ sid: "SM456" }), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({
+            sid: "SM456",
+            to: "+15551234567",
+            from: "+15557654321",
+            status: "queued",
+          }),
+          {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          },
+        ),
     );
 
     await expect(
@@ -120,6 +130,7 @@ describe("Twilio SMS helpers", () => {
           authToken: "secret",
           fromNumber: "+15557654321",
           messagingServiceSid: "",
+          defaultTo: "",
           webhookPath: "/webhooks/sms",
           publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
           dangerouslyDisableSignatureValidation: false,
@@ -131,7 +142,12 @@ describe("Twilio SMS helpers", () => {
         text: "hello",
         fetchImpl,
       }),
-    ).resolves.toEqual({ sid: "SM456", to: "+15551234567" });
+    ).resolves.toEqual({
+      sid: "SM456",
+      to: "+15551234567",
+      from: "+15557654321",
+      status: "queued",
+    });
 
     const [url, init] = fetchImpl.mock.calls[0] ?? [];
     expect(url).toBe("https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json");
@@ -163,6 +179,7 @@ describe("Twilio SMS helpers", () => {
         authToken: "secret",
         fromNumber: "",
         messagingServiceSid: "MG123",
+        defaultTo: "",
         webhookPath: "/webhooks/sms",
         publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
         dangerouslyDisableSignatureValidation: false,
@@ -199,6 +216,7 @@ describe("Twilio SMS helpers", () => {
         authToken: "secret",
         fromNumber: "+15557654321",
         messagingServiceSid: "MG123",
+        defaultTo: "",
         webhookPath: "/webhooks/sms",
         publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
         dangerouslyDisableSignatureValidation: false,
@@ -283,5 +301,47 @@ describe("Twilio SMS helpers", () => {
     expect(error.message).toBe("Twilio SMS send failed (429): Too many requests");
     expect(error.httpStatus).toBe(429);
     expect(error.twilioCode).toBe(20429);
+  });
+
+  it("requires successful Twilio sends to include a Message SID", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ status: "queued" }), { status: 201 }),
+    );
+
+    await expect(
+      sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Twilio SMS send response did not include a Message SID.");
+  });
+
+  it("preserves the configured public webhook path when adding a request query", () => {
+    expect(
+      resolveTwilioWebhookSignatureUrl({
+        req: { url: "/webhooks/sms?foo=bar" } as never,
+        publicWebhookUrl: "https://gateway.example.com/base",
+      }),
+    ).toBe("https://gateway.example.com/base?foo=bar");
+  });
+
+  it("keeps an explicit configured public webhook query", () => {
+    expect(
+      resolveTwilioWebhookSignatureUrl({
+        req: { url: "/webhooks/sms?foo=request" } as never,
+        publicWebhookUrl: "https://gateway.example.com/base?foo=configured",
+      }),
+    ).toBe("https://gateway.example.com/base?foo=configured");
+  });
+
+  it("does not reserialize the configured public webhook URL", () => {
+    expect(
+      resolveTwilioWebhookSignatureUrl({
+        req: { url: "/webhooks/sms" } as never,
+        publicWebhookUrl: "https://gateway.example.com:443/webhooks/sms",
+      }),
+    ).toBe("https://gateway.example.com:443/webhooks/sms");
   });
 });
