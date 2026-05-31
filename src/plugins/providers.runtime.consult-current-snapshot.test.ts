@@ -14,11 +14,9 @@ import {
 } from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
-// Mock the persisted-registry loaders so a direct disk load is observable as a
-// loader call. B2-core routes SITE A/B/C through the consult-first
-// resolvePluginMetadataSnapshot: when a compatible current snapshot is
-// registered, these loaders must not run; otherwise the fallback load keeps the
-// pre-existing behavior.
+// Mock the persisted-registry loaders so direct metadata loads are observable.
+// Provider hot paths should reuse a compatible current snapshot and only fall
+// back to the loader when no compatible lifecycle-owned snapshot exists.
 const loadPluginRegistrySnapshotWithMetadata = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
 
@@ -139,7 +137,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     resetPluginRuntimeStateForTest();
   });
 
-  describe("SITE A: isPluginProvidersLoadInFlight", () => {
+  describe("isPluginProvidersLoadInFlight", () => {
     it("reuses a compatible current snapshot without a direct disk load", () => {
       const config: OpenClawConfig = {};
       registerCurrentSnapshot(config);
@@ -185,7 +183,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     });
   });
 
-  describe("SITE B: resolvePluginProviders", () => {
+  describe("resolvePluginProviders", () => {
     it("reuses a compatible current snapshot without a direct disk load", () => {
       const config: OpenClawConfig = {};
       registerCurrentSnapshot(config);
@@ -220,7 +218,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     });
   });
 
-  describe("SITE C: resolveExternalAuthProfilesWithPlugins", () => {
+  describe("resolveExternalAuthProfilesWithPlugins", () => {
     it("reuses a compatible current snapshot without a direct disk load", () => {
       const config: OpenClawConfig = {};
       registerCurrentSnapshot(config);
