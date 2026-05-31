@@ -51,6 +51,8 @@ type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 type ProjectedCodexDynamicTool = {
   tool: AnyAgentTool;
+  toolName: string;
+  description: string;
   inputSchema: JsonValue;
 };
 
@@ -58,6 +60,17 @@ type CodexDynamicToolSchemaQuarantine = {
   tool: string;
   violations: readonly string[];
 };
+
+type CodexDynamicToolEntryRead =
+  | {
+      readonly ok: true;
+      readonly tool: AnyAgentTool;
+      readonly toolIndex: number;
+    }
+  | {
+      readonly ok: false;
+      readonly quarantine: CodexDynamicToolSchemaQuarantine;
+    };
 
 export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
@@ -101,19 +114,22 @@ export function createCodexDynamicToolBridge(params: {
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
-  const availableTools = availableProjection.tools.map(({ tool, inputSchema }) => {
-    if (isToolWrappedWithBeforeToolCallHook(tool)) {
-      setBeforeToolCallDiagnosticsEnabled(tool, false);
-      return { tool, inputSchema };
-    }
-    return {
-      tool: wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false }),
-      inputSchema,
-    };
-  });
-  const toolMap = new Map(availableTools.map(({ tool }) => [tool.name, tool]));
-  const registeredTools = registeredProjection.tools.map(({ tool }) => tool);
-  const registeredToolNames = new Set(registeredTools.map((tool) => tool.name));
+  const availableTools = availableProjection.tools.map(
+    ({ tool, toolName, description, inputSchema }) => {
+      if (isToolWrappedWithBeforeToolCallHook(tool)) {
+        setBeforeToolCallDiagnosticsEnabled(tool, false);
+        return { tool, toolName, description, inputSchema };
+      }
+      return {
+        tool: wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false }),
+        toolName,
+        description,
+        inputSchema,
+      };
+    },
+  );
+  const toolMap = new Map(availableTools.map(({ toolName, tool }) => [toolName, tool]));
+  const registeredToolNames = new Set(registeredProjection.tools.map((tool) => tool.toolName));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
@@ -142,17 +158,19 @@ export function createCodexDynamicToolBridge(params: {
   ]);
 
   return {
-    availableSpecs: availableTools.map(({ tool, inputSchema }) =>
+    availableSpecs: availableTools.map(({ toolName, description, inputSchema }) =>
       createCodexDynamicToolSpec({
-        tool,
+        toolName,
+        description,
         inputSchema,
         loading: params.loading ?? "searchable",
         directToolNames,
       }),
     ),
-    specs: registeredProjection.tools.map(({ tool, inputSchema }) =>
+    specs: registeredProjection.tools.map(({ toolName, description, inputSchema }) =>
       createCodexDynamicToolSpec({
-        tool,
+        toolName,
+        description,
         inputSchema,
         loading: params.loading ?? "searchable",
         directToolNames,
@@ -286,17 +304,18 @@ export function createCodexDynamicToolBridge(params: {
 }
 
 function createCodexDynamicToolSpec(params: {
-  tool: AnyAgentTool;
+  toolName: string;
+  description: string;
   inputSchema: JsonValue;
   loading: CodexDynamicToolsLoading;
   directToolNames: ReadonlySet<string>;
 }): CodexDynamicToolSpec {
   const base = {
-    name: params.tool.name,
-    description: params.tool.description,
+    name: params.toolName,
+    description: params.description,
     inputSchema: params.inputSchema,
   };
-  if (params.loading === "direct" || params.directToolNames.has(params.tool.name)) {
+  if (params.loading === "direct" || params.directToolNames.has(params.toolName)) {
     return base;
   }
   return {
@@ -312,15 +331,94 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
 } {
   const projectedTools: ProjectedCodexDynamicTool[] = [];
   const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
-  for (const tool of tools) {
-    const projection = projectRuntimeToolInputSchema(tool.parameters, `${tool.name}.inputSchema`);
-    if (projection.violations.length > 0) {
-      quarantinedTools.push({ tool: tool.name, violations: projection.violations });
+  for (const entry of readCodexDynamicToolEntries(tools)) {
+    if (!entry.ok) {
+      quarantinedTools.push(entry.quarantine);
       continue;
     }
-    projectedTools.push({ tool, inputSchema: projection.schema as JsonValue });
+
+    const nameRead = readCodexDynamicToolField(entry.tool, "name");
+    if (!nameRead.readable) {
+      const diagnosticToolName = `tool[${entry.toolIndex}]`;
+      quarantinedTools.push({
+        tool: diagnosticToolName,
+        violations: [`${diagnosticToolName}.name is unreadable`],
+      });
+      continue;
+    }
+    const diagnosticToolName = nameRead.value;
+    const descriptionRead = readCodexDynamicToolField(entry.tool, "description");
+    if (!descriptionRead.readable) {
+      quarantinedTools.push({
+        tool: diagnosticToolName,
+        violations: [`${diagnosticToolName}.description is unreadable`],
+      });
+      continue;
+    }
+    const parametersRead = readCodexDynamicToolField(entry.tool, "parameters");
+    if (!parametersRead.readable) {
+      quarantinedTools.push({
+        tool: diagnosticToolName,
+        violations: [`${diagnosticToolName}.inputSchema is unreadable`],
+      });
+      continue;
+    }
+
+    const projection = projectRuntimeToolInputSchema(
+      parametersRead.value,
+      `${diagnosticToolName}.inputSchema`,
+    );
+    if (projection.violations.length > 0) {
+      quarantinedTools.push({ tool: diagnosticToolName, violations: projection.violations });
+      continue;
+    }
+    projectedTools.push({
+      tool: entry.tool,
+      toolName: diagnosticToolName,
+      description: typeof descriptionRead.value === "string" ? descriptionRead.value : "",
+      inputSchema: projection.schema as JsonValue,
+    });
   }
   return { tools: projectedTools, quarantinedTools };
+}
+
+function readCodexDynamicToolEntries(tools: readonly AnyAgentTool[]): CodexDynamicToolEntryRead[] {
+  let length: number;
+  try {
+    length = tools.length;
+  } catch {
+    return [unreadableCodexDynamicToolEntry(0)];
+  }
+  const entries: CodexDynamicToolEntryRead[] = [];
+  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
+    try {
+      entries.push({ ok: true, tool: tools[toolIndex], toolIndex });
+    } catch {
+      entries.push(unreadableCodexDynamicToolEntry(toolIndex));
+    }
+  }
+  return entries;
+}
+
+function unreadableCodexDynamicToolEntry(toolIndex: number): CodexDynamicToolEntryRead {
+  return {
+    ok: false,
+    quarantine: {
+      tool: `tool[${toolIndex}]`,
+      violations: [`tool[${toolIndex}] is unreadable`],
+    },
+  };
+}
+
+function readCodexDynamicToolField<TField extends "name" | "description" | "parameters">(
+  tool: AnyAgentTool,
+  field: TField,
+): { readable: true; value: AnyAgentTool[TField] } | { readable: false } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
 }
 
 function warnQuarantinedDynamicTools(tools: readonly CodexDynamicToolSchemaQuarantine[]): void {

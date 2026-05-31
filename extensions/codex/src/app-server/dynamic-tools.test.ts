@@ -371,6 +371,84 @@ describe("createCodexDynamicToolBridge", () => {
     expect(badExecute).not.toHaveBeenCalled();
   });
 
+  it("quarantines unreadable dynamic tool entries before Codex registration", () => {
+    const message = createTool({ name: "message" });
+    const tools = [message] as AnyAgentTool[];
+    const proxy = new Proxy(tools, {
+      get(target, property, receiver) {
+        if (property === "1") {
+          throw new Error("fuzzplugin dynamic tool entry getter exploded");
+        }
+        if (property === "length") {
+          return 2;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: proxy,
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      {
+        tool: "tool[1]",
+        violations: ["tool[1] is unreadable"],
+      },
+    ]);
+  });
+
+  it("quarantines unreadable dynamic tool fields before Codex registration", () => {
+    const unreadable = createTool({ name: "fuzzplugin_unreadable" });
+    Object.defineProperty(unreadable, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin dynamic tool parameters getter exploded");
+      },
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: [unreadable, createTool({ name: "message" })],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      {
+        tool: "fuzzplugin_unreadable",
+        violations: ["fuzzplugin_unreadable.inputSchema is unreadable"],
+      },
+    ]);
+  });
+
+  it("quarantines unreadable dynamic tool descriptions before Codex registration", () => {
+    const unreadable = createTool({ name: "fuzzplugin_unreadable_description" });
+    Object.defineProperty(unreadable, "description", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin dynamic tool description getter exploded");
+      },
+    });
+
+    const bridge = createCodexDynamicToolBridge({
+      tools: [unreadable, createTool({ name: "message" })],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      {
+        tool: "fuzzplugin_unreadable_description",
+        violations: ["fuzzplugin_unreadable_description.description is unreadable"],
+      },
+    ]);
+  });
+
   it("can expose all dynamic tools directly for compatibility", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],
