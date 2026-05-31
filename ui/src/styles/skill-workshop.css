@@ -729,6 +729,71 @@
 }
 
 /* ── Mode switch ────────────────────────────────────────────────────── */
+.sw-header-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sw-revision-session-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sw-revision-session-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sw-revision-session-toggle__track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.sw-revision-session-toggle__track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--muted);
+  transition:
+    transform 160ms ease,
+    background 160ms ease;
+}
+
+.sw-revision-session-toggle input:checked + .sw-revision-session-toggle__track {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
+}
+
+.sw-revision-session-toggle input:checked + .sw-revision-session-toggle__track::after {
+  transform: translateX(14px);
+  background: var(--accent);
+}
+
+.sw-revision-session-toggle:focus-within .sw-revision-session-toggle__track {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 .sw-mode-switch {
   position: relative;
   display: inline-grid;
