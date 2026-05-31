@@ -8,7 +8,7 @@ export type RequiredParamGroup = {
 };
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
-const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>*$/;
+const XML_ARG_VALUE_SUFFIX_RE = /<\/arg_value>>+$/;
 const XML_ARG_VALUE_PATH_PARAM_KEYS = new Set(["path"]);
 
 function parameterValidationError(message: string): Error {

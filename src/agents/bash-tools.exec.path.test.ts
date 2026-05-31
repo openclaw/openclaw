@@ -136,11 +136,11 @@ describe("exec PATH login shell merge", () => {
     ({ createExecTool } = await import("./bash-tools.exec.js"));
   });
 
-  afterAll(async () => {
+  afterAll(() => {
     vi.doUnmock("../infra/shell-env.js");
     vi.doUnmock("../infra/exec-approvals.js");
     vi.doUnmock("../process/supervisor/index.js");
-    await vi.resetModules();
+    vi.resetModules();
   });
 
   beforeEach(() => {

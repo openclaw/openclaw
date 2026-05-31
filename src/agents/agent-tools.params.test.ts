@@ -16,6 +16,7 @@ describe("assertRequiredParams", () => {
   it("strips only the malformed terminal XML arg-value suffix", () => {
     expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>>")).toBe("echo test");
     expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>>>>>")).toBe("echo test");
+    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>")).toBe("echo test</arg_value>");
     expect(stripMalformedXmlArgValueSuffix("echo </arg_value>> test")).toBe(
       "echo </arg_value>> test",
     );
