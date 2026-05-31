@@ -14,6 +14,10 @@ const MIN_ECHO_CHARS = 80;
 
 const bootContextBySessionKey = new Map<string, string>();
 
+function normalizeEchoComparisonText(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
 export function setBootEchoContextForSession(sessionKey: string, bootPrompt: string): void {
   if (!sessionKey || !bootPrompt) {
     return;
@@ -47,8 +51,8 @@ export function containsSubstantialBootEcho(
   bootPrompt: string,
   minLen: number = MIN_ECHO_CHARS,
 ): boolean {
-  const haystack = outboundText ?? "";
-  const needle = (bootPrompt ?? "").trim();
+  const haystack = normalizeEchoComparisonText(outboundText ?? "");
+  const needle = normalizeEchoComparisonText(bootPrompt ?? "");
   if (haystack.length < minLen || needle.length < minLen) {
     return false;
   }

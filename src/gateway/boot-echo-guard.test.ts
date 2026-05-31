@@ -59,6 +59,19 @@ describe("containsSubstantialBootEcho", () => {
     expect(containsSubstantialBootEcho(partial, LONG_BOOT_PROMPT)).toBe(true);
   });
 
+  it("detects copied boot content when whitespace is collapsed", () => {
+    const bootPrompt = [
+      "BOOT.md:",
+      "When you wake up each morning,",
+      "send a thoughtful greeting to the operator",
+      "over the configured channel and report status.",
+    ].join("\n");
+    const outbound =
+      "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+
+    expect(containsSubstantialBootEcho(outbound, bootPrompt)).toBe(true);
+  });
+
   it("detects an unaligned exact minimum-length boot prompt chunk", () => {
     const bootPrompt = Array.from({ length: 120 }, (_, index) =>
       index.toString(36).padStart(2, "0"),
