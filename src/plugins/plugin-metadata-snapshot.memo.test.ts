@@ -9,7 +9,10 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginInstallRecordInfo,
+} from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
@@ -151,7 +154,7 @@ function writeRecoverableNpmPlugin(params: {
 
 function writePersistedInstallRecords(
   stateDir: string,
-  installRecords: Record<string, Record<string, unknown>>,
+  installRecords: Record<string, InstalledPluginInstallRecordInfo>,
 ): void {
   writePersistedInstalledPluginIndexSync(
     {
@@ -676,13 +679,15 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     [
       "install path package manifest",
       "~/tracked-plugin",
-      (recordPath: string) => ({ source: "path", installPath: recordPath }),
+      (recordPath: string) =>
+        ({ source: "path", installPath: recordPath }) satisfies InstalledPluginInstallRecordInfo,
       (homeDir: string) => path.join(homeDir, "tracked-plugin", "package.json"),
     ],
     [
       "source path package manifest",
       "~/tracked-plugin",
-      (recordPath: string) => ({ source: "path", sourcePath: recordPath }),
+      (recordPath: string) =>
+        ({ source: "path", sourcePath: recordPath }) satisfies InstalledPluginInstallRecordInfo,
       (homeDir: string) => path.join(homeDir, "tracked-plugin", "package.json"),
     ],
   ])(
