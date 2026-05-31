@@ -790,6 +790,7 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
   }
 }
 
+/** Converts raw gateway connection text into stable settings metric labels. */
 private fun gatewayStatusLabel(
   statusText: String,
   isConnected: Boolean,
@@ -867,6 +868,7 @@ private fun AboutStatusRow(
   }
 }
 
+/** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
     "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."
@@ -1051,6 +1053,7 @@ private fun approvalActionName(name: String): String {
     .ifBlank { "Action Request" }
 }
 
+/** Builds approval row age/error copy without exposing raw tool arguments. */
 private fun approvalSubtitle(
   toolCall: ChatPendingToolCall,
   hasIssue: Boolean,
@@ -1061,8 +1064,10 @@ private fun approvalSubtitle(
   return if (minutes < 1) "Waiting for review" else "Waiting ${minutes}m"
 }
 
+/** Builds the dense cron-job subtitle from schedule, next wake, and prompt preview. */
 private fun cronJobSubtitle(job: GatewayCronJobSummary): String = "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
 
+/** Summarizes a provider plan and most-used quota window for usage rows. */
 private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String {
   provider.error?.let { return it }
   val window = provider.windows.maxByOrNull { it.usedPercent }
@@ -1086,6 +1091,7 @@ private fun formatUsageUpdated(updatedAtMs: Long?): String {
   }
 }
 
+/** Converts gateway cron status text into the short row badge label. */
 private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   if (!job.enabled) return "Off"
   return when (job.lastRunStatus?.lowercase()) {
@@ -1096,6 +1102,7 @@ private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   }
 }
 
+/** Maps gateway cron status text to app status colors. */
 private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   if (!job.enabled) return ClawStatus.Neutral
   return when (job.lastRunStatus?.lowercase()) {
