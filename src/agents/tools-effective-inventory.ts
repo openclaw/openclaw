@@ -15,6 +15,7 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { resolveModel } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
+import { normalizePositiveContextTokenBudget } from "./local-model-lean.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { normalizeToolName } from "./tool-policy.js";
 import {
@@ -310,6 +311,10 @@ export function resolveEffectiveToolInventory(
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const modelContextWindowTokens =
+    normalizePositiveContextTokenBudget(params.contextTokenBudget) ??
+    normalizePositiveContextTokenBudget(runtimeModelContext.runtimeModel?.contextTokens) ??
+    normalizePositiveContextTokenBudget(runtimeModelContext.runtimeModel?.contextWindow);
 
   const effectiveTools = createOpenClawCodingTools({
     agentId,
@@ -321,6 +326,7 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
     modelApi: runtimeModelContext.modelApi,
     modelCompat,
+    modelContextWindowTokens,
     messageProvider: params.messageProvider,
     senderId: params.senderId,
     senderName: params.senderName ?? undefined,

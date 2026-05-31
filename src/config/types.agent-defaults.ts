@@ -270,7 +270,7 @@ export type AgentDefaultsConfig = {
      * Drop heavyweight non-essential default tools for weaker or smaller local
      * model backends. Experimental preview only.
      */
-    localModelLean?: boolean;
+    localModelLean?: boolean | "auto";
   };
   /**
    * Agent-visible bootstrap truncation warning mode:

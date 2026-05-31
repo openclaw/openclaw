@@ -30,7 +30,7 @@ Treat them differently from normal config:
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
+`agents.defaults.experimental.localModelLean` is a pressure-release valve for weaker local-model setups. Set it to `true` to always drop three default tools - `browser`, `cron`, and `message` - from the agent's tool surface. Set it to `"auto"` to drop them only when the resolved runtime context cap is **64K tokens or smaller**. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
 
 ### Why these three tools
 
@@ -48,7 +48,7 @@ Enable lean mode when you have already proved the model can talk to the Gateway 
 
 1. `openclaw infer model run --gateway --model <ref> --prompt "Reply with exactly: pong"` succeeds.
 2. A normal agent turn fails with malformed tool calls, oversized prompts, or the model ignoring its tools.
-3. Toggling `localModelLean: true` clears the failure.
+3. Toggling `localModelLean: true` clears the failure, or `localModelLean: "auto"` clears it for models capped at 64K tokens or smaller.
 
 ### When to leave it off
 
@@ -63,7 +63,7 @@ Lean mode also does not replace `tools.profile`, `tools.allow`/`tools.deny`, or 
   agents: {
     defaults: {
       experimental: {
-        localModelLean: true,
+        localModelLean: "auto",
       },
     },
   },
@@ -80,7 +80,7 @@ For one agent only:
         id: "local",
         model: "lmstudio/gemma-4-e4b-it",
         experimental: {
-          localModelLean: true,
+          localModelLean: "auto",
         },
       },
     ],

@@ -181,7 +181,7 @@ describe("config schema regressions", () => {
           {
             id: "gemma",
             experimental: {
-              localModelLean: true,
+              localModelLean: "auto",
             },
           },
         ],

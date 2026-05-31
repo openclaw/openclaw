@@ -5,6 +5,25 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
 const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+export const LOCAL_MODEL_LEAN_AUTO_MAX_CONTEXT_TOKENS = 64 * 1024;
+
+export function normalizePositiveContextTokenBudget(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const int = Math.floor(value);
+  return int > 0 ? int : undefined;
+}
+
+function shouldEnableAutoLocalModelLean(params: {
+  contextTokenBudget?: number;
+  modelContextWindowTokens?: number;
+}): boolean {
+  const contextTokens =
+    normalizePositiveContextTokenBudget(params.contextTokenBudget) ??
+    normalizePositiveContextTokenBudget(params.modelContextWindowTokens);
+  return Boolean(contextTokens && contextTokens <= LOCAL_MODEL_LEAN_AUTO_MAX_CONTEXT_TOKENS);
+}
 
 function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
   if (!names) {
@@ -52,6 +71,8 @@ export function isLocalModelLeanEnabled(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  contextTokenBudget?: number;
+  modelContextWindowTokens?: number;
 }): boolean {
   const normalizedAgentId = resolveLocalModelLeanAgentId(params);
   const resolvedExperimental =
@@ -59,7 +80,11 @@ export function isLocalModelLeanEnabled(params: {
       ? (resolveAgentConfig(params.config, normalizedAgentId)?.experimental ??
         params.config.agents?.defaults?.experimental)
       : params.config?.agents?.defaults?.experimental;
-  return resolvedExperimental?.localModelLean ?? false;
+  const leanMode = resolvedExperimental?.localModelLean;
+  if (leanMode === "auto") {
+    return shouldEnableAutoLocalModelLean(params);
+  }
+  return leanMode === true;
 }
 
 export function filterLocalModelLeanTools(params: {
@@ -68,6 +93,8 @@ export function filterLocalModelLeanTools(params: {
   agentId?: string;
   sessionKey?: string;
   preserveToolNames?: Iterable<string>;
+  contextTokenBudget?: number;
+  modelContextWindowTokens?: number;
 }): AnyAgentTool[] {
   if (!isLocalModelLeanEnabled(params)) {
     return params.tools;

@@ -12,6 +12,50 @@ function tools(names: string[]): AnyAgentTool[] {
 }
 
 describe("local model lean tool filtering", () => {
+  it("auto-enables lean mode only for small effective context caps", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: "auto",
+          },
+        },
+      },
+    };
+
+    expect(isLocalModelLeanEnabled({ config: cfg, contextTokenBudget: 65_536 })).toBe(true);
+    expect(isLocalModelLeanEnabled({ config: cfg, contextTokenBudget: 65_537 })).toBe(false);
+    expect(isLocalModelLeanEnabled({ config: cfg, modelContextWindowTokens: 32_000 })).toBe(true);
+    expect(isLocalModelLeanEnabled({ config: cfg })).toBe(false);
+  });
+
+  it("filters heavyweight tools in auto mode when the effective context cap is small", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: "auto",
+          },
+        },
+      },
+    };
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        config: cfg,
+        contextTokenBudget: 32_000,
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        config: cfg,
+        contextTokenBudget: 128_000,
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "browser", "cron", "message", "exec"]);
+  });
+
   it("filters heavyweight tools for one configured agent", () => {
     const cfg: OpenClawConfig = {
       agents: {

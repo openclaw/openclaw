@@ -247,6 +247,7 @@ function applyModelProviderToolPolicy(
     sessionKey?: string;
     agentDir?: string;
     modelCompat?: ModelCompatConfig;
+    modelContextWindowTokens?: number;
     suppressManagedWebSearch?: boolean;
     runtimeToolAllowlist?: string[];
     localModelLeanPreserveToolNames?: string[];
@@ -259,6 +260,7 @@ function applyModelProviderToolPolicy(
     agentId: params?.agentId,
     sessionKey: params?.sessionKey,
     preserveToolNames: params?.localModelLeanPreserveToolNames ?? params?.runtimeToolAllowlist,
+    modelContextWindowTokens: params?.modelContextWindowTokens,
   });
 
   if (
@@ -1074,6 +1076,7 @@ export function createOpenClawCodingTools(options?: {
     sessionKey: options?.sessionKey,
     agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
+    modelContextWindowTokens: options?.modelContextWindowTokens,
     suppressManagedWebSearch: options?.suppressManagedWebSearch,
     runtimeToolAllowlist: options?.runtimeToolAllowlist,
     localModelLeanPreserveToolNames,

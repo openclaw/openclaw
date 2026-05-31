@@ -396,6 +396,54 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("message");
   });
 
+  it("filters heavyweight tools in auto local model lean mode for small context caps", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: "auto",
+            },
+          },
+        },
+      },
+      modelContextWindowTokens: 32_000,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).not.toContain("message");
+  });
+
+  it("keeps heavyweight tools in auto local model lean mode for large context caps", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: "auto",
+            },
+          },
+        },
+      },
+      modelContextWindowTokens: 128_000,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
   it("preserves forced message through local model lean filtering without runtime allowlist", () => {
     const tools = createOpenClawCodingTools({
       config: {

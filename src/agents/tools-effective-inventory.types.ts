@@ -51,6 +51,7 @@ export type ResolveEffectiveToolInventoryParams = {
   modelId?: string;
   modelApi?: string | null;
   runtimeModel?: ProviderRuntimeModel;
+  contextTokenBudget?: number;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;

@@ -203,6 +203,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       agentDir: sessionBound ? undefined : params.agentDir,
       modelProvider: params.provider,
       modelId: params.model,
+      contextTokenBudget: params.contextTokens,
       messageProvider: params.command.channel,
       senderId: params.command.senderId,
       senderName: params.ctx.SenderName,

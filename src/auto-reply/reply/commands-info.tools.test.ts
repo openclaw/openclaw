@@ -172,6 +172,7 @@ describe("handleToolsCommand", () => {
     const toolsArg = resolveToolsArg(resolveToolsMock);
     expect(toolsArg).not.toHaveProperty("senderIsOwner");
     expect(toolsArg.senderId).toBeUndefined();
+    expect(toolsArg.contextTokenBudget).toBe(0);
     expect(toolsArg.senderName).toBe("User Name");
     expect(toolsArg.senderUsername).toBe("user_name");
     expect(toolsArg.senderE164).toBe("+1000");

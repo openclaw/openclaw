@@ -663,7 +663,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
           {
             id: "local",
             experimental: {
-              localModelLean: true,
+              localModelLean: "auto",
             },
             model: { primary: "ollama/gemma4" },
           },
@@ -692,7 +692,7 @@ Use these as starting points and replace model IDs with the exact names from `ol
     ```
 
     Use `compat.supportsTools: false` only when the model or server reliably fails on tool schemas. It trades agent capability for stability.
-    `localModelLean` removes the browser, cron, and message tools from the agent surface, but it does not change Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
+    `localModelLean: "auto"` removes the browser, cron, and message tools from the agent surface only when the resolved runtime context cap is 64K tokens or smaller. Set it to `true` when you want that trimmed surface for every model. It does not change Ollama's runtime context or thinking mode. Pair it with explicit `params.num_ctx` and `params.thinking: false` for small Qwen-style thinking models that loop or spend their response budget on hidden reasoning.
 
   </Accordion>
 </AccordionGroup>

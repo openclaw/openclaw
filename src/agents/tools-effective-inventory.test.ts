@@ -933,4 +933,90 @@ describe("resolveEffectiveToolInventory", () => {
     });
     expect(createToolsOptions?.modelApi).toBe("openai-completions");
   });
+
+  it("passes the effective context cap into tool creation", async () => {
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
+      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+    ]);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal } = await loadHarness(
+      {
+        createToolsMock,
+      },
+    );
+
+    resolveEffectiveToolInventoryLocal({
+      cfg: {},
+      modelProvider: "openai",
+      modelId: "gpt-test",
+      runtimeModel: {
+        id: "gpt-test",
+        name: "GPT Test",
+        provider: "openai",
+        api: "openai-responses",
+        contextWindow: 128_000,
+        contextTokens: 96_000,
+      } as never,
+      contextTokenBudget: 32_000,
+    });
+
+    expect(createToolsMock).toHaveBeenCalledTimes(1);
+    expect(createToolsMock.mock.calls.at(0)?.[0]?.modelContextWindowTokens).toBe(32_000);
+  });
+
+  it("falls back to runtime model contextTokens for tool creation", async () => {
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
+      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+    ]);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal } = await loadHarness(
+      {
+        createToolsMock,
+      },
+    );
+
+    resolveEffectiveToolInventoryLocal({
+      cfg: {},
+      modelProvider: "openai",
+      modelId: "gpt-test",
+      runtimeModel: {
+        id: "gpt-test",
+        name: "GPT Test",
+        provider: "openai",
+        api: "openai-responses",
+        contextWindow: 128_000,
+        contextTokens: 48_000,
+      } as never,
+    });
+
+    expect(createToolsMock).toHaveBeenCalledTimes(1);
+    expect(createToolsMock.mock.calls.at(0)?.[0]?.modelContextWindowTokens).toBe(48_000);
+  });
+
+  it("ignores zero command context budgets before runtime model context fallback", async () => {
+    const createToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => [
+      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+    ]);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal } = await loadHarness(
+      {
+        createToolsMock,
+      },
+    );
+
+    resolveEffectiveToolInventoryLocal({
+      cfg: {},
+      modelProvider: "openai",
+      modelId: "gpt-test",
+      runtimeModel: {
+        id: "gpt-test",
+        name: "GPT Test",
+        provider: "openai",
+        api: "openai-responses",
+        contextWindow: 128_000,
+        contextTokens: 48_000,
+      } as never,
+      contextTokenBudget: 0,
+    });
+
+    expect(createToolsMock).toHaveBeenCalledTimes(1);
+    expect(createToolsMock.mock.calls.at(0)?.[0]?.modelContextWindowTokens).toBe(48_000);
+  });
 });

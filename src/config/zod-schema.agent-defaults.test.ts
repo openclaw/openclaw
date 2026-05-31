@@ -160,10 +160,10 @@ describe("agent defaults schema", () => {
   it("accepts experimental.localModelLean", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {
-        localModelLean: true,
+        localModelLean: "auto",
       },
     })!;
-    expect(result.experimental?.localModelLean).toBe(true);
+    expect(result.experimental?.localModelLean).toBe("auto");
   });
 
   it("accepts contextInjection: always", () => {

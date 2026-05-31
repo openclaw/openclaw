@@ -1204,7 +1204,7 @@ export async function runEmbeddedAttempt(
             modelId: params.modelId,
             modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
-            modelContextWindowTokens: params.model.contextWindow,
+            modelContextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
             modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
               workspaceDir: effectiveWorkspace,
             }),
@@ -1508,6 +1508,8 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: sessionAgentId,
       preserveToolNames: localModelLeanPreserveToolNames,
+      contextTokenBudget: params.contextTokenBudget,
+      modelContextWindowTokens: params.model.contextWindow,
     });
     const uncompactedToolSchemaProjection = filterRuntimeCompatibleTools(
       projectedUncompactedEffectiveTools,
@@ -1580,6 +1582,8 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: sessionAgentId,
       preserveToolNames: localModelLeanPreserveToolNames,
+      contextTokenBudget: params.contextTokenBudget,
+      modelContextWindowTokens: params.model.contextWindow,
     });
     const toolSearchSchemaProjection = filterRuntimeCompatibleTools(projectedToolSearchTools);
     logRuntimeToolSchemaQuarantine({
@@ -2423,6 +2427,8 @@ export async function runEmbeddedAttempt(
         localModelLean: isLocalModelLeanEnabled({
           config: params.config,
           agentId: sessionAgentId,
+          contextTokenBudget: params.contextTokenBudget,
+          modelContextWindowTokens: params.model.contextWindow,
         }),
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,
