@@ -555,11 +555,11 @@ function historyRowIsStaleForActiveSession(
   }
   const existingUpdatedAt = existing.updatedAt ?? 0;
   const incomingUpdatedAt = incoming.updatedAt ?? 0;
-  if (existingUpdatedAt > incomingUpdatedAt) {
+  if (existingUpdatedAt >= incomingUpdatedAt) {
     return true;
   }
   const existingStartedAt = typeof existing.startedAt === "number" ? existing.startedAt : 0;
-  return existingStartedAt > incomingUpdatedAt;
+  return existingStartedAt >= incomingUpdatedAt;
 }
 
 function isPersistedChatHistorySessionRow(row: GatewaySessionRow): boolean {
@@ -917,7 +917,17 @@ export function applyChatHistorySessionInfo(
   const session = sanitizeChatHistorySessionRow(row);
   if (!state.sessionsResult) {
     if (!isPersistedChatHistorySessionRow(session)) {
-      return false;
+      if (!defaults) {
+        return false;
+      }
+      state.sessionsResult = {
+        ts: Date.now(),
+        path: "",
+        count: 0,
+        defaults,
+        sessions: [],
+      };
+      return true;
     }
     const sessions = state.sessionsShowArchived || !isArchivedSessionRow(session) ? [session] : [];
     state.sessionsResult = {
@@ -945,6 +955,13 @@ export function applyChatHistorySessionInfo(
     sessionRowMatchesChatHistoryRow(state, existing, session),
   );
   if (!existingVisibleSession && !isPersistedChatHistorySessionRow(session)) {
+    if (defaults) {
+      state.sessionsResult = {
+        ...state.sessionsResult,
+        defaults: preserveRicherThinkingMetadata(defaults, state.sessionsResult.defaults),
+      };
+      return true;
+    }
     return false;
   }
   if (defaults) {

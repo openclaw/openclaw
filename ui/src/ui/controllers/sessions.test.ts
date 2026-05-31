@@ -2104,6 +2104,42 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult).toBeNull();
   });
 
+  it("keeps history defaults when ignoring synthetic chat history session rows", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: null,
+    });
+
+    const applied = applyChatHistorySessionInfo(
+      state,
+      {
+        key: "agent:main:missing",
+        kind: "direct",
+        updatedAt: null,
+        status: "done",
+        hasActiveRun: false,
+      },
+      {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        contextTokens: 200_000,
+        thinkingLevels: [{ id: "medium", label: "Medium" }],
+        thinkingDefault: "medium",
+      },
+    );
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult).toMatchObject({
+      count: 0,
+      sessions: [],
+      defaults: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        contextTokens: 200_000,
+        thinkingDefault: "medium",
+      },
+    });
+  });
+
   it("updates catalog-backed thinking metadata from chat history session info", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
@@ -2388,6 +2424,47 @@ describe("applySessionsChangedEvent", () => {
       key: "agent:main:main",
       kind: "direct",
       updatedAt: 50,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.chatRunId).toBe("run-active");
+    expect(state.chatStream).toBe("streaming");
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      updatedAt: 100,
+      status: "running",
+      hasActiveRun: true,
+    });
+  });
+
+  it("does not clear equal-timestamp active runs from stale chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:main:main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 100,
+            startedAt: 100,
+            status: "running",
+            hasActiveRun: true,
+          },
+        ],
+      },
+      chatRunId: "run-active",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 100,
       status: "done",
       hasActiveRun: false,
     });
