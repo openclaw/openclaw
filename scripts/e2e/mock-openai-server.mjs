@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
@@ -72,6 +73,82 @@ function responseEvents(text) {
   ];
 }
 
+function buildMockFunctionCall(name, args) {
+  const serialized = JSON.stringify(args);
+  const suffix = createHash("sha256")
+    .update(name)
+    .update("\0")
+    .update(serialized)
+    .digest("hex")
+    .slice(0, 10);
+  const callId = `call_mock_${name}_${suffix}`;
+  const itemId = `fc_mock_${name}_${suffix}`;
+  const item = {
+    type: "function_call",
+    id: itemId,
+    call_id: callId,
+    name,
+    arguments: serialized,
+  };
+  return {
+    item,
+    itemId,
+    responseId: `resp_mock_${name}_${suffix}`,
+    serialized,
+  };
+}
+
+function toolCallEvents(name, args) {
+  const call = buildMockFunctionCall(name, args);
+  return [
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "function_call",
+        id: call.itemId,
+        call_id: call.item.call_id,
+        name,
+        arguments: "",
+      },
+    },
+    { type: "response.function_call_arguments.delta", delta: call.serialized },
+    { type: "response.output_item.done", item: call.item },
+    {
+      type: "response.completed",
+      response: {
+        id: call.responseId,
+        status: "completed",
+        output: [call.item],
+        usage: {
+          input_tokens: 64,
+          output_tokens: 16,
+          total_tokens: 80,
+          input_tokens_details: { cached_tokens: 0 },
+        },
+      },
+    },
+  ];
+}
+
+function writeResponsesEvents(res, stream, events) {
+  if (stream === false) {
+    const completed = events.find((event) => event.type === "response.completed");
+    writeJson(res, 200, {
+      id: completed?.response?.id ?? "resp_e2e",
+      object: "response",
+      status: "completed",
+      output: completed?.response?.output ?? [],
+      usage: completed?.response?.usage ?? {
+        input_tokens: 64,
+        output_tokens: 16,
+        total_tokens: 80,
+      },
+    });
+    return;
+  }
+  writeSse(res, events);
+}
+
 function writeChatCompletion(res, stream, text = successMarker) {
   if (stream) {
     writeSse(res, [
@@ -115,6 +192,97 @@ function resolveResponseText(bodyText) {
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
+function collectText(value) {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectText(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const texts = [];
+  for (const key of ["text", "content", "output"]) {
+    if (typeof value[key] === "string") {
+      texts.push(value[key]);
+    }
+  }
+  for (const nested of Object.values(value)) {
+    if (nested && typeof nested === "object") {
+      texts.push(...collectText(nested));
+    }
+  }
+  return texts;
+}
+
+function stringifyFunctionCallOutput(output) {
+  if (typeof output === "string") {
+    return output;
+  }
+  try {
+    return JSON.stringify(output);
+  } catch {
+    return "";
+  }
+}
+
+function collectFunctionCallOutputText(body) {
+  const input = Array.isArray(body?.input) ? body.input : [];
+  return input
+    .filter((item) => item?.type === "function_call_output")
+    .map((item) => stringifyFunctionCallOutput(item.output))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function hasDeclaredTool(bodyText, name) {
+  return new RegExp(`"name"\\s*:\\s*"${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "u").test(
+    bodyText,
+  );
+}
+
+function mcpCodeModeApiFileEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!/mcp code mode api file qa check/i.test(allText)) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (!toolOutput) {
+    if (!hasDeclaredTool(bodyText, "exec")) {
+      return null;
+    }
+    return toolCallEvents("exec", {
+      language: "javascript",
+      code: [
+        'const files = await API.list("mcp");',
+        'const root = await API.read("mcp/index.d.ts");',
+        'const api = await API.read("mcp/fixture.d.ts");',
+        'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+        "return {",
+        '  marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",',
+        "  files: files.files.map((file) => file.path),",
+        "  rootHasFixture: root.content.includes('fixture'),",
+        "  headerHasLookup: api.content.includes('function lookupNote'),",
+        "  resultText: result.content?.[0]?.text,",
+        "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+        "};",
+      ].join("\n"),
+    });
+  }
+  if (
+    !/MCP_CODE_MODE_FILE_TOOL_RESULT/.test(toolOutput) ||
+    !/fixture-note-alpha/.test(toolOutput)
+  ) {
+    return responseEvents(
+      "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+    );
+  }
+  return responseEvents(
+    "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none improvement=virtual-api-files-were-clear-and-needed-one-exec",
+  );
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -145,6 +313,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
+      const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
+      if (codeModeEvents) {
+        writeResponsesEvents(res, body.stream, codeModeEvents);
+        return;
+      }
       const responseText = resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {

@@ -1447,13 +1447,21 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const allowedBundledTools = applyEmbeddedAttemptToolsAllow(
-      [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
+    const allowedBundleMcpTools = applyEmbeddedAttemptToolsAllow(
+      bundleMcpRuntime?.tools ?? [],
       effectiveToolsAllow,
       {
         toolMeta: (tool) => getPluginToolMeta(tool),
       },
     );
+    const allowedBundleLspTools = applyEmbeddedAttemptToolsAllow(
+      bundleLspRuntime?.tools ?? [],
+      effectiveToolsAllow,
+      {
+        toolMeta: (tool) => getPluginToolMeta(tool),
+      },
+    );
+    const allowedBundledTools = [...allowedBundleMcpTools, ...allowedBundleLspTools];
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: allowedBundledTools,
       config: params.config,

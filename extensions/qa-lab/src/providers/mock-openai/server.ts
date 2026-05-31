@@ -175,6 +175,7 @@ const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small projec
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
+const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -1807,23 +1808,42 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
   }
-  if (QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)) {
+  if (
+    QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
+    QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)
+  ) {
     if (!toolOutput && hasDeclaredTool(body, "exec")) {
+      const useApiFiles = QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText);
       return buildToolCallEventsWithArgs("exec", {
         language: "javascript",
-        code: [
-          "const rootApi = await MCP.$api();",
-          'const api = await MCP.fixture.$api("lookupNote", { schema: true });',
-          'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
-          "return {",
-          '  marker: "MCP_CODE_MODE_TOOL_RESULT",',
-          "  rootServers: rootApi.servers,",
-          "  headerHasLookup: api.header.includes('function lookupNote'),",
-          "  schemaKeys: Object.keys(api.schemas),",
-          "  resultText: result.content?.[0]?.text,",
-          "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
-          "};",
-        ].join("\n"),
+        code: useApiFiles
+          ? [
+              'const files = await API.list("mcp");',
+              'const root = await API.read("mcp/index.d.ts");',
+              'const api = await API.read("mcp/fixture.d.ts");',
+              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "return {",
+              '  marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",',
+              "  files: files.files.map((file) => file.path),",
+              "  rootHasFixture: root.content.includes('fixture'),",
+              "  headerHasLookup: api.content.includes('function lookupNote'),",
+              "  resultText: result.content?.[0]?.text,",
+              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "};",
+            ].join("\n")
+          : [
+              "const rootApi = await MCP.$api();",
+              'const api = await MCP.fixture.$api("lookupNote", { schema: true });',
+              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "return {",
+              '  marker: "MCP_CODE_MODE_TOOL_RESULT",',
+              "  rootServers: rootApi.servers,",
+              "  headerHasLookup: api.header.includes('function lookupNote'),",
+              "  schemaKeys: Object.keys(api.schemas),",
+              "  resultText: result.content?.[0]?.text,",
+              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "};",
+            ].join("\n"),
       });
     }
     if (
@@ -1832,6 +1852,19 @@ async function buildResponsesPayload(
       hasDeclaredTool(body, "wait")
     ) {
       return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+    }
+    if (
+      toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT") &&
+      toolOutput.includes("fixture-note-alpha")
+    ) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none improvement=virtual-api-files-were-clear-and-needed-one-exec",
+      );
+    }
+    if (toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT")) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+      );
     }
     if (/MCP_CODE_MODE_TOOL_RESULT|fixture-note-alpha/.test(toolOutput)) {
       return buildAssistantEvents(

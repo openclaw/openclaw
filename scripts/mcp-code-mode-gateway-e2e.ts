@@ -113,6 +113,8 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
   const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
   const mentions = {
     apiCall: 0,
+    apiFileList: 0,
+    apiFileRead: 0,
     mcpNamespace: 0,
     mcpTool: 0,
     toolSearchPollution: 0,
@@ -121,6 +123,8 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
   for (const file of files.filter((candidate) => candidate.endsWith(".jsonl"))) {
     const raw = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");
     mentions.apiCall += countOccurrences(raw, "MCP.$api");
+    mentions.apiFileList += countOccurrences(raw, "API.list");
+    mentions.apiFileRead += countOccurrences(raw, "API.read");
     mentions.mcpNamespace += countOccurrences(raw, "MCP.fixture");
     mentions.mcpTool += countOccurrences(raw, "fixture__lookup_note");
     mentions.toolSearchPollution += countOccurrences(raw, 'tools.search("lookup note"');
@@ -297,7 +301,7 @@ export async function main() {
             content: [
               {
                 type: "input_text",
-                text: "mcp code mode qa check: inspect the MCP typed API, call the fixture lookup_note tool for alpha, and say what was unclear.",
+                text: "mcp code mode api file qa check: inspect the MCP TypeScript declaration files through API.read, call the fixture lookup_note tool for alpha, and return the note text plus what was unclear.",
               },
             ],
           },
@@ -319,9 +323,17 @@ export async function main() {
       .map((request) => request.plannedToolName)
       .filter((name): name is string => typeof name === "string");
 
-    assert(finalText.includes("MCP_CODE_MODE_OK"), "agent did not complete MCP code-mode turn");
+    assert(
+      finalText.includes("MCP_CODE_MODE_FILE_OK"),
+      "agent did not complete MCP code-mode API file turn",
+    );
+    assert(finalText.includes("fixture-note-alpha"), "agent did not return MCP fixture note");
     assert(plannedTools.includes("exec"), "agent did not call code-mode exec");
-    assert(mentions.apiCall > 0 && mentions.mcpNamespace > 0, "session log lacks MCP API usage");
+    assert(
+      mentions.apiFileRead > 0 && mentions.mcpNamespace > 0,
+      "session log lacks MCP API file usage",
+    );
+    assert(mentions.apiCall === 0, "agent should not need MCP.$api when API files are available");
     assert(mentions.mcpTool > 0, "session log lacks materialized MCP tool call");
     assert(mentions.toolSearchPollution === 0, "MCP lookup leaked through tools.search");
 

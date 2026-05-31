@@ -809,6 +809,9 @@ describe("Code Mode", () => {
       code: `
         const rootApi = await MCP.$api();
         const api = await MCP.github.$api("createIssue", { schema: true });
+        const apiFiles = await API.list("mcp");
+        const rootFile = await API.read("mcp/index.d.ts");
+        const serverFile = await API.read("mcp/github.d.ts");
         const created = await MCP.github.createIssue({
           owner: "openclaw",
           repo: "openclaw",
@@ -833,6 +836,10 @@ describe("Code Mode", () => {
         }
         return {
           apiHeader: api.header,
+          apiFilePaths: apiFiles.files.map((file) => file.path),
+          rootFileHasReference: rootFile.content.includes('./github.d.ts'),
+          serverFileHasCreateIssue: serverFile.content.includes('function createIssue('),
+          serverFileHasTitleDoc: serverFile.content.includes('@param title Issue title Shown in tracker'),
           apiSchemaTitle: api.schemas.createIssue.type,
           rootServers: rootApi.servers,
           createdPayload,
@@ -875,12 +882,79 @@ describe("Code Mode", () => {
       hasMcp: true,
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
+      apiFilePaths: ["mcp/index.d.ts", "mcp/github.d.ts"],
+      rootFileHasReference: true,
+      serverFileHasCreateIssue: true,
+      serverFileHasTitleDoc: true,
       rootServers: [{ identifier: "github", serverName: "github", toolCount: 1 }],
     });
     const value = details.value as { apiHeader: string };
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");
+    expect(githubCreate.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets agents inspect MCP declaration files before calling MCP tools", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const githubCreate = mcpTool({
+      name: "github__create_issue",
+      serverName: "github",
+      toolName: "create_issue",
+      parameters: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          title: { type: "string", description: "Issue title" },
+        },
+        required: ["owner", "repo", "title"],
+      },
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, githubCreate],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        const files = await API.list("mcp");
+        const api = await API.read("mcp/github.d.ts");
+        const created = await MCP.github.createIssue({
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "From file docs",
+        });
+        return {
+          fileCount: files.files.length,
+          headerHasSignature: api.content.includes("function createIssue("),
+          usedApiCall: api.content.includes("function $api("),
+          created: JSON.parse(created.content[0].text),
+        };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      fileCount: 2,
+      headerHasSignature: true,
+      usedApiCall: true,
+      created: {
+        serverName: "github",
+        toolName: "create_issue",
+        input: {
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "From file docs",
+        },
+      },
+    });
     expect(githubCreate.execute).toHaveBeenCalledTimes(1);
   });
 
