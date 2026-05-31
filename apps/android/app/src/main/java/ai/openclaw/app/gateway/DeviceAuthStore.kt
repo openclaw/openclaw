@@ -21,16 +21,19 @@ private data class PersistedDeviceAuthMetadata(
 
 /** Persistence interface used by gateway pairing/session code for role tokens. */
 interface DeviceAuthTokenStore {
+  /** Loads the stored token plus metadata for one device/role pair. */
   fun loadEntry(
     deviceId: String,
     role: String,
   ): DeviceAuthEntry?
 
+  /** Loads only the bearer token when callers do not need scope metadata. */
   fun loadToken(
     deviceId: String,
     role: String,
   ): String? = loadEntry(deviceId, role)?.token
 
+  /** Persists a role token and deterministic scope metadata under normalized keys. */
   fun saveToken(
     deviceId: String,
     role: String,
@@ -38,12 +41,14 @@ interface DeviceAuthTokenStore {
     scopes: List<String> = emptyList(),
   )
 
+  /** Removes both token and metadata for the normalized device/role pair. */
   fun clearToken(
     deviceId: String,
     role: String,
   )
 }
 
+/** SecurePrefs-backed implementation of Android gateway device-token storage. */
 class DeviceAuthStore(
   private val prefs: SecurePrefs,
 ) : DeviceAuthTokenStore {
