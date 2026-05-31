@@ -358,6 +358,31 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.to).toBe("https://example.invalid/cron");
   });
 
+  it("preserves invalid completion webhook create shapes for validation", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "completion without announce",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+      delivery: {
+        mode: "none",
+        completionDestination: {
+          mode: " WeBhOoK ",
+          to: " https://example.invalid/complete ",
+        },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.completionDestination).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/complete",
+    });
+    expect(validateCronAddParams(normalized)).toBe(false);
+  });
+
   it("does not default explicit mode-less delivery objects to announce", () => {
     const normalized = normalizeCronJobCreate({
       name: "implicit announce",
@@ -1012,6 +1037,25 @@ describe("normalizeCronJobPatch", () => {
       sessionKey: null,
     }) as unknown as Record<string, unknown>;
     expect(cleared.sessionKey).toBeNull();
+  });
+
+  it("preserves completion webhook patches without delivery mode", () => {
+    const normalized = normalizeCronJobPatch({
+      delivery: {
+        completionDestination: {
+          mode: " WeBhOoK ",
+          to: " https://example.invalid/complete ",
+        },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.delivery).toEqual({
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/complete",
+      },
+    });
+    expect(validateCronUpdateParams({ id: "job", patch: normalized })).toBe(true);
   });
 
   it("normalizes cron stagger values in patch schedules", () => {

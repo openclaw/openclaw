@@ -812,7 +812,7 @@ describe("handleChatEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "error",
-      errorMessage: 'No API key found for provider "openai-codex".',
+      errorMessage: 'No API key found for provider "openai".',
     };
 
     expect(handleChatEvent(state, payload)).toBe("error");
@@ -821,9 +821,9 @@ describe("handleChatEvent", () => {
     expectTextChatMessage(
       state.chatMessages[1],
       "assistant",
-      'Error: No API key found for provider "openai-codex".',
+      'Error: No API key found for provider "openai".',
     );
-    expect(state.lastError).toBe('No API key found for provider "openai-codex".');
+    expect(state.lastError).toBe('No API key found for provider "openai".');
   });
 
   it("prefers server-provided assistant error messages", () => {
@@ -1768,6 +1768,66 @@ describe("loadChatHistory retry handling", () => {
       "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
     );
     expect(state.chatLoading).toBe(false);
+  });
+
+  it("coalesces duplicate in-flight history loads for the selected session", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const firstLoad = loadChatHistory(state);
+    const secondLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    history.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+      thinkingLevel: "low",
+    });
+    await firstLoad;
+    await secondLoad;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "ready" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("starts a fresh same-session history load after local messages change", async () => {
+    const staleRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const freshRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => freshRequest.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const staleLoad = loadChatHistory(state);
+    state.chatMessages = [{ role: "user", content: [{ type: "text", text: "new local ask" }] }];
+    const freshLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "old history" }] }],
+    });
+    await staleLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "user", content: [{ type: "text", text: "new local ask" }] },
+    ]);
+
+    freshRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh history" }] }],
+    });
+    await freshLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
+    ]);
   });
 
   it("ignores stale history responses after switching sessions", async () => {

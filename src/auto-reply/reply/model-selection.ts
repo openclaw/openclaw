@@ -7,6 +7,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   buildConfiguredModelCatalog,
+  legacyModelKey,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
@@ -23,7 +24,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
-} from "../../agents/openai-codex-routing.js";
+} from "../../agents/openai-routing.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -458,10 +459,32 @@ export async function createModelSelectionState(params: {
       return defaultThinkingLevel;
     }
     const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    if (agentThinkingDefault) {
+      defaultThinkingLevel = agentThinkingDefault;
+      return defaultThinkingLevel;
+    }
+    const configuredModels = cfg.agents?.defaults?.models;
+    const canonicalKey = modelKey(provider, model);
+    const legacyKey = legacyModelKey(provider, model);
+    const configuredModelThinkingDefault =
+      configuredModels?.[canonicalKey]?.params?.thinking ??
+      (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+    if (
+      configuredModelThinkingDefault === "off" ||
+      configuredModelThinkingDefault === "minimal" ||
+      configuredModelThinkingDefault === "low" ||
+      configuredModelThinkingDefault === "medium" ||
+      configuredModelThinkingDefault === "high" ||
+      configuredModelThinkingDefault === "xhigh" ||
+      configuredModelThinkingDefault === "adaptive" ||
+      configuredModelThinkingDefault === "max"
+    ) {
+      defaultThinkingLevel = configuredModelThinkingDefault;
+      return defaultThinkingLevel;
+    }
     const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
-    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
-    if (explicitThinkingDefault) {
-      defaultThinkingLevel = explicitThinkingDefault;
+    if (configuredThinkingDefault) {
+      defaultThinkingLevel = configuredThinkingDefault;
       return defaultThinkingLevel;
     }
     const catalogForThinking = await resolveThinkingCatalog();

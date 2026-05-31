@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -33,7 +36,6 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
@@ -56,7 +58,6 @@ import {
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
@@ -146,6 +147,7 @@ import {
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "../../local-model-lean.js";
@@ -176,9 +178,19 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../subagent-capabilities.js";
+import {
+  ackPendingAgentSteeringItems,
+  leasePendingAgentSteeringItems,
+  prependAgentSteeringPrompt,
+  releasePendingAgentSteeringItems,
+} from "../../subagent-registry.js";
+import { ensureSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
+import {
+  appendModelIdentitySystemPrompt,
+  buildModelIdentityPromptLine,
+} from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -329,7 +341,7 @@ import {
   buildAfterTurnRuntimeContextFromUsage,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
-  resolveAttemptPrependSystemContext,
+  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   resolvePromptSubmissionSkipReason,
@@ -378,6 +390,7 @@ import {
   sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
+  wrapStreamFnPromoteStandaloneTextToolCalls,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -437,7 +450,7 @@ export {
   mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
-  resolveAttemptPrependSystemContext,
+  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
@@ -453,6 +466,7 @@ export {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 export {
+  wrapStreamFnPromoteStandaloneTextToolCalls,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -464,6 +478,31 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
+
+function pluginMetadataSnapshotCoversProvider(
+  snapshot: PluginMetadataSnapshot | undefined,
+  provider: string,
+): snapshot is PluginMetadataSnapshot {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!snapshot || !normalizedProvider) {
+    return false;
+  }
+  return snapshot.manifestRegistry.plugins.some((plugin) => {
+    const ownsProvider = plugin.providers.some(
+      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+    );
+    if (ownsProvider) {
+      return true;
+    }
+    const modelCatalogProviderIds = [
+      ...Object.keys(plugin.modelCatalog?.providers ?? {}),
+      ...Object.keys(plugin.modelCatalog?.aliases ?? {}),
+    ];
+    return modelCatalogProviderIds.some(
+      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+    );
+  });
+}
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -789,6 +828,7 @@ export async function runEmbeddedAttempt(
   const getCurrentAttemptPluginMetadataSnapshot = () => {
     if (!currentPluginMetadataSnapshotResolved) {
       currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        allowScopedSnapshot: true,
         config: params.config,
         env: process.env,
         workspaceDir: effectiveWorkspace,
@@ -802,12 +842,16 @@ export async function runEmbeddedAttempt(
     if (providerRuntimeHandle?.plugin) {
       return providerRuntimeHandle;
     }
+    const pluginMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
     const resolvedHandle = resolveProviderRuntimePluginHandle({
       provider: params.provider,
       modelId: params.modelId,
       config: params.config,
       workspaceDir: effectiveWorkspace,
       env: process.env,
+      ...(pluginMetadataSnapshotCoversProvider(pluginMetadataSnapshot, params.provider)
+        ? { pluginMetadataSnapshot }
+        : {}),
     });
     if (resolvedHandle.plugin) {
       providerRuntimeHandle = resolvedHandle;
@@ -849,7 +893,7 @@ export async function runEmbeddedAttempt(
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
-  let sessionCleanupOwnsEmbeddedResources = false;
+  const sessionCleanupOwnsEmbeddedResources = false;
   let abortActiveSessionForExternalSignal: (() => Promise<void>) | undefined;
   let abortRunForExternalSignal: ((isTimeout?: boolean, reason?: unknown) => void) | undefined;
   let isCompactionPendingForExternalSignal: (() => boolean) | undefined;
@@ -1882,7 +1926,7 @@ export async function runEmbeddedAttempt(
         missingToolResultText:
           params.model.api === "openai-responses" ||
           params.model.api === "azure-openai-responses" ||
-          params.model.api === "openai-codex-responses"
+          params.model.api === "openai-chatgpt-responses"
             ? "aborted"
             : undefined,
         allowedToolNames: replayAllowedToolNames,
@@ -1993,7 +2037,7 @@ export async function runEmbeddedAttempt(
 
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
-        sandboxEnabled: !!sandbox?.enabled,
+        sandboxEnabled: Boolean(sandbox?.enabled),
         toolHookContext: catalogToolHookContext,
       });
 
@@ -2025,7 +2069,7 @@ export async function runEmbeddedAttempt(
       });
       // Exact raw names of every tool registered for this run, including
       // bundled/plugin tools. Used as the raw-name set for the trusted local
-      // MEDIA: passthrough gate: a normalized alias is not sufficient — the
+      // media passthrough gate: a normalized alias is not sufficient — the
       // emitted tool name must match an exact registration of this run.
       const builtinToolNames = new Set(
         uncompactedEffectiveTools.flatMap((tool) => {
@@ -2561,7 +2605,7 @@ export async function runEmbeddedAttempt(
       const isOpenAIResponsesApi =
         params.model.api === "openai-responses" ||
         params.model.api === "azure-openai-responses" ||
-        params.model.api === "openai-codex-responses";
+        params.model.api === "openai-chatgpt-responses";
 
       const replayToolCallIdSanitizerDecision = {
         sanitizeToolCallIds: transcriptPolicy.sanitizeToolCallIds,
@@ -2615,6 +2659,10 @@ export async function runEmbeddedAttempt(
         transcriptPolicy,
         params.provider,
       );
+      activeSession.agent.streamFn = wrapStreamFnPromoteStandaloneTextToolCalls(
+        activeSession.agent.streamFn,
+        allowedToolNames,
+      );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
         allowedToolNames,
@@ -2651,8 +2699,6 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnHandleSensitiveStopReason(
         activeSession.agent.streamFn,
       );
-
-      let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
       // Wrap stream with idle timeout detection.
       //
@@ -2915,7 +2961,6 @@ export async function runEmbeddedAttempt(
           }
         }
       };
-      let queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined;
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -2947,7 +2992,7 @@ export async function runEmbeddedAttempt(
         }
       };
       abortRunForExternalSignal = abortRun;
-      idleTimeoutTrigger = (error) => {
+      const idleTimeoutTrigger: ((error: Error) => void) | undefined = (error) => {
         idleTimedOut = true;
         abortRun(true, error);
       };
@@ -3092,6 +3137,10 @@ export async function runEmbeddedAttempt(
         }
       };
 
+      const abortActiveRunExternally = () => {
+        externalAbort = true;
+        abortRun();
+      };
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -3107,10 +3156,8 @@ export async function runEmbeddedAttempt(
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        cancel: () => {
-          abortRun();
-        },
-        abort: abortRun,
+        cancel: abortActiveRunExternally,
+        abort: abortActiveRunExternally,
       };
       let lastAssistant: AssistantMessage | undefined;
       let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
@@ -3124,7 +3171,7 @@ export async function runEmbeddedAttempt(
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
-      queueHandleForAbandonment = queueHandle;
+      const queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined = queueHandle;
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey, params.sessionFile);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
@@ -3282,6 +3329,23 @@ export async function runEmbeddedAttempt(
         }
       };
       let skipPromptSubmission = false;
+      let leasedSteering:
+        | {
+            leaseId: string;
+            runIds: readonly string[];
+          }
+        | undefined;
+      const releaseLeasedSteering = (error?: unknown) => {
+        if (!leasedSteering) {
+          return;
+        }
+        releasePendingAgentSteeringItems({
+          runIds: leasedSteering.runIds,
+          leaseId: leasedSteering.leaseId,
+          error: error ? formatErrorMessage(error) : undefined,
+        });
+        leasedSteering = undefined;
+      };
       try {
         const promptStartedAt = Date.now();
         if (emptyExplicitToolAllowlistError) {
@@ -3343,11 +3407,7 @@ export async function runEmbeddedAttempt(
           }
           const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
             baseSystemPrompt: systemPromptText,
-            prependSystemContext: resolveAttemptPrependSystemContext({
-              sessionKey: params.sessionKey,
-              trigger: params.trigger,
-              hookPrependSystemContext: hookResult?.prependSystemContext,
-            }),
+            prependSystemContext: hookResult?.prependSystemContext,
             appendSystemContext: hookResult?.appendSystemContext,
           });
           if (prependedOrAppendedSystemPrompt) {
@@ -3358,9 +3418,29 @@ export async function runEmbeddedAttempt(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
             );
           }
+          const mediaTaskSystemPromptAddition = resolveAttemptMediaTaskSystemPromptAddition({
+            sessionKey: params.sessionKey,
+            trigger: params.trigger,
+          });
+          if (mediaTaskSystemPromptAddition) {
+            setActiveSessionSystemPrompt(
+              prependSystemPromptAddition({
+                systemPrompt: ensureSystemPromptCacheBoundary(systemPromptText),
+                systemPromptAddition: mediaTaskSystemPromptAddition,
+              }),
+            );
+          }
         }
+        // The model identity line is appended below; for a marker-free hook systemPrompt
+        // override ensure the cache boundary first so the identity lands in the dynamic
+        // suffix, not the cached prefix — otherwise an idle turn's prefix (O + identity)
+        // diverges from an active media turn's prefix (O) and breaks prompt caching. Skip
+        // empty prompts (raw/gateway runs) and turns with no identity line, which need none.
         const modelAwareSystemPrompt = appendModelIdentitySystemPrompt({
-          systemPrompt: systemPromptText,
+          systemPrompt:
+            buildModelIdentityPromptLine(runtimeInfo.model) && systemPromptText.trim().length > 0
+              ? ensureSystemPromptCacheBoundary(systemPromptText)
+              : systemPromptText,
           model: runtimeInfo.model,
         });
         if (modelAwareSystemPrompt !== systemPromptText) {
@@ -3462,6 +3542,37 @@ export async function runEmbeddedAttempt(
             log.warn(orphanRepairMessage);
           } else {
             log.debug(orphanRepairMessage);
+          }
+        }
+        if (params.sessionKey && !isRawModelRun) {
+          const leaseId = `${params.runId}:agent-steering`;
+          const leased = leasePendingAgentSteeringItems({
+            requesterSessionKey: params.sessionKey,
+            leaseId,
+          });
+          if (leased) {
+            leasedSteering = {
+              leaseId,
+              runIds: leased.runIds,
+            };
+            effectivePrompt = prependAgentSteeringPrompt({
+              steeringPrompt: leased.prompt,
+              prompt: effectivePrompt,
+            });
+            promptForRuntimeContextSplit = prependAgentSteeringPrompt({
+              steeringPrompt: leased.prompt,
+              prompt: promptForRuntimeContextSplit,
+            });
+            if (transcriptPromptForRuntimeSplit !== undefined) {
+              transcriptPromptForRuntimeSplit = prependAgentSteeringPrompt({
+                steeringPrompt: leased.prompt,
+                prompt: transcriptPromptForRuntimeSplit,
+              });
+            }
+            log.debug(
+              `agent steering: injected ${leased.runIds.length} queued item(s) into parent turn ` +
+                `runId=${params.runId} sessionKey=${params.sessionKey}`,
+            );
           }
         }
         const promptForModelBeforeRuntimeContextSplit = effectivePrompt;
@@ -3837,7 +3948,7 @@ export async function runEmbeddedAttempt(
                   prompt: promptForModel,
                   historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
                   imagesCount: imageResult.images.length,
-                  tools: tools,
+                  tools,
                 },
                 {
                   runId: params.runId,
@@ -4053,12 +4164,22 @@ export async function runEmbeddedAttempt(
                   cleanupRuntimeContextMessage();
                 }
               }
+              if (leasedSteering) {
+                ackPendingAgentSteeringItems({
+                  runIds: leasedSteering.runIds,
+                  leaseId: leasedSteering.leaseId,
+                });
+                leasedSteering = undefined;
+              }
             } finally {
               cleanupProviderPromptHistoryTransform();
               cleanupModelPromptTransform();
             }
+          } else {
+            releaseLeasedSteering(promptError ?? "prompt submission skipped");
           }
         } catch (err) {
+          releaseLeasedSteering(err);
           yieldAborted =
             yieldDetected &&
             isRunnerAbortError(err) &&
@@ -4393,33 +4514,26 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        // Run agent_end hooks to allow plugins to analyze the conversation
-        // This is fire-and-forget, so we don't await
-        // Run even on compaction timeout so plugins can log/cleanup
-        if (hookRunner?.hasHooks("agent_end")) {
-          hookRunner
-            .runAgentEnd(
-              {
-                messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? formatErrorMessage(promptError) : undefined,
-                durationMs: Date.now() - promptStartedAt,
-              },
-              {
-                runId: params.runId,
-                trace: freezeDiagnosticTraceContext(diagnosticTrace),
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                workspaceDir: params.workspaceDir,
-                trigger: params.trigger,
-                ...buildAgentHookContextChannelFields(params),
-              },
-            )
-            .catch((err) => {
-              log.warn(`agent_end hook failed: ${err}`);
-            });
-        }
+        runAgentEndSideEffects({
+          event: {
+            messages: messagesSnapshot,
+            success: !aborted && !promptError,
+            error: promptError ? formatErrorMessage(promptError) : undefined,
+            durationMs: Date.now() - promptStartedAt,
+          },
+          ctx: {
+            runId: params.runId,
+            trace: freezeDiagnosticTraceContext(diagnosticTrace),
+            agentId: hookAgentId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            workspaceDir: params.workspaceDir,
+            trigger: params.trigger,
+            ...(params.config ? { config: params.config } : {}),
+            ...buildAgentHookContextChannelFields(params),
+          },
+          hookRunner,
+        });
       } finally {
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
@@ -4641,6 +4755,7 @@ export async function runEmbeddedAttempt(
       const attemptTrajectoryTerminal = resolveAttemptTrajectoryTerminal({
         promptError,
         aborted,
+        externalAbort,
         timedOut,
         assistantTexts: terminalAssistantTexts,
         toolMetas: toolMetasNormalized,

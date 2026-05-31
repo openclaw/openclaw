@@ -12,7 +12,7 @@ import { z } from "zod";
 import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
 import { formatErrorMessage } from "../../dist/infra/errors.js";
 import { rawDataToString } from "../../dist/infra/ws.js";
-import { readStringValue } from "../../dist/shared/string-coerce.js";
+import { readStringValue } from "../../dist/normalization-core/string-coerce.js";
 import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
 import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
 import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
@@ -300,6 +300,7 @@ function isRetryableGatewayConnectError(error: Error): boolean {
   return (
     message.includes("gateway ws open timeout") ||
     message.includes("gateway connect timeout") ||
+    message.includes("closed before open") ||
     message.includes("gateway closed") ||
     message.includes("econnrefused") ||
     message.includes("socket hang up")
@@ -339,12 +340,9 @@ export async function connectMcpClient(params: {
     process.stderr.write(`[openclaw mcp] ${String(chunk)}`);
   });
   const rawMessages: unknown[] = [];
-  // The MCP stdio transport here exposes a writable onmessage callback at
-  // runtime, not an EventTarget-style addEventListener API.
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener
-  transport.onmessage = (message) => {
+  Reflect.set(transport, "onmessage", (message: unknown) => {
     pushBounded(rawMessages, message, MCP_RAW_MESSAGE_RETAIN_LIMIT);
-  };
+  });
 
   const client = new Client({ name: "docker-mcp-channels", version: "1.0.0" });
   await connectMcpWithTimeout(client, transport, MCP_CONNECT_TIMEOUT_MS);

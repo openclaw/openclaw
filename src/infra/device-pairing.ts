@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -10,7 +11,6 @@ import {
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   createAsyncLock,
@@ -109,6 +109,11 @@ export type PairedDeviceMetadataPatch = Pick<
   | "remoteIp"
   | "lastSeenAtMs"
   | "lastSeenReason"
+>;
+
+export type DevicePairingAccessMetadata = Pick<
+  PairedDevice,
+  "displayName" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
 >;
 
 export type DevicePairingList = {
@@ -458,6 +463,36 @@ function buildDeviceAuthToken(params: {
   };
 }
 
+function buildApprovedPairedDevice(params: {
+  pending: DevicePairingPendingRequest;
+  existing: PairedDevice | undefined;
+  roles: string[] | undefined;
+  approvedScopes: string[] | undefined;
+  tokens: Record<string, DeviceAuthToken>;
+  now: number;
+  accessMetadata?: DevicePairingAccessMetadata;
+}): PairedDevice {
+  return {
+    deviceId: params.pending.deviceId,
+    publicKey: params.pending.publicKey,
+    displayName: params.accessMetadata?.displayName ?? params.pending.displayName,
+    platform: params.pending.platform,
+    deviceFamily: params.pending.deviceFamily,
+    clientId: params.pending.clientId,
+    clientMode: params.pending.clientMode,
+    role: params.pending.role,
+    roles: params.roles,
+    scopes: params.approvedScopes,
+    approvedScopes: params.approvedScopes,
+    remoteIp: params.accessMetadata?.remoteIp ?? params.pending.remoteIp,
+    tokens: params.tokens,
+    createdAtMs: params.existing?.createdAtMs ?? params.now,
+    approvedAtMs: params.now,
+    lastSeenAtMs: params.accessMetadata?.lastSeenAtMs ?? params.existing?.lastSeenAtMs,
+    lastSeenReason: params.accessMetadata?.lastSeenReason ?? params.existing?.lastSeenReason,
+  };
+}
+
 function resolveRoleScopedDeviceTokenScopes(role: string, scopes: string[] | undefined): string[] {
   const normalized = normalizeDeviceAuthScopes(scopes);
   if (role === "operator") {
@@ -620,12 +655,14 @@ export async function approveDevicePairing(
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[] },
+  options: { callerScopes?: readonly string[]; accessMetadata?: DevicePairingAccessMetadata },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
+  optionsOrBaseDir?:
+    | { callerScopes?: readonly string[]; accessMetadata?: DevicePairingAccessMetadata }
+    | string,
   maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   const options =
@@ -707,23 +744,15 @@ export async function approveDevicePairing(
         lastUsedAtMs: existingToken?.lastUsedAtMs,
       };
     }
-    const device: PairedDevice = {
-      deviceId: pending.deviceId,
-      publicKey: pending.publicKey,
-      displayName: pending.displayName,
-      platform: pending.platform,
-      deviceFamily: pending.deviceFamily,
-      clientId: pending.clientId,
-      clientMode: pending.clientMode,
-      role: pending.role,
+    const device = buildApprovedPairedDevice({
+      pending,
+      existing,
       roles,
-      scopes: approvedScopes,
       approvedScopes,
-      remoteIp: pending.remoteIp,
       tokens,
-      createdAtMs: existing?.createdAtMs ?? now,
-      approvedAtMs: now,
-    };
+      now,
+      accessMetadata: options?.accessMetadata,
+    });
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, baseDir, "both");
@@ -735,7 +764,24 @@ export async function approveBootstrapDevicePairing(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
   baseDir?: string,
+): Promise<ApproveDevicePairingResult>;
+export async function approveBootstrapDevicePairing(
+  requestId: string,
+  bootstrapProfile: DeviceBootstrapProfile,
+  options: { accessMetadata?: DevicePairingAccessMetadata },
+  baseDir?: string,
+): Promise<ApproveDevicePairingResult>;
+export async function approveBootstrapDevicePairing(
+  requestId: string,
+  bootstrapProfile: DeviceBootstrapProfile,
+  optionsOrBaseDir?: { accessMetadata?: DevicePairingAccessMetadata } | string,
+  maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
+  const options =
+    typeof optionsOrBaseDir === "string" || optionsOrBaseDir === undefined
+      ? undefined
+      : optionsOrBaseDir;
+  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   const approvedRoles = mergeRoles(bootstrapProfile.roles) ?? [];
   const approvedScopes = resolveBootstrapProfileScopesForRoles(
     approvedRoles,
@@ -796,23 +842,15 @@ export async function approveBootstrapDevicePairing(
       });
     }
 
-    const device: PairedDevice = {
-      deviceId: pending.deviceId,
-      publicKey: pending.publicKey,
-      displayName: pending.displayName,
-      platform: pending.platform,
-      deviceFamily: pending.deviceFamily,
-      clientId: pending.clientId,
-      clientMode: pending.clientMode,
-      role: pending.role,
+    const device = buildApprovedPairedDevice({
+      pending,
+      existing,
       roles,
-      scopes: nextApprovedScopes,
       approvedScopes: nextApprovedScopes,
-      remoteIp: pending.remoteIp,
       tokens,
-      createdAtMs: existing?.createdAtMs ?? now,
-      approvedAtMs: now,
-    };
+      now,
+      accessMetadata: options?.accessMetadata,
+    });
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, baseDir, "both");
@@ -976,9 +1014,12 @@ export async function verifyDeviceToken(params: {
     if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
       return { ok: false, reason: "scope-mismatch" };
     }
-    entry.lastUsedAtMs = Date.now();
+    const now = Date.now();
+    entry.lastUsedAtMs = now;
     device.tokens ??= {};
     device.tokens[role] = entry;
+    device.lastSeenAtMs = now;
+    device.lastSeenReason = "device-token-auth";
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir, "paired");
     return entry.issuer ? { ok: true, issuer: entry.issuer } : { ok: true };

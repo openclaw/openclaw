@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
@@ -68,13 +68,14 @@ function loadOnboardConfigModule(): Promise<OnboardConfigModule> {
 }
 
 async function writeWizardConfigFile(
-  config: OpenClawConfig,
+  configInput: OpenClawConfig,
   opts: {
     allowConfigSizeDrop?: boolean;
     migrationBaseConfig?: OpenClawConfig;
     onPendingPluginInstallMigration?: () => void;
   } = {},
 ): Promise<OpenClawConfig> {
+  let config = configInput;
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
     const migrationBaseConfig = opts.migrationBaseConfig;
@@ -221,9 +222,10 @@ async function requireRiskAcknowledgement(params: {
 
 export async function runSetupWizard(
   opts: OnboardOptions,
-  runtime: RuntimeEnv | undefined,
+  runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
+  let runtime = runtimeInput;
   runtime ??= defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
@@ -865,7 +867,7 @@ export async function runSetupWizard(
   });
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
-  const { launchedTui } = await finalizeSetupWizard({
+  await finalizeSetupWizard({
     flow: wizardFlow,
     opts,
     baseConfig,
@@ -875,7 +877,4 @@ export async function runSetupWizard(
     prompter,
     runtime,
   });
-  if (launchedTui) {
-    return;
-  }
 }

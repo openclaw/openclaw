@@ -601,7 +601,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-primary",
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
       trigger: "overflow",
       modelFallbacksOverride: ["openai/gpt-fallback"],
       config: {
@@ -627,7 +627,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       ([provider, modelId]) => provider === "openai" && modelId === "gpt-fallback",
     );
     expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
-      authProfileId: "openai-codex:default",
+      authProfileId: "openai:default",
     });
   });
 
@@ -651,13 +651,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: {
         models: {
           providers: {
-            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         auth: {
           order: {
-            "openai-codex": ["openai-codex:work"],
+            openai: ["openai:work"],
           },
         },
         agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
@@ -693,8 +692,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: {
         models: {
           providers: {
-            openai: { models: [{ id: "fake-model", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "fake-model", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "fake-model", contextWindow: 350_000 }] },
           },
         },
       } as never,
@@ -731,11 +729,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: {
         models: {
           providers: {
-            openai: {
-              baseUrl: "https://openai-compatible.example/v1",
-              models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }],
-            },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
@@ -803,9 +797,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         models: {
           providers: {
             openai: {
-              models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }, { id: "gpt-5.4-mini" }],
-            },
-            "openai-codex": {
               models: [{ id: "gpt-5.5" }, { id: "gpt-5.4-mini", contextWindow: 350_000 }],
             },
           },
@@ -844,17 +835,16 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       config: {
         models: {
           providers: {
-            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
           },
         },
         auth: {
           order: {
-            "openai-codex": ["openai-codex:work"],
+            openai: ["openai:work"],
           },
         },
       } as never,
@@ -1748,7 +1738,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
             },
           },
         },
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         authProfileId: "openai:p1",
       }),
@@ -1800,7 +1790,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("passes resolved context-engine runtime context to harness compaction", async () => {
+  it("passes resolved OpenAI runtime context to context-engine compaction", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
       compacted: true,
@@ -1813,7 +1804,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         authProfileId: "openai:p1",
         currentTokenCount: 333,
@@ -1821,15 +1812,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
-    if (harnessArg.contextEngine === undefined) {
-      throw new Error("Expected compact harness context engine");
-    }
-    expect(harnessArg.contextTokenBudget).toBeTypeOf("number");
-    expectRecordFields(harnessArg.contextEngineRuntimeContext, {
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
       sessionKey: TEST_SESSION_KEY,
       workspaceDir: TEST_WORKSPACE_DIR,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       authProfileId: "openai:p1",
       currentTokenCount: 333,
@@ -1856,7 +1846,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -1897,7 +1887,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -1939,7 +1929,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -1981,7 +1971,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -2019,8 +2009,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -2059,11 +2048,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           models: {
             providers: {
-              openai: {
-                baseUrl: "https://openai-compatible.example/v1",
-                models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }],
-              },
-              "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
             },
           },
         },
@@ -2120,7 +2105,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to context-engine compaction for Codex native binding failures", async () => {
+  it("uses context-engine compaction when no Codex native binding is selected", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: false,
       compacted: false,
@@ -2130,7 +2116,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         agentHarnessId: "codex",
         currentTokenCount: 333,
@@ -2140,7 +2126,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.result?.summary).toBe("engine-summary");
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
 

@@ -1,9 +1,9 @@
+import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
-import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
 function isDataUrlMedia(mediaUrl: string): boolean {
@@ -61,7 +61,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       continue;
     }
     const mergedMediaUrls: string[] = [];
-    let text = payload.text;
+    const text = payload.text;
     for (const mediaUrl of mediaUrls) {
       if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);

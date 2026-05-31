@@ -1,4 +1,4 @@
-import { asDateTimestampMs } from "../../../src/shared/number-coercion.js";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "./types.ts";
 
 export type QuotaWindowSummary = {

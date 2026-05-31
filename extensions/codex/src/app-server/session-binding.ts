@@ -7,7 +7,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
+  isCodexPluginsMarketplaceName,
   normalizeCodexServiceTier,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
@@ -251,7 +251,8 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
     if (
       "appId" in entry ||
       typeof entry.configKey !== "string" ||
-      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+      typeof entry.marketplaceName !== "string" ||
+      !isCodexPluginsMarketplaceName(entry.marketplaceName) ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       !Array.isArray(entry.mcpServerNames) ||
@@ -337,10 +338,10 @@ export function isCodexAppServerNativeAuthProfile(
       ...lookup,
       authProfileId,
     });
-    return isCodexAppServerNativeAuthProvider({
-      provider: credential?.provider,
-      config: lookup.config,
-    });
+    if (!credential || credential.type === "api_key") {
+      return false;
+    }
+    return isOpenAiAuthProvider({ provider: credential.provider, config: lookup.config });
   } catch (error) {
     embeddedAgentLog.debug("failed to resolve codex app-server auth profile provider", {
       authProfileId,
@@ -403,7 +404,7 @@ function loadCodexAppServerAuthProfileStore(params: {
   );
 }
 
-function isCodexAppServerNativeAuthProvider(params: {
+function isOpenAiAuthProvider(params: {
   provider?: string;
   config?: ProviderAuthAliasConfig;
 }): boolean {

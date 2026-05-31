@@ -440,6 +440,7 @@ export async function handleFeishuMessage(params: {
   botOpenId?: string;
   botName?: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: ReturnType<typeof getFeishuRuntime>["channel"];
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
   processingClaimHeld?: boolean;
@@ -450,6 +451,7 @@ export async function handleFeishuMessage(params: {
     botOpenId,
     botName,
     runtime,
+    channelRuntime,
     chatHistories,
     accountId,
     processingClaimHeld = false,
@@ -709,7 +711,9 @@ export async function handleFeishuMessage(params: {
   }
 
   try {
-    const core = getFeishuRuntime();
+    const core = {
+      channel: channelRuntime ?? getFeishuRuntime().channel,
+    } as ReturnType<typeof getFeishuRuntime>;
     const pairing = createChannelPairingController({
       core,
       channel: "feishu",
@@ -1199,7 +1203,7 @@ export async function handleFeishuMessage(params: {
       }
 
       const rootMsg = await getRootMessageInfo();
-      let feishuThreadId = ctx.threadId ?? rootMessageThreadId ?? rootMsg?.threadId;
+      const feishuThreadId = ctx.threadId ?? rootMessageThreadId ?? rootMsg?.threadId;
       if (feishuThreadId) {
         log(`feishu[${account.accountId}]: resolved thread ID: ${feishuThreadId}`);
       }

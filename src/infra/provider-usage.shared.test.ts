@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
@@ -23,8 +24,8 @@ describe("provider-usage.shared", () => {
   });
 
   it("maps canonical OpenAI subscription profiles to Codex usage windows", () => {
-    expect(resolveUsageProviderId("openai", { credentialType: "oauth" })).toBe("openai-codex");
-    expect(resolveUsageProviderId("openai", { credentialType: "token" })).toBe("openai-codex");
+    expect(resolveUsageProviderId("openai", { credentialType: "oauth" })).toBe("openai");
+    expect(resolveUsageProviderId("openai", { credentialType: "token" })).toBe("openai");
     expect(resolveUsageProviderId("openai", { credentialType: "api_key" })).toBeUndefined();
   });
 
@@ -62,6 +63,18 @@ describe("provider-usage.shared", () => {
     const late = new Promise<string>((resolve) => setTimeout(() => resolve("late"), 50));
     const result = withTimeout(late, 1, "fallback");
     await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBe("fallback");
+  });
+
+  it("clamps oversized timeout delays before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const result = withTimeout(new Promise<string>(() => {}), Number.MAX_SAFE_INTEGER, "fallback");
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
     await expect(result).resolves.toBe("fallback");
   });
 

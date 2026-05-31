@@ -19,7 +19,7 @@ const nativeAuthLookup: Pick<CodexAppServerAuthProfileLookup, "authProfileStore"
     profiles: {
       work: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
@@ -98,6 +98,36 @@ describe("codex app-server session binding", () => {
     };
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-123",
+      cwd: tempDir,
+      pluginAppPolicyContext,
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("round-trips plugin app policy context for openai-bundled marketplace plugins", async () => {
+    // The chrome plugin lives in openai-bundled (ships with Codex.app), so
+    // its policy must persist across reads/writes the same way curated entries do.
+    const sessionFile = path.join(tempDir, "session-bundled.json");
+    const pluginAppPolicyContext = {
+      fingerprint: "plugin-policy-bundled-1",
+      apps: {
+        "chrome-app": {
+          configKey: "chrome",
+          marketplaceName: "openai-bundled" as const,
+          pluginName: "chrome",
+          allowDestructiveActions: true,
+          mcpServerNames: ["chrome"],
+        },
+      },
+      pluginAppIds: {
+        chrome: ["chrome-app"],
+      },
+    };
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-bundled",
       cwd: tempDir,
       pluginAppPolicyContext,
     });
@@ -237,7 +267,7 @@ describe("codex app-server session binding", () => {
       {
         threadId: "thread-123",
         cwd: tempDir,
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
         model: "gpt-5.4-mini",
         modelProvider: "openai",
       },
@@ -245,7 +275,7 @@ describe("codex app-server session binding", () => {
         authProfileStore: {
           version: 1,
           profiles: {
-            "openai-codex:work": {
+            "openai:work": {
               type: "api_key",
               provider: "openai",
               key: "sk-test",
@@ -259,7 +289,7 @@ describe("codex app-server session binding", () => {
       authProfileStore: {
         version: 1,
         profiles: {
-          "openai-codex:work": {
+          "openai:work": {
             type: "api_key",
             provider: "openai",
             key: "sk-test",
@@ -283,7 +313,7 @@ describe("codex app-server session binding", () => {
       {
         threadId: "thread-123",
         cwd: tempDir,
-        authProfileId: "openai-codex:default",
+        authProfileId: "openai:default",
         model: "gpt-5.4-mini",
         modelProvider: "openai",
       },
@@ -294,7 +324,7 @@ describe("codex app-server session binding", () => {
     const binding = await readCodexAppServerBinding(sessionFile, { agentDir });
 
     expect(raw).not.toContain('"modelProvider": "openai"');
-    expect(binding?.authProfileId).toBe("openai-codex:default");
+    expect(binding?.authProfileId).toBe("openai:default");
     expect(binding?.modelProvider).toBeUndefined();
   });
 

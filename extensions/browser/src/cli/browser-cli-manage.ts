@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { runCommandWithRuntime } from "../core-api.js";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
@@ -132,8 +133,12 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   defaultRuntime.log(
     tabs
       .map((t, i) => {
-        const alias = [t.tabId, t.label ? `label:${t.label}` : undefined].filter(Boolean).join(" ");
-        return `${i + 1}. ${t.title || "(untitled)"}${alias ? ` [${alias}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
+        const labelHandle = t.label ? `label:${t.label}` : undefined;
+        const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
+        const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
+          .filter(Boolean)
+          .join(" ");
+        return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
       })
       .join("\n"),
   );
@@ -215,7 +220,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       checks.push({
         name: "tabs",
         ok: true,
-        detail: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use target ${tabs[0].suggestedTargetId}` : ""}`,
+        detail: `${tabs.length} visible${tabs.length > 0 && tabs[0]?.suggestedTargetId ? `, use tab reference ${tabs[0].suggestedTargetId}` : ""}`,
       });
     } catch (err) {
       checks.push({
@@ -480,7 +485,7 @@ export function registerBrowserManageCommands(
   tab
     .command("label")
     .description("Assign a friendly label to a tab")
-    .argument("<targetId>", "Target id, tab id, label, or unique target id prefix")
+    .argument("<targetId>", BROWSER_TAB_REFERENCE_HELP)
     .argument("<label>", "Friendly label")
     .action(async (targetId: string, label: string, _opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -571,8 +576,8 @@ export function registerBrowserManageCommands(
 
   browser
     .command("focus")
-    .description("Focus a tab by target id, tab id, label, or unique target id prefix")
-    .argument("<targetId>", "Target id, tab id, label, or unique target id prefix")
+    .description("Focus a tab by tab reference")
+    .argument("<targetId>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (targetId: string, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -596,8 +601,8 @@ export function registerBrowserManageCommands(
 
   browser
     .command("close")
-    .description("Close a tab (target id optional)")
-    .argument("[targetId]", "Target id, tab id, label, or unique target id prefix (optional)")
+    .description("Close a tab (tab reference optional)")
+    .argument("[targetId]", `${BROWSER_TAB_REFERENCE_HELP} (optional)`)
     .action(async (targetId: string | undefined, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;

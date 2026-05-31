@@ -1,3 +1,10 @@
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -89,7 +96,7 @@ function parseValue(raw: string | null): unknown {
 
 function isExpired(row: AgentCacheRow, now: number): boolean {
   const expiresAt = asNumber(row.expires_at);
-  return expiresAt !== null && expiresAt <= now;
+  return expiresAt !== null && !isFutureDateTimestampMs(expiresAt, { nowMs: now });
 }
 
 function rowToCacheValue(
@@ -112,9 +119,23 @@ function resolveExpiresAt(options: AgentRuntimeCacheWriteOptions, now: number): 
     if (!Number.isFinite(options.ttlMs) || options.ttlMs <= 0) {
       throw new Error("SQLite agent cache ttlMs must be a positive finite number.");
     }
-    return now + options.ttlMs;
+    const expiresAt = resolveExpiresAtMsFromDurationMs(options.ttlMs, { nowMs: now });
+    if (expiresAt === undefined) {
+      throw new Error("SQLite agent cache ttlMs must resolve to a valid Date timestamp.");
+    }
+    return expiresAt;
   }
-  return options.expiresAt ?? null;
+  if (options.expiresAt !== undefined) {
+    if (options.expiresAt === null) {
+      return null;
+    }
+    const expiresAt = asDateTimestampMs(options.expiresAt);
+    if (expiresAt === undefined) {
+      throw new Error("SQLite agent cache expiresAt must be a valid Date timestamp.");
+    }
+    return expiresAt;
+  }
+  return null;
 }
 
 export function writeSqliteAgentCacheEntry(
@@ -122,7 +143,7 @@ export function writeSqliteAgentCacheEntry(
 ): AgentRuntimeCacheValue {
   const scope = normalizeScope(options);
   const key = normalizeKey(options.key);
-  const updatedAt = options.now?.() ?? Date.now();
+  const updatedAt = resolveDateTimestampMs(options.now?.());
   const expiresAt = resolveExpiresAt(options, updatedAt);
   const valueJson = options.value === undefined ? null : JSON.stringify(options.value);
   const blob =
@@ -182,7 +203,7 @@ export function readSqliteAgentCacheEntry(
         .where("scope", "=", scope.scope)
         .where("key", "=", key),
     ) ?? null;
-  if (!row || isExpired(row, options.now?.() ?? Date.now())) {
+  if (!row || isExpired(row, resolveDateTimestampMs(options.now?.()))) {
     return null;
   }
   return rowToCacheValue(row, scope);
@@ -192,7 +213,7 @@ export function listSqliteAgentCacheEntries(
   options: SqliteAgentCacheStoreOptions,
 ): AgentRuntimeCacheValue[] {
   const scope = normalizeScope(options);
-  const now = options.now?.() ?? Date.now();
+  const now = resolveDateTimestampMs(options.now?.());
   const database = openOpenClawAgentDatabase(toDatabaseOptions(options));
   const db = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
   return executeSqliteQuerySync(
@@ -238,7 +259,10 @@ export function clearExpiredSqliteAgentCacheEntries(
   options: SqliteAgentCacheStoreOptions & { currentTime?: number },
 ): number {
   const scope = normalizeScope(options);
-  const currentTime = options.currentTime ?? options.now?.() ?? Date.now();
+  const currentTime = asDateTimestampMs(options.currentTime ?? options.now?.() ?? Date.now());
+  if (currentTime === undefined) {
+    return 0;
+  }
   return runOpenClawAgentWriteTransaction((database) => {
     const db = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
     const result = executeSqliteQuerySync(
@@ -247,7 +271,13 @@ export function clearExpiredSqliteAgentCacheEntries(
         .deleteFrom("cache_entries")
         .where("scope", "=", scope.scope)
         .where("expires_at", "is not", null)
-        .where("expires_at", "<=", currentTime),
+        .where((eb) =>
+          eb.or([
+            eb("expires_at", "<=", currentTime),
+            eb("expires_at", ">", MAX_DATE_TIMESTAMP_MS),
+            eb("expires_at", "<", -MAX_DATE_TIMESTAMP_MS),
+          ]),
+        ),
     );
     return Number(result.numAffectedRows ?? 0);
   }, toDatabaseOptions(options));

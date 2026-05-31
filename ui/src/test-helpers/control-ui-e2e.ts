@@ -7,6 +7,10 @@ import type { Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import {
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../../vite.config.ts";
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
@@ -108,9 +112,11 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     },
     publicDir: path.join(uiRoot, "public"),
     resolve: {
-      alias: {
-        json5: json5EsmPath,
-      },
+      alias: [
+        { find: "json5", replacement: json5EsmPath },
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
     },
     root: uiRoot,
     server: {
@@ -251,7 +257,7 @@ function installControlUiMockGateway(input: {
   }
 
   function hasOwn(record: Record<string, unknown>, key: string): boolean {
-    return Object.prototype.hasOwnProperty.call(record, key);
+    return Object.hasOwn(record, key);
   }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {

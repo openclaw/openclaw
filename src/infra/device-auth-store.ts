@@ -1,22 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
   clearDeviceAuthTokenFromStore,
+  coerceDeviceAuthStore,
   type DeviceAuthEntry,
+  type DeviceAuthStore,
   loadDeviceAuthTokenFromStore,
   storeDeviceAuthTokenInStore,
 } from "../shared/device-auth-store.js";
-import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { privateFileStoreSync } from "./private-file-store.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
-const DeviceAuthStoreSchema = z.object({
-  version: z.literal(1),
-  deviceId: z.string(),
-  tokens: z.record(z.string(), z.unknown()),
-}) as z.ZodType<DeviceAuthStore>;
 
 type StoreCacheEntry = { store: DeviceAuthStore | null; mtimeMs: number; size: number };
 const storeReadCache = new Map<string, StoreCacheEntry>();
@@ -52,8 +47,7 @@ function readStore(filePath: string): DeviceAuthStore | null {
     const parsed = privateFileStoreSync(path.dirname(filePath)).readJsonIfExists(
       path.basename(filePath),
     );
-    const result = DeviceAuthStoreSchema.safeParse(parsed);
-    const store = result.success ? result.data : null;
+    const store = coerceDeviceAuthStore(parsed);
     storeReadCache.set(filePath, { store, mtimeMs: stat.mtimeMs, size: stat.size });
     return store;
   } catch {

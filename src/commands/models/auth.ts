@@ -6,6 +6,11 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   stylePromptHint,
   stylePromptMessage,
@@ -51,10 +56,6 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
@@ -64,6 +65,19 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
+  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
+  if (!normalizedExpiresIn) {
+    return undefined;
+  }
+  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
+  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
+  if (expires === undefined) {
+    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
+  }
+  return expires;
+}
 
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
@@ -137,11 +151,11 @@ function resolveDefaultTokenProfileId(provider: string): string {
 
 function normalizeManualAuthProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
-  return normalized === "openai-codex" ? "openai" : normalized;
+  return normalized === "openai" ? "openai" : normalized;
 }
 
 function isOpenAIProvider(provider: string): boolean {
-  return normalizeProviderId(provider) === "openai";
+  return normalizeManualAuthProvider(provider) === "openai";
 }
 
 function stripBearerPrefix(value: string): string {
@@ -227,7 +241,9 @@ function preferSetupAuthProviders(params: {
   workspaceDir: string;
   requestedProvider?: string;
 }): ProviderPlugin[] {
-  const requestedProvider = params.requestedProvider?.trim();
+  const requestedProvider = params.requestedProvider
+    ? normalizeManualAuthProvider(params.requestedProvider)
+    : undefined;
   if (requestedProvider) {
     const setupProvider = resolvePluginSetupProvider({
       provider: requestedProvider,
@@ -256,15 +272,18 @@ async function resolveModelsAuthContext(params?: {
   const workspaceDir =
     resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const requestedProvider = params?.requestedProvider?.trim();
+  const providerRef = requestedProvider
+    ? normalizeManualAuthProvider(requestedProvider)
+    : undefined;
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
     bundledProviderVitestCompat: true,
-    ...(requestedProvider
+    ...(providerRef
       ? {
-          providerRefs: [requestedProvider],
+          providerRefs: [providerRef],
           activate: true,
         }
       : {}),
@@ -273,7 +292,7 @@ async function resolveModelsAuthContext(params?: {
     providers,
     config,
     workspaceDir,
-    requestedProvider: params?.requestedProvider,
+    requestedProvider: providerRef,
   });
   return {
     config,
@@ -626,12 +645,7 @@ export async function modelsAuthPasteTokenCommand(
       ? tokenInput.replaceAll(/\s+/g, "").trim()
       : (normalizeOptionalString(tokenInput) ?? "");
 
-  const expires = normalizeStringifiedOptionalString(opts.expiresIn)
-    ? Date.now() +
-      parseDurationMs(normalizeStringifiedOptionalString(opts.expiresIn) ?? "", {
-        defaultUnit: "d",
-      })
-    : undefined;
+  const expires = resolveManualTokenExpiryMs(opts.expiresIn);
 
   await upsertAuthProfileWithLockOrThrow({
     profileId,
@@ -912,7 +926,10 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
-  const requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, opts.provider);
+  const requestedProvider = resolveRequestedLoginProviderOrThrow(
+    authProviders,
+    opts.provider ? normalizeManualAuthProvider(opts.provider) : undefined,
+  );
   const selectedProvider =
     requestedProvider ??
     (await prompter

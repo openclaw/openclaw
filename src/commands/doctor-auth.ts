@@ -36,21 +36,29 @@ import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
-const CODEX_PROVIDER_ID = "openai";
+const OPENAI_PROVIDER_ID = "openai";
+const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
+const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
+};
 
 function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
   return Object.values(cfg.auth?.profiles ?? {}).some(
-    (profile) => profile.provider === CODEX_PROVIDER_ID && profile.mode === "oauth",
+    (profile) =>
+      (profile.provider === OPENAI_PROVIDER_ID || profile.provider === LEGACY_CODEX_PROVIDER_ID) &&
+      profile.mode === "oauth",
   );
 }
 
 function hasStoredCodexOAuthProfile(): boolean {
   const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
   return Object.values(store.profiles).some(
-    (profile) => profile.provider === CODEX_PROVIDER_ID && profile.type === "oauth",
+    (profile) =>
+      (profile.provider === OPENAI_PROVIDER_ID || profile.provider === LEGACY_CODEX_PROVIDER_ID) &&
+      profile.type === "oauth",
   );
 }
 
@@ -89,16 +97,16 @@ function hasLegacyCodexTransportOverride(providerOverride: unknown): boolean {
 
 function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   const lines = [
-    `- models.providers.${CODEX_PROVIDER_ID} contains a legacy transport override while Codex OAuth is configured.`,
+    `- models.providers.${LEGACY_CODEX_PROVIDER_ID} contains a legacy transport override while Codex OAuth is configured.`,
     "- Older OpenAI transport settings can shadow the built-in Codex OAuth provider path.",
   ];
   if (isRecord(providerOverride)) {
     const record = providerOverride;
     if (typeof record.api === "string") {
-      lines.push(`- models.providers.${CODEX_PROVIDER_ID}.api=${record.api}`);
+      lines.push(`- models.providers.${LEGACY_CODEX_PROVIDER_ID}.api=${record.api}`);
     }
     if (typeof record.baseUrl === "string") {
-      lines.push(`- models.providers.${CODEX_PROVIDER_ID}.baseUrl=${record.baseUrl}`);
+      lines.push(`- models.providers.${LEGACY_CODEX_PROVIDER_ID}.baseUrl=${record.baseUrl}`);
     }
   }
   lines.push(
@@ -111,7 +119,7 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
 }
 
 export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
-  const providerOverride = cfg.models?.providers?.[CODEX_PROVIDER_ID];
+  const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
   if (!providerOverride) {
     return;
   }
@@ -216,7 +224,10 @@ export function formatOAuthRefreshFailureDoctorLine(params: {
   if (!classified) {
     return null;
   }
-  const provider = classified.provider ?? params.provider;
+  const rawProvider = classified.provider ?? params.provider;
+  const provider = rawProvider
+    ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
+    : null;
   const command = buildOAuthRefreshFailureLoginCommand(provider);
   if (classified.reason) {
     return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;

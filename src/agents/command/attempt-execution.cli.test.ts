@@ -27,7 +27,7 @@ vi.mock("../model-selection.js", () => ({
 vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
-    ["codex-cli", "openai-codex"].includes(provider.trim().toLowerCase())
+    ["codex-cli", "openai"].includes(provider.trim().toLowerCase())
       ? "openai"
       : provider.trim().toLowerCase(),
 }));
@@ -252,7 +252,7 @@ describe("CLI attempt execution", () => {
     };
   }
 
-  it("clears stale Claude CLI session IDs before retrying after session expiration", async () => {
+  it("clears stale Claude CLI session IDs before a fresh retry after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
     const homeDir = path.join(tmpDir, "home");
     const projectsDir = resolveClaudeCliProjectDirForWorkspace({
@@ -278,16 +278,24 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
 
-    runCliAgentMock
-      .mockRejectedValueOnce(
-        new FailoverError("session expired", {
-          reason: "session_expired",
-          provider: "claude-cli",
-          model: "opus",
-          status: 410,
-        }),
-      )
-      .mockResolvedValueOnce(makeCliResult("hello from cli"));
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const retry = requireRecord(args, "run CLI agent argument").onBeforeFreshCliSessionRetry;
+      expect(retry).toBeTypeOf("function");
+      await (
+        retry as (params: {
+          provider: string;
+          reason: "session_expired";
+          sessionId: string;
+        }) => Promise<boolean>
+      )({
+        provider: "claude-cli",
+        reason: "session_expired",
+        sessionId: "stale-cli-session",
+      });
+      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+      return makeCliResult("hello from cli");
+    });
 
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -319,9 +327,8 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe("stale-cli-session");
-    expect(firstRunCliAgentArg(1).cliSessionId).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
@@ -368,30 +375,40 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
-  it("clears reused Claude CLI session IDs after non-expired failover without retrying", async () => {
+  it("clears reused Claude CLI session IDs before a fresh retry after timeout failover", async () => {
     const sessionKey = "agent:main:direct:cli-timeout";
     const cliSessionId = "timeout-poisoned-session";
     await writeClaudeCliAssistantTranscript(cliSessionId);
     const sessionEntry = makeClaudeCliSessionEntry("session-cli-timeout", cliSessionId);
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    runCliAgentMock.mockRejectedValueOnce(
-      new FailoverError("CLI produced no output for 60s", {
-        reason: "timeout",
+    runCliAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const retry = requireRecord(args, "run CLI agent argument").onBeforeFreshCliSessionRetry;
+      expect(retry).toBeTypeOf("function");
+      await (
+        retry as (params: {
+          provider: string;
+          reason: "timeout";
+          sessionId: string;
+        }) => Promise<boolean>
+      )({
         provider: "claude-cli",
-        model: "opus",
-      }),
-    );
+        reason: "timeout",
+        sessionId: cliSessionId,
+      });
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+      return makeCliResult("hello after timeout");
+    });
 
-    await expect(
-      runClaudeCliAttempt({
-        sessionKey,
-        sessionEntry,
-        sessionStore,
-        body: "resume after timeout",
-        runId: "run-cli-timeout",
-      }),
-    ).rejects.toMatchObject({ name: "FailoverError", reason: "timeout" });
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "resume after timeout",
+      runId: "run-cli-timeout",
+    });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
@@ -399,6 +416,81 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
+
+  it("does not install a stale-session clearing hook for storeless CLI attempts", async () => {
+    const sessionKey = "agent:main:internal-storeless";
+    const cliSessionId = "storeless-stale-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-storeless", cliSessionId);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("storeless ok"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "storeless retry path",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-storeless-cli",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(firstRunCliAgentArg().onBeforeFreshCliSessionRetry).toBeUndefined();
+  });
+
+  it.each(["auth", "billing", "rate_limit"] as const)(
+    "clears reused Claude CLI session IDs after %s failover without retrying",
+    async (reason) => {
+      const sessionKey = `agent:main:direct:cli-${reason}`;
+      const cliSessionId = `${reason}-poisoned-session`;
+      await writeClaudeCliAssistantTranscript(cliSessionId);
+      const sessionEntry = makeClaudeCliSessionEntry(`session-cli-${reason}`, cliSessionId);
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+      runCliAgentMock.mockRejectedValueOnce(
+        new FailoverError(`${reason} failed`, {
+          reason,
+          provider: "claude-cli",
+          model: "opus",
+        }),
+      );
+
+      await expect(
+        runClaudeCliAttempt({
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          body: `resume after ${reason}`,
+          runId: `run-cli-${reason}`,
+        }),
+      ).rejects.toMatchObject({ name: "FailoverError", reason });
+
+      expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    },
+  );
 
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";
@@ -546,7 +638,7 @@ describe("CLI attempt execution", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-codex",
       updatedAt: Date.now(),
-      authProfileOverride: "openai-codex:work",
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -577,14 +669,14 @@ describe("CLI attempt execution", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai-codex",
+      authProfileProvider: "openai",
       sessionStore,
       storePath,
       sessionHasHistory: false,
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(firstRunCliAgentArg().authProfileId).toBe("openai-codex:work");
+    expect(firstRunCliAgentArg().authProfileId).toBe("openai:work");
   });
 
   it("persists CLI replies into the session transcript", async () => {
@@ -1219,9 +1311,9 @@ describe("CLI attempt execution", () => {
 
   it("forwards user-pinned OpenAI API-key backup profiles to Codex harness runs", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
-    const sessionKey = "agent:main:direct:openai-codex-api-key";
+    const sessionKey = "agent:main:direct:openai-chatgpt-api-key";
     const sessionEntry: SessionEntry = {
-      sessionId: "openclaw-session-openai-codex-api-key",
+      sessionId: "openclaw-session-openai-chatgpt-api-key",
       updatedAt: Date.now(),
       authProfileOverride: "openai:backup",
       authProfileOverrideSource: "user",
@@ -1273,7 +1365,7 @@ describe("CLI attempt execution", () => {
         isFallbackRetry: false,
         resolvedThinkLevel: "medium",
         timeoutMs: 1_000,
-        runId: "run-openai-codex-api-key-backup",
+        runId: "run-openai-chatgpt-api-key-backup",
         opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
         runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
         spawnedBy: undefined,
@@ -1675,9 +1767,9 @@ describe("embedded attempt harness pinning", () => {
       JSON.stringify({
         version: 1,
         profiles: {
-          "openai-codex:work": {
+          "openai:work": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
@@ -1730,7 +1822,7 @@ describe("embedded attempt harness pinning", () => {
 
     expectMockArgFields(runEmbeddedAgentMock, {
       agentHarnessId: undefined,
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       authProfileIdSource: "auto",
     });
   });
@@ -1823,7 +1915,7 @@ describe("embedded attempt harness pinning", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-agent-codex-oauth-session",
       updatedAt: Date.now(),
-      authProfileOverride: "openai-codex:work",
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     };
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -1864,7 +1956,7 @@ describe("embedded attempt harness pinning", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai-codex",
+      authProfileProvider: "openai",
       sessionHasHistory: false,
     });
 
@@ -1873,7 +1965,7 @@ describe("embedded attempt harness pinning", () => {
       model: "gpt-5.4",
       agentHarnessId: "openclaw",
       agentHarnessRuntimeOverride: "openclaw",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       authProfileIdSource: "user",
     });
   });

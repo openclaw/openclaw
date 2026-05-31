@@ -834,10 +834,10 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -1151,6 +1151,7 @@ jobs:
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000"
           OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
         shell: bash
         run: |
@@ -1970,6 +1971,21 @@ jobs:
             sleep $((attempt * 20))
           done
           exit 1
+
+      - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
+        run: |
+          set -euo pipefail
+          # Guard: chat-only consumers build OpenClawKit with the Talk trait
+          # disabled and must NOT link ElevenLabsKit. Assert that future sources
+          # under OpenClawKit cannot silently reintroduce an unconditional
+          # ElevenLabsKit dependency while the manifest still looks correct.
+          deps="$(swift package --package-path apps/shared/OpenClawKit show-dependencies --disable-default-traits)"
+          echo "$deps"
+          if grep -qi 'elevenlabs' <<<"$deps"; then
+            echo "::error::ElevenLabsKit resolved with the Talk trait disabled; keep it gated behind the Talk trait."
+            exit 1
+          fi
+          swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
 
       - name: Swift test
         run: |

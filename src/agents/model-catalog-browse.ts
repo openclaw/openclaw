@@ -1,5 +1,8 @@
+import {
+  clampTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseFiniteNumber } from "../shared/number-coercion.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 
@@ -7,10 +10,26 @@ export const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 
 export type ModelCatalogBrowseView = "default" | "configured" | "all";
 
+const modelCatalogBrowseDeps = {
+  setTimeout: globalThis.setTimeout,
+  clearTimeout: globalThis.clearTimeout,
+};
+
+export function setModelCatalogBrowseTestDeps(
+  overrides: Partial<typeof modelCatalogBrowseDeps>,
+): void {
+  Object.assign(modelCatalogBrowseDeps, overrides);
+}
+
+export function restoreModelCatalogBrowseTestDeps(): void {
+  modelCatalogBrowseDeps.setTimeout = globalThis.setTimeout;
+  modelCatalogBrowseDeps.clearTimeout = globalThis.clearTimeout;
+}
+
 function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
-  return Math.max(
-    1,
-    Math.floor(parseFiniteNumber(value) ?? DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS),
+  return (
+    clampTimerTimeoutMs(value, 1) ??
+    resolveTimerTimeoutMs(DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS, 1)
   );
 }
 
@@ -34,7 +53,7 @@ export async function loadModelCatalogForBrowse(params: {
   const timedOut = Symbol("model-catalog-browse-timeout");
   const catalogPromise = params.loadCatalog({ readOnly: true });
   const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = setTimeout(() => resolve(timedOut), timeoutMs);
+    timeout = modelCatalogBrowseDeps.setTimeout(() => resolve(timedOut), timeoutMs);
     timeout.unref?.();
   });
 
@@ -48,7 +67,7 @@ export async function loadModelCatalogForBrowse(params: {
     return result;
   } finally {
     if (timeout) {
-      clearTimeout(timeout);
+      modelCatalogBrowseDeps.clearTimeout(timeout);
     }
   }
 }

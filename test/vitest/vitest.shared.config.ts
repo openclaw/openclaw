@@ -82,6 +82,21 @@ function hasWorkerOverride(env: Record<string, string | undefined>): boolean {
   return Boolean((env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS)?.trim());
 }
 
+function sourcePackageAlias(packageId: string, subpath?: string) {
+  return {
+    find: `@openclaw/${packageId}${subpath ? `/${subpath}` : ""}`,
+    replacement: path.join(
+      repoRoot,
+      "packages",
+      packageId,
+      "src",
+      ...(subpath ? subpath.split("/") : ["index"]).map((part, index, parts) =>
+        index === parts.length - 1 ? `${part}.ts` : part,
+      ),
+    ),
+  };
+}
+
 export function resolveSharedVitestWorkerConfig(params: {
   env?: Record<string, string | undefined>;
   isCI?: boolean;
@@ -248,6 +263,36 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/model-catalog-core/model-catalog-refs",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "model-catalog-refs.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/model-catalog-normalize",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "model-catalog-normalize.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/model-catalog-types",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "model-catalog-types.ts",
+        ),
+      },
+      {
         find: "@openclaw/model-catalog-core/provider-id",
         replacement: path.join(repoRoot, "packages", "model-catalog-core", "src", "provider-id.ts"),
       },
@@ -301,6 +346,65 @@ export const sharedVitestConfig = {
         find: "@openclaw/net-policy",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
+      {
+        find: "@openclaw/normalization-core/number-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "number-coercion.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/record-coerce",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "record-coerce.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/string-coerce",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "string-coerce.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/string-normalization",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "string-normalization.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
+      },
+      sourcePackageAlias("media-core", "base64"),
+      sourcePackageAlias("media-core", "constants"),
+      sourcePackageAlias("media-core", "content-length"),
+      sourcePackageAlias("media-core", "file-name"),
+      sourcePackageAlias("media-core", "inbound-path-policy"),
+      sourcePackageAlias("media-core", "inline-image-data-url"),
+      sourcePackageAlias("media-core", "media-source-url"),
+      sourcePackageAlias("media-core", "mime"),
+      sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
+      sourcePackageAlias("media-core", "read-response-with-limit"),
+      sourcePackageAlias("media-core"),
+      sourcePackageAlias("acp-core", "normalize-text"),
+      sourcePackageAlias("acp-core", "record-shared"),
+      sourcePackageAlias("acp-core", "runtime/types"),
+      sourcePackageAlias("acp-core"),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),

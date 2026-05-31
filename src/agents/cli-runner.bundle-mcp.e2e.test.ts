@@ -81,7 +81,14 @@ async function restoreCliRunnerPrepareDeps() {
 }
 
 beforeEach(async () => {
+  const { setCliRunnerTestDeps } = await import("./cli-runner.js");
   const { setCliRunnerPrepareTestDeps } = await import("./cli-runner/prepare.js");
+  setCliRunnerTestDeps({
+    // Bundle MCP wiring is the behavior under test; transcript flush has
+    // dedicated coverage and the fake Claude binary does not write real
+    // Claude transcript files.
+    claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
+  });
   setCliRunnerPrepareTestDeps({
     // This test validates downstream bundle MCP config injection. The generic
     // OpenClaw loopback tool inventory is covered by prepare-level tests and is
@@ -91,7 +98,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  const { restoreCliRunnerTestDeps } = await import("./cli-runner.js");
   cliBackendsTesting.resetDepsForTest();
+  restoreCliRunnerTestDeps();
   await restoreCliRunnerPrepareDeps();
   await resetBundleMcpPluginState();
 });

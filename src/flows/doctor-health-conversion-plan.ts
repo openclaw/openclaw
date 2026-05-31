@@ -54,8 +54,8 @@ export const doctorHealthConversionRules = [
   {
     contributionId: "doctor:structured-health-repairs",
     conversion: "terminal-side-effect",
-    target: ["doctor-health-repair-runner"],
-    rule: "Delete this bridge after converted checks are registered directly; repair orchestration belongs outside the contribution list.",
+    target: ["doctor-health-repair-runner", "core/doctor/ui-protocol-freshness"],
+    rule: "Delete this bridge after converted checks are registered directly; repair orchestration belongs outside the contribution list. UI freshness is registered for lint/dry-run effects while legacy doctor still owns real repair.",
   },
   {
     contributionId: "doctor:legacy-state",

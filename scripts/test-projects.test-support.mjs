@@ -51,7 +51,7 @@ import {
 } from "./changed-lanes.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
-  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveVitestCliEntry,
   resolveVitestNodeArgs,
 } from "./run-vitest.mjs";
@@ -524,6 +524,14 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/e2e/plugin-lifecycle-matrix-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
   [
+    "scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs",
+    ["test/scripts/plugin-lifecycle-probe.test.ts"],
+  ],
+  [
+    "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh",
+    ["test/scripts/plugin-lifecycle-probe.test.ts"],
+  ],
+  [
     "scripts/e2e/release-media-memory-docker.sh",
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/release-media-memory-scenario.test.ts"],
   ],
@@ -732,9 +740,11 @@ const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
-export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(
-  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(900_000);
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS = String(
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
 );
 const EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD = 12;
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
@@ -753,6 +763,12 @@ const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
+const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
+  "vitest.config.ts",
+  DEFAULT_VITEST_CONFIG,
+  ...Object.values(VITEST_CONFIG_BY_KIND),
+  ...fullSuiteVitestShards.flatMap((shard) => [shard.config, ...shard.projects]),
+]);
 const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
@@ -912,7 +928,13 @@ function isPathLikeTargetArg(arg, cwd) {
   if (!arg || arg === "--" || arg.startsWith("-")) {
     return false;
   }
-  return isGlobTarget(arg) || isFileLikeTarget(arg) || isExistingPathTarget(arg, cwd);
+  const relative = toRepoRelativeTarget(arg, cwd);
+  return (
+    isGlobTarget(arg) ||
+    isFileLikeTarget(arg) ||
+    isVitestConfigPathLikeTarget(relative) ||
+    isExistingPathTarget(arg, cwd)
+  );
 }
 
 function toRepoRelativeTarget(arg, cwd) {
@@ -1041,7 +1063,10 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
   const unmatched = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
-    if (resolveVitestConfigTargetKind(relative)) {
+    if (
+      resolveVitestConfigTargetKind(relative) ||
+      (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
+    ) {
       continue;
     }
     const kind = classifyTarget(targetArg, cwd);
@@ -1313,8 +1338,7 @@ function resolveAffectedTestsFromTargetedImportScan(changedPath, cwd) {
   const seen = new Set(queue);
   const targets = [];
 
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index];
+  for (const current of queue) {
     const importers = findDirectImportersWithGitGrep(cwd, current, fileSet);
     if (importers === null) {
       return null;
@@ -1384,8 +1408,7 @@ function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
   const seen = new Set(queue);
   const targets = [];
 
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index];
+  for (const current of queue) {
     for (const importer of reverseImports.get(current) ?? []) {
       if (seen.has(importer)) {
         continue;
@@ -1403,6 +1426,16 @@ function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
 
 function resolveVitestConfigTargetKind(relative) {
   return VITEST_CONFIG_TARGET_KIND_BY_PATH.get(relative) ?? null;
+}
+
+function isVitestConfigPathLikeTarget(relative) {
+  return (
+    relative === "vitest.config.ts" || /^test\/vitest\/vitest\..+\.config\.ts$/u.test(relative)
+  );
+}
+
+function isVitestConfigFileTarget(relative) {
+  return RUNNABLE_VITEST_CONFIG_TARGETS.has(relative);
 }
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
@@ -2009,6 +2042,24 @@ export function buildVitestRunPlans(
     ];
   }
 
+  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
+  const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
+    toRepoRelativeTarget(targetArg, cwd),
+  );
+  if (explicitConfigTargets.every(isVitestConfigFileTarget)) {
+    if (watchMode && explicitConfigTargets.length > 1) {
+      throw new Error(
+        "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
+      );
+    }
+    return explicitConfigTargets.map((config) => ({
+      config,
+      forwardedArgs: nonTargetArgs,
+      includePatterns: null,
+      watchMode,
+    }));
+  }
+
   const groupedTargets = new Map();
   for (const targetArg of activeTargetArgs) {
     const kind = classifyTarget(targetArg, cwd);
@@ -2038,7 +2089,6 @@ export function buildVitestRunPlans(
     );
   }
 
-  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
   const orderedKinds = [
     "unitFast",
     "unitFastFakeTimers",
@@ -2253,7 +2303,8 @@ function hasConservativeVitestWorkerBudget(env) {
   return workerBudget !== null && workerBudget <= 1;
 }
 
-export function resolveParallelFullSuiteConcurrency(specCount, env, hostInfo) {
+export function resolveParallelFullSuiteConcurrency(specCount, envInput, hostInfo) {
+  let env = envInput;
   env ??= process.env;
   const override = parsePositiveInt(env.OPENCLAW_TEST_PROJECTS_PARALLEL);
   if (override !== null) {
@@ -2321,25 +2372,43 @@ export function applyDefaultMultiSpecVitestCachePaths(specs, params = {}) {
 
 export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
   const baseEnv = params.env ?? process.env;
-  if (Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+  if (
+    Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY) &&
+    Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY)
+  ) {
     return specs;
   }
   return specs.map((spec) => {
-    if (spec.watchMode || Object.hasOwn(spec.env ?? {}, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+    if (spec.watchMode) {
       return spec;
+    }
+    const env = spec.env ?? {};
+    const nextEnv = { ...env };
+    if (
+      !Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY) &&
+      !Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)
+    ) {
+      nextEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY] = DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS;
+    }
+    if (
+      !Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY) &&
+      !Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY)
+    ) {
+      nextEnv[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY] =
+        DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS;
     }
     return {
       ...spec,
-      env: {
-        ...spec.env,
-        [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
-      },
+      env: nextEnv,
     };
   });
 }
 
 export function shouldRetryVitestNoOutputTimeout(env = process.env) {
   const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
+  if (value === undefined && isCiLikeEnv(env)) {
+    return false;
+  }
   return !["0", "false", "no", "off"].includes(value ?? "");
 }
 

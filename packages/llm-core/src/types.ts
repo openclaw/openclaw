@@ -6,7 +6,7 @@ export type KnownApi =
   | "mistral-conversations"
   | "openai-responses"
   | "azure-openai-responses"
-  | "openai-codex-responses"
+  | "openai-chatgpt-responses"
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"
@@ -52,6 +52,12 @@ export interface ProviderResponse {
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Stop sequences forwarded to providers that support them. Providers map this
+   * to their native request field, such as OpenAI `stop` or Anthropic
+   * `stop_sequences`.
+   */
+  stop?: string[];
   signal?: AbortSignal;
   apiKey?: string;
   /**

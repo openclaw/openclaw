@@ -63,6 +63,15 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/model-catalog-core/configured-model-refs": [
     "../dist/plugin-sdk/packages/model-catalog-core/src/configured-model-refs.d.ts",
   ],
+  "@openclaw/model-catalog-core/model-catalog-refs": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-refs.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-normalize": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-types": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-types.d.ts",
+  ],
   "@openclaw/model-catalog-core/provider-id": [
     "../dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
   ],
@@ -107,6 +116,48 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/media-generation-core/*": [
     "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts",
   ],
+  "@openclaw/media-core": ["../dist/plugin-sdk/packages/media-core/src/index.d.ts"],
+  "@openclaw/media-core/base64": ["../dist/plugin-sdk/packages/media-core/src/base64.d.ts"],
+  "@openclaw/media-core/constants": ["../dist/plugin-sdk/packages/media-core/src/constants.d.ts"],
+  "@openclaw/media-core/content-length": [
+    "../dist/plugin-sdk/packages/media-core/src/content-length.d.ts",
+  ],
+  "@openclaw/media-core/file-name": ["../dist/plugin-sdk/packages/media-core/src/file-name.d.ts"],
+  "@openclaw/media-core/inbound-path-policy": [
+    "../dist/plugin-sdk/packages/media-core/src/inbound-path-policy.d.ts",
+  ],
+  "@openclaw/media-core/inline-image-data-url": [
+    "../dist/plugin-sdk/packages/media-core/src/inline-image-data-url.d.ts",
+  ],
+  "@openclaw/media-core/media-source-url": [
+    "../dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts",
+  ],
+  "@openclaw/media-core/mime": ["../dist/plugin-sdk/packages/media-core/src/mime.d.ts"],
+  "@openclaw/media-core/read-byte-stream-with-limit": [
+    "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  ],
+  "@openclaw/media-core/read-response-with-limit": [
+    "../dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts",
+  ],
+  "@openclaw/media-core/*": ["../dist/plugin-sdk/packages/media-core/src/*.d.ts"],
+  "@openclaw/normalization-core/record-coerce": [
+    "../dist/plugin-sdk/packages/normalization-core/src/record-coerce.d.ts",
+  ],
+  "@openclaw/normalization-core/string-coerce": [
+    "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts",
+  ],
+  "@openclaw/normalization-core/*": ["../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"],
+  "@openclaw/acp-core": ["../dist/plugin-sdk/packages/acp-core/src/index.d.ts"],
+  "@openclaw/acp-core/normalize-text": [
+    "../dist/plugin-sdk/packages/acp-core/src/normalize-text.d.ts",
+  ],
+  "@openclaw/acp-core/record-shared": [
+    "../dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts",
+  ],
+  "@openclaw/acp-core/runtime/types": [
+    "../dist/plugin-sdk/packages/acp-core/src/runtime/types.d.ts",
+  ],
+  "@openclaw/acp-core/*": ["../dist/plugin-sdk/packages/acp-core/src/*.d.ts"],
   "@openclaw/terminal-core": ["../dist/plugin-sdk/packages/terminal-core/src/index.d.ts"],
   "@openclaw/terminal-core/ansi": ["../dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts"],
   "@openclaw/terminal-core/decorative-emoji": [
@@ -219,9 +270,8 @@ type ExtensionPackageBoundaryPackageJson = {
   devDependencies?: Record<string, string>;
 };
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Boundary helper lets callers ascribe JSON file shape.
-function readJsonFile<T>(filePath: string): T {
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
+function readJsonFile(filePath: string): unknown {
+  return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
 function collectBundledExtensionIds(rootDir = resolve(".")): string[] {
@@ -243,18 +293,18 @@ export function readExtensionPackageBoundaryTsconfig(
   extensionId: string,
   rootDir = resolve("."),
 ): ExtensionPackageBoundaryTsConfigJson {
-  return readJsonFile<ExtensionPackageBoundaryTsConfigJson>(
+  return readJsonFile(
     resolveExtensionTsconfigPath(extensionId, rootDir),
-  );
+  ) as ExtensionPackageBoundaryTsConfigJson;
 }
 
 export function readExtensionPackageBoundaryPackageJson(
   extensionId: string,
   rootDir = resolve("."),
 ): ExtensionPackageBoundaryPackageJson {
-  return readJsonFile<ExtensionPackageBoundaryPackageJson>(
+  return readJsonFile(
     resolveExtensionPackageJsonPath(extensionId, rootDir),
-  );
+  ) as ExtensionPackageBoundaryPackageJson;
 }
 
 export function isOptInExtensionPackageBoundaryTsconfig(

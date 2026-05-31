@@ -1,11 +1,11 @@
-import { sanitizeAgentId } from "../routing/session-key.js";
-import { timestampMsToIsoString } from "../shared/number-coercion.js";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,
@@ -91,18 +91,16 @@ function coerceSchedule(schedule: UnknownRecord) {
 
   if (kind) {
     next.kind = kind;
-  } else {
-    if (
-      typeof schedule.atMs === "number" ||
-      typeof schedule.at === "string" ||
-      typeof schedule.atMs === "string"
-    ) {
-      next.kind = "at";
-    } else if (everyMs !== undefined) {
-      next.kind = "every";
-    } else if (normalizedExpr) {
-      next.kind = "cron";
-    }
+  } else if (
+    typeof schedule.atMs === "number" ||
+    typeof schedule.at === "string" ||
+    typeof schedule.atMs === "string"
+  ) {
+    next.kind = "at";
+  } else if (everyMs !== undefined) {
+    next.kind = "every";
+  } else if (normalizedExpr) {
+    next.kind = "cron";
   }
 
   const parsedAtIso = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
@@ -318,7 +316,33 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("accountId" in next) {
     delete next.accountId;
   }
+  if ("completionDestination" in next) {
+    if (next.completionDestination === null) {
+      next.completionDestination = null;
+    } else {
+      const completionDestination = isRecord(next.completionDestination)
+        ? coerceCompletionDestination(next.completionDestination)
+        : null;
+      if (completionDestination) {
+        next.completionDestination = completionDestination;
+      } else {
+        delete next.completionDestination;
+      }
+    }
+  }
   return next;
+}
+
+function coerceCompletionDestination(value: UnknownRecord) {
+  const mode = normalizeOptionalLowercaseString(value.mode);
+  const to = normalizeOptionalString(value.to);
+  if (mode !== "webhook") {
+    return null;
+  }
+  return {
+    mode,
+    ...(to ? { to } : {}),
+  } satisfies UnknownRecord;
 }
 
 function inferTopLevelPayload(next: UnknownRecord) {

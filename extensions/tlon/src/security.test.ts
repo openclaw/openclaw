@@ -226,8 +226,7 @@ describe("Security: Bot Mention Detection", () => {
     it("handles empty/null inputs safely", () => {
       expect(isBotMentioned("", botShip)).toBe(false);
       expect(isBotMentioned("test", "")).toBe(false);
-      // @ts-expect-error testing null input
-      expect(isBotMentioned(null, botShip)).toBe(false);
+      expect(isBotMentioned(null as unknown as string, botShip)).toBe(false);
     });
 
     it("requires word boundary for nickname", () => {

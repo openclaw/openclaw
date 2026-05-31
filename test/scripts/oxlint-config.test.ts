@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 type OxlintConfig = {
   ignorePatterns?: string[];
+  overrides?: Array<{ files?: string[]; rules?: Record<string, unknown> }>;
   rules?: Record<string, unknown>;
 };
 
@@ -22,24 +23,37 @@ const ZERO_BASELINE_RULES = [
   "eslint/no-sequences",
   "eslint/no-self-compare",
   "eslint/no-var",
+  "eslint/no-param-reassign",
+  "eslint/no-implicit-coercion",
+  "eslint/no-useless-rename",
+  "eslint/no-useless-return",
   "eslint/no-new-wrappers",
   "eslint/no-else-return",
+  "eslint/no-lonely-if",
   "eslint/no-case-declarations",
+  "eslint/object-shorthand",
   "eslint/prefer-exponentiation-operator",
+  "eslint/prefer-const",
   "eslint/prefer-numeric-literals",
+  "eslint/prefer-object-has-own",
   "eslint/radix",
   "eslint/unicode-bom",
   "eslint/yoda",
   "import/no-absolute-path",
+  "import/first",
   "import/no-empty-named-blocks",
+  "import/no-duplicates",
   "import/no-self-import",
   "node/no-exports-assign",
   "promise/no-new-statics",
   "typescript/adjacent-overload-signatures",
   "typescript/ban-tslint-comment",
+  "typescript/no-import-type-side-effects",
+  "typescript/no-inferrable-types",
   "typescript/no-non-null-asserted-nullish-coalescing",
   "typescript/no-unnecessary-qualifier",
   "typescript/prefer-find",
+  "typescript/prefer-for-of",
   "typescript/prefer-function-type",
   "typescript/prefer-includes",
   "typescript/prefer-reduce-type-parameter",
@@ -52,7 +66,10 @@ const ZERO_BASELINE_RULES = [
   "unicorn/no-negation-in-equality-check",
   "unicorn/no-new-buffer",
   "unicorn/no-typeof-undefined",
+  "unicorn/no-unreadable-array-destructuring",
   "unicorn/no-useless-error-capture-stack-trace",
+  "unicorn/no-zero-fractions",
+  "unicorn/prefer-array-flat",
   "unicorn/prefer-array-some",
   "unicorn/prefer-dom-node-text-content",
   "unicorn/prefer-keyboard-event-key",
@@ -63,6 +80,8 @@ const ZERO_BASELINE_RULES = [
   "unicorn/prefer-optional-catch-binding",
   "unicorn/prefer-prototype-methods",
   "unicorn/prefer-regexp-test",
+  "unicorn/prefer-set-has",
+  "unicorn/prefer-structured-clone",
   "unicorn/prefer-string-slice",
   "unicorn/require-array-join-separator",
   "unicorn/require-number-to-fixed-digits-argument",
@@ -116,14 +135,51 @@ describe("oxlint config", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     const ignorePatterns = config.ignorePatterns ?? [];
 
-    expect(ignorePatterns).toContain("**/node_modules/**");
-    expect(ignorePatterns).toContain("**/dist/**");
-    expect(ignorePatterns).toContain("**/build/**");
-    expect(ignorePatterns).toContain("**/coverage/**");
-    expect(ignorePatterns).toContain("**/.cache/**");
-    expect(ignorePatterns).toContain("**/.openclaw-runtime-deps-copy-*/**");
-    expect(ignorePatterns).toContain("extensions/diffs/assets/viewer-runtime.js");
-    expect(ignorePatterns).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
+    expect(ignorePatterns).toEqual([
+      "dist/",
+      "dist-runtime/",
+      "docs/_layouts/",
+      "extensions/diffs/assets/viewer-runtime.js",
+      "extensions/diffs-language-pack/assets/viewer-runtime.js",
+      "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
+      "node_modules/",
+      "patches/",
+      "pnpm-lock.yaml",
+      "skills/**",
+      "src/auto-reply/reply/export-html/template.js",
+      "src/canvas-host/a2ui/a2ui.bundle.js",
+      "vendor/",
+      "**/.cache/**",
+      "**/.openclaw-runtime-deps-copy-*/**",
+      "**/build/**",
+      "**/coverage/**",
+      "**/dist/**",
+      "**/dist-runtime/**",
+      "**/node_modules/**",
+    ]);
+  });
+
+  it("keeps lint overrides limited to the explicit test-file carve-out", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+
+    expect(config.overrides).toEqual([
+      {
+        files: [
+          "**/*.test.ts",
+          "**/*.test.tsx",
+          "**/*.e2e.test.ts",
+          "**/*.live.test.ts",
+          "**/*test-harness.ts",
+          "**/*test-helpers.ts",
+          "**/*test-support.ts",
+        ],
+        rules: {
+          "typescript/no-explicit-any": "off",
+          "typescript/unbound-method": "off",
+          "eslint/no-unsafe-optional-chaining": "off",
+        },
+      },
+    ]);
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

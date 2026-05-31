@@ -199,11 +199,9 @@ function createOpenAIRealtimeTranscriptionSession(
         } else {
           config.onError?.(error);
         }
-        return;
       }
 
       default:
-        return;
     }
   };
 

@@ -1,6 +1,6 @@
+import { normalizeText } from "@openclaw/acp-core/normalize-text";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpIdentity, SessionAcpMeta } from "../../config/sessions/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { normalizeText } from "../normalize-text.js";
 import { isSessionIdentityPending, resolveSessionIdentityFromMeta } from "./session-identity.js";
 
 export const ACP_SESSION_IDENTITY_RENDERER_VERSION = "v1";
@@ -15,7 +15,7 @@ const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>(
       `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
   ],
   [
-    "openai-codex",
+    "openai",
     ({ agentSessionId }) =>
       `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
   ],

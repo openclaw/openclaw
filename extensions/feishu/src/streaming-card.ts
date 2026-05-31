@@ -342,7 +342,7 @@ export class FeishuStreamingSession {
       sequence: 1,
       currentText: "",
       sentText: "",
-      hasNote: !!options?.note,
+      hasNote: Boolean(options?.note),
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
@@ -535,8 +535,9 @@ export class FeishuStreamingSession {
     const text = finalText ?? pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
 
-    // Only send final update if content differs from what's already displayed
-    if (text && text !== this.state.sentText) {
+    // Only send final update if content differs from what's already displayed.
+    // An explicit empty final text clears a transient preview before closeout.
+    if ((text || finalText !== undefined) && text !== this.state.sentText) {
       const sent = text.startsWith(this.state.sentText)
         ? await this.updateCardContent(
             resolveStreamingCardAppendContent(this.state.sentText, text),
@@ -587,6 +588,32 @@ export class FeishuStreamingSession {
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
+  }
+
+  async discard(): Promise<void> {
+    if (!this.state || this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.clearFlushTimer();
+    await this.queue;
+
+    const currentState = this.state;
+    try {
+      const response = await this.client.im.message.delete({
+        path: { message_id: currentState.messageId },
+      });
+      if (response.code !== undefined && response.code !== 0) {
+        throw new Error(`Delete streaming card message failed: ${response.msg ?? response.code}`);
+      }
+      this.state = null;
+      this.pendingText = null;
+      this.log?.(`Discarded streaming card: cardId=${currentState.cardId}`);
+    } catch (error) {
+      this.log?.(`Discard failed: ${String(error)}`);
+      this.closed = false;
+      await this.close("");
+    }
   }
 
   isActive(): boolean {

@@ -1,10 +1,10 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "./device-auth.js";
-import { isRecord } from "./record-coerce.js";
 export type { DeviceAuthEntry, DeviceAuthStore } from "./device-auth.js";
 
 export type DeviceAuthStoreAdapter = {
@@ -43,6 +43,20 @@ function copyCanonicalDeviceAuthTokens(
     }
   }
   return out;
+}
+
+export function coerceDeviceAuthStore(value: unknown): DeviceAuthStore | null {
+  if (!isRecord(value) || value.version !== 1 || typeof value.deviceId !== "string") {
+    return null;
+  }
+  if (!isRecord(value.tokens)) {
+    return null;
+  }
+  return {
+    version: 1,
+    deviceId: value.deviceId,
+    tokens: copyCanonicalDeviceAuthTokens(value.tokens),
+  };
 }
 
 export function loadDeviceAuthTokenFromStore(params: {

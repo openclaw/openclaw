@@ -49,6 +49,7 @@ const rawSqliteAllowPathGroups = {
     "src/acp/event-ledger.ts",
     "src/agents/subagent-registry.store.ts",
     "src/cron/run-log.ts",
+    "src/cron/run-log/sqlite-store.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",
@@ -127,8 +128,7 @@ function collectImports(sourceFile) {
           const importedName = element.propertyName?.text ?? element.name.text;
           if (
             importedName === "executeSqliteQuerySync" ||
-            importedName === "executeSqliteQueryTakeFirstSync" ||
-            importedName === "executeSqliteQueryTakeFirstOrThrowSync"
+            importedName === "executeSqliteQueryTakeFirstSync"
           ) {
             syncHelperNames.add(element.name.text);
           }

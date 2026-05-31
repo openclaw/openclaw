@@ -152,7 +152,7 @@ export function describeOpenAICodexProviderAuthContract(
 
     async function expectStableFallbackProfile(params: { access: string; profileId: string }) {
       const { default: openAIPlugin } = await load();
-      const provider = requireProvider(await registerProviders(openAIPlugin), "openai-codex");
+      const provider = requireProvider(await registerProviders(openAIPlugin), "openai");
       loginOpenAICodexOAuthMock.mockResolvedValueOnce({
         refresh: "refresh-token",
         access: params.access,
@@ -171,7 +171,7 @@ export function describeOpenAICodexProviderAuthContract(
 
     async function getProvider() {
       const { default: openAIPlugin } = await load();
-      return requireProvider(await registerProviders(openAIPlugin), "openai-codex");
+      return requireProvider(await registerProviders(openAIPlugin), "openai");
     }
 
     it("keeps OAuth auth results provider-owned", async () => {
@@ -313,7 +313,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       };
 
       const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
-      const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+      const hadOwnIsTTY = Object.hasOwn(stdin, "isTTY");
       const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
       Object.defineProperty(stdin, "isTTY", {
         configurable: true,
@@ -444,7 +444,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
     it("supports non-interactive (GUI/RPC) auth contexts without a TTY", async () => {
       const provider = await getProvider();
       const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
-      const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+      const hadOwnIsTTY = Object.hasOwn(stdin, "isTTY");
       const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
       Object.defineProperty(stdin, "isTTY", {
         configurable: true,

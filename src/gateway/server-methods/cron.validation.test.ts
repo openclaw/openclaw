@@ -538,6 +538,53 @@ describe("cron method validation", () => {
     expectResponseError(respond, { messageIncludes: "belongs to telegram, not slack" });
   });
 
+  it("accepts completion webhook delivery patches and nullable clears", async () => {
+    const currentJob = createCronJob({
+      delivery: { mode: "announce" },
+    });
+
+    const addResult = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            mode: "announce",
+            completionDestination: {
+              mode: "webhook",
+              to: "https://example.invalid/cron-finished",
+            },
+          },
+        },
+      },
+      currentJob,
+    );
+
+    expect(addResult.context.cron.update).toHaveBeenCalled();
+    const addPatch = requireCronUpdatePatch(addResult.context);
+    const addDelivery = requireRecord(addPatch.delivery, "delivery");
+    expect(addDelivery.completionDestination).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+
+    const clearResult = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            completionDestination: null,
+          },
+        },
+      },
+      currentJob,
+    );
+
+    expect(clearResult.context.cron.update).toHaveBeenCalled();
+    const clearPatch = requireCronUpdatePatch(clearResult.context);
+    const clearDelivery = requireRecord(clearPatch.delivery, "delivery");
+    expect(clearDelivery.completionDestination).toBeNull();
+  });
+
   it("rejects underscored provider prefixes for a different explicit delivery channel", async () => {
     getRuntimeConfig.mockReturnValue({
       channels: {

@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
   listAcpSessionEntries,
@@ -12,7 +17,7 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
-import { readCronRunLogEntriesSync, resolveCronRunLogPath } from "../cron/run-log.js";
+import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
 import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
@@ -29,10 +34,6 @@ import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import {
   CODEX_NATIVE_SUBAGENT_STALE_ERROR,
   isChildlessCodexNativeSubagentTask,
@@ -83,7 +84,7 @@ let sweeper: NodeJS.Timeout | null = null;
 let deferredSweep: NodeJS.Timeout | null = null;
 let sweepInProgress = false;
 let configuredCronStorePath: string | undefined;
-let configuredCronRuntimeAuthoritative = false;
+let configuredRuntimeAuthoritative = false;
 
 type TaskRegistryMaintenanceRuntime = {
   listAcpSessionEntries: typeof listAcpSessionEntries;
@@ -100,6 +101,7 @@ type TaskRegistryMaintenanceRuntime = {
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
+  hasActiveAcpTurn: (sessionKey: string) => boolean;
   parseAgentSessionKey: typeof parseAgentSessionKey;
   hasActiveTaskForChildSessionKey: typeof hasActiveTaskForChildSessionKey;
   deleteTaskRecordById: typeof deleteTaskRecordById;
@@ -111,10 +113,9 @@ type TaskRegistryMaintenanceRuntime = {
   maybeDeliverTaskTerminalUpdate: typeof maybeDeliverTaskTerminalUpdate;
   resolveTaskForLookupToken: typeof resolveTaskForLookupToken;
   setTaskCleanupAfterById: typeof setTaskCleanupAfterById;
-  isCronRuntimeAuthoritative: () => boolean;
+  isRuntimeAuthoritative: () => boolean;
   resolveCronStorePath: typeof resolveCronStorePath;
   loadCronStoreSync: typeof loadCronStoreSync;
-  resolveCronRunLogPath: typeof resolveCronRunLogPath;
   readCronRunLogEntriesSync: typeof readCronRunLogEntriesSync;
 };
 
@@ -140,6 +141,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
+  hasActiveAcpTurn: isAcpTurnActive,
   parseAgentSessionKey,
   hasActiveTaskForChildSessionKey,
   deleteTaskRecordById,
@@ -151,10 +153,9 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   maybeDeliverTaskTerminalUpdate,
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
-  isCronRuntimeAuthoritative: () => configuredCronRuntimeAuthoritative,
+  isRuntimeAuthoritative: () => configuredRuntimeAuthoritative,
   resolveCronStorePath: () => configuredCronStorePath ?? resolveCronStorePath(),
   loadCronStoreSync,
-  resolveCronRunLogPath,
   readCronRunLogEntriesSync,
 };
 
@@ -174,6 +175,7 @@ export type TaskRegistryMaintenanceTaskDiagnostic = {
   status: TaskRecord["status"];
   decision: "retained" | "would_reconcile";
   reason:
+    | "acp_runtime_not_authoritative"
     | "active_cli_run"
     | "backing_session_missing"
     | "backing_session_present"
@@ -367,11 +369,8 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   }
   let entries: CronRunLogEntry[] = [];
   try {
-    const logPath = taskRegistryMaintenanceRuntime.resolveCronRunLogPath({
+    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync({
       storePath: context.storePath,
-      jobId,
-    });
-    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync(logPath, {
       jobId,
       limit: 5000,
     });
@@ -482,7 +481,7 @@ function hasCliRunIdentity(task: TaskRecord): boolean {
 
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
   if (task.runtime === "cron") {
-    if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
+    if (!taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
       return true;
     }
     const jobId = task.sourceId?.trim();
@@ -501,14 +500,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return !isChildlessCodexNativeSubagentTask(task);
   }
   if (task.runtime === "acp") {
-    const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
-      sessionKey: childSessionKey,
-      clone: false,
-    });
-    if (!acpEntry || acpEntry.storeReadFailed) {
+    // The live-turn map is process-local; only the gateway owns it. A standalone CLI
+    // maintenance run has an empty map, so stay conservative there and never reclaim.
+    if (!taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
       return true;
     }
-    return Boolean(acpEntry.entry);
+    // The persisted entry survives a crash, so only a live in-process turn proves the ACP run is alive.
+    return taskRegistryMaintenanceRuntime.hasActiveAcpTurn(childSessionKey);
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
     if (task.runtime === "cli") {
@@ -1019,11 +1017,11 @@ function explainActiveTaskRetention(params: {
   if (!hasBackingSession(params.task, params.context)) {
     return { decision: "would_reconcile", reason: "backing_session_missing" };
   }
-  if (
-    params.task.runtime === "cron" &&
-    !taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()
-  ) {
+  if (params.task.runtime === "cron" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
     return { decision: "retained", reason: "cron_runtime_not_authoritative" };
+  }
+  if (params.task.runtime === "acp" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
+    return { decision: "retained", reason: "acp_runtime_not_authoritative" };
   }
   if (params.task.runtime === "cli" && hasActiveCliRun(params.task)) {
     return { decision: "retained", reason: "active_cli_run" };
@@ -1237,16 +1235,16 @@ export function setTaskRegistryMaintenanceRuntimeForTests(
 export function resetTaskRegistryMaintenanceRuntimeForTests(): void {
   taskRegistryMaintenanceRuntime = defaultTaskRegistryMaintenanceRuntime;
   configuredCronStorePath = undefined;
-  configuredCronRuntimeAuthoritative = false;
+  configuredRuntimeAuthoritative = false;
 }
 
 export function configureTaskRegistryMaintenance(options: {
   cronStorePath?: string;
-  cronRuntimeAuthoritative?: boolean;
+  runtimeAuthoritative?: boolean;
 }): void {
   configuredCronStorePath = options.cronStorePath?.trim() || undefined;
-  if (options.cronRuntimeAuthoritative !== undefined) {
-    configuredCronRuntimeAuthoritative = options.cronRuntimeAuthoritative;
+  if (options.runtimeAuthoritative !== undefined) {
+    configuredRuntimeAuthoritative = options.runtimeAuthoritative;
   }
 }
 

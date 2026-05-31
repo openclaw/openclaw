@@ -1,11 +1,11 @@
-import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-import { fetchWithTimeoutGuarded } from "../media-understanding/shared.js";
-import { canonicalizeBase64 } from "../media/base64.js";
-import { isRecord } from "../shared/record-coerce.js";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { fetchWithTimeoutGuarded } from "../media-understanding/shared.js";
 import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./types.js";
 
 const DEFAULT_IMAGE_MIME_TYPE = "image/png";

@@ -3,6 +3,7 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   asSafeIntegerInRange,
   resolveExpiresAtMsFromDurationOrEpoch,
+  resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
@@ -259,7 +260,7 @@ export async function loginMiniMaxPortalOAuth(params: {
     // Fall back to manual copy/paste if browser open fails.
   }
 
-  let pollIntervalMs = oauth.interval ? oauth.interval : 2000;
+  let pollIntervalMs = resolvePositiveTimerTimeoutMs(oauth.interval, 2000);
   // The authorization endpoint returns an absolute millisecond deadline.
   const expireTimeMs = oauth.expired_in;
 
@@ -279,7 +280,11 @@ export async function loginMiniMaxPortalOAuth(params: {
       throw new Error(result.message);
     }
 
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    const remainingMs = Math.max(0, expireTimeMs - Date.now());
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
     pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 

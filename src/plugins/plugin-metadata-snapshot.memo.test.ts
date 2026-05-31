@@ -244,6 +244,30 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
   });
 
+  it("skips persisted registry filesystem fingerprints after a process memo hit", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    const first = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    const statSpy = vi.spyOn(fs, "statSync");
+    const readdirSpy = vi.spyOn(fs, "readdirSync");
+    try {
+      const second = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+      expect(second).toBe(first);
+      expect(statSpy).not.toHaveBeenCalled();
+      expect(readdirSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("clears the process memo at plugin metadata lifecycle boundaries", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
@@ -260,6 +284,37 @@ describe("loadPluginMetadataSnapshot process memo", () => {
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps scoped and unscoped metadata snapshots in separate memo slots", () => {
+    const index = makeIndex();
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: index,
+      diagnostics: [],
+    });
+
+    const scoped = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      index,
+      pluginIds: ["demo"],
+    });
+    const unscoped = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      index,
+    });
+
+    expect(scoped.pluginIds).toEqual(["demo"]);
+    expect(unscoped.pluginIds).toBeUndefined();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
+      pluginIds: ["demo"],
+    });
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[1]?.[0]).not.toHaveProperty(
+      "pluginIds",
+    );
   });
 
   it("keeps hot persisted snapshots for alternating config callers", () => {
@@ -358,6 +413,49 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     ).toBe(snapshot);
     expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse an unscoped current snapshot for a scoped resolver request", () => {
+    const index = makeIndex("demo");
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "runtime",
+      snapshot: index,
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      ({ pluginIds }: { pluginIds?: readonly string[] }) => ({
+        ...makeManifestRegistry(pluginIds?.[0] ?? "demo"),
+        plugins: pluginIds?.map((pluginId) => makeManifestRegistry(pluginId).plugins[0]) ?? [
+          makeManifestRegistry("demo").plugins[0],
+        ],
+      }),
+    );
+    const unscoped = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      index,
+    });
+    setCurrentPluginMetadataSnapshot(unscoped, {
+      config: {},
+      env: {},
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockClear();
+
+    const scoped = resolvePluginMetadataSnapshot({
+      config: {},
+      env: {},
+      index,
+      pluginIdScope: {
+        key: "demo-only",
+        resolve: () => ["demo"],
+      },
+    });
+
+    expect(scoped).not.toBe(unscoped);
+    expect(scoped.pluginIds).toEqual(["demo"]);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginIds: ["demo"] }),
+    );
   });
 
   it("does not scan persisted registry files when the caller provides an index", () => {
@@ -481,7 +579,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
-  it("refreshes when the persisted registry file changes", () => {
+  it("keeps persisted registry snapshots process-stable until lifecycle clear", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir, 1);
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
@@ -492,6 +590,11 @@ describe("loadPluginMetadataSnapshot process memo", () => {
 
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
     touchPersistedIndex(stateDir, 22);
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+
+    clearPluginMetadataLifecycleCaches();
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
