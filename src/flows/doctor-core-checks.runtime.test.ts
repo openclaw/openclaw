@@ -699,6 +699,8 @@ describe("doctor provider catalog projection checks", () => {
         auth: [],
         staticCatalog: {
           order: "simple",
+          // Awaiting a promise resolved with a proxy reads "then", so revoked
+          // catalog results fail at the hook boundary before result key checks.
           run: async () => proxy,
         },
       },
