@@ -1,6 +1,3 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
-import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import {
   createIdentityFromHandleEvent,
   createIdentityFromStatus,
@@ -8,8 +5,15 @@ import {
   mergeSessionIdentity,
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
-} from "../runtime/session-identity.js";
-import type { AcpRuntime, AcpRuntimeHandle, AcpRuntimeStatus } from "../runtime/types.js";
+} from "@openclaw/acp-core/runtime/session-identity";
+import type {
+  AcpRuntime,
+  AcpRuntimeHandle,
+  AcpRuntimeStatus,
+} from "@openclaw/acp-core/runtime/types";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
+import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { SessionAcpMeta, SessionEntry } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 

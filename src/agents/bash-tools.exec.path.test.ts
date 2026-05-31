@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
@@ -136,6 +136,13 @@ describe("exec PATH login shell merge", () => {
     ({ createExecTool } = await import("./bash-tools.exec.js"));
   });
 
+  afterAll(() => {
+    vi.doUnmock("../infra/shell-env.js");
+    vi.doUnmock("../infra/exec-approvals.js");
+    vi.doUnmock("../process/supervisor/index.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     envSnapshot = captureEnv(["PATH", "SHELL"]);
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
@@ -146,6 +153,28 @@ describe("exec PATH login shell merge", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+  });
+
+  it("strips malformed XML arg-value suffixes from exec command and routing options", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-xml-"));
+    try {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const malformedArgs = {
+        command: "echo ok</arg_value>>",
+        workdir: `${tempDir}</arg_value>>`,
+        host: "gateway</arg_value>>",
+        security: "full</arg_value>>",
+        ask: "off</arg_value>>",
+        node: "ignored-node</arg_value>>",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      } as unknown as Parameters<typeof tool.execute>[1];
+      const result = await tool.execute("call-xml-suffix", malformedArgs);
+      const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+      expect(value).toBe("ok");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("merges login-shell PATH for host=gateway", async () => {

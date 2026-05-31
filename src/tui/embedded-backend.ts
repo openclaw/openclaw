@@ -539,7 +539,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    return { ok: true, key: result.key, entry: result.entry };
+    return { ok: true as const, key: result.key, entry: result.entry };
   }
 
   async getGatewayStatus() {

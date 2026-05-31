@@ -772,6 +772,28 @@ function isDreamingSessionStoreKey(sessionKey: string): boolean {
   return sessionSegment.startsWith(DREAMING_SESSION_KEY_PREFIX);
 }
 
+// A dreaming store row is reclaimable once its narrative run is finished. The
+// happy path deletes the session in `finally`, but when `deleteSession` throws
+// (e.g. request-scoped subagent runtime) the row is left behind referencing a
+// still-present transcript, so the missing-transcript check alone never reaps
+// it and the session lingers in the sidebar forever (issue #88322). Reclaim a
+// dreaming row when its transcript is missing, or when the transcript has aged
+// past the orphan threshold (a live narrative refreshes its transcript well
+// within that window, so active runs are never reaped).
+async function isReclaimableDreamingStoreEntry(
+  normalizedSessionFile: string | null,
+): Promise<boolean> {
+  if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+    return true;
+  }
+  try {
+    const stat = await fs.stat(normalizedSessionFile);
+    return Date.now() - stat.mtimeMs >= DREAMING_ORPHAN_MIN_AGE_MS;
+  } catch {
+    return true;
+  }
+}
+
 async function normalizeSessionEntryPathForComparison(params: {
   sessionsDir: string;
   entry: { sessionFile?: string; sessionId?: string } | undefined;
@@ -837,7 +859,7 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (!isDreamingSessionStoreKey(key)) {
         continue;
       }
-      if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+      if (await isReclaimableDreamingStoreEntry(normalizedSessionFile)) {
         needsStoreUpdate = true;
       }
     }
@@ -851,15 +873,21 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
             sessionsDir,
             entry,
           });
-          if (normalizedSessionFile) {
-            referencedSessionFiles.add(normalizedSessionFile);
-          }
           if (!isDreamingSessionStoreKey(key)) {
+            if (normalizedSessionFile) {
+              referencedSessionFiles.add(normalizedSessionFile);
+            }
             continue;
           }
-          if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
+          if (await isReclaimableDreamingStoreEntry(normalizedSessionFile)) {
+            // Drop the row and leave the transcript unreferenced so the orphan
+            // transcript pass below archives the aged-out (or missing) file.
             delete lockedStore[key];
             prunedForAgent += 1;
+            continue;
+          }
+          if (normalizedSessionFile) {
+            referencedSessionFiles.add(normalizedSessionFile);
           }
         }
         return prunedForAgent;

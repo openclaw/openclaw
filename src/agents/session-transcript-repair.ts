@@ -2,7 +2,7 @@ import {
   hasNonEmptyString as hasNonEmptyStringField,
   normalizeOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "./runtime/index.js";
 import {
   extractToolCallsFromAssistant,
@@ -445,6 +445,29 @@ function assistantHasToolCalls(message: AgentMessage): boolean {
   return extractToolCallsFromAssistant(message).length > 0;
 }
 
+function findLaterMatchingToolResult(params: {
+  messages: AgentMessage[];
+  startIndex: number;
+  toolCallId: string;
+  toolName?: string;
+  toolCalls: Array<{ id: string; name?: string }>;
+  seenToolResultIds: Set<string>;
+}): Extract<AgentMessage, { role: "toolResult" }> | undefined {
+  for (let index = params.startIndex; index < params.messages.length; index += 1) {
+    const candidate = params.messages[index];
+    if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
+      continue;
+    }
+    const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
+    const id = extractToolResultId(normalizedLegacyResult);
+    if (!id || id !== params.toolCallId || params.seenToolResultIds.has(id)) {
+      continue;
+    }
+    return normalizeToolResultName(normalizedLegacyResult, params.toolName);
+  }
+  return undefined;
+}
+
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
@@ -540,12 +563,12 @@ export function repairToolUseResultPairing(
           toolCalls,
         );
         const id = extractToolResultId(toolResult);
+        if (id && seenToolResultIds.has(id)) {
+          droppedDuplicateCount += 1;
+          changed = true;
+          continue;
+        }
         if (id && toolCallIds.has(id)) {
-          if (seenToolResultIds.has(id)) {
-            droppedDuplicateCount += 1;
-            changed = true;
-            continue;
-          }
           if (toolResult !== next) {
             changed = true;
           }
@@ -612,14 +635,28 @@ export function repairToolUseResultPairing(
       if (existing) {
         pushToolResult(existing);
       } else {
-        const missing = makeMissingToolResult({
+        const laterResult = findLaterMatchingToolResult({
+          messages,
+          startIndex: j,
           toolCallId: call.id,
           toolName: call.name,
-          text: options?.missingToolResultText,
+          toolCalls,
+          seenToolResultIds,
         });
-        added.push(missing);
-        changed = true;
-        pushToolResult(missing);
+        if (laterResult) {
+          moved = true;
+          changed = true;
+          pushToolResult(laterResult);
+        } else {
+          const missing = makeMissingToolResult({
+            toolCallId: call.id,
+            toolName: call.name,
+            text: options?.missingToolResultText,
+          });
+          added.push(missing);
+          changed = true;
+          pushToolResult(missing);
+        }
       }
     }
 

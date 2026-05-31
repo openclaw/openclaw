@@ -587,17 +587,13 @@ function resolveThinkingLevelOptionsForSession(
   if (session?.thinkingLevels?.length) {
     return session.thinkingLevels;
   }
-  const sessionModelMatchesDefaults =
-    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
-    (!session?.model || session.model === defaults?.model);
-  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
+  const matchesDefaults = sessionModelMatchesDefaults(session, defaults);
+  if (matchesDefaults && defaults?.thinkingLevels?.length) {
     return defaults.thinkingLevels;
   }
   const labels =
     (session?.thinkingOptions?.length ? session.thinkingOptions : null) ??
-    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
-      ? defaults.thinkingOptions
-      : null) ??
+    (matchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null) ??
     formatThinkingLevels(
       session?.modelProvider ?? defaults?.modelProvider,
       session?.model ?? defaults?.model,
@@ -606,6 +602,16 @@ function resolveThinkingLevelOptionsForSession(
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
     label,
   }));
+}
+
+function sessionModelMatchesDefaults(
+  session: GatewaySessionRow | undefined,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
+    (!session?.model || session.model === defaults?.model)
+  );
 }
 
 async function loadCurrentSession(
@@ -691,7 +697,7 @@ function resolveCurrentThinkingLevel(
   if (session?.thinkingDefault) {
     return session.thinkingDefault;
   }
-  if (defaults?.thinkingDefault) {
+  if ((!session || sessionModelMatchesDefaults(session, defaults)) && defaults?.thinkingDefault) {
     return defaults.thinkingDefault;
   }
   const provider = session?.modelProvider ?? defaults?.modelProvider;

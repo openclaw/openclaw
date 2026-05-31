@@ -2,10 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
-import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 
@@ -516,7 +516,7 @@ function isTrustedSessionFileState(
   fingerprint: SessionFileFingerprint,
 ): boolean {
   const trusted = trustedSessionFileStates.get(sessionFileKey);
-  return !!trusted && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
+  return trusted !== undefined && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
 }
 
 async function readSessionFileFingerprint(sessionFile: string): Promise<SessionFileFingerprint> {
@@ -651,7 +651,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       return { lock: await acquireLock(), owned: true };
     } catch (err) {
-      if (isSessionWriteLockTimeoutError(err)) {
+      if (isSessionWriteLockAcquireError(err)) {
         takeoverDetected = true;
       }
       throw err;
@@ -865,7 +865,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     try {
       return await acquireLock();
     } catch (err) {
-      if (isSessionWriteLockTimeoutError(err)) {
+      if (isSessionWriteLockAcquireError(err)) {
         takeoverDetected = true;
         return undefined;
       }

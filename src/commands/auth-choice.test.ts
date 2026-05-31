@@ -751,19 +751,19 @@ describe("applyAuthChoice", () => {
     const spy = vi
       .spyOn(providerAuthChoices, "resolveManifestDeprecatedProviderAuthChoice")
       .mockReturnValueOnce({
-        choiceId: "openai-codex",
+        choiceId: "openai",
       } as never);
     try {
       await expect(
         applyAuthChoice({
-          authChoice: "openai-codex-import",
+          authChoice: "openai-chatgpt-import",
           config: {},
           prompter: createPrompter({}),
           runtime: createExitThrowingRuntime(),
           setDefaultModel: true,
         }),
       ).rejects.toThrow(
-        'Auth choice "openai-codex-import" is no longer supported. Use "openai-codex" instead, or run openclaw onboard to choose interactively.',
+        'Auth choice "openai-chatgpt-import" is no longer supported. Use "openai" instead, or run openclaw onboard to choose interactively.',
       );
     } finally {
       spy.mockRestore();

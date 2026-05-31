@@ -193,6 +193,52 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.moved).toBe(true);
   });
 
+  it("moves late real results ahead of newer assistant tool calls instead of synthesizing", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_exec", name: "exec", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_read",
+        toolName: "read",
+        content: [{ type: "text", text: "real read output" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_exec",
+        toolName: "exec",
+        content: [{ type: "text", text: "real exec output" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+    ]);
+    expect((result.messages[1] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe(
+      "call_read",
+    );
+    expect((result.messages[1] as { isError?: boolean }).isError).toBe(false);
+    expect((result.messages[3] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe(
+      "call_exec",
+    );
+    expect(JSON.stringify(result.messages)).not.toContain("missing tool result");
+    expect(result.moved).toBe(true);
+  });
+
   it("repairs blank tool result names from matching tool calls", () => {
     const input = castAgentMessages([
       {

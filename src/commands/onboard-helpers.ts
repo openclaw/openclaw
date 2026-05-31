@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -25,8 +28,6 @@ import {
 import { detectBinary } from "../infra/detect-binary.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
@@ -339,7 +340,7 @@ export async function waitForGatewayReachable(params: {
   pollMs?: number;
 }): Promise<{ ok: boolean; detail?: string }> {
   const deadlineMs = params.deadlineMs ?? 15_000;
-  const pollMs = params.pollMs ?? 400;
+  const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 400, 400, 0);
   const probeTimeoutMs = params.probeTimeoutMs ?? 1500;
   const startedAt = Date.now();
   let lastDetail: string | undefined;
@@ -355,7 +356,11 @@ export async function waitForGatewayReachable(params: {
       return probe;
     }
     lastDetail = probe.detail;
-    await sleep(pollMs);
+    const remainingMs = deadlineMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(pollMs, remainingMs));
   }
 
   return { ok: false, detail: lastDetail };

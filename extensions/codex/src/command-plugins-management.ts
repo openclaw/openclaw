@@ -1,3 +1,4 @@
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
@@ -33,6 +34,24 @@ export type CodexPluginsConfigBlock = {
 const POLICY_REFRESH_HINT =
   "New Codex conversations pick this up automatically. Use /new or /reset to refresh the current one.";
 
+type CodexPickerButton = { label: string; command: string };
+
+function buildPickerPresentation(title: string, prompt: string, buttons: CodexPickerButton[]) {
+  return {
+    title,
+    blocks: [
+      { type: "text", text: prompt },
+      {
+        type: "buttons",
+        buttons: buttons.map((button) => ({
+          label: button.label,
+          value: button.command,
+        })),
+      },
+    ],
+  } satisfies MessagePresentation;
+}
+
 export async function handleCodexPluginsSubcommand(
   ctx: PluginCommandContext,
   rest: string[],
@@ -40,6 +59,20 @@ export async function handleCodexPluginsSubcommand(
 ): Promise<PluginCommandResult> {
   const [verb = "list", ...args] = rest;
   const normalized = verb.toLowerCase();
+
+  if (normalized === "menu") {
+    if (args.length > 0) {
+      return { text: "Usage: /codex plugins menu" };
+    }
+    return buildPluginsMenuReply();
+  }
+
+  if (normalized === "help") {
+    if (args.length > 0) {
+      return { text: "Usage: /codex plugins help" };
+    }
+    return { text: buildPluginsHelp() };
+  }
 
   if (normalized === "list") {
     if (args.length > 0) {
@@ -53,6 +86,10 @@ export async function handleCodexPluginsSubcommand(
 
   const target = args[0];
   if (normalized === "enable" || normalized === "disable") {
+    if (args.length === 0) {
+      const current = await io.readConfig();
+      return buildPluginNamePickerReply(normalized, current);
+    }
     if (!target || args.length > 1) {
       return { text: `Usage: /codex plugins ${normalized} <name>` };
     }
@@ -82,6 +119,98 @@ export async function handleCodexPluginsSubcommand(
 
   return {
     text: `Unknown /codex plugins subcommand: ${formatCodexDisplayText(verb)}\n\n${buildPluginsHelp()}`,
+  };
+}
+
+function buildPluginsMenuReply(): PluginCommandResult {
+  const buttons: CodexPickerButton[] = [
+    { label: "list", command: "/codex plugins list" },
+    { label: "enable", command: "/codex plugins enable" },
+    { label: "disable", command: "/codex plugins disable" },
+    { label: "help", command: "/codex plugins help" },
+    { label: "back", command: "/codex" },
+  ];
+  const text = [
+    "Codex sub-plugins. Pick a sub-action or type:",
+    "",
+    "  1. /codex plugins list",
+    "  2. /codex plugins enable",
+    "  3. /codex plugins disable",
+    "  4. /codex plugins help",
+    "",
+    "Type '/codex' to go back to the main menu.",
+  ].join("\n");
+  return {
+    text,
+    presentation: buildPickerPresentation(
+      "Codex sub-plugins",
+      "Pick a Codex sub-plugin action:",
+      buttons,
+    ),
+  };
+}
+
+function buildPluginNamePickerReply(
+  verb: "enable" | "disable",
+  current: CodexPluginsConfigBlock,
+): PluginCommandResult {
+  const globalEnabled = current.enabled === true;
+  const entries = Object.entries(current.plugins ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const eligible = entries.filter(([, entry]) => {
+    const effectivelyEnabled = globalEnabled && entry.enabled !== false;
+    return verb === "disable" ? effectivelyEnabled : !effectivelyEnabled;
+  });
+
+  if (eligible.length === 0) {
+    const action = verb === "enable" ? "disabled" : "enabled";
+    return {
+      text: [
+        `No configured ${action} Codex sub-plugins found.`,
+        "",
+        "Type '/codex plugins list' to inspect configured sub-plugins.",
+        "Type '/codex plugins menu' to go back to the plugins menu.",
+      ].join("\n"),
+      presentation: buildPickerPresentation(
+        "Codex sub-plugins",
+        "Pick another Codex sub-plugin action:",
+        [
+          { label: "list", command: "/codex plugins list" },
+          { label: "back", command: "/codex plugins menu" },
+        ],
+      ),
+    };
+  }
+
+  const buttons: CodexPickerButton[] = [
+    ...eligible.map(([key]) => ({
+      label: formatCodexDisplayText(key),
+      command: `/codex plugins ${verb} ${key}`,
+    })),
+    { label: "back", command: "/codex plugins menu" },
+  ];
+  const text = [
+    `Codex sub-plugins to ${verb}. Pick one or type:`,
+    "",
+    ...eligible.map(([key], index) => `  ${index + 1}. /codex plugins ${verb} ${key}`),
+    "",
+    ...(verb === "enable" && !globalEnabled
+      ? [
+          "Global codexPlugins.enabled is off; enabling one configured sub-plugin turns it on.",
+          "",
+        ]
+      : []),
+    "Type '/codex plugins menu' to go back to the plugins menu.",
+  ].join("\n");
+
+  return {
+    text,
+    presentation: buildPickerPresentation(
+      "Codex sub-plugins",
+      `Pick a Codex sub-plugin to ${verb}:`,
+      buttons,
+    ),
   };
 }
 

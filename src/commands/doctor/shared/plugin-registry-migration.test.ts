@@ -247,6 +247,38 @@ describe("plugin registry install migration", () => {
     expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
   });
 
+  it("keeps legacy OpenAI Codex plugin references doctor-only", async () => {
+    const stateDir = makeTempDir();
+    const openaiDir = path.join(stateDir, "plugins", "openai");
+    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
+    fs.mkdirSync(openaiDir, { recursive: true });
+    fs.mkdirSync(unusedBundledDir, { recursive: true });
+
+    const result = await migratePluginRegistryForInstall({
+      stateDir,
+      candidates: [
+        createCandidate(openaiDir, "openai", "bundled"),
+        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
+      ],
+      readConfig: async () => ({
+        plugins: {
+          entries: {
+            "openai-codex": {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      env: hermeticEnv(),
+    });
+
+    const current = requireMigratedIndex(result);
+    expect(current.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
+  });
+
   it("keeps bundled memory command plugins discoverable for first-run CLI registration", async () => {
     const stateDir = makeTempDir();
     const memoryDir = path.join(stateDir, "plugins", "memory-core");

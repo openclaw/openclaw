@@ -41,7 +41,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     config: params.nextConfig,
     env: process.env,
   });
-  let nextConfig = params.nextConfig;
+  const nextConfig = params.nextConfig;
   const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
   if (opts.secretInputMode && !requestedSecretInputMode) {
     runtime.error(

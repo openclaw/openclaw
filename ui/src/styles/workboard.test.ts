@@ -15,4 +15,13 @@ describe("workboard styles", () => {
     expect(css).toContain("grid-auto-columns: minmax(260px, 82vw);");
     expect(css).not.toContain("grid-template-columns: repeat(6");
   });
+
+  it("keeps the mini game scene framed for a 3d canvas and fallback board", () => {
+    const css = readWorkboardCss();
+
+    expect(css).toContain(".workboard-game__scene {\n  position: relative;");
+    expect(css).toContain("min-height: min(58vh, 430px);");
+    expect(css).toContain(".workboard-game__canvas {\n  position: absolute;");
+    expect(css).toContain("transform: perspective(720px) rotateX(58deg) rotateZ(-35deg);");
+  });
 });

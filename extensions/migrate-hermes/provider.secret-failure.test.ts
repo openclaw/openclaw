@@ -125,17 +125,15 @@ describe("Hermes migration provider secret write failures", () => {
         chatgpt_plan_type: "plus",
       },
     });
+    await writeFile(path.join(source, "auth.json"), "{}");
+    const opencodeAuthPath = path.join(root, ".local", "share", "opencode", "auth.json");
     await writeFile(
-      path.join(source, "auth.json"),
+      opencodeAuthPath,
       JSON.stringify({
-        providers: {
-          "openai-codex": {
-            last_refresh: new Date().toISOString(),
-            tokens: {
-              access_token: accessToken,
-              refresh_token: "refresh-fail-token",
-            },
-          },
+        openai: {
+          type: "oauth",
+          access: accessToken,
+          refresh: "refresh-fail-token",
         },
       }),
     );
@@ -155,7 +153,7 @@ describe("Hermes migration provider secret write failures", () => {
         id: "auth:openai",
         kind: "auth",
         action: "create",
-        source: path.join(source, "auth.json"),
+        source: opencodeAuthPath,
         target: `${path.join(stateDir, "agents", "main", "agent")}/auth-profiles.json#openai:account-acct_fail`,
         status: "error",
         sensitive: true,

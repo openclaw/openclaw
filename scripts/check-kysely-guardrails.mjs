@@ -39,6 +39,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-pragma.test-support.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-wal.ts",
+    "src/state/openclaw-agent-db.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
@@ -48,6 +49,7 @@ const rawSqliteAllowPathGroups = {
     "src/acp/event-ledger.ts",
     "src/agents/subagent-registry.store.ts",
     "src/cron/run-log.ts",
+    "src/cron/run-log/sqlite-store.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",
@@ -126,8 +128,7 @@ function collectImports(sourceFile) {
           const importedName = element.propertyName?.text ?? element.name.text;
           if (
             importedName === "executeSqliteQuerySync" ||
-            importedName === "executeSqliteQueryTakeFirstSync" ||
-            importedName === "executeSqliteQueryTakeFirstOrThrowSync"
+            importedName === "executeSqliteQueryTakeFirstSync"
           ) {
             syncHelperNames.add(element.name.text);
           }

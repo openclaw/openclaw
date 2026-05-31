@@ -83,6 +83,10 @@ describe("applyJobPatch", () => {
       to: "-100123",
       threadId: 42,
       accountId: "coordinator",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
     });
 
     applyJobPatch(job, {
@@ -93,8 +97,63 @@ describe("applyJobPatch", () => {
       mode: "webhook",
       to: "https://example.invalid/cron",
       bestEffort: undefined,
+      completionDestination: undefined,
       failureDestination: undefined,
     });
+  });
+
+  it("clears migrated completion webhook when disabling delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-disable-completion-webhook", {
+      mode: "announce",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
+    });
+
+    applyJobPatch(job, {
+      delivery: { mode: "none" },
+    });
+
+    expect(job.delivery?.mode).toBe("none");
+    expect(job.delivery?.completionDestination).toBeUndefined();
+  });
+
+  it("rejects completion webhook on disabled delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-disable-with-completion-webhook", {
+      mode: "announce",
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: {
+          mode: "none",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/legacy-completion",
+          },
+        },
+      }),
+    ).toThrow(
+      'cron completion destination webhook is only supported with delivery.mode="announce"',
+    );
+  });
+
+  it("clears migrated completion webhook while keeping announce delivery", () => {
+    const job = createIsolatedAgentTurnJob("job-clear-completion-webhook", {
+      mode: "announce",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
+    });
+
+    applyJobPatch(job, {
+      delivery: { completionDestination: null },
+    });
+
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.completionDestination).toBeUndefined();
   });
 
   it("clears webhook delivery targets when switching delivery to announce", () => {
@@ -777,29 +836,15 @@ describe("createJob delivery defaults", () => {
     });
     expect(job.delivery).toBeUndefined();
   });
-
-  it("uses legacy systemEvent message text without throwing", () => {
-    const state = createMockState(now, { defaultAgentId: "main" });
-    const job = createJob(state, {
-      name: "legacy system event",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", message: "legacy text" } as never,
-    });
-
-    expect(resolveJobPayloadTextForMain(job)).toBe("legacy text");
-  });
 });
 
 describe("recomputeNextRuns", () => {
-  it("backfills missing every anchorMs for legacy loaded jobs", () => {
+  it("backfills missing every anchorMs for loaded jobs", () => {
     const now = Date.parse("2026-03-01T12:00:00.000Z");
     const createdAtMs = now - 120_000;
     const job: CronJob = {
-      id: "legacy-every",
-      name: "legacy-every",
+      id: "loaded-every",
+      name: "loaded-every",
       enabled: true,
       createdAtMs,
       updatedAtMs: createdAtMs,

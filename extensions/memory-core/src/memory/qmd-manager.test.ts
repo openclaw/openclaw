@@ -84,12 +84,7 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
   return child;
 }
 
-function emitAndClose(
-  child: MockChild,
-  stream: "stdout" | "stderr",
-  data: string,
-  code: number = 0,
-) {
+function emitAndClose(child: MockChild, stream: "stdout" | "stderr", data: string, code = 0) {
   queueMicrotask(() => {
     child[stream].emit("data", data);
     child.closeWith(code);
@@ -3822,6 +3817,40 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("does not store qmd embed backoff when the process clock is invalid", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const { manager } = await createManager({ mode: "status" });
+    try {
+      (
+        manager as unknown as {
+          noteEmbedFailure: (reason: string, err: unknown) => void;
+        }
+      ).noteEmbedFailure("manual", new Error("embed failed"));
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    const status = manager.status() as { custom?: { qmd?: { embedBackoffUntil?: number | null } } };
+    expect(status.custom?.qmd?.embedBackoffUntil).toBeNull();
+    await manager.close();
+  });
+
   it("runs periodic embed maintenance even when regular update scheduling is disabled", async () => {
     vi.useFakeTimers();
     cfg = {
@@ -5150,6 +5179,94 @@ describe("QmdMemoryManager", () => {
       | undefined;
     const busyTimeout = row?.busy_timeout ?? row?.timeout;
     expect(busyTimeout).toBe(1000);
+    await manager.close();
+  });
+
+  it("uses the configured qmd timeout for status probes", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          limits: { timeoutMs: 6000 },
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let statusKill: Mock | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "status") {
+        const child = createMockChild({ autoClose: false });
+        statusKill = vi.fn();
+        child.kill = statusKill;
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    const probe = manager.probeVectorAvailability();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(statusKill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(probe).resolves.toBe(false);
+    expect(manager.status().vector).toEqual({
+      enabled: true,
+      available: false,
+      semanticAvailable: false,
+      loadError: expect.stringContaining("timed out after 6000ms"),
+    });
+    await manager.close();
+  });
+
+  it("exports valid session transcripts whose IDs contain checkpoint words", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          sessions: { enabled: true },
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: true,
+            waitForBootSync: true,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionsDir, "live-session.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "live" } })}\n`,
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "team.checkpoint.notes.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "notes" } })}\n`,
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "live-session.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      `${JSON.stringify({ type: "message", message: { role: "user", content: "checkpoint" } })}\n`,
+    );
+
+    const { manager } = await createManager({ mode: "full" });
+    const sessionExportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exported = (await fs.readdir(sessionExportDir)).toSorted();
+
+    expect(exported).toEqual(["live-session.md", "team.checkpoint.notes.md"]);
+    await expect(
+      fs.readFile(path.join(sessionExportDir, "team.checkpoint.notes.md"), "utf-8"),
+    ).resolves.toContain("notes");
     await manager.close();
   });
 

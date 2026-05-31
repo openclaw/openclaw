@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
@@ -72,11 +77,6 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  readStringValue,
-} from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -107,6 +107,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
@@ -149,6 +150,7 @@ function filterSessionStoreToConfiguredAgents(
       if (isConfiguredSessionKey(key)) {
         return true;
       }
+      // Keep spawned child sessions visible when their parent belongs to a configured agent.
       return (
         isConfiguredSessionKey(entry?.spawnedBy) || isConfiguredSessionKey(entry?.parentSessionKey)
       );
@@ -798,6 +800,7 @@ function resolveSessionMessageSubscriptionKey(params: {
     : params.canonicalKey === "global" && params.defaultAgentId
       ? normalizeAgentId(params.defaultAgentId)
       : undefined;
+  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
   return params.canonicalKey === "global" && agentId
     ? `agent:${agentId}:global`
     : params.canonicalKey;
@@ -922,6 +925,7 @@ async function interruptSessionRunIfActive(params: {
     abortEmbeddedAgentRun(params.sessionId);
   }
 
+  // Clear queued follow-up work for both requested aliases and the canonical session id.
   clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
 
   if (hasEmbeddedRun && params.sessionId) {
@@ -987,6 +991,7 @@ async function handleSessionSend(params: {
     return;
   }
   if (!entry?.sessionId && !params.interruptIfActive && isAgentMainSessionKey(cfg, canonicalKey)) {
+    // Sending to an empty agent main session should create it; steering still requires an active row.
     const created = await createAgentMainSessionForSend({
       req: params.req,
       canonicalKey,
@@ -1353,10 +1358,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     for (const key of keys) {
       try {
-        const storeTarget = resolveGatewaySessionStoreTarget({ cfg, key, scanLegacyKeys: false });
-        const store =
-          storeCache.get(storeTarget.storePath) ?? loadSessionStore(storeTarget.storePath);
-        storeCache.set(storeTarget.storePath, store);
+        const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key,
+          scanLegacyKeys: false,
+        });
+        const store = storeCache.get(cachedStoreTarget.storePath) ?? cachedStoreTarget.store;
+        storeCache.set(cachedStoreTarget.storePath, store);
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key,

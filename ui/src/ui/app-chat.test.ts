@@ -149,11 +149,25 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatAvatarReason: null,
     chatSideResult: null,
     chatSideResultTerminalRuns: new Set<string>(),
+    sessionsLoading: false,
+    sessionsResult: null,
+    sessionsResultAgentId: null,
+    sessionsError: null,
+    sessionsFilterActive: "0",
+    sessionsFilterLimit: "50",
+    sessionsIncludeGlobal: true,
+    sessionsIncludeUnknown: true,
+    sessionsShowArchived: false,
+    sessionsExpandedCheckpointKey: null,
+    sessionsCheckpointItemsByKey: {},
+    sessionsCheckpointLoadingKey: null,
+    sessionsCheckpointBusyKey: null,
+    sessionsCheckpointErrorByKey: {},
     chatModelOverrides: {},
     chatModelSwitchPromises: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
@@ -209,7 +223,7 @@ describe("refreshChat", () => {
     await loadChatHelpers();
   });
 
-  it("dispatches chat refresh work without waiting for slow history or secondary RPCs", async () => {
+  it("dispatches chat refresh work without waiting for slow history or metadata RPCs", async () => {
     const request = vi.fn(() => new Promise<unknown>(() => undefined));
     const requestUpdate = vi.fn();
     const host = makeHost({
@@ -228,23 +242,31 @@ describe("refreshChat", () => {
       limit: 100,
       maxChars: 4000,
     });
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).not.toHaveBeenCalledWith("models.list", { view: "configured" });
     const sessionsListPayload = findRequestPayload(
       request as unknown as MockCallSource,
       "sessions.list",
       "sessions list payload",
     );
     expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
-    expect(sessionsListPayload).not.toHaveProperty("agentId");
+    expect(sessionsListPayload.agentId).toBe("main");
     expect(sessionsListPayload.includeGlobal).toBe(true);
     expect(sessionsListPayload.includeUnknown).toBe(true);
     expect(sessionsListPayload.limit).toBe(50);
-    expect(request).toHaveBeenCalledWith("commands.list", {
+    expect(request).not.toHaveBeenCalledWith("commands.list", {
       agentId: "main",
       includeArgs: true,
       scope: "text",
     });
     expect(requestUpdate).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.list", { view: "configured" }),
+    );
+    expect(request).toHaveBeenCalledWith("commands.list", {
+      agentId: "main",
+      includeArgs: true,
+      scope: "text",
+    });
   });
 
   it("scopes global chat refresh session rows to the selected agent", async () => {
@@ -273,6 +295,13 @@ describe("refreshChat", () => {
     );
     expect(sessionsListPayload.agentId).toBe("work");
     expect(sessionsListPayload.includeGlobal).toBe(true);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("commands.list", {
+        agentId: "work",
+        includeArgs: true,
+        scope: "text",
+      }),
+    );
   });
 
   it("scopes agent main aliases as selected global chat refreshes", async () => {
@@ -299,6 +328,28 @@ describe("refreshChat", () => {
       "global alias sessions list payload",
     );
     expect(sessionsListPayload.agentId).toBe("work");
+    expect(sessionsListPayload.includeGlobal).toBe(true);
+  });
+
+  it("scopes agent session refresh rows before the list limit", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:work:dashboard",
+      agentsList: { defaultId: "main", mainKey: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "agent direct sessions list payload",
+    );
+    expect(sessionsListPayload.agentId).toBe("work");
+    expect(sessionsListPayload.limit).toBe(50);
     expect(sessionsListPayload.includeGlobal).toBe(true);
   });
 
@@ -333,6 +384,33 @@ describe("refreshChat", () => {
     expect(sessionsListPayload.agentId).toBe("ops");
   });
 
+  it("keeps unknown chat refresh session rows unscoped", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "unknown",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "unknown",
+      limit: 100,
+      maxChars: 4000,
+    });
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "unknown sessions list payload",
+    );
+    expect(sessionsListPayload).not.toHaveProperty("agentId");
+    expect(sessionsListPayload.includeUnknown).toBe(true);
+  });
+
   it("can wait for history without waiting for secondary metadata refreshes", async () => {
     const history = createDeferred<unknown>();
     const requestUpdate = vi.fn();
@@ -360,8 +438,91 @@ describe("refreshChat", () => {
     expect(host.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "ready" }] },
     ]);
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).not.toHaveBeenCalledWith("models.list", { view: "configured" });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.list", { view: "configured" }),
+    );
     expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("drains a restored queue after refresh proves the selected session is idle", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([row("main", { hasActiveRun: false, status: "done" })]);
+      }
+      return {};
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: [{ id: "queued-1", text: "after reload", createdAt: 1 }],
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "after reload",
+      }),
+    );
+    expect(host.chatQueue).toEqual([]);
+  });
+
+  it("keeps a restored queue while the selected session is still active", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([row("main", { hasActiveRun: true, status: "running" })]);
+      }
+      return {};
+    });
+    const restoredQueue = [{ id: "queued-1", text: "after active run", createdAt: 1 }];
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: restoredQueue,
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toEqual(restoredQueue);
+    expect(host.chatRunId).toBeNull();
+  });
+
+  it("keeps a restored queue when idle proof is stale after sessions refresh fails", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        throw new Error("sessions unavailable");
+      }
+      return {};
+    });
+    const restoredQueue = [{ id: "queued-1", text: "after reload", createdAt: 1 }];
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: restoredQueue,
+      sessionsResult: createSessionsResult([row("main", { hasActiveRun: false, status: "done" })]),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toEqual(restoredQueue);
+    expect(host.sessionsError).toContain("sessions unavailable");
   });
 });
 
@@ -636,6 +797,67 @@ describe("refreshChatAvatar", () => {
     expect(fetchUrl(fetchMock as unknown as MockCallSource, 2)).toBe("/avatar/ops");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 2).method).toBe("GET");
   });
+
+  it("ignores stale global avatar responses after switching selected agents", async () => {
+    const createObjectURL = vi.fn(() => "blob:ops-avatar");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const workRequest = createDeferred<{ avatarUrl?: string }>();
+    const opsRequest = createDeferred<{ avatarUrl?: string }>();
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = requestUrl(input);
+      if (url === "/avatar/work?meta=1") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => workRequest.promise,
+        });
+      }
+      if (url === "/avatar/ops?meta=1") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => opsRequest.promise,
+        });
+      }
+      if (url === "/avatar/ops") {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(["avatar"]),
+        });
+      }
+      throw new Error(`Unexpected avatar URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const host = makeHost({
+      basePath: "",
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    const firstRefresh = refreshChatAvatar(host);
+    host.assistantAgentId = "ops";
+    const secondRefresh = refreshChatAvatar(host);
+
+    workRequest.resolve({ avatarUrl: "/avatar/work" });
+    await firstRefresh;
+    expect(host.chatAvatarUrl).toBeNull();
+
+    opsRequest.resolve({ avatarUrl: "/avatar/ops" });
+    await secondRefresh;
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(host.chatAvatarUrl).toBe("blob:ops-avatar");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/work?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/ops?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 2)).toBe("/avatar/ops");
+  });
 });
 
 describe("refreshChat", () => {
@@ -672,11 +894,13 @@ describe("refreshChat", () => {
         "sessions list payload",
       );
       expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
-      expect(sessionsListPayload).not.toHaveProperty("agentId");
+      expect(sessionsListPayload.agentId).toBe("main");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
       expect(sessionsListPayload.limit).toBe(50);
-      expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("models.list", { view: "configured" }),
+      );
       const commandsListPayload = findRequestPayload(
         request as unknown as MockCallSource,
         "commands.list",

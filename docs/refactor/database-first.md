@@ -1092,9 +1092,11 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   legacy `jobs.json`, `jobs-state.json`, and `runs/*.jsonl` files and removes
   the imported sources. Plugin target writebacks update matching `cron_jobs`
   rows instead of loading and replacing the whole cron store.
-- If doctor cannot safely translate legacy `notify: true` webhook fallback
-  without replacing an explicit delivery target, it records a warning and leaves
-  the legacy source in place instead of publishing a lossy SQLite row.
+- Doctor and Gateway startup translate legacy `notify: true` webhook fallback
+  into explicit SQLite delivery before the scheduler runs. Jobs that already
+  announce to a chat keep that delivery and receive a webhook
+  `completionDestination`; jobs without `cron.webhook` are reported for manual
+  repair.
 - Outbound and session delivery queues now store queue status, entry kind,
   session key, channel, target, account id, retry count, last attempt/error,
   recovery state, and platform-send markers as typed columns in the shared

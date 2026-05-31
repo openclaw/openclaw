@@ -1248,6 +1248,25 @@ describe("chat sidebar raw content", () => {
       rawText: rawMarkdown,
     });
   });
+
+  it("does not carry full-message requests into raw views", () => {
+    const raw = buildRawSidebarContent({
+      kind: "markdown",
+      content: "Rendered",
+      rawText: "Raw",
+      fullMessageRequest: {
+        sessionKey: "main",
+        messageId: "msg-raw",
+        kind: "assistant_message",
+      },
+    });
+
+    expect(raw).toEqual({
+      kind: "markdown",
+      content: "```\nRaw\n```",
+      rawText: "Raw",
+    });
+  });
 });
 
 describe("chat welcome", () => {
@@ -1372,6 +1391,97 @@ describe("chat session controls", () => {
     agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
+  });
+
+  it("keeps agent switch targets after scoped session refreshes", () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn();
+    state.sessionKey = "agent:alpha:main";
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 3,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        { key: "agent:alpha:main", kind: "direct", updatedAt: 4 },
+        { key: "agent:beta:dashboard:beta-recent", kind: "direct", updatedAt: 3 },
+        { key: "agent:beta:main", kind: "direct", updatedAt: 2 },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    state.sessionsResultAgentId = "alpha";
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [{ key: "agent:alpha:main", kind: "direct", updatedAt: 5 }],
+    };
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    const agentSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-agent-filter="true"]',
+    );
+    agentSelect!.value = "beta";
+    agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
+  });
+
+  it("clears cached agent switch targets after a scoped empty refresh", () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn();
+    state.sessionKey = "agent:alpha:main";
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        { key: "agent:alpha:main", kind: "direct", updatedAt: 4 },
+        { key: "agent:beta:dashboard:deleted", kind: "direct", updatedAt: 3 },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    state.sessionsResultAgentId = "beta";
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 0,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [],
+    };
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    const agentSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-agent-filter="true"]',
+    );
+    agentSelect!.value = "beta";
+    agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:main");
   });
 
   it("renders selector labels from the active locale", async () => {
@@ -1921,11 +2031,9 @@ describe("chat session controls", () => {
       includeUnknown: true,
       limit: 50,
     });
-    expect(
-      request.mock.calls.some(([, params]) =>
-        Object.prototype.hasOwnProperty.call(params ?? {}, "agentId"),
-      ),
-    ).toBe(false);
+    expect(request.mock.calls.some(([, params]) => Object.hasOwn(params ?? {}, "agentId"))).toBe(
+      false,
+    );
   });
 
   it("reloads the picker after switching agents", async () => {
@@ -2154,7 +2262,7 @@ describe("chat session controls", () => {
       ts: Date.now(),
       providers: [
         {
-          provider: "openai-codex",
+          provider: "openai",
           displayName: "Codex",
           status: "ok",
           profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
@@ -2340,11 +2448,86 @@ describe("chat session controls", () => {
     expect(rerendered.value).toBe("openai/gpt-5-mini");
   });
 
+  it("keeps the selected model visible after switching away and back to a session", async () => {
+    const sessionA = "agent:main:session-a";
+    const sessionB = "agent:main:session-b";
+    const catalog = createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG, {
+      id: "claude-opus-4.5",
+      name: "Claude Opus 4.5",
+      provider: "bedrock",
+    });
+    const { state } = createChatHeaderState({ models: catalog });
+    let rows: GatewaySessionRow[] = [
+      { key: sessionA, kind: "direct", label: "Session A", updatedAt: 2 },
+      { key: sessionB, kind: "direct", label: "Session B", updatedAt: 1 },
+    ];
+    const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === "sessions.patch") {
+        const key = typeof params.key === "string" ? params.key : "";
+        const nextModel = typeof params.model === "string" ? params.model.trim() : "";
+        rows = rows.map((row) => {
+          if (row.key !== key) {
+            return row;
+          }
+          const nextRow: GatewaySessionRow = { ...row };
+          if (!nextModel) {
+            delete nextRow.model;
+            delete nextRow.modelProvider;
+            return nextRow;
+          }
+          const slashIndex = nextModel.indexOf("/");
+          if (slashIndex > 0) {
+            nextRow.modelProvider = nextModel.slice(0, slashIndex);
+          } else {
+            delete nextRow.modelProvider;
+          }
+          nextRow.model = slashIndex > 0 ? nextModel.slice(slashIndex + 1) : nextModel;
+          return nextRow;
+        });
+        return { ok: true, key };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResultFromRows(rows);
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "tools.effective") {
+        return { agentId: "main", profile: "coding", groups: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.sessionKey = sessionA;
+    state.settings.sessionKey = sessionA;
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.value).toBe("");
+
+    modelSelect.value = "bedrock/claude-opus-4.5";
+    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    state.sessionKey = sessionB;
+    state.settings.sessionKey = sessionB;
+    render(renderChatSessionSelect(state), container);
+    expect(getChatModelSelect(container).value).toBe("");
+
+    state.sessionKey = sessionA;
+    state.settings.sessionKey = sessionA;
+    render(renderChatSessionSelect(state), container);
+
+    expect(getChatModelSelect(container).value).toBe("bedrock/claude-opus-4.5");
+  });
+
   it("uses default thinking options when the active session is absent", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionsResult = createSessionsListResult({
       defaultsModel: "gpt-5.5",
-      defaultsProvider: "openai-codex",
+      defaultsProvider: "openai",
       defaultsThinkingLevels: [
         { id: "off", label: "off" },
         { id: "adaptive", label: "adaptive" },
@@ -2432,15 +2615,46 @@ describe("chat session controls", () => {
     ).toEqual(["Inherited: Off"]);
   });
 
+  it("does not label a non-default chat model from global thinking defaults", () => {
+    const { state } = createChatHeaderState({
+      model: "deepseek-v4-flash",
+      modelProvider: "deepseek",
+      defaultsThinkingDefault: "off",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          provider: "deepseek",
+          reasoning: true,
+        },
+      ],
+    });
+    state.sessionsResult = createSessionsListResult({
+      model: "deepseek-v4-flash",
+      modelProvider: "deepseek",
+      defaultsModel: "MiniMax-M2.7",
+      defaultsProvider: "minimax",
+      defaultsThinkingDefault: "off",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Low");
+  });
+
   it("always renders full thinking labels", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       thinkingDefault: "high",
     });
     state.sessionsResult = createSessionsListResult({
       defaultsModel: "gpt-5.5",
-      defaultsProvider: "openai-codex",
+      defaultsProvider: "openai",
       defaultsThinkingDefault: "high",
       defaultsThinkingLevels: [
         { id: "off", label: "off" },

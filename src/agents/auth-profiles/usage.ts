@@ -1,10 +1,13 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationMs,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  positiveSecondsToSafeMilliseconds,
-  resolveExpiresAtMsFromEpochSeconds,
-} from "../../shared/number-coercion.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
@@ -19,6 +22,7 @@ import type {
 import {
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
+  isModelScopedCooldownReason,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 export {
@@ -111,12 +115,26 @@ function shouldProbeWhamForFailure(
 ): boolean {
   const normalizedProvider = normalizeProviderId(provider ?? "");
   return (
-    (normalizedProvider === "openai" || normalizedProvider === "openai-codex") &&
+    normalizedProvider === "openai" &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
       reason === "no_error_details" ||
       reason === "unclassified" ||
       reason === "unknown")
+  );
+}
+
+function resolveActiveWindowUntil(value: unknown, now: number): number {
+  const timestampMs = asDateTimestampMs(value);
+  return timestampMs !== undefined && timestampMs > now ? timestampMs : 0;
+}
+
+function resolveUsageWindowUntil(now: number, durationMs: number): number {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return now;
+  }
+  return (
+    resolveExpiresAtMsFromDurationMs(Math.max(1, Math.floor(durationMs)), { nowMs: now }) ?? now
   );
 }
 
@@ -143,11 +161,11 @@ function resolveWhamResetMs(window: WhamUsageWindow | undefined, now: number): n
 }
 
 function isWhamWindowExhausted(window: WhamUsageWindow | undefined): boolean {
-  return !!(
+  return Boolean(
     window &&
     typeof window.used_percent === "number" &&
     Number.isFinite(window.used_percent) &&
-    window.used_percent >= 100
+    window.used_percent >= 100,
   );
 }
 
@@ -185,7 +203,10 @@ function applyWhamCooldownResult(params: {
   }
   return {
     ...params.computed,
-    cooldownUntil: Math.max(existingActiveCooldownUntil, params.now + params.whamResult.cooldownMs),
+    cooldownUntil: Math.max(
+      existingActiveCooldownUntil,
+      resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
+    ),
   };
 }
 
@@ -201,9 +222,13 @@ async function probeWhamForCooldown(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WHAM_TIMEOUT_MS);
   try {
+    const version = process.env.OPENCLAW_VERSION?.trim();
     const defaultHeaders: Record<string, string> = {
       Authorization: `Bearer ${profile.access}`,
       Accept: "application/json",
+      originator: "openclaw",
+      ...(version ? { version } : {}),
+      "User-Agent": `openclaw/${version || "dev"}`,
     };
     if (profile.accountId) {
       defaultHeaders["ChatGPT-Account-Id"] = profile.accountId;
@@ -252,7 +277,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + primaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, primaryResetMs),
         blockedSource: "wham",
         reason: "wham_personal_rolling",
       };
@@ -264,7 +289,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + secondaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, secondaryResetMs),
         blockedSource: "wham",
         reason: "wham_team_weekly",
       };
@@ -276,7 +301,7 @@ async function probeWhamForCooldown(
       }
       return {
         cooldownMs: WHAM_BURST_COOLDOWN_MS,
-        blockedUntil: now + primaryResetMs,
+        blockedUntil: resolveUsageWindowUntil(now, primaryResetMs),
         blockedSource: "wham",
         reason: "wham_team_rolling",
       };
@@ -604,7 +629,7 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = keepActiveWindowOrRecompute({
       existingUntil: params.existing.disabledUntil,
       now: params.now,
-      recomputedUntil: params.now + backoffMs,
+      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
     });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
@@ -614,7 +639,7 @@ function computeNextProfileUsageStats(params: {
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
       existingUntil: params.existing.cooldownUntil,
       now: params.now,
-      recomputedUntil: params.now + backoffMs,
+      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
     });
     // Update cooldown metadata based on whether the window is still active
     // and whether the same or a different model is failing.
@@ -636,23 +661,25 @@ function computeNextProfileUsageStats(params: {
       ) {
         updatedStats.cooldownModel = undefined;
       } else if (
-        params.reason === "rate_limit" &&
+        isModelScopedCooldownReason(params.reason) &&
         !params.modelId &&
         params.existing.cooldownModel
       ) {
         // Unknown originating model during an active model-scoped cooldown:
         // widen scope conservatively so no model can bypass on stale metadata.
         updatedStats.cooldownModel = undefined;
-      } else if (params.reason !== "rate_limit") {
-        // Non-rate-limit failures are profile-wide — clear model scope even
-        // when the same model fails, so that no model can bypass.
+      } else if (!isModelScopedCooldownReason(params.reason)) {
+        // Profile-wide failures (auth, billing, format, server_error, ...) —
+        // clear model scope so that no model can bypass.
         updatedStats.cooldownModel = undefined;
       } else {
         updatedStats.cooldownModel = params.existing.cooldownModel;
       }
     } else {
       updatedStats.cooldownReason = params.reason;
-      updatedStats.cooldownModel = params.reason === "rate_limit" ? params.modelId : undefined;
+      updatedStats.cooldownModel = isModelScopedCooldownReason(params.reason)
+        ? params.modelId
+        : undefined;
     }
   }
 
@@ -812,8 +839,7 @@ export async function markAuthProfileBlockedUntil(params: {
   if (
     !profile ||
     isAuthCooldownBypassedForProvider(profile.provider) ||
-    !Number.isFinite(blockedUntil) ||
-    blockedUntil <= Date.now()
+    !isFutureDateTimestampMs(blockedUntil)
   ) {
     return;
   }
@@ -828,16 +854,13 @@ export async function markAuthProfileBlockedUntil(params: {
       if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
         return false;
       }
-      const now = Date.now();
+      const now = asDateTimestampMs(Date.now());
+      if (now === undefined) {
+        return false;
+      }
       previousStats = freshStore.usageStats?.[profileId];
       updateTime = now;
-      const existingBlockedUntil = previousStats?.blockedUntil;
-      const activeBlockedUntil =
-        typeof existingBlockedUntil === "number" &&
-        Number.isFinite(existingBlockedUntil) &&
-        existingBlockedUntil > now
-          ? existingBlockedUntil
-          : 0;
+      const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
       nextStats = {
         ...previousStats,
         blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
@@ -876,15 +899,12 @@ export async function markAuthProfileBlockedUntil(params: {
     return;
   }
 
-  const now = Date.now();
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined) {
+    return;
+  }
   previousStats = store.usageStats?.[profileId];
-  const existingBlockedUntil = previousStats?.blockedUntil;
-  const activeBlockedUntil =
-    typeof existingBlockedUntil === "number" &&
-    Number.isFinite(existingBlockedUntil) &&
-    existingBlockedUntil > now
-      ? existingBlockedUntil
-      : 0;
+  const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
   nextStats = {
     ...previousStats,
     blockedUntil: Math.max(activeBlockedUntil, blockedUntil),

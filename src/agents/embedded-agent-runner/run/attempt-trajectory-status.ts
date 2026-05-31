@@ -15,6 +15,7 @@ export type AttemptTrajectoryTerminal = {
 export type ResolveAttemptTrajectoryTerminalParams = {
   promptError?: unknown;
   aborted: boolean;
+  externalAbort: boolean;
   timedOut: boolean;
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
@@ -81,7 +82,7 @@ export function resolveAttemptTrajectoryTerminal(
   if (params.promptError) {
     return { status: "error" };
   }
-  if (params.aborted || params.timedOut) {
+  if ((params.aborted && params.externalAbort) || params.timedOut) {
     return { status: "interrupted" };
   }
 

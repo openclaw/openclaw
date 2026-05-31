@@ -1,4 +1,13 @@
 import type {
+  AcpRuntime,
+  AcpRuntimeCapabilities,
+  AcpRuntimeEvent,
+  AcpRuntimeHandle,
+  AcpRuntimePromptMode,
+  AcpRuntimeSessionMode,
+  AcpRuntimeStatus,
+} from "@openclaw/acp-core/runtime/types";
+import type {
   SessionAcpIdentity,
   AcpSessionRuntimeOptions,
   SessionAcpMeta,
@@ -12,15 +21,6 @@ import {
   readAcpSessionEntry,
   upsertAcpSessionMeta,
 } from "../runtime/session-meta.js";
-import type {
-  AcpRuntime,
-  AcpRuntimeCapabilities,
-  AcpRuntimeEvent,
-  AcpRuntimeHandle,
-  AcpRuntimePromptMode,
-  AcpRuntimeSessionMode,
-  AcpRuntimeStatus,
-} from "../runtime/types.js";
 
 export type AcpSessionResolution =
   | {

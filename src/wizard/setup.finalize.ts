@@ -474,7 +474,7 @@ export async function finalizeSetupWizard(
   );
 
   let controlUiOpened = false;
-  let seededInBackground = false;
+  const seededInBackground = false;
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 

@@ -13,6 +13,11 @@ import {
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
 import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
+import {
+  detectUiProtocolFreshnessIssues,
+  uiProtocolFreshnessIssueToHealthFinding,
+  uiProtocolFreshnessIssueToRepairEffects,
+} from "../commands/doctor-ui.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
@@ -35,6 +40,9 @@ export type CoreHealthCheckDeps = {
   readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
+  readonly collectProviderCatalogProjectionFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
 };
@@ -74,11 +82,19 @@ async function collectRuntimeToolSchemaFindingsWithRuntime(
   return runtime.collectRuntimeToolSchemaFindings(ctx.cfg);
 }
 
+async function collectProviderCatalogProjectionFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
+  collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -412,6 +428,18 @@ function createRuntimeToolSchemaCheck(deps: CoreHealthCheckDeps): HealthCheck {
     source: "doctor",
     async detect(ctx) {
       return deps.collectRuntimeToolSchemaFindings(ctx);
+    },
+  };
+}
+
+function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): HealthCheck {
+  return {
+    id: "core/doctor/provider-catalog-projection",
+    kind: "core",
+    description: "Provider catalog hooks project into unified text model catalog rows.",
+    source: "doctor",
+    async detect(ctx) {
+      return deps.collectProviderCatalogProjectionFindings(ctx);
     },
   };
 }
@@ -832,6 +860,30 @@ const shellCompletionCheck: HealthCheck = {
   },
 };
 
+const uiProtocolFreshnessCheck: HealthCheck = {
+  id: "core/doctor/ui-protocol-freshness",
+  kind: "core",
+  description: "Control UI assets are present and current with the Gateway protocol schema.",
+  source: "doctor",
+  async detect() {
+    return (await detectUiProtocolFreshnessIssues()).map(uiProtocolFreshnessIssueToHealthFinding);
+  },
+  async repair(ctx) {
+    const effects = (await detectUiProtocolFreshnessIssues()).flatMap(
+      uiProtocolFreshnessIssueToRepairEffects,
+    );
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor UI freshness repair owns real mutations",
+      changes: [],
+      effects,
+    };
+  },
+};
+
 function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
   return {
     id: "core/doctor/workspace-suggestions",
@@ -860,12 +912,14 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
     shellCompletionCheck,
+    uiProtocolFreshnessCheck,
     gatewayPlatformNotesCheck,
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
+    createProviderCatalogProjectionCheck(deps),
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
   ];

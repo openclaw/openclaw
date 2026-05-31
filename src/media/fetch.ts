@@ -1,3 +1,11 @@
+import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
+import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
+import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import {
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "@openclaw/media-core/read-response-with-limit";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   fetchWithSsrFGuard,
@@ -8,11 +16,7 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { MAX_DOCUMENT_BYTES } from "./constants.js";
-import { parseMediaContentLength } from "./content-length.js";
-import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
-import { detectMime, extensionForMime } from "./mime.js";
-import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
 export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
@@ -390,12 +394,13 @@ async function readChunkWithIdleTimeout(
         timeoutId = undefined;
       }
     };
+    const resolvedChunkTimeoutMs = resolveTimerTimeoutMs(chunkTimeoutMs, 1);
     timeoutId = setTimeout(() => {
       timedOut = true;
       clear();
       void reader.cancel().catch(() => undefined);
-      reject(new Error(`Media download stalled: no data received for ${chunkTimeoutMs}ms`));
-    }, chunkTimeoutMs);
+      reject(new Error(`Media download stalled: no data received for ${resolvedChunkTimeoutMs}ms`));
+    }, resolvedChunkTimeoutMs);
     void reader.read().then(
       (result) => {
         clear();

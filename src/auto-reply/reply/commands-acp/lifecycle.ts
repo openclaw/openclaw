@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  resolveAcpSessionCwd,
+  resolveAcpThreadSessionDetailLines,
+} from "@openclaw/acp-core/runtime/session-identifiers";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { resolveAcpSessionResolutionError } from "../../../acp/control-plane/manager.utils.js";
 import {
@@ -12,10 +17,10 @@ import {
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
 import {
-  resolveAcpSessionCwd,
-  resolveAcpThreadSessionDetailLines,
-} from "../../../acp/runtime/session-identifiers.js";
-import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
+  resolveAcpSpawnRuntimePolicyError,
+  resolveRuntimeCwdForAcpSpawn,
+} from "../../../agents/acp-spawn.js";
+import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import {
   resolveThreadBindingIntroText,
@@ -42,7 +47,6 @@ import {
   type SessionBindingRecord,
   type SessionBindingService,
 } from "../../../infra/outbound/session-binding-service.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { ReplyPayload } from "../../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
@@ -516,6 +520,27 @@ export async function handleAcpSpawnAction(
 
   const acpManager = getAcpSessionManager();
   const sessionKey = `agent:${spawn.agentId}:acp:${randomUUID()}`;
+  const resolvedCwd = resolveSpawnedWorkspaceInheritance({
+    config: params.cfg,
+    targetAgentId: spawn.agentId,
+    requesterSessionKey: params.sessionKey,
+    explicitWorkspaceDir: spawn.cwd,
+  });
+  let runtimeCwd: string | undefined;
+  try {
+    runtimeCwd = await resolveRuntimeCwdForAcpSpawn({
+      resolvedCwd,
+      explicitCwd: spawn.cwd,
+    });
+  } catch (error) {
+    return stopWithText(
+      collectAcpErrorText({
+        error,
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+        fallbackMessage: "Could not resolve ACP session workspace.",
+      }),
+    );
+  }
 
   let initializedBackend = "";
   let initializedMeta: SessionAcpMeta | undefined;
@@ -526,7 +551,7 @@ export async function handleAcpSpawnAction(
       sessionKey,
       agent: spawn.agentId,
       mode: spawn.mode,
-      cwd: spawn.cwd,
+      cwd: runtimeCwd,
     });
     initializedRuntime = {
       runtime: initialized.runtime,

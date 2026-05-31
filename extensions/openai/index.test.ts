@@ -32,11 +32,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("./openai-codex-oauth-flow.runtime.js", () => ({
+vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
   refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
 
-import { createOpenAICodexProviderRuntime } from "./openai-codex-provider.runtime.js";
+import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider.runtime.js";
 
 const registerOpenAIPluginForTest = async () =>
   registerProviderPlugin({
@@ -354,10 +354,10 @@ describe("openai plugin", () => {
     const normalizedCodex = openaiProvider.normalizeToolSchemas?.({
       provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: {
         provider: "openai",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
       } as never,
@@ -394,10 +394,10 @@ describe("openai plugin", () => {
       openaiProvider.inspectToolSchemas?.({
         provider: "openai",
         modelId: "gpt-5.4",
-        modelApi: "openai-codex-responses",
+        modelApi: "openai-chatgpt-responses",
         model: {
           provider: "openai",
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api",
           id: "gpt-5.4",
         } as never,

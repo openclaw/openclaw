@@ -49,7 +49,11 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  addTimerTimeoutGraceMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -1432,8 +1436,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     try {
+      const timeoutMs = this.qmd.limits.timeoutMs;
       const result = await this.runQmd(["status"], {
-        timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
+        timeoutMs,
       });
       const vectorCount = parseQmdStatusVectorCount(`${result.stdout}\n${result.stderr}`);
       if (vectorCount === null) {
@@ -1701,7 +1706,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     const now = Date.now();
-    if (this.embedBackoffUntil !== null && now < this.embedBackoffUntil) {
+    if (this.embedBackoffUntil !== null && isFutureDateTimestampMs(this.embedBackoffUntil)) {
       return false;
     }
     const embedIntervalMs = this.qmd.update.embedIntervalMs;
@@ -1808,7 +1813,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       QMD_EMBED_BACKOFF_MAX_MS,
       QMD_EMBED_BACKOFF_BASE_MS * 2 ** Math.max(0, this.embedFailureCount - 1),
     );
-    this.embedBackoffUntil = Date.now() + delayMs;
+    this.embedBackoffUntil = resolveExpiresAtMsFromDurationMs(delayMs) ?? null;
     log.warn(
       `qmd embed failed (${reason}): ${String(err)}; backing off for ${Math.ceil(delayMs / 1000)}s`,
     );

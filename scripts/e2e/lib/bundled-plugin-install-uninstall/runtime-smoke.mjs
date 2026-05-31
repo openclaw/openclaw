@@ -698,14 +698,7 @@ async function runManifestProbes(plan, options) {
     }
   }
   if (plan.runtimeSlashAliases.length > 0 && plan.activeInThisProbe) {
-    const commands = await retryRpcCall(
-      "commands.list",
-      { scope: "both", includeArgs: true },
-      options,
-    );
-    for (const alias of plan.runtimeSlashAliases) {
-      assertCommandVisible(commands, alias);
-    }
+    await retryCommandsListWithAliases(plan.runtimeSlashAliases, options);
   } else if (plan.runtimeSlashAliases.length > 0) {
     console.log(
       `Runtime slash command smoke skipped for ${options.pluginId}: plugin is lazy in this probe`,
@@ -741,10 +734,10 @@ function isChannelVisible(payload, channel) {
   return false;
 }
 
-function assertCommandVisible(payload, alias) {
+export function isCommandVisible(payload, alias) {
   const expected = alias.replace(/^\//u, "").toLowerCase();
   const commands = Array.isArray(payload.commands) ? payload.commands : [];
-  const found = commands.some((command) => {
+  return commands.some((command) => {
     const names = [
       command?.name,
       command?.nativeName,
@@ -754,11 +747,32 @@ function assertCommandVisible(payload, alias) {
       .map((value) => value.replace(/^\//u, "").toLowerCase());
     return names.includes(expected);
   });
-  if (!found) {
+}
+
+function assertCommandVisible(payload, alias) {
+  const expected = alias.replace(/^\//u, "").toLowerCase();
+  if (!isCommandVisible(payload, alias)) {
     throw new Error(
       `commands.list did not include /${expected}: ${JSON.stringify(payload).slice(0, 2000)}`,
     );
   }
+}
+
+async function retryCommandsListWithAliases(aliases, options) {
+  const started = Date.now();
+  let commands;
+  while (Date.now() - started < COMMAND_TIMEOUT_MS) {
+    commands = await retryRpcCall("commands.list", { scope: "both", includeArgs: true }, options);
+    const missing = aliases.filter((alias) => !isCommandVisible(commands, alias));
+    if (missing.length === 0) {
+      return commands;
+    }
+    await delay(500);
+  }
+  for (const alias of aliases) {
+    assertCommandVisible(commands, alias);
+  }
+  return commands;
 }
 
 function assertToolVisible(payload, tool) {

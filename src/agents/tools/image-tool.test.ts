@@ -2,10 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
@@ -21,6 +21,11 @@ import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandb
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
 
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
@@ -1685,7 +1690,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("keeps an Anthropic-safe image schema snapshot", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
-      expect(JSON.parse(JSON.stringify(tool.parameters))).toEqual({
+      expect(jsonRoundTrip(tool.parameters)).toEqual({
         type: "object",
         properties: {
           prompt: { type: "string" },

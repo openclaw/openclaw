@@ -6,6 +6,7 @@ read_when:
   - You want to enable OpenClaw code mode for an agent run
   - You need to explain why code mode is different from Codex Code mode
   - You are reviewing the exec/wait contract, QuickJS-WASI sandbox, TypeScript transform, or hidden tool-catalog bridge
+  - You are adding or reviewing an internal code-mode namespace registry integration
 ---
 
 Code mode is an experimental OpenClaw agent-runtime feature. It is off by
@@ -43,6 +44,8 @@ When code mode is active:
   guest program through `ALL_TOOLS` and `tools`.
 - Guest code can search the hidden catalog, describe a tool, and call a tool
   through the same OpenClaw execution path used by normal agent turns.
+- MCP tools are grouped under the `MCP` namespace. In code mode, this namespace
+  is the only supported way to call MCP tools.
 - `wait` resumes a suspended code-mode run when nested tool calls are still
   pending.
 
@@ -380,6 +383,8 @@ The guest runtime exposes a small global API:
 ```typescript
 declare const ALL_TOOLS: ToolCatalogEntry[];
 declare const tools: ToolCatalog;
+declare const MCP: Record<string, unknown>;
+declare const namespaces: Record<string, unknown>;
 
 declare function text(value: unknown): void;
 declare function json(value: unknown): void;
@@ -430,8 +435,206 @@ const content = await tools.call(fileRead.id, { path: "README.md" });
 const hits = await tools.web_search({ query: "OpenClaw code mode" });
 ```
 
+MCP catalog entries are not callable through `tools.call(...)` or convenience
+functions in code mode. Use the generated `MCP` namespace instead:
+
+```typescript
+const issue = await MCP.github.createIssue({
+  owner: "openclaw",
+  repo: "openclaw",
+  title: "Investigate gateway logs",
+});
+
+const snapshot = await MCP.chromeDevtools.takeSnapshot({ output: "markdown" });
+const resource = await MCP.docs.resources.read("memo://one");
+const prompt = await MCP.docs.prompts.get("brief", { topic: "release" });
+```
+
 The guest runtime must not expose host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
+
+## Internal namespaces
+
+Internal namespaces give code mode a concise domain API without adding more
+model-visible tools. A loader-owned integration can register a namespace such
+as `Issues`, `Fictions`, or `Calendar`; guest code then calls that namespace
+inside the QuickJS program while OpenClaw still shows only `exec` and `wait` to
+the model.
+
+Namespaces are internal for now. There is no public plugin SDK namespace API:
+external plugin namespaces need a loader-owned contract so plugin identity,
+installed manifests, auth state, and cached catalog descriptors cannot drift
+from the plugin tools that back the namespace. Core code mode owns only the
+sandbox, serialization, catalog gating, and bridge dispatch.
+
+Guest code can then use either the direct global or the `namespaces` map:
+
+```javascript
+const open = await Issues.list({ state: "open" });
+const alsoOpen = await namespaces.Issues.list({ state: "open" });
+return { count: open.length, alsoCount: alsoOpen.length };
+```
+
+### Registry lifecycle
+
+The namespace registry is process-local and keyed by namespace id. A typical
+run follows this path:
+
+1. A trusted loader calls `registerCodeModeNamespaceForPlugin(pluginId, registration)`.
+2. Code mode creates the hidden `ToolSearchRuntime` for the run and reads its
+   run-scoped catalog.
+3. `createCodeModeNamespaceRuntime(ctx, catalog)` keeps only registrations
+   whose `requiredToolNames` are all visible and owned by the same `pluginId`.
+4. Each visible namespace calls `createScope(ctx)` for the current run. The
+   scope receives run context such as `agentId`, `sessionKey`, `sessionId`,
+   `runId`, config, and abort state.
+5. Scope data is serialized into a plain descriptor and injected into QuickJS as
+   direct globals and `namespaces.<globalName>`.
+6. Guest calls suspend through the worker bridge, resolve the namespace path on
+   the host, map the call to a declared plugin-owned catalog tool, and execute
+   that tool through `ToolSearchRuntime.call`.
+7. `wait` resumes the same namespace runtime when a code-mode run suspended on
+   nested tool work.
+8. Plugin rollback or uninstall calls `clearCodeModeNamespacesForPlugin(pluginId)`
+   so stale globals do not survive a failed plugin load.
+
+The important invariant: namespace calls are catalog tool calls. They use the
+same policy hooks, approvals, abort handling, telemetry, transcript projection,
+and suspend/resume behavior as `tools.call(...)`.
+
+### Registration shape
+
+Register namespaces from the integration that owns the backing tools. Keep the
+scope small and only expose domain verbs that map to declared catalog tools.
+
+```typescript
+import {
+  createCodeModeNamespaceTool,
+  registerCodeModeNamespaceForPlugin,
+} from "../agents/code-mode-namespaces.js";
+
+const pluginId = "github";
+
+registerCodeModeNamespaceForPlugin(pluginId, {
+  id: "github-issues",
+  globalName: "Issues",
+  description: "GitHub issue helpers for the current repository.",
+  requiredToolNames: ["github_list_issues", "github_update_issue"],
+  prompt: "Use Issues.list(params) and Issues.update(number, patch).",
+  createScope: (ctx) => ({
+    repository: ctx.config,
+    list: createCodeModeNamespaceTool("github_list_issues", ([params]) => params ?? {}),
+    update: createCodeModeNamespaceTool("github_update_issue", ([number, patch]) => ({
+      number,
+      patch,
+    })),
+  }),
+});
+```
+
+`createCodeModeNamespaceTool(toolName, inputMapper)` marks a scope member as a
+callable namespace function. The optional `inputMapper` receives the guest
+arguments and returns the input object for the backing catalog tool. Without an
+input mapper, the first guest argument is used, or `{}` when omitted.
+
+Raw host functions are rejected before guest code runs:
+
+```typescript
+createScope: () => ({
+  // Wrong: this bypasses the catalog tool lifecycle and will be rejected.
+  list: async () => githubClient.listIssues(),
+});
+```
+
+### Ownership and visibility
+
+Namespace ownership is bound to the registration caller's `pluginId`.
+`requiredToolNames` is both a visibility gate and an ownership check:
+
+- every required tool must exist in the run catalog
+- every required tool must have `sourceName === pluginId`
+- the namespace is hidden when any required tool is absent or owned by another
+  plugin
+- each callable path may target only a tool named in `requiredToolNames`
+
+This prevents another plugin from exposing a namespace by registering a
+same-named tool. It also keeps namespaces aligned with ordinary agent policy:
+if the run cannot see the backing tools, it cannot see the namespace.
+
+For example, a GitHub namespace should live behind a GitHub-owned extension that
+owns GitHub auth, REST or GraphQL clients, rate limits, write approvals, and
+tests. Core code mode should not embed GitHub-specific APIs, token handling, or
+provider policy.
+
+### Scope serialization rules
+
+`createScope(ctx)` may return a plain object containing JSON-compatible values,
+arrays, nested objects, and `createCodeModeNamespaceTool(...)` call markers.
+Host objects never enter QuickJS directly.
+
+The serializer rejects:
+
+- raw functions
+- circular object graphs
+- unsafe path segments: `__proto__`, `constructor`, `prototype`, empty keys, or
+  keys containing the internal path separator
+- `globalName` values that are not JavaScript identifiers
+- `globalName` collisions with built-in code-mode globals such as `tools`,
+  `namespaces`, `text`, `json`, `yield_control`, or `__openclaw*`
+
+Values that cannot be JSON-serialized are converted to JSON-safe fallback
+values before crossing the bridge. Binary data, handles, sockets, clients, and
+class instances should stay behind ordinary catalog tools.
+
+### Prompts
+
+The namespace `description` and optional `prompt` are appended to the model
+visible `exec` schema only when the namespace is visible for that run. Use them
+to teach the smallest useful surface:
+
+```typescript
+{
+  description: "Fiction production service helpers.",
+  prompt:
+    "Use Fictions.riskAudit(), Fictions.promoteIfReady(id, status), and Fictions.unpaidOver(amount).",
+}
+```
+
+Keep prompts about the namespace contract, not auth setup, implementation
+history, or unrelated plugin behavior.
+
+### Cleanup
+
+Namespaces are process-local registrations. Remove them when the owning plugin
+is disabled, uninstalled, or rolled back:
+
+```typescript
+clearCodeModeNamespacesForPlugin(pluginId);
+```
+
+Use `unregisterCodeModeNamespace(namespaceId)` only when removing one known
+namespace. Tests can call `clearCodeModeNamespacesForTest()` to avoid leaking
+registrations across cases.
+
+### Test checklist
+
+Namespace changes should cover the security boundary and the guest behavior:
+
+- namespace prompt text appears only when backing tools are visible
+- same-named tools from another `sourceName` do not expose the namespace
+- raw scope functions are rejected
+- forged namespace ids and forged paths are rejected
+- callable paths cannot target undeclared tools
+- nested objects and shared references serialize correctly
+- namespace calls execute through catalog tools and return JSON-safe details
+- failures can be caught by guest code
+- suspended namespace calls resume through `wait`
+- plugin rollback clears the owning namespace registrations
+
+Namespaces complement the generic `tools.search` / `tools.call` catalog. Use the
+catalog for arbitrary enabled OpenClaw, plugin, and client tools; use `MCP` for
+MCP tools; use other namespaces for plugin-owned, documented domain APIs where
+concise code is more reliable than repeated schema lookups.
 
 ## Output API
 
@@ -496,6 +699,12 @@ The catalog omits code-mode control tools:
 
 This prevents recursion and keeps the model-facing contract narrow.
 
+MCP entries stay in the run-scoped catalog so policy, approvals, hooks,
+telemetry, transcript projection, and exact tool ids remain shared with normal
+tool execution. The guest-facing `tools.call(...)` bridge rejects MCP entries;
+the generated `MCP.<server>.<tool>(...)` namespace resolves back to the exact
+catalog id and then dispatches through the same executor path.
+
 ## Tool Search interaction
 
 Code mode supersedes the OpenClaw Tool Search model surface for runs where it is
@@ -508,6 +717,7 @@ When `tools.codeMode.enabled` is true and code mode activates:
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives compact `ALL_TOOLS` metadata and search, describe,
   and call helpers.
+- MCP calls use the generated `MCP` namespace instead of `tools.call(...)`.
 - Nested calls dispatch through the same OpenClaw executor path that Tool Search
   uses.
 
@@ -727,6 +937,8 @@ Code mode coverage should prove:
 - all effective tools appear in `ALL_TOOLS`
 - denied tools do not appear in `ALL_TOOLS`
 - `tools.search`, `tools.describe`, and `tools.call` work for OpenClaw tools
+- MCP namespace calls work for visible MCP tools and direct MCP `tools.call`
+  attempts fail closed
 - Tool Search control tools are hidden from both the model surface and the hidden
   catalog
 - nested calls preserve approval and hook behavior
@@ -754,13 +966,16 @@ Run these as integration or end-to-end tests when changing the runtime:
 5. Send an agent turn with OpenClaw, plugin, MCP, and client test tools.
 6. Assert the model-visible tool list is exactly `exec`, `wait`.
 7. In `exec`, read `ALL_TOOLS` and assert the effective test tools are present.
-8. In `exec`, call `tools.search`, `tools.describe`, and `tools.call`.
-9. Assert denied tools are absent and cannot be called by guessed id.
-10. Start a nested tool call that resolves after `exec` returns `waiting`.
-11. Call `wait` and assert the restored VM receives the tool result.
-12. Assert the final answer contains output produced after restore.
-13. Assert timeout, abort, and snapshot expiry clean up runtime state.
-14. Export trajectory and assert nested calls are visible under the parent
+8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
+   `tools.describe`, and `tools.call`.
+9. In `exec`, call MCP tools through `MCP.<server>.<tool>(...)` and assert direct
+   MCP `tools.call(...)` attempts fail.
+10. Assert denied tools are absent and cannot be called by guessed id.
+11. Start a nested tool call that resolves after `exec` returns `waiting`.
+12. Call `wait` and assert the restored VM receives the tool result.
+13. Assert the final answer contains output produced after restore.
+14. Assert timeout, abort, and snapshot expiry clean up runtime state.
+15. Export trajectory and assert nested calls are visible under the parent
     code-mode call.
 
 Docs-only changes to this page should still run `pnpm check:docs`.

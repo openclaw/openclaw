@@ -357,7 +357,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      channel: "sms",
+      channel: "missing-channel",
       idempotencyKey: "idem-agent-bad-channel",
     });
     expect(res.ok).toBe(false);
@@ -365,11 +365,10 @@ describe("gateway server agent", () => {
   });
 
   test("agent errors when deliver=true and last channel is webchat", async () => {
-    testState.allowFrom = ["+1555"];
     await writeMainSessionEntry({
       sessionId: "sess-main-webchat",
       lastChannel: "webchat",
-      lastTo: "+1555",
+      lastTo: "webchat-room",
     });
     const res = await rpcReq(ws, "agent", {
       message: "hi",

@@ -6,7 +6,10 @@ import type {
   APIVoiceState,
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import {
@@ -140,7 +143,7 @@ export async function timeoutMemberDiscord(
   let until = payload.until;
   if (!until && payload.durationMinutes) {
     const ms = payload.durationMinutes * 60 * 1000;
-    until = timestampMsToIsoString(Date.now() + ms);
+    until = timestampMsToIsoString(resolveExpiresAtMsFromDurationMs(ms));
     if (!until) {
       throw new Error("Discord timeout duration is outside the supported Date range");
     }

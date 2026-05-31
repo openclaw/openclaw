@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -42,7 +43,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeOptionalString as resolveOptionalStringParam } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
@@ -52,7 +52,7 @@ import {
   isConfiguredAgent,
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
@@ -71,6 +71,41 @@ const agentsHandlerDeps = {
   root,
   isWorkspaceSetupCompleted,
 };
+
+let loggedSlowAgentsListCatalog = false;
+
+const AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
+
+async function loadOptionalAgentsListModelCatalog(
+  context: GatewayRequestContext,
+): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = Symbol("agents-list-model-catalog-timeout");
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(() => resolve(timedOut), AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+  try {
+    const result = await Promise.race([
+      context.loadGatewayModelCatalog().catch(() => undefined),
+      timeoutPromise,
+    ]);
+    if (result === timedOut) {
+      if (!loggedSlowAgentsListCatalog) {
+        loggedSlowAgentsListCatalog = true;
+        context.logGateway.debug(
+          `agents.list continuing without model catalog after ${AGENTS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
+        );
+      }
+      return undefined;
+    }
+    return Array.isArray(result) ? result : undefined;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
 
 export const testing = {
   setDepsForTests(
@@ -94,6 +129,7 @@ export const testing = {
 
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME] as const;
 
+// Gateway file mutations are intentionally capped to the workspace files the UI owns.
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
 
 function resolveAgentWorkspaceFileOrRespondError(
@@ -142,6 +178,7 @@ function isRegularWorkspaceFileStat(stat: {
   const isFile = typeof stat.isFile === "function" ? stat.isFile() : stat.isFile;
   const isSymbolicLink =
     typeof stat.isSymbolicLink === "function" ? stat.isSymbolicLink() : stat.isSymbolicLink;
+  // Reject links even after path-root containment so workspace reads cannot follow shared files.
   return isFile && !isSymbolicLink && stat.nlink <= 1;
 }
 
@@ -166,6 +203,7 @@ async function statWorkspaceFileSafely(
       return null;
     }
     try {
+      // fs-safe roots can reject fixtures that are still valid regular files for listing metadata.
       const stat = await fs.lstat(path.join(workspaceDir, name));
       if (!isRegularWorkspaceFileStat(stat)) {
         return null;
@@ -199,6 +237,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
 
   const workspaceRoot = await openWorkspaceRootSafely(workspaceDir);
   if (!workspaceRoot) {
+    // Keep the UI shape stable when the workspace path is missing or unsafe.
     const missingNames = [
       ...(options?.hideBootstrap ? BOOTSTRAP_FILE_NAMES_POST_ONBOARDING : BOOTSTRAP_FILE_NAMES),
       DEFAULT_MEMORY_FILENAME,
@@ -407,6 +446,7 @@ async function buildIdentityMarkdownForWrite(params: {
 }): Promise<string> {
   let baseContent: string | undefined;
   if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
+    // Workspace moves may create a blank identity file; merge into the previous user-edited file.
     baseContent = await readWorkspaceFileContent(
       params.fallbackWorkspaceDir,
       DEFAULT_IDENTITY_FILENAME,
@@ -446,7 +486,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
-  "agents.list": ({ params, respond, context }) => {
+  "agents.list": async ({ params, respond, context }) => {
     if (!validateAgentsListParams(params)) {
       respond(
         false,
@@ -460,7 +500,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const result = listAgentsForGateway(cfg);
+    const modelCatalog = await loadOptionalAgentsListModelCatalog(context);
+    const result = listAgentsForGateway(cfg, modelCatalog);
     respond(true, result, undefined);
   },
   "agents.create": async ({ params, respond, context }) => {

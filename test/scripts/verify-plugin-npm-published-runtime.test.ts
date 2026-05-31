@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectPluginNpmPublishedRuntimeErrors,
+  findPackedPackageReadmePath,
   parseNpmReadmeMetadata,
   readPositiveIntEnv,
   resolveNpmPackFilename,
@@ -207,6 +208,15 @@ describe("resolveNpmPackFilename", () => {
     ].join("\n");
 
     expect(resolveNpmPackFilename(noisyOutput)).toBe("openclaw-msteams-2026.5.24-beta.1.tgz");
+  });
+});
+
+describe("findPackedPackageReadmePath", () => {
+  it("finds a root package README without accepting nested documentation files", () => {
+    expect(
+      findPackedPackageReadmePath(["package.json", "docs/README.md", "README.md", "dist/index.js"]),
+    ).toBe("README.md");
+    expect(findPackedPackageReadmePath(["package.json", "docs/README.md"])).toBe("");
   });
 });
 

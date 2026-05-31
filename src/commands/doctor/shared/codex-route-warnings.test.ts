@@ -3474,7 +3474,7 @@ describe("collectCodexRouteWarnings", () => {
         agentId: "worker",
         config: cfg,
       }).runtime,
-    ).toBe("codex");
+    ).toBe("auto");
 
     const result = maybeRepairCodexRoutes({
       cfg,

@@ -16,7 +16,10 @@ import type {
   ThinkingConfig,
   TurnCoverage,
 } from "@google/genai";
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceAudioFormat,
@@ -747,7 +750,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       );
     }
 
-    let emittedAssistantText = false;
     for (const part of content.modelTurn?.parts ?? []) {
       if (part.inlineData?.data) {
         const pcm = Buffer.from(part.inlineData.data, "base64");
@@ -763,13 +765,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         continue;
       }
       if (!content.outputTranscription?.text && typeof part.text === "string" && part.text.trim()) {
-        emittedAssistantText = true;
         this.config.onTranscript?.("assistant", part.text, content.turnComplete ?? false);
       }
-    }
-
-    if (!emittedAssistantText && content.turnComplete && content.waitingForInput === false) {
-      return;
     }
   }
 
@@ -856,11 +853,17 @@ async function createGoogleRealtimeBrowserSession(
 
   const model = req.model ?? config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
   const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
-  const expiresAtMs = Date.now() + GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS;
-  const newSessionExpiresAtMs = Date.now() + GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS;
+  const nowMs = Date.now();
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS, {
+    nowMs,
+  });
+  const newSessionExpiresAtMs = resolveExpiresAtMsFromDurationMs(
+    GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS,
+    { nowMs },
+  );
   const expireTime = timestampMsToIsoString(expiresAtMs);
   const newSessionExpireTime = timestampMsToIsoString(newSessionExpiresAtMs);
-  if (!expireTime || !newSessionExpireTime) {
+  if (expiresAtMs === undefined || !expireTime || !newSessionExpireTime) {
     throw new Error("Google realtime browser session expiry is outside the supported Date range");
   }
   const ai = createGoogleGenAI({

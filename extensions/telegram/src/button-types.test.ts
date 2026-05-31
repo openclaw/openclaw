@@ -47,4 +47,50 @@ describe("buildTelegramPresentationButtons", () => {
       ],
     ]);
   });
+
+  it("drops presentation buttons whose callback payload exceeds Telegram limits", () => {
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Keep", value: "/codex plugins menu" },
+              { label: "Drop", value: `/codex plugins enable ${"x".repeat(80)}` },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Keep",
+          callback_data: "tgcmd:/codex plugins menu",
+          style: undefined,
+        },
+      ],
+    ]);
+  });
+
+  it("keeps shortened plugin approval callbacks on the approval bypass path", () => {
+    const approvalId = `plugin:${"a".repeat(36)}`;
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Allow", value: `/approve ${approvalId} allow-always` }],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Allow",
+          callback_data: `/approve ${approvalId} always`,
+          style: undefined,
+        },
+      ],
+    ]);
+  });
 });

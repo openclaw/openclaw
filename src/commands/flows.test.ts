@@ -19,6 +19,11 @@ vi.mock("../config/config.js", () => ({
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -95,8 +100,8 @@ describe("flows commands", () => {
         status: "blocked",
         flows: [
           {
-            ...JSON.parse(JSON.stringify(flow)),
-            tasks: [JSON.parse(JSON.stringify(childTask))],
+            ...jsonRoundTrip(flow),
+            tasks: [jsonRoundTrip(childTask)],
             taskSummary: {
               total: 1,
               active: 1,

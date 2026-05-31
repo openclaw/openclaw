@@ -1,4 +1,8 @@
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   clearSessionGoal,
   createSessionGoal,
   formatSessionGoalStatus,
@@ -6,10 +10,6 @@ import {
   getSessionGoal,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type {
   CommandHandler,

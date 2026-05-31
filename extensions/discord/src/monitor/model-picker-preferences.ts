@@ -347,7 +347,5 @@ export async function recordDiscordModelPickerRecentModel(params: {
       )
       .toSorted(comparePreferenceEntries);
     await Promise.all(scopedEntries.slice(limit).map((entry) => store.delete(entry.key)));
-  } catch {
-    return;
-  }
+  } catch {}
 }
