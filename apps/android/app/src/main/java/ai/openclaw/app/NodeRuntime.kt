@@ -853,6 +853,7 @@ class NodeRuntime(
 
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
 
+  /** Clears setup credentials plus paired device tokens for both Android gateway roles. */
   fun resetGatewaySetupAuth() {
     prefs.clearGatewaySetupAuth()
     val deviceId = identityStore.loadOrCreate().deviceId
@@ -860,6 +861,7 @@ class NodeRuntime(
     deviceAuthStore.clearToken(deviceId, "operator")
   }
 
+  /** Persists onboarding state; callers decide whether runtime startup is needed first. */
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
 
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
@@ -929,6 +931,7 @@ class NodeRuntime(
     updateHomeCanvasState()
   }
 
+  /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
     _isForeground.value = value
     if (value) {
@@ -1018,6 +1021,8 @@ class NodeRuntime(
     if (didAutoConnect) return
     if (_isConnected.value) return
     val endpoint = resolvePreferredGatewayEndpoint() ?: return
+    // Only attempt the stored preferred gateway once per runtime lifetime; users
+    // can still reconnect explicitly from the UI after a failed auto attempt.
     didAutoConnect = true
     connect(endpoint)
   }
