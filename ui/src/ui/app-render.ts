@@ -66,6 +66,7 @@ import {
   updateConfigRawValue,
   updateConfigFormValue,
   removeConfigFormValue,
+  updateMcpServerEnabled,
 } from "./controllers/config.ts";
 import {
   loadCronJobsPage,
@@ -1647,11 +1648,7 @@ export function renderApp(state: AppViewState) {
           onSaveConfig: () => saveConfig(state),
           onApplyConfig: () => applyConfig(state),
           onServerEnabledChange: (name, enabled) => {
-            if (enabled) {
-              removeConfigFormValue(state, ["mcp", "servers", name, "enabled"]);
-            } else {
-              updateConfigFormValue(state, ["mcp", "servers", name, "enabled"], false);
-            }
+            updateMcpServerEnabled(state, name, enabled);
             requestHostUpdate?.();
           },
           editor: renderConfigTab({

@@ -430,6 +430,24 @@ export function removeConfigFormValue(state: ConfigState, path: Array<string | n
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }
 
+export function updateMcpServerEnabled(state: ConfigState, name: string, enabled: boolean) {
+  mutateConfigForm(state, (draft) => {
+    const serverPath = ["mcp", "servers", name];
+    if (!enabled) {
+      setPathValue(draft, [...serverPath, "enabled"], false);
+      return;
+    }
+
+    removePathValue(draft, [...serverPath, "enabled"]);
+    const mcp = asConfigRecord(draft.mcp);
+    const servers = asConfigRecord(mcp?.servers);
+    const server = asConfigRecord(servers?.[name]);
+    if (server && Object.keys(server).length === 0) {
+      removePathValue(draft, serverPath);
+    }
+  });
+}
+
 export function findAgentConfigEntryIndex(
   config: Record<string, unknown> | null,
   agentId: string,
