@@ -7,7 +7,7 @@ import {
   loadDeviceAuthTokenFromStore,
   storeDeviceAuthTokenInStore,
 } from "../shared/device-auth-store.js";
-import { type DeviceAuthStore } from "../shared/device-auth.js";
+import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { privateFileStoreSync } from "./private-file-store.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
