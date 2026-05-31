@@ -6,7 +6,7 @@ import type { ResolvedSmsAccount } from "./types.js";
 const registerPluginHttpRoute = vi.hoisted(() => vi.fn(() => vi.fn()));
 
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
-  ...((await importOriginal()) as Record<string, unknown>),
+  ...(await importOriginal()),
   registerPluginHttpRoute,
 }));
 

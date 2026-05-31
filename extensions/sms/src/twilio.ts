@@ -76,7 +76,7 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
     if (err instanceof Error && err.message === "Twilio SMS send returned malformed JSON.") {
       throw err;
     }
-    throw new Error("Twilio SMS send returned malformed JSON.");
+    throw new Error("Twilio SMS send returned malformed JSON.", { cause: err });
   }
 }
 
@@ -145,7 +145,7 @@ export function computeTwilioSignature(params: {
   const data =
     params.url +
     Object.keys(params.form)
-      .sort()
+      .toSorted()
       .map((key) => `${key}${params.form[key] ?? ""}`)
       .join("");
   return createHmac("sha1", params.authToken).update(data).digest("base64");

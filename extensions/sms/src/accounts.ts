@@ -21,7 +21,7 @@ const DEFAULT_WEBHOOK_PATH = "/webhooks/sms";
 const DEFAULT_TEXT_CHUNK_LIMIT = 1500;
 
 function getChannelConfig(cfg: OpenClawConfig): SmsChannelConfig | undefined {
-  return cfg?.channels?.[CHANNEL_ID] as SmsChannelConfig | undefined;
+  return cfg.channels?.[CHANNEL_ID] as SmsChannelConfig | undefined;
 }
 
 function parseList(raw: string | string[] | undefined): string[] {
@@ -29,7 +29,7 @@ function parseList(raw: string | string[] | undefined): string[] {
     return [];
   }
   return (Array.isArray(raw) ? raw : normalizeStringEntries(raw.split(",")))
-    .map((entry) => normalizeSmsAllowFrom(String(entry)))
+    .map((entry) => normalizeSmsAllowFrom(entry))
     .filter(Boolean);
 }
 
@@ -115,8 +115,8 @@ export function resolveSmsAccount(
     ? process.env.SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION
     : undefined;
 
-  const webhookPath = String(merged.webhookPath ?? envWebhookPath ?? DEFAULT_WEBHOOK_PATH).trim();
-  const publicWebhookUrl = String(merged.publicWebhookUrl ?? envPublicWebhookUrl ?? "").trim();
+  const webhookPath = (merged.webhookPath ?? envWebhookPath ?? DEFAULT_WEBHOOK_PATH).trim();
+  const publicWebhookUrl = (merged.publicWebhookUrl ?? envPublicWebhookUrl ?? "").trim();
   const authToken =
     normalizeResolvedSecretInputString({
       value: merged.authToken ?? envAuthToken,
@@ -128,11 +128,11 @@ export function resolveSmsAccount(
   return {
     accountId: id,
     enabled: channelCfg.enabled !== false && accountConfig?.enabled !== false,
-    accountSid: String(merged.accountSid ?? envAccountSid ?? "").trim(),
+    accountSid: (merged.accountSid ?? envAccountSid ?? "").trim(),
     authToken,
-    fromNumber: normalizeSmsPhoneNumber(String(merged.fromNumber ?? envFromNumber ?? "")),
-    messagingServiceSid: String(merged.messagingServiceSid ?? envMessagingServiceSid ?? "").trim(),
-    defaultTo: normalizeSmsPhoneNumber(String(merged.defaultTo ?? "")),
+    fromNumber: normalizeSmsPhoneNumber(merged.fromNumber ?? envFromNumber ?? ""),
+    messagingServiceSid: (merged.messagingServiceSid ?? envMessagingServiceSid ?? "").trim(),
+    defaultTo: normalizeSmsPhoneNumber(merged.defaultTo ?? ""),
     webhookPath: webhookPath || DEFAULT_WEBHOOK_PATH,
     publicWebhookUrl,
     dangerouslyDisableSignatureValidation:

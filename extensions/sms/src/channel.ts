@@ -103,15 +103,15 @@ function applySmsAccountConfig(params: {
   input: Record<string, unknown>;
 }): OpenClawConfig {
   const patch = smsSetupPatch(params.input);
-  const channels = { ...(params.cfg.channels ?? {}) };
-  const current = { ...((channels[CHANNEL_ID] as Record<string, unknown> | undefined) ?? {}) };
+  const channels = { ...params.cfg.channels };
+  const current = { ...(channels[CHANNEL_ID] as Record<string, unknown> | undefined) };
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
     channels[CHANNEL_ID] = { ...current, ...patch };
     return { ...params.cfg, channels };
   }
-  const accounts = { ...((current.accounts as Record<string, unknown> | undefined) ?? {}) };
+  const accounts = { ...(current.accounts as Record<string, unknown> | undefined) };
   accounts[params.accountId] = {
-    ...((accounts[params.accountId] as Record<string, unknown> | undefined) ?? {}),
+    ...(accounts[params.accountId] as Record<string, unknown> | undefined),
     ...patch,
   };
   channels[CHANNEL_ID] = { ...current, accounts };
