@@ -520,13 +520,19 @@ export function createSessionsSendTool(opts?: {
       // Fire-and-forget same-session sends still need this baseline because the
       // A2A follow-up may deliver directly to the source channel.
       const baselineReply =
-        timeoutSeconds !== 0 || sameSessionA2A
+        timeoutSeconds !== 0
           ? await readLatestAssistantReplySnapshot({
               sessionKey: resolvedKey,
               limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
               callGateway: gatewayCall,
             })
-          : undefined;
+          : sameSessionA2A
+            ? await readLatestAssistantReplySnapshot({
+                sessionKey: resolvedKey,
+                limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+                callGateway: gatewayCall,
+              }).catch(() => undefined)
+            : undefined;
 
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,

@@ -195,6 +195,30 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
+  it("does not direct-deliver a delayed same-session reply without a baseline", async () => {
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
+      text: "Maybe stale channel reply",
+      fingerprint: "maybe-stale-channel-reply",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:channel:target-room",
+      displayKey: "agent:main:discord:channel:target-room",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:channel:target-room",
+      requesterChannel: "discord",
+      waitRunId: "run-delayed-channel",
+    });
+
+    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe(
+      "run-delayed-channel",
+    );
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
   it("keeps the announce decider for same-session sends from a different channel", async () => {
     vi.mocked(runAgentStep).mockResolvedValueOnce("ANNOUNCE_SKIP");
 

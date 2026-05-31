@@ -126,6 +126,9 @@ export async function runSessionsSendA2AFlow(params: {
       params.requesterSessionKey === params.targetSessionKey &&
       params.requesterChannel === announceTarget.channel
     ) {
+      if (params.waitRunId && !params.roundOneReply && !params.baseline) {
+        return;
+      }
       await deliverAnnounceReply({
         announceTarget,
         message: latestReply,
