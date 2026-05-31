@@ -200,6 +200,7 @@ Retention and pruning are controlled in config:
 
 - `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
 - `cron.runLog.keepLines` prunes retained SQLite run-history rows per job. `cron.runLog.maxBytes` remains accepted for compatibility with older file-backed run logs.
+- `cron.maintenance` enables a daily maintenance window shared by cron and heartbeat. Agents listed in `cron.maintenance.maintenanceAgents` run only during the maintenance phase; ordinary agents are blocked during that phase. Blocked cron runs persist deferred counters and replay FIFO when the phase allows. `openclaw cron status --json` includes additive maintenance diagnostics.
 
 ## Migrating older jobs
 

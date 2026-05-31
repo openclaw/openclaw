@@ -125,4 +125,11 @@ describe("cron protocol conformance", () => {
     expect(errorReason).toBeDefined();
     expect(extractConstUnionValues(errorReason ?? {})).toEqual(expectedReasons);
   });
+
+  it("cron job state schema includes deferred maintenance fields returned by jobs", () => {
+    const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    expect(properties).toHaveProperty("deferredMaintenanceRuns");
+    expect(properties).toHaveProperty("firstDeferredMaintenanceAtMs");
+    expect(properties).toHaveProperty("lastDeferredMaintenanceAtMs");
+  });
 });
