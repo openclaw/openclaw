@@ -198,6 +198,34 @@ export const MessagesSchema = z
       })
       .strict()
       .optional(),
+    usageLine: z
+      .object({
+        enabled: z.boolean().optional(),
+        command: z.string().min(1).optional(),
+        args: z.array(z.string()).optional(),
+        format: z.enum(["plain", "preformatted", "raw"]).optional(),
+        timeoutMs: z.number().int().min(1).max(5000).optional(),
+        maxOutputChars: z.number().int().min(1).max(5000).optional(),
+        maxOutputLines: z.number().int().min(1).max(10).optional(),
+        surfaces: z
+          .record(
+            z.string(),
+            z
+              .object({
+                enabled: z.boolean().optional(),
+                command: z.string().min(1).optional(),
+                args: z.array(z.string()).optional(),
+                format: z.enum(["plain", "preformatted", "raw"]).optional(),
+                timeoutMs: z.number().int().min(1).max(5000).optional(),
+                maxOutputChars: z.number().int().min(1).max(5000).optional(),
+                maxOutputLines: z.number().int().min(1).max(10).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })

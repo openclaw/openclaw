@@ -159,7 +159,7 @@ Current source-of-truth:
     - `/tasks` lists active/recent background tasks for the current session.
     - `/context [list|detail|map|json]` explains how context is assembled. `map` sends a treemap image of the current session context.
     - `/whoami` shows your sender id. Alias: `/id`.
-    - `/usage off|tokens|full|cost` controls the per-response usage footer or prints a local cost summary.
+    - `/usage off|tokens|full|cost` controls the per-response usage footer or prints a local cost summary. The footer can be rendered by a local `messages.usageLine` command; see [Custom /usage footer](/reference/custom-usage-footer).
 
   </Accordion>
   <Accordion title="Skills, allowlists, approvals">
@@ -314,7 +314,7 @@ For profile and override editing, use the Control UI Tools panel or config/catal
 - **Provider usage/quota** (example: "Claude 80% left") shows up in `/status` for the current model provider when usage tracking is enabled. OpenClaw normalizes provider windows to `% left`; for MiniMax, remaining-only percent fields are inverted before display, and `model_remains` responses prefer the chat-model entry plus a model-tagged plan label.
 - **Token/cache lines** in `/status` can fall back to the latest transcript usage entry when the live session snapshot is sparse. Existing nonzero live values still win, and transcript fallback can also recover the active runtime model label plus a larger prompt-oriented total when stored totals are missing or smaller.
 - **Execution vs runtime:** `/status` reports `Execution` for the effective sandbox path and `Runtime` for who is actually running the session: `OpenClaw Default`, `OpenAI Codex`, a CLI backend, or an ACP backend.
-- **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
+- **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies). Configure `messages.usageLine` to render that footer with a local command.
 - `/model status` is about **models/auth/endpoints**, not usage.
 
 ## Model selection (`/model`)

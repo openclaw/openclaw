@@ -109,4 +109,59 @@ describe("visible reply config schema", () => {
       expect(issue?.path).toBe("messages.groupChat.unmentionedInbound");
     }
   });
+
+  it("accepts usageLine renderer config", () => {
+    const result = validateConfigObjectRaw({
+      messages: {
+        usageLine: {
+          command: "/tmp/render-usage-line",
+          args: ["--compact"],
+          format: "plain",
+          timeoutMs: 300,
+          maxOutputChars: 500,
+          maxOutputLines: 2,
+          surfaces: {
+            discord: {
+              format: "raw",
+            },
+            telegram: {
+              command: "/tmp/render-telegram-usage-line",
+              format: "preformatted",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.messages?.usageLine?.surfaces?.telegram?.format).toBe("preformatted");
+    }
+  });
+
+  it("rejects malformed usageLine renderer config", () => {
+    const result = validateConfigObjectRaw({
+      messages: {
+        usageLine: {
+          command: "",
+          format: "codeblock",
+          unknown: true,
+          surfaces: {
+            discord: {
+              args: "not-an-array",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.path === "messages.usageLine.command")).toBe(true);
+      expect(result.issues.some((issue) => issue.path === "messages.usageLine.format")).toBe(true);
+      expect(
+        result.issues.some((issue) => issue.path === "messages.usageLine.surfaces.discord.args"),
+      ).toBe(true);
+    }
+  });
 });

@@ -106,6 +106,35 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type UsageLineFormat = "plain" | "preformatted" | "raw";
+
+export type UsageLineRendererConfig = {
+  /** Executable path for rendering the per-response /usage line. */
+  command?: string;
+  /** Arguments passed to command without shell parsing. */
+  args?: string[];
+  /** Output wrapping mode. Default: "plain". */
+  format?: UsageLineFormat;
+  /** Renderer timeout in milliseconds. Default: 1500. */
+  timeoutMs?: number;
+  /** Maximum accepted stdout characters. Default: 500. */
+  maxOutputChars?: number;
+  /** Maximum accepted stdout lines. Default: 2. */
+  maxOutputLines?: number;
+};
+
+export type UsageLineSurfaceConfig = UsageLineRendererConfig & {
+  /** Disable the usage line renderer on this surface. */
+  enabled?: boolean;
+};
+
+export type UsageLineConfig = UsageLineRendererConfig & {
+  /** Enable custom rendering for the existing /usage line. */
+  enabled?: boolean;
+  /** Per-surface overrides keyed by provider/surface id, e.g. "discord". */
+  surfaces?: Record<string, UsageLineSurfaceConfig>;
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -150,6 +179,8 @@ export type MessagesConfig = {
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
+  /** Optional command renderer for the per-response /usage line. */
+  usageLine?: UsageLineConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */

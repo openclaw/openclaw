@@ -1800,6 +1800,7 @@
                   "agent-runtime-architecture",
                   "reference/wizard",
                   "reference/token-use",
+                  "reference/custom-usage-footer",
                   "reference/secretref-credential-surface",
                   "reference/prompt-caching",
                   "reference/api-usage-costs",

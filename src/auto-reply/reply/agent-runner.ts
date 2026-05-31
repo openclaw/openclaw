@@ -84,6 +84,7 @@ import {
 } from "./agent-runner-reminder-guard.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
+import { renderUsageLine } from "./agent-runner-usage-renderer.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -2038,14 +2039,40 @@ export async function runReplyAgent(params: {
         allowPluginNormalization: false,
       });
       const showCost = responseUsageMode === "full" && costConfig !== undefined;
-      let formatted = formatResponseUsageLine({
+      let defaultFormatted = formatResponseUsageLine({
         usage,
         showCost,
         costConfig,
       });
-      if (formatted && responseUsageMode === "full" && sessionKey) {
-        formatted = `${formatted} · session \`${sessionKey}\``;
+      if (defaultFormatted && responseUsageMode === "full" && sessionKey) {
+        defaultFormatted = `${defaultFormatted} · session \`${sessionKey}\``;
       }
+      const contextUsedTokens = deriveContextPromptTokens({
+        lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+        promptTokens,
+        usage,
+      });
+      const formatted = await renderUsageLine({
+        config: cfg.messages?.usageLine,
+        defaultLine: defaultFormatted,
+        mode: responseUsageMode,
+        surface: replyToChannel,
+        chatType: sessionCtx.ChatType,
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        model: modelUsed,
+        provider: providerUsed,
+        reasoning: followupRun.run.thinkLevel,
+        workspaceDir: followupRun.run.workspaceDir,
+        projectDir: followupRun.run.workspaceDir,
+        usage,
+        context: {
+          maxTokens: contextTokensUsed,
+          ...(contextUsedTokens !== undefined ? { usedTokens: contextUsedTokens } : {}),
+        },
+        costConfig,
+        durationMs: Date.now() - runStartedAt,
+      });
       if (formatted) {
         responseUsageLine = formatted;
       }

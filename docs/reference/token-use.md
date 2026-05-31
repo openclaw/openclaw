@@ -78,6 +78,7 @@ Use these in chat:
   - Persists per session (stored as `responseUsage`).
   - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
     local pricing for the active model. Otherwise it shows tokens only.
+  - `messages.usageLine` can render this footer with a local command. See [Custom /usage footer](/reference/custom-usage-footer).
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Other surfaces:

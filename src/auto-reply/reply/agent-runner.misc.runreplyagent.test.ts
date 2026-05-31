@@ -2738,6 +2738,126 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).toContain("est $0.04");
     expect(text).toContain(`· session \`${sessionKey}\``);
   });
+
+  it("uses configured usageLine renderer output", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "usage-line-"));
+    const scriptPath = path.join(tmpDir, "renderer.mjs");
+    await fs.writeFile(
+      scriptPath,
+      [
+        "let raw = '';",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => { raw += chunk; });",
+        "process.stdin.on('end', () => {",
+        "  const ctx = JSON.parse(raw);",
+        "  console.log([",
+        "    ctx.surface,",
+        "    ctx.mode,",
+        "    ctx.model.provider,",
+        "    ctx.model.reasoning,",
+        "    ctx.session.key,",
+        "    ctx.timing.duration_ms !== undefined,",
+        "    `${ctx.usage.input_tokens}->${ctx.usage.output_tokens}`,",
+        "  ].join(':'));",
+        "});",
+      ].join("\n"),
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "tokens",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      config: {
+        ...createCliBackendTestConfig(),
+        messages: {
+          usageLine: {
+            command: process.execPath,
+            args: [scriptPath],
+            format: "plain",
+          },
+        },
+      },
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.text).toContain(
+      "ok\nwhatsapp:tokens:anthropic:low:agent:main:whatsapp:dm:+1000:true:12->3",
+    );
+    expect(payload?.text).not.toContain("Usage:");
+  });
+
+  it("falls back when configured usageLine renderer fails", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "tokens",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      config: {
+        ...createCliBackendTestConfig(),
+        messages: {
+          usageLine: {
+            command: process.execPath,
+            args: ["-e", "process.exit(2)"],
+          },
+        },
+      },
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.text).toContain("ok\nUsage: 12 in / 3 out");
+  });
+
+  it("wraps configured usageLine preformatted output", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "usage-line-"));
+    const scriptPath = path.join(tmpDir, "renderer.mjs");
+    await fs.writeFile(scriptPath, "console.log('line one\\nline two');\n");
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 12, output: 3 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "tokens",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      config: {
+        ...createCliBackendTestConfig(),
+        messages: {
+          usageLine: {
+            command: process.execPath,
+            args: [scriptPath],
+            format: "preformatted",
+          },
+        },
+      },
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.text).toContain("```text\nline one\nline two\n```");
+  });
 });
 
 describe("runReplyAgent transient HTTP retry", () => {
