@@ -674,6 +674,8 @@ describe("isSmallLiveModelRef", () => {
   it("matches the small-model live matrix without requiring provider modern hooks", () => {
     expect(isSmallLiveModelRef({ provider: "lmstudio", id: "Qwen/Qwen3.5-9B" })).toBe(true);
     expect(isSmallLiveModelRef({ provider: "openrouter", id: "qwen/qwen3.5-9b" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "groq", id: "llama-3.1-8b-instant" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "groq", id: "openai/gpt-oss-20b" })).toBe(true);
     expect(isSmallLiveModelRef({ provider: "openrouter", id: "z-ai/glm-5.1" })).toBe(true);
     expect(isSmallLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
     expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
@@ -690,6 +692,8 @@ describe("isPrioritizedSmallLiveModelRef", () => {
       { provider: "vllm", id: "qwen/qwen3-8b" },
       { provider: "sglang", id: "qwen/qwen3-8b" },
       { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+      { provider: "groq", id: "llama-3.1-8b-instant" },
+      { provider: "groq", id: "openai/gpt-oss-20b" },
       { provider: "openrouter", id: "z-ai/glm-5.1" },
       { provider: "openrouter", id: "z-ai/glm-5" },
       { provider: "zai", id: "glm-5.1" },
@@ -776,12 +780,14 @@ describe("selectSmallLiveItems", () => {
       { provider: "vllm", id: "qwen/qwen3-8b" },
       { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
       { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+      { provider: "groq", id: "openai/gpt-oss-20b" },
+      { provider: "groq", id: "llama-3.1-8b-instant" },
     ];
 
     expect(
       selectSmallLiveItems(
         items,
-        3,
+        5,
         (item) => item,
         (item) => item.provider,
       ),
@@ -789,6 +795,8 @@ describe("selectSmallLiveItems", () => {
       { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
       { provider: "vllm", id: "qwen/qwen3-8b" },
       { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+      { provider: "groq", id: "llama-3.1-8b-instant" },
+      { provider: "groq", id: "openai/gpt-oss-20b" },
     ]);
   });
 });

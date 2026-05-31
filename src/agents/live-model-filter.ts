@@ -36,6 +36,8 @@ const SMALL_LIVE_MODEL_PRIORITY = [
   "vllm/qwen/qwen3-8b",
   "sglang/qwen/qwen3-8b",
   "openrouter/qwen/qwen3.5-9b",
+  "groq/llama-3.1-8b-instant",
+  "groq/openai/gpt-oss-20b",
   "openrouter/z-ai/glm-5.1",
   "openrouter/z-ai/glm-5",
   "zai/glm-5.1",
