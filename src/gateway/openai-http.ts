@@ -68,6 +68,10 @@ type OpenAiChatMessage = {
   stopReason?: unknown;
 };
 
+type ChatToolChoiceConstraint =
+  | { type: "required" }
+  | { type: "function"; name: string };
+
 type OpenAiChatCompletionRequest = {
   model?: unknown;
   stream?: unknown;
@@ -208,6 +212,7 @@ function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition
 function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice: unknown }): {
   tools: ClientToolDefinition[];
   extraSystemPrompt?: string;
+  constraint?: ChatToolChoiceConstraint;
 } {
   const { tools, toolChoice } = params;
   if (toolChoice == null || toolChoice === "auto") {
@@ -217,16 +222,65 @@ function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice
     return { tools: [] };
   }
   if (toolChoice === "required") {
-    throw new Error("tool_choice=required is not supported");
+    if (tools.length === 0) {
+      throw new Error("tool_choice=required but no tools were provided");
+    }
+    return {
+      tools,
+      extraSystemPrompt: "You must call one of the available tools before responding.",
+      constraint: { type: "required" },
+    };
   }
   if (typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
     throw new Error("tool_choice must be a string or object");
   }
   const choiceType = (toolChoice as { type?: unknown }).type;
+  if (choiceType === "function") {
+    const targetName = normalizeOptionalString(
+      (toolChoice as { function?: { name?: unknown } }).function?.name,
+    );
+    if (!targetName) {
+      throw new Error("tool_choice.function.name is required");
+    }
+    const matched = tools.filter((tool) => tool.function?.name === targetName);
+    if (matched.length === 0) {
+      throw new Error(`tool_choice requested unknown tool: ${targetName}`);
+    }
+    return {
+      tools: matched,
+      extraSystemPrompt: `You must call the ${targetName} tool before responding.`,
+      constraint: { type: "function", name: targetName },
+    };
+  }
   if (typeof choiceType !== "string") {
     throw new Error("unsupported tool_choice type");
   }
   throw new Error(`tool_choice ${choiceType} is not supported`);
+}
+
+function isChatToolChoiceConstraintSatisfied(params: {
+  constraint: ChatToolChoiceConstraint | undefined;
+  pendingToolCalls: Array<{ name: string }> | undefined;
+}): boolean {
+  const { constraint, pendingToolCalls } = params;
+  if (!constraint) {
+    return true;
+  }
+  if (!pendingToolCalls || pendingToolCalls.length === 0) {
+    return false;
+  }
+  if (constraint.type === "required") {
+    return true;
+  }
+  return pendingToolCalls.some((call) => call.name === constraint.name);
+}
+
+function resolveUnsatisfiedChatToolChoiceMessage(
+  constraint: ChatToolChoiceConstraint,
+): string {
+  return constraint.type === "function"
+    ? `tool_choice required a ${constraint.name} tool call, but the agent did not produce one`
+    : "tool_choice=required was not satisfied by the agent response";
 }
 
 function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
@@ -954,6 +1008,7 @@ export async function handleOpenAiHttpRequest(
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
   let resolvedClientTools: ClientToolDefinition[] = [];
   let toolChoicePrompt: string | undefined;
+  let toolChoiceConstraint: ChatToolChoiceConstraint | undefined;
   try {
     const parsedClientTools = extractClientToolsFromChatRequest(payload.tools);
     const toolChoiceResult = applyChatToolChoice({
@@ -962,6 +1017,7 @@ export async function handleOpenAiHttpRequest(
     });
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
+    toolChoiceConstraint = toolChoiceResult.constraint;
   } catch (err) {
     sendJson(res, 400, {
       error: {
@@ -1028,6 +1084,22 @@ export async function handleOpenAiHttpRequest(
       const usage = resolveChatCompletionUsage(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
+
+      if (
+        toolChoiceConstraint &&
+        !isChatToolChoiceConstraintSatisfied({
+          constraint: toolChoiceConstraint,
+          pendingToolCalls,
+        })
+      ) {
+        sendJson(res, 502, {
+          error: {
+            message: resolveUnsatisfiedChatToolChoiceMessage(toolChoiceConstraint),
+            type: "api_error",
+          },
+        });
+        return true;
+      }
 
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         const commentary = resolveAgentResponseCommentary(result);
@@ -1101,6 +1173,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  let bufferedAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
@@ -1152,6 +1225,11 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      if (toolChoiceConstraint) {
+        bufferedAssistantContent += content;
+        return;
+      }
+
       if (!wroteRole) {
         wroteRole = true;
         writeAssistantRoleChunk(res, { runId, model });
@@ -1196,13 +1274,34 @@ export async function handleOpenAiHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
+      if (
+        toolChoiceConstraint &&
+        !isChatToolChoiceConstraintSatisfied({
+          constraint: toolChoiceConstraint,
+          pendingToolCalls,
+        })
+      ) {
+        closed = true;
+        stopWatchingDisconnect();
+        unsubscribe();
+        writeSse(res, {
+          error: {
+            message: resolveUnsatisfiedChatToolChoiceMessage(toolChoiceConstraint),
+            type: "api_error",
+          },
+        });
+        writeDone(res);
+        res.end();
+        return;
+      }
+
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         if (!wroteRole) {
           wroteRole = true;
           writeAssistantRoleChunk(res, { runId, model });
         }
         if (!sawAssistantDelta) {
-          const commentary = resolveAgentResponseCommentary(result);
+          const commentary = bufferedAssistantContent || resolveAgentResponseCommentary(result);
           if (commentary) {
             sawAssistantDelta = true;
             writeAssistantContentChunk(res, {
