@@ -341,7 +341,7 @@ describe("task-registry maintenance issue #60299", () => {
       expect.objectContaining({
         taskId: task.taskId,
         decision: "retained",
-        reason: "runtime_not_authoritative",
+        reason: "acp_runtime_not_authoritative",
       }),
     );
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
@@ -433,10 +433,14 @@ describe("task-registry maintenance issue #60299", () => {
   });
 
   it("does not mark cron tasks lost when the current process is not the cron runtime authority", async () => {
+    const staleAt = Date.now() - 40 * 60_000;
     const task = makeStaleTask({
       runtime: "cron",
       sourceId: "cron-job-offline-audit",
       childSessionKey: undefined,
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
     });
 
     const { currentTasks } = createTaskRegistryMaintenanceHarness({
@@ -445,6 +449,13 @@ describe("task-registry maintenance issue #60299", () => {
     });
 
     expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 0 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        decision: "retained",
+        reason: "cron_runtime_not_authoritative",
+      }),
+    );
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
     expectTaskStatus(currentTasks, task.taskId, "running");
   });

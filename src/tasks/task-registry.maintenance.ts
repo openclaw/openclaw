@@ -175,11 +175,12 @@ export type TaskRegistryMaintenanceTaskDiagnostic = {
   status: TaskRecord["status"];
   decision: "retained" | "would_reconcile";
   reason:
+    | "acp_runtime_not_authoritative"
     | "active_cli_run"
     | "backing_session_missing"
     | "backing_session_present"
+    | "cron_runtime_not_authoritative"
     | "lost_grace_pending"
-    | "runtime_not_authoritative"
     | "subagent_recovery_wedged";
   detail?: string;
   ageMs: number;
@@ -1016,9 +1017,11 @@ function explainActiveTaskRetention(params: {
   if (!hasBackingSession(params.task, params.context)) {
     return { decision: "would_reconcile", reason: "backing_session_missing" };
   }
-  const probesProcessLocalRuntime = params.task.runtime === "cron" || params.task.runtime === "acp";
-  if (probesProcessLocalRuntime && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
-    return { decision: "retained", reason: "runtime_not_authoritative" };
+  if (params.task.runtime === "cron" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
+    return { decision: "retained", reason: "cron_runtime_not_authoritative" };
+  }
+  if (params.task.runtime === "acp" && !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
+    return { decision: "retained", reason: "acp_runtime_not_authoritative" };
   }
   if (params.task.runtime === "cli" && hasActiveCliRun(params.task)) {
     return { decision: "retained", reason: "active_cli_run" };
