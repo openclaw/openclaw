@@ -327,6 +327,45 @@ describe("registerCoreHealthChecks", () => {
     );
   });
 
+  it("reports disabled Codex plugin routes as core health findings", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/codex-session-routes",
+    );
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(findings).toStrictEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/codex-session-routes",
+        severity: "warning",
+        path: "agents.defaults.model.primary",
+        target: "openai/gpt-5.5",
+        requirement: "Codex plugin enabled for routes that use the Codex runtime.",
+        fixHint:
+          "Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
+      }),
+    ]);
+    expect(findings[0]?.message).toContain("Codex plugin is disabled by config");
+  });
+
   it("uses the read-only model catalog for hooks.gmail.model checks", async () => {
     const cfg: OpenClawConfig = {
       hooks: {

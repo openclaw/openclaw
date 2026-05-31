@@ -18,6 +18,7 @@ import {
   uiProtocolFreshnessIssueToHealthFinding,
   uiProtocolFreshnessIssueToRepairEffects,
 } from "../commands/doctor-ui.js";
+import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
@@ -29,6 +30,7 @@ import { registerHealthCheck } from "./health-check-registry.js";
 import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
+const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 
 const loadDoctorCoreChecksRuntimeModule = async () =>
@@ -616,6 +618,37 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   },
 };
 
+const codexSessionRoutesCheck: HealthCheck = {
+  id: CODEX_SESSION_ROUTES_CHECK_ID,
+  kind: "core",
+  description: "Codex runtime routes have a registered Codex plugin harness before sessions run.",
+  source: "doctor",
+  async detect(ctx) {
+    return collectDisabledCodexPluginRouteIssues(ctx.cfg).map(
+      (issue): HealthFinding => ({
+        checkId: CODEX_SESSION_ROUTES_CHECK_ID,
+        severity: "warning",
+        message: [
+          `${issue.path} routes ${issue.modelRef} to ${issue.canonicalModel}`,
+          "with Codex runtime, but the Codex plugin is disabled by config.",
+        ].join(" "),
+        path: issue.path,
+        target: issue.canonicalModel,
+        requirement: "Codex plugin enabled for routes that use the Codex runtime.",
+        fixHint: issue.blockedOutsideEntry
+          ? [
+              "Enable plugin loading and remove codex from plugins.deny,",
+              "or set the affected OpenAI models to an OpenClaw runtime policy.",
+            ].join(" ")
+          : [
+              "Run `openclaw doctor --fix`: it enables plugins.entries.codex,",
+              "or set the affected OpenAI models to an OpenClaw runtime policy.",
+            ].join(" "),
+      }),
+    );
+  },
+};
+
 const gatewayPlatformNotesCheck: HealthCheck = {
   id: "core/doctor/gateway-services/platform-notes",
   kind: "core",
@@ -913,6 +946,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
+    codexSessionRoutesCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
     gatewayPlatformNotesCheck,

@@ -43,6 +43,12 @@ type DisabledCodexPluginRouteHit = {
   modelRef: string;
   canonicalModel: string;
 };
+export type DisabledCodexPluginRouteIssue = {
+  path: string;
+  modelRef: string;
+  canonicalModel: string;
+  blockedOutsideEntry: boolean;
+};
 type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverrideKey, boolean>;
 
 type MutableRecord = Record<string, unknown>;
@@ -1171,6 +1177,18 @@ function collectDisabledCodexPluginRouteHits(cfg: OpenClawConfig): DisabledCodex
     hits.push({ path: ref.path, modelRef: ref.modelRef, canonicalModel });
   }
   return hits;
+}
+
+export function collectDisabledCodexPluginRouteIssues(
+  cfg: OpenClawConfig,
+): DisabledCodexPluginRouteIssue[] {
+  const blockedOutsideEntry = codexPluginIsBlockedOutsideEntry(cfg);
+  return collectDisabledCodexPluginRouteHits(cfg).map((hit) => ({
+    path: hit.path,
+    modelRef: hit.modelRef,
+    canonicalModel: hit.canonicalModel,
+    blockedOutsideEntry,
+  }));
 }
 
 function enableCodexPluginForRequiredRoutes(params: {
