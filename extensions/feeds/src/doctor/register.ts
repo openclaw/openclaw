@@ -108,6 +108,10 @@ export function evaluateFeedsConfig(
   }
 
   const findings: HealthFinding[] = [];
+  const installPolicyFinding = evaluateInstallPolicyConfig(config.installPolicy);
+  if (installPolicyFinding !== undefined) {
+    findings.push(installPolicyFinding);
+  }
   const sources = config.sources;
   if (sources === undefined) {
     findings.push({
@@ -150,6 +154,44 @@ export function evaluateFeedsConfig(
     findings.push(...evaluateFeedSource(source, index, seenIds));
   });
   return findings;
+}
+
+function evaluateInstallPolicyConfig(value: unknown): HealthFinding | undefined {
+  const basePath = "plugins.entries.feeds.config.installPolicy";
+  const baseOcPath = "oc://openclaw.config/plugins/entries/feeds/config/installPolicy";
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return invalidConfigFinding({
+      propertyPath: basePath,
+      target: baseOcPath,
+      message: "plugins.entries.feeds.config.installPolicy must be an object.",
+      fixHint: 'Use installPolicy: { mode: "warn", requireApproval: true } or remove it.',
+    });
+  }
+  if (
+    value.mode !== undefined &&
+    value.mode !== "off" &&
+    value.mode !== "warn" &&
+    value.mode !== "enforce"
+  ) {
+    return invalidConfigFinding({
+      propertyPath: `${basePath}.mode`,
+      target: `${baseOcPath}/mode`,
+      message: "plugins.entries.feeds.config.installPolicy.mode must be off, warn, or enforce.",
+      fixHint: 'Use mode "off", "warn", or "enforce".',
+    });
+  }
+  if (value.requireApproval !== undefined && typeof value.requireApproval !== "boolean") {
+    return invalidConfigFinding({
+      propertyPath: `${basePath}.requireApproval`,
+      target: `${baseOcPath}/requireApproval`,
+      message: "plugins.entries.feeds.config.installPolicy.requireApproval must be a boolean.",
+      fixHint: "Set requireApproval to true or false.",
+    });
+  }
+  return undefined;
 }
 
 function evaluateFeedSource(

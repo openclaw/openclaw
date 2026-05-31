@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import type { Command } from "commander";
 import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -25,12 +26,30 @@ export type FeedsCommandRuntime = FeedDocumentRuntime & {
   error(value: string): void;
   isTTY?: boolean;
   readConfigSnapshot?: (options: { readonly observe?: boolean }) => Promise<FeedConfigSnapshot>;
+  runOpenClawCommand?: (argv: readonly string[]) => Promise<number>;
 };
 
 export type FeedsCommandOptions = {
   readonly json?: boolean;
   readonly source?: string;
   readonly type?: string;
+};
+
+export type FeedInstallPolicyMode = "off" | "warn" | "enforce";
+
+export type FeedInstallPolicy = {
+  readonly mode: FeedInstallPolicyMode;
+  readonly requireApproval: boolean;
+};
+
+export type FeedsInstallOptions = FeedsCommandOptions & {
+  readonly dryRun?: boolean;
+  readonly force?: boolean;
+};
+
+type ConfiguredFeeds = {
+  readonly sources: readonly FeedSourceConfig[];
+  readonly installPolicy: FeedInstallPolicy;
 };
 
 export type FeedEntryResult = FeedEntry & {
@@ -45,6 +64,9 @@ const defaultRuntime: FeedsCommandRuntime = {
   },
   error(value) {
     process.stderr.write(`${value}\n`);
+  },
+  runOpenClawCommand(argv) {
+    return runOpenClawSubcommand(argv);
   },
 };
 
@@ -78,6 +100,18 @@ export function registerFeedsCli(program: Command): void {
     .option("--json", "Emit JSON output")
     .action(async (query: string, options: FeedsCommandOptions) => {
       process.exitCode = await feedsSearchCommand(query, options);
+    });
+
+  feeds
+    .command("install")
+    .argument("<id>", "Feed entry id to install")
+    .description("Install one feed entry through the existing OpenClaw install command")
+    .option("--source <id>", "Limit to one feed source id")
+    .option("--type <type>", "Limit to skill or plugin entries")
+    .option("--dry-run", "Print the install command without running it")
+    .option("--force", "Forward --force to the existing install command")
+    .action(async (id: string, options: FeedsInstallOptions) => {
+      process.exitCode = await feedsInstallCommand(id, options);
     });
 }
 
@@ -135,11 +169,46 @@ export async function feedsSearchCommand(
   }
 }
 
+export async function feedsInstallCommand(
+  id: string,
+  options: FeedsInstallOptions,
+  runtime: FeedsCommandRuntime = defaultRuntime,
+): Promise<number> {
+  try {
+    assertFeedEntryType(options.type);
+    const config = await readConfiguredFeedsConfig(runtime);
+    const loaded = await loadFeedDocuments(config.sources, options, runtime);
+    const entry = selectInstallEntry(flattenFeedEntries(loaded), id, options);
+    applyFeedInstallPolicy(entry, config.installPolicy, runtime);
+    const command = buildFeedInstallCommand(entry, { force: options.force === true });
+    if (command === undefined) {
+      throw new Error(`Feed entry '${id}' does not include supported install metadata.`);
+    }
+    if (options.dryRun === true) {
+      runtime.writeStdout(`${command.label}\n`);
+      return 0;
+    }
+    const run = runtime.runOpenClawCommand ?? runOpenClawSubcommand;
+    return await run(command.argv);
+  } catch (err) {
+    runtime.error(err instanceof Error ? err.message : String(err));
+    return 2;
+  }
+}
+
 async function loadConfiguredFeedDocuments(
   options: FeedsCommandOptions,
   runtime: FeedsCommandRuntime,
 ): Promise<readonly LoadedFeedDocument[]> {
-  const sources = (await readConfiguredFeedSources(runtime)).filter((source) => source.enabled);
+  return loadFeedDocuments(await readConfiguredFeedSources(runtime), options, runtime);
+}
+
+async function loadFeedDocuments(
+  configuredSources: readonly FeedSourceConfig[],
+  options: FeedsCommandOptions,
+  runtime: FeedsCommandRuntime,
+): Promise<readonly LoadedFeedDocument[]> {
+  const sources = configuredSources.filter((source) => source.enabled);
   const selected = selectSources(sources, options.source);
   return Promise.all(selected.map((source) => loadFeedDocument(source, runtime)));
 }
@@ -147,6 +216,10 @@ async function loadConfiguredFeedDocuments(
 async function readConfiguredFeedSources(
   runtime: FeedsCommandRuntime,
 ): Promise<readonly FeedSourceConfig[]> {
+  return (await readConfiguredFeedsConfig(runtime)).sources;
+}
+
+async function readConfiguredFeedsConfig(runtime: FeedsCommandRuntime): Promise<ConfiguredFeeds> {
   const readSnapshot = runtime.readConfigSnapshot ?? readConfigFileSnapshot;
   const snapshot = await readSnapshot({ observe: false });
   if (!snapshot.valid) {
@@ -155,18 +228,41 @@ async function readConfiguredFeedSources(
   }
   const config = snapshot.config.plugins?.entries?.feeds?.config;
   if (config === undefined) {
-    return [];
+    return { sources: [], installPolicy: { mode: "off", requireApproval: false } };
   }
   if (!isRecord(config)) {
     throw new Error("plugins.entries.feeds.config must be an object.");
   }
   if (config.sources === undefined) {
-    return [];
+    return { sources: [], installPolicy: parseInstallPolicy(config.installPolicy) };
   }
   if (!Array.isArray(config.sources)) {
     throw new Error("plugins.entries.feeds.config.sources must be an array.");
   }
-  return config.sources.map((source, index) => parseSourceConfig(source, index));
+  return {
+    sources: config.sources.map((source, index) => parseSourceConfig(source, index)),
+    installPolicy: parseInstallPolicy(config.installPolicy),
+  };
+}
+
+function parseInstallPolicy(value: unknown): FeedInstallPolicy {
+  if (value === undefined) {
+    return { mode: "off", requireApproval: false };
+  }
+  if (!isRecord(value)) {
+    throw new Error("plugins.entries.feeds.config.installPolicy must be an object.");
+  }
+  if (value.requireApproval !== undefined && typeof value.requireApproval !== "boolean") {
+    throw new Error("feeds installPolicy.requireApproval must be a boolean.");
+  }
+  const mode =
+    value.mode === undefined ? (value.requireApproval === true ? "enforce" : "off") : value.mode;
+  if (mode !== "off" && mode !== "warn" && mode !== "enforce") {
+    throw new Error("feeds installPolicy.mode must be off, warn, or enforce.");
+  }
+  const requireApproval =
+    typeof value.requireApproval === "boolean" ? value.requireApproval : mode !== "off";
+  return { mode, requireApproval };
 }
 
 function parseSourceConfig(value: unknown, index: number): FeedSourceConfig {
@@ -263,7 +359,19 @@ function assertFeedEntryType(
   }
 }
 
+type FeedInstallCommand = {
+  readonly argv: readonly string[];
+  readonly label: string;
+};
+
 function formatFeedInstallCommand(entry: FeedEntry): string | undefined {
+  return buildFeedInstallCommand(entry)?.label;
+}
+
+function buildFeedInstallCommand(
+  entry: FeedEntry,
+  options: { readonly force?: boolean } = {},
+): FeedInstallCommand | undefined {
   const install = entry.install;
   if (!isRecord(install)) {
     return undefined;
@@ -274,44 +382,144 @@ function formatFeedInstallCommand(entry: FeedEntry): string | undefined {
   const npmSpec = typeof install.npmSpec === "string" ? install.npmSpec.trim() : "";
   const slug = typeof install.slug === "string" ? install.slug.trim() : "";
   if (entry.type === "plugin") {
-    if (clawhubSpec) {
-      return formatOpenClawInstallCommand("plugins", normalizeClawHubSpec(clawhubSpec));
+    const resolvedSpec = resolvePluginInstallSpec({ clawhubSpec, npmSpec, source, spec });
+    if (resolvedSpec === undefined) {
+      return undefined;
     }
-    if (source === "clawhub" && spec) {
-      return formatOpenClawInstallCommand("plugins", normalizeClawHubSpec(spec));
-    }
-    if (npmSpec) {
-      return formatOpenClawInstallCommand("plugins", npmSpec);
-    }
-    if ((source === "npm" || source === "path" || source === "git") && spec) {
-      return formatOpenClawInstallCommand("plugins", spec);
-    }
-    return undefined;
+    const argv = [
+      "plugins",
+      "install",
+      resolvedSpec,
+      ...(options.force === true ? ["--force"] : []),
+    ];
+    return { argv, label: formatOpenClawCommand(argv) };
   }
   if (entry.type === "skill") {
-    if (slug) {
-      return formatOpenClawInstallCommand("skills", slug);
+    const resolvedSpec = resolveSkillInstallSpec({ source, spec, slug });
+    if (resolvedSpec === undefined) {
+      return undefined;
     }
-    if (source === "clawhub" && spec) {
-      return formatOpenClawInstallCommand("skills", spec.replace(/^clawhub:/u, ""));
-    }
-    if ((source === "git" || source === "path" || source === "local") && spec) {
-      return formatOpenClawInstallCommand("skills", spec);
-    }
+    const argv = [
+      "skills",
+      "install",
+      resolvedSpec,
+      ...(options.force === true ? ["--force"] : []),
+    ];
+    return { argv, label: formatOpenClawCommand(argv) };
   }
   return undefined;
 }
 
-function formatOpenClawInstallCommand(kind: "plugins" | "skills", spec: string): string {
-  return `openclaw ${kind} install ${quoteCliArg(spec)}`;
+function formatOpenClawCommand(argv: readonly string[]): string {
+  return ["openclaw", ...argv].map(quoteCliArg).join(" ");
 }
 
 function quoteCliArg(value: string): string {
   return /^[A-Za-z0-9_/:=.,@%+-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function resolvePluginInstallSpec(params: {
+  readonly clawhubSpec: string;
+  readonly npmSpec: string;
+  readonly source: string | undefined;
+  readonly spec: string;
+}): string | undefined {
+  if (params.clawhubSpec) {
+    return normalizeClawHubSpec(params.clawhubSpec);
+  }
+  if (params.source === "clawhub" && params.spec) {
+    return normalizeClawHubSpec(params.spec);
+  }
+  if (params.npmSpec) {
+    return params.npmSpec;
+  }
+  if (
+    (params.source === "npm" || params.source === "path" || params.source === "git") &&
+    params.spec
+  ) {
+    return params.spec;
+  }
+  return undefined;
+}
+
+function resolveSkillInstallSpec(params: {
+  readonly source: string | undefined;
+  readonly spec: string;
+  readonly slug: string;
+}): string | undefined {
+  if (params.slug) {
+    return params.slug;
+  }
+  if (params.source === "clawhub" && params.spec) {
+    return params.spec.replace(/^clawhub:/u, "");
+  }
+  if (
+    (params.source === "git" || params.source === "path" || params.source === "local") &&
+    params.spec
+  ) {
+    return params.spec;
+  }
+  return undefined;
+}
+
+function selectInstallEntry(
+  entries: readonly FeedEntryResult[],
+  id: string,
+  options: FeedsInstallOptions,
+): FeedEntryResult {
+  const matches = filterEntriesByType(entries, options.type).filter(
+    (entry) =>
+      entry.id === id && (options.source === undefined || entry.sourceId === options.source),
+  );
+  if (matches.length === 0) {
+    throw new Error(`No feed entry found for '${id}'.`);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `Feed entry '${id}' matched ${matches.length} entries. Use --source or --type to choose one.`,
+    );
+  }
+  return matches[0];
+}
+
+function applyFeedInstallPolicy(
+  entry: FeedEntryResult,
+  policy: FeedInstallPolicy,
+  runtime: FeedsCommandRuntime,
+): void {
+  if (policy.mode === "off" || !policy.requireApproval || feedEntryApproved(entry)) {
+    return;
+  }
+  const message = `Feed entry '${entry.id}' is not approved by feed metadata.`;
+  if (policy.mode === "enforce") {
+    throw new Error(`${message} Set approval.status to approved or update feeds installPolicy.`);
+  }
+  runtime.error(`Warning: ${message}`);
+}
+
+function feedEntryApproved(entry: FeedEntry): boolean {
+  if (!isRecord(entry.approval)) {
+    return false;
+  }
+  return (
+    typeof entry.approval.status === "string" && entry.approval.status.toLowerCase() === "approved"
+  );
+}
+
 function normalizeClawHubSpec(value: string): string {
   return value.startsWith("clawhub:") ? value : `clawhub:${value}`;
+}
+
+function runOpenClawSubcommand(argv: readonly string[]): Promise<number> {
+  const entrypoint = process.argv[1];
+  if (entrypoint === undefined) {
+    throw new Error("Unable to resolve the current OpenClaw CLI entrypoint.");
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [entrypoint, ...argv], { stdio: "inherit" });
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code ?? 1));
+  });
 }
 
 function formatSourceRows(sources: readonly FeedSourceConfig[]): string {
