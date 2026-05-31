@@ -349,14 +349,14 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/tool-cards.ts",
-      "text": "Tool error"
+      "text": "Tool input"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/tool-cards.ts",
-      "text": "Tool input"
+      "text": "Tool error"
     },
     {
       "count": 1,
