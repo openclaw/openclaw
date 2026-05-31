@@ -1787,18 +1787,18 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("normalizes prefixed Anthropic fallback candidates independently", () => {
+  it("normalizes self-prefixed fallback candidates independently", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
           model: {
-            primary: "anthropic/claude-sonnet-4-6",
-            fallbacks: ["anthropic/claude-haiku-4-5", "anthropic/claude-opus-4-7"],
+            primary: "google/gemini-2.0-flash",
+            fallbacks: ["xai/grok-4-fast-reasoning", "openai/gpt-5.4"],
           },
           models: {
-            "anthropic/claude-sonnet-4-6": {},
-            "anthropic/claude-haiku-4-5": {},
-            "anthropic/claude-opus-4-7": {},
+            "google/gemini-2.0-flash": {},
+            "xai/grok-4-fast": {},
+            "openai/gpt-5.4": {},
           },
         },
       },
@@ -1806,14 +1806,14 @@ describe("runWithModelFallback", () => {
 
     const candidates = testing.resolveFallbackCandidates({
       cfg,
-      provider: "anthropic",
-      model: "anthropic/claude-sonnet-4-6",
+      provider: "google",
+      model: "google/gemini-2.0-flash",
     });
 
     expect(candidates).toEqual([
-      { provider: "anthropic", model: "claude-sonnet-4-6" },
-      { provider: "anthropic", model: "claude-haiku-4-5" },
-      { provider: "anthropic", model: "claude-opus-4-7" },
+      { provider: "google", model: "gemini-2.0-flash" },
+      { provider: "xai", model: "grok-4-fast" },
+      { provider: "openai", model: "gpt-5.4" },
     ]);
   });
 

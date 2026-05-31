@@ -58,6 +58,14 @@ function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
 }
 
+function stripSelfProviderPrefix(provider: string, model: string): string {
+  const prefix = `${normalizeLowercaseStringOrEmpty(provider)}/`;
+  const trimmed = model.trim();
+  return normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)
+    ? trimmed.slice(prefix.length)
+    : model;
+}
+
 export function normalizeProviderModelIdWithPolicies(params: {
   provider: string;
   policies: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
@@ -106,7 +114,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
     normalizedProvider === "google-gemini-cli" ||
     normalizedProvider === "google-vertex"
   ) {
-    return normalizeGooglePreviewModelId(model);
+    return normalizeGooglePreviewModelId(stripSelfProviderPrefix(normalizedProvider, model));
   }
   if (normalizedProvider === "openrouter") {
     const trimmed = model.trim();
@@ -131,7 +139,8 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-4.6": "claude-opus-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
-    const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    const providerModel = stripSelfProviderPrefix(normalizedProvider, model);
+    const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
     return normalizeLowercaseStringOrEmpty(aliased).startsWith("claude-")
       ? `anthropic/${aliased}`
       : aliased;
@@ -155,7 +164,11 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
       "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
     };
-    return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    const providerModel = stripSelfProviderPrefix(normalizedProvider, model);
+    return xaiAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
+  }
+  if (normalizedProvider === "openai") {
+    return stripSelfProviderPrefix(normalizedProvider, model);
   }
   if (normalizedProvider === "together") {
     return normalizeTogetherModelId(model);
