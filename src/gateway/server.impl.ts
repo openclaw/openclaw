@@ -859,15 +859,16 @@ export async function startGatewayServer(
   });
   const deferStartupSidecars = opts.deferStartupSidecars === true;
   const isGatewayStartupPending = () => !startupSidecarsReady && !deferStartupSidecars;
+  const shouldSkipChannelReadiness = () =>
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupPendingReason,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
-    shouldSkipChannelReadiness: () =>
-      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+    shouldSkipChannelReadiness,
   });
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
@@ -1743,6 +1744,8 @@ export async function startGatewayServer(
           gatewayCronStartHandled = true;
         },
         cron: runtimeState.cronState.cron,
+        getRuntimeSnapshot: () => channelManager.getRuntimeSnapshot(),
+        shouldSkipChannelReadiness,
         logCron,
         log,
         recordPostReadyMemory: () => {
