@@ -620,7 +620,7 @@ describe("connectGateway", () => {
     try {
       const { host, client } = connectHostGateway();
       const pendingReload = vi.fn();
-      host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+      host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
 
       client.emitClose({ code: 1005 });
 
