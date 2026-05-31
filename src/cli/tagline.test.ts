@@ -60,6 +60,10 @@ describe("future holiday tagline windows (2028-2030)", () => {
     expect(poolHas(activePoolOn(2029, 10, 5), "diwali")).toBe(true);
   });
 
+  it("activates the Diwali tagline on 2030-10-25", () => {
+    expect(poolHas(activePoolOn(2030, 9, 25), "diwali")).toBe(true);
+  });
+
   it("activates the Easter tagline on 2030-04-21", () => {
     expect(poolHas(activePoolOn(2030, 3, 21), "easter")).toBe(true);
   });

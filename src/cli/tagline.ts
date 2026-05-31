@@ -218,7 +218,7 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
         [2027, 9, 28],
         [2028, 9, 17],
         [2029, 10, 5],
-        [2030, 9, 26],
+        [2030, 9, 25],
       ],
       1,
     ),
