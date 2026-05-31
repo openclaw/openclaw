@@ -251,6 +251,23 @@ function resolveGatewayServerShardName(file) {
   if (name.startsWith("server-")) {
     return "agentic-control-plane-runtime-server";
   }
+  if (name.startsWith("server.config-patch")) {
+    return "agentic-control-plane-runtime-config";
+  }
+  if (name.startsWith("server.shared-token")) {
+    return "agentic-control-plane-runtime-shared-token";
+  }
+  if (
+    name.startsWith("server.control-ui-root") ||
+    name.startsWith("server.ios-client-id") ||
+    name.startsWith("server.minimal-channel-pin") ||
+    name.startsWith("server.tools-catalog")
+  ) {
+    return "agentic-control-plane-runtime-ui-tools";
+  }
+  if (name.startsWith("server/")) {
+    return "agentic-control-plane-runtime-events";
+  }
   if (name.startsWith("server.") || name.startsWith("server/")) {
     return "agentic-control-plane-runtime-state";
   }
@@ -269,10 +286,14 @@ function createGatewayServerSplitShards() {
     "agentic-control-plane-http-models",
     "agentic-control-plane-http-plugin-ws",
     "agentic-control-plane-runtime",
+    "agentic-control-plane-runtime-config",
     "agentic-control-plane-runtime-cron",
+    "agentic-control-plane-runtime-events",
     "agentic-control-plane-runtime-network",
     "agentic-control-plane-runtime-server",
+    "agentic-control-plane-runtime-shared-token",
     "agentic-control-plane-runtime-state",
+    "agentic-control-plane-runtime-ui-tools",
     "agentic-control-plane-startup-runtime",
   ]
     .map((shardName) => ({
