@@ -429,6 +429,16 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     };
   }
 
+  function makeCustomSyntheticResult(toolCallId: string, text: string) {
+    return {
+      role: "toolResult" as const,
+      toolCallId,
+      toolName: "read",
+      content: [{ type: "text", text }],
+      isError: true,
+    };
+  }
+
   function makeRealResult(toolCallId: string, text = "real output") {
     return {
       role: "toolResult" as const,
@@ -464,6 +474,24 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
   });
 
+  it("custom synthetic text first, real second → keeps real when configured", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeCustomSyntheticResult("call_1", "aborted"),
+      makeRealResult("call_1"),
+    ]);
+
+    const result = repairToolUseResultPairing(input, { missingToolResultText: "aborted" });
+
+    const toolResults = result.messages.filter((m) => m.role === "toolResult") as Array<{
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    }>;
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]?.isError).not.toBe(true);
+    expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
+  });
+
   it("real first, synthetic second → keeps real", () => {
     const input = castAgentMessages([
       makeAssistant("call_1"),
@@ -480,6 +508,39 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]?.isError).not.toBe(true);
     expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
+  });
+
+  it("late real result after another assistant turn replaces prior synthetic", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeSyntheticResult("call_1"),
+      {
+        role: "assistant" as const,
+        content: [{ type: "toolCall", id: "call_2", name: "write", arguments: {} }],
+      },
+      makeRealResult("call_1"),
+      {
+        role: "toolResult" as const,
+        toolCallId: "call_2",
+        toolName: "write",
+        content: [{ type: "text", text: "second output" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    const toolResults = result.messages.filter((m) => m.role === "toolResult") as Array<{
+      toolCallId?: string;
+      isError?: boolean;
+      content?: Array<{ text?: string }>;
+    }>;
+    expect(toolResults).toHaveLength(2);
+    expect(toolResults[0]?.toolCallId).toBe("call_1");
+    expect(toolResults[0]?.isError).not.toBe(true);
+    expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
+    expect(toolResults[1]?.toolCallId).toBe("call_2");
+    expect(toolResults[1]?.content?.[0]?.text).toBe("second output");
   });
 
   it("two real results → keeps first (unchanged behavior)", () => {

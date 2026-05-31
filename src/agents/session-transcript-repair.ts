@@ -170,18 +170,20 @@ function makeMissingToolResult(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
-/**
- * Check whether a tool result is a synthetic "missing tool result" error injected
- * by transcript repair or the session-tool-result-guard flush.
- *
- * Only detects synthetics using the default marker text.  When callers pass custom
- * `missingToolResultText` (e.g. "aborted" for OpenAI/Codex replay), the resulting
- * synthetic will NOT be detected here — the preference logic won't fire and the
- * existing first-seen deduplication applies instead.  This is acceptable because
- * custom-text synthetics are produced for fresh API submissions, not persisted
- * session history repair.
- */
-function isSyntheticMissingToolResult(msg: Extract<AgentMessage, { role: "toolResult" }>): boolean {
+function resolveSyntheticMissingToolResultTexts(
+  options?: ToolUseResultPairingOptions,
+): ReadonlySet<string> {
+  const texts = new Set([DEFAULT_MISSING_TOOL_RESULT_TEXT]);
+  if (typeof options?.missingToolResultText === "string" && options.missingToolResultText) {
+    texts.add(options.missingToolResultText);
+  }
+  return texts;
+}
+
+function isSyntheticMissingToolResult(
+  msg: Extract<AgentMessage, { role: "toolResult" }>,
+  syntheticTexts: ReadonlySet<string>,
+): boolean {
   if (!(msg as { isError?: unknown }).isError) {
     return false;
   }
@@ -194,7 +196,7 @@ function isSyntheticMissingToolResult(msg: Extract<AgentMessage, { role: "toolRe
       typeof block === "object" &&
       block !== null &&
       (block as { type?: string }).type === "text" &&
-      (block as { text?: string }).text === DEFAULT_MISSING_TOOL_RESULT_TEXT,
+      syntheticTexts.has((block as { text?: string }).text ?? ""),
   );
 }
 
@@ -511,6 +513,7 @@ export function repairToolUseResultPairing(
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
   const toolResultPositions = new Map<string, number>();
+  const syntheticMissingToolResultTexts = resolveSyntheticMissingToolResultTexts(options);
   let droppedDuplicateCount = 0;
   let droppedOrphanCount = 0;
   let moved = false;
@@ -524,8 +527,11 @@ export function repairToolUseResultPairing(
         const existing = out[existingIdx];
         if (
           existing &&
-          isSyntheticMissingToolResult(existing as Extract<AgentMessage, { role: "toolResult" }>) &&
-          !isSyntheticMissingToolResult(msg)
+          isSyntheticMissingToolResult(
+            existing as Extract<AgentMessage, { role: "toolResult" }>,
+            syntheticMissingToolResultTexts,
+          ) &&
+          !isSyntheticMissingToolResult(msg, syntheticMissingToolResultTexts)
         ) {
           out[existingIdx] = msg;
           const addedIdx = added.findIndex((a) => extractToolResultId(a) === id);
@@ -613,8 +619,7 @@ export function repairToolUseResultPairing(
         );
         const id = extractToolResultId(toolResult);
         if (id && seenToolResultIds.has(id)) {
-          droppedDuplicateCount += 1;
-          changed = true;
+          pushToolResult(normalizeToolResultName(toolResult, toolCallNamesById.get(id)));
           continue;
         }
         if (id && toolCallIds.has(id)) {
@@ -632,8 +637,8 @@ export function repairToolUseResultPairing(
           if (!existingSpan) {
             spanResultsById.set(id, normalizedToolResult);
           } else if (
-            isSyntheticMissingToolResult(existingSpan) &&
-            !isSyntheticMissingToolResult(normalizedToolResult)
+            isSyntheticMissingToolResult(existingSpan, syntheticMissingToolResultTexts) &&
+            !isSyntheticMissingToolResult(normalizedToolResult, syntheticMissingToolResultTexts)
           ) {
             spanResultsById.set(id, normalizedToolResult);
             droppedDuplicateCount += 1;
