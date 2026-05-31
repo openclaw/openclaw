@@ -136,6 +136,29 @@ describe("registerAgentCommands", () => {
     expect(deps).toBeUndefined();
   });
 
+  it("forwards gateway connection overrides to the agent command", async () => {
+    await runCli([
+      "agent",
+      "--message",
+      "hi",
+      "--agent",
+      "ops",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      "token-override",
+      "--password",
+      "password-override",
+    ]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { url?: string }).url).toBe("ws://127.0.0.1:18789");
+    expect((options as { token?: string }).token).toBe("token-override");
+    expect((options as { password?: string }).password).toBe("password-override");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);

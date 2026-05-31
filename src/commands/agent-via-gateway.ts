@@ -77,6 +77,9 @@ type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  url?: string;
+  token?: string;
+  password?: string;
 };
 
 type AgentCliSignal = "SIGINT" | "SIGTERM";
@@ -90,6 +93,10 @@ type AgentCliDeps = CliDeps & {
 type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
   "clientName" | "mode" | "scopes"
+>;
+type AgentGatewayAuthOverrides = Pick<
+  Parameters<typeof callGateway>[0],
+  "url" | "token" | "password"
 >;
 type EmbeddedAgentCommandModule = typeof import("./agent.js");
 type AgentSessionModule = typeof import("./agent/session.js");
@@ -439,6 +446,7 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
   signal: AgentCliSignal | undefined;
   runtime: RuntimeEnv;
   gatewayIdentity: AgentGatewayCallIdentity;
+  gatewayAuthOverrides: AgentGatewayAuthOverrides;
   config: OpenClawConfig;
 }): Promise<void> {
   const request: GatewayRequestFunction = async <T = Record<string, unknown>>(
@@ -453,6 +461,7 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
       expectFinal: opts?.expectFinal,
       config: params.config,
       ...params.gatewayIdentity,
+      ...params.gatewayAuthOverrides,
     });
   const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
   for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
@@ -640,6 +649,11 @@ async function agentViaGatewayCommand(
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       };
+  const gatewayAuthOverrides: AgentGatewayAuthOverrides = {
+    url: opts.url,
+    token: opts.token,
+    password: opts.password,
+  };
 
   let acceptedRunId: string | undefined = idempotencyKey;
   let acceptedSessionKey: string | undefined = sessionKey;
@@ -680,6 +694,7 @@ async function agentViaGatewayCommand(
           timeoutMs: gatewayTimeoutMs,
           config: cfg,
           signal: signalBridge.signal,
+          ...gatewayAuthOverrides,
           onAccepted: (payload) => {
             acceptedGatewayRun = true;
             const accepted = readAcceptedRunContext(payload);
@@ -711,6 +726,7 @@ async function agentViaGatewayCommand(
         signal: signalBridge.getReceivedSignal(),
         runtime,
         gatewayIdentity,
+        gatewayAuthOverrides,
         config: cfg,
       });
     }

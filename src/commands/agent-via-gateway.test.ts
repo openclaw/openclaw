@@ -297,6 +297,29 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("forwards explicit gateway auth overrides", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          url: "ws://127.0.0.1:18789",
+          token: "token-override",
+          password: "password-override",
+        },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request.url).toBe("ws://127.0.0.1:18789");
+      expect(request.token).toBe("token-override");
+      expect(request.password).toBe("password-override");
+    });
+  });
+
   it.each(["/new", "/RESET", "/reset check status"] as const)(
     "uses backend admin authority for %s gateway commands",
     async (message) => {

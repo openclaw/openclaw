@@ -50,6 +50,9 @@ export function registerAgentTurnCommand(
     .option("--reply-to <target>", "Delivery target override (separate from session routing)")
     .option("--reply-channel <channel>", "Delivery channel override (separate from routing)")
     .option("--reply-account <id>", "Delivery account id override")
+    .option("--url <url>", "Gateway WebSocket URL override")
+    .option("--token <token>", "Gateway token override")
+    .option("--password <password>", "Gateway password override")
     .option(
       "--local",
       "Run the embedded agent locally (requires model provider API keys in your shell)",

@@ -35,6 +35,9 @@ Related:
 - `--reply-to <target>`: delivery target override
 - `--reply-channel <channel>`: delivery channel override
 - `--reply-account <id>`: delivery account override
+- `--url <url>`: Gateway WebSocket URL override
+- `--token <token>`: Gateway token override
+- `--password <password>`: Gateway password override
 - `--local`: run the embedded agent directly (after plugin registry preload)
 - `--deliver`: send the reply back to the selected channel/target
 - `--timeout <seconds>`: override agent timeout (default 600 or config value)
@@ -57,6 +60,7 @@ openclaw agent --agent ops --message "Run locally" --local
 ## Notes
 
 - Gateway mode falls back to the embedded agent when the Gateway request fails. Use `--local` to force embedded execution up front.
+- `--url`, `--token`, and `--password` apply only to the Gateway request for this invocation. Use them when the configured Gateway auth SecretRef is unavailable in the local shell.
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.
 - Gateway-backed runs leave Gateway-owned MCP loopback resources under the running Gateway process; older clients may still send the historical cleanup flag, but the Gateway accepts it as a compatibility no-op.
