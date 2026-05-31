@@ -27,6 +27,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
+import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
@@ -126,6 +127,7 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  focusMode: boolean;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
@@ -145,6 +147,7 @@ export type ChatProps = {
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
   onRefresh: () => void;
+  onToggleFocusMode: () => void;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
@@ -195,45 +198,9 @@ const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
 const SLASH_MENU_LISTBOX_ID = "chat-slash-menu-listbox";
 const SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID = "chat-slash-active-announcement";
-type TalkSelectOption = { label: string; value: string };
-
-const TALK_VOICE_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
-  { label: "Alloy", value: "alloy" },
-  { label: "Ash", value: "ash" },
-  { label: "Ballad", value: "ballad" },
-  { label: "Coral", value: "coral" },
-  { label: "Echo", value: "echo" },
-  { label: "Sage", value: "sage" },
-  { label: "Shimmer", value: "shimmer" },
-  { label: "Verse", value: "verse" },
-  { label: "Marin", value: "marin" },
-  { label: "Cedar", value: "cedar" },
-];
-const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
-  { label: "Low", value: "0.65" },
-  { label: "Medium", value: "0.5" },
-  { label: "High", value: "0.35" },
-];
-const TALK_PROVIDER_OPTIONS: TalkSelectOption[] = [
-  { label: "Auto", value: "" },
-  { label: "OpenAI", value: "openai" },
-  { label: "Google", value: "google" },
-];
-const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
-  { label: "Auto", value: "" },
-  { label: "WebRTC", value: "webrtc" },
-  { label: "Gateway relay", value: "gateway-relay" },
-  { label: "Provider WebSocket", value: "provider-websocket" },
-];
-const TALK_REASONING_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
-  { label: "Minimal", value: "minimal" },
-  { label: "Low", value: "low" },
-  { label: "Medium", value: "medium" },
-  { label: "High", value: "high" },
-];
+const INITIAL_CHAT_HISTORY_RENDER_WINDOW = 30;
+const CHAT_HISTORY_RENDER_WINDOW_BATCH = 30;
+const CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX = 48;
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -249,68 +216,6 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
     sessionKey,
     () => new DeletedMessages(sessionKey),
   );
-}
-
-function renderTalkSelect(params: {
-  label: string;
-  value: string;
-  options: TalkSelectOption[];
-  onSelect: (value: string) => void;
-}) {
-  const selected = params.options.find((entry) => entry.value === params.value);
-  const selectedLabel = selected?.label ?? params.value;
-  return html`
-    <label class="agent-chat__talk-field agent-chat__talk-field--select">
-      <span>${params.label}</span>
-      <details class="agent-chat__talk-select" data-talk-select=${params.label.toLowerCase()}>
-        <summary
-          class="agent-chat__talk-select-trigger"
-          aria-label=${params.label}
-          title=${selectedLabel}
-        >
-          <span class="agent-chat__talk-select-label">${selectedLabel}</span>
-          <span class="agent-chat__talk-select-icon" aria-hidden="true">
-            ${icons.chevronDown}
-          </span>
-        </summary>
-        <div class="agent-chat__talk-select-menu" role="listbox" aria-label=${params.label}>
-          ${repeat(
-            params.options,
-            (entry) => entry.value,
-            (entry) => {
-              const isSelected = entry.value === params.value;
-              return html`
-                <button
-                  class="agent-chat__talk-select-option ${isSelected
-                    ? "agent-chat__talk-select-option--selected"
-                    : ""}"
-                  data-talk-select-option=${entry.value}
-                  role="option"
-                  aria-selected=${isSelected ? "true" : "false"}
-                  type="button"
-                  @click=${(event: MouseEvent) => {
-                    (event.currentTarget as HTMLElement)
-                      .closest("details")
-                      ?.removeAttribute("open");
-                    if (!isSelected) {
-                      params.onSelect(entry.value);
-                    }
-                  }}
-                >
-                  <span>${entry.label}</span>
-                  ${isSelected
-                    ? html`<span class="agent-chat__talk-select-check" aria-hidden="true">
-                        ${icons.check}
-                      </span>`
-                    : nothing}
-                </button>
-              `;
-            },
-          )}
-        </div>
-      </details>
-    </label>
-  `;
 }
 
 function renderRealtimeTalkOptions(props: ChatProps) {
@@ -331,19 +236,34 @@ function renderRealtimeTalkOptions(props: ChatProps) {
     : isPresetSensitivity
       ? options.vadThreshold
       : "__custom";
-  const sensitivityOptions = isCustomSensitivity
-    ? [...TALK_SENSITIVITY_OPTIONS, { label: "Custom", value: "__custom" }]
-    : TALK_SENSITIVITY_OPTIONS;
+  const updateSensitivity = (event: Event) => {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (value !== "__custom") {
+      onChange({ vadThreshold: value });
+    }
+  };
   return html`
     <div class="agent-chat__talk-options" aria-label="Talk options">
       <div class="agent-chat__talk-options-primary">
-        ${renderTalkSelect({
-          label: "Voice",
-          value: options.voice,
-          options: TALK_VOICE_OPTIONS,
-          onSelect: (voice) => onChange({ voice }),
-        })}
-        <label class="agent-chat__talk-field">
+        <label>
+          <span>Voice</span>
+          <select .value=${options.voice} @change=${update("voice")}>
+            <option value="">Default</option>
+            ${[
+              "alloy",
+              "ash",
+              "ballad",
+              "coral",
+              "echo",
+              "sage",
+              "shimmer",
+              "verse",
+              "marin",
+              "cedar",
+            ].map((voice) => html`<option value=${voice}>${voice}</option>`)}
+          </select>
+        </label>
+        <label>
           <span>Model</span>
           <input
             .value=${options.model}
@@ -352,39 +272,50 @@ function renderRealtimeTalkOptions(props: ChatProps) {
             spellcheck="false"
           />
         </label>
-        ${renderTalkSelect({
-          label: "Sensitivity",
-          value: sensitivityValue,
-          options: sensitivityOptions,
-          onSelect: (vadThreshold) => {
-            if (vadThreshold !== "__custom") {
-              onChange({ vadThreshold });
-            }
-          },
-        })}
+        <label>
+          <span>Sensitivity</span>
+          <select @change=${updateSensitivity}>
+            <option value="" ?selected=${sensitivityValue === ""}>Default</option>
+            <option value="0.65" ?selected=${sensitivityValue === "0.65"}>Low</option>
+            <option value="0.5" ?selected=${sensitivityValue === "0.5"}>Medium</option>
+            <option value="0.35" ?selected=${sensitivityValue === "0.35"}>High</option>
+            ${isCustomSensitivity
+              ? html`<option value="__custom" selected>Custom</option>`
+              : nothing}
+          </select>
+        </label>
       </div>
       <details class="agent-chat__talk-options-advanced">
         <summary>Advanced</summary>
         <div class="agent-chat__talk-options-grid">
-          ${renderTalkSelect({
-            label: "Provider",
-            value: options.provider,
-            options: TALK_PROVIDER_OPTIONS,
-            onSelect: (provider) => onChange({ provider }),
-          })}
-          ${renderTalkSelect({
-            label: "Transport",
-            value: options.transport,
-            options: TALK_TRANSPORT_OPTIONS,
-            onSelect: (transport) => onChange({ transport }),
-          })}
-          ${renderTalkSelect({
-            label: "Reasoning",
-            value: options.reasoningEffort,
-            options: TALK_REASONING_OPTIONS,
-            onSelect: (reasoningEffort) => onChange({ reasoningEffort }),
-          })}
-          <label class="agent-chat__talk-field">
+          <label>
+            <span>Provider</span>
+            <select .value=${options.provider} @change=${update("provider")}>
+              <option value="">Auto</option>
+              <option value="openai">OpenAI</option>
+              <option value="google">Google</option>
+            </select>
+          </label>
+          <label>
+            <span>Transport</span>
+            <select .value=${options.transport} @change=${update("transport")}>
+              <option value="">Auto</option>
+              <option value="webrtc">WebRTC</option>
+              <option value="gateway-relay">Gateway relay</option>
+              <option value="provider-websocket">Provider WebSocket</option>
+            </select>
+          </label>
+          <label>
+            <span>Reasoning</span>
+            <select .value=${options.reasoningEffort} @change=${update("reasoningEffort")}>
+              <option value="">Default</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label>
             <span>Exact VAD</span>
             <input
               type="number"
@@ -396,7 +327,7 @@ function renderRealtimeTalkOptions(props: ChatProps) {
               placeholder="0.5"
             />
           </label>
-          <label class="agent-chat__talk-field">
+          <label>
             <span>Pause before send</span>
             <input
               type="number"
@@ -407,7 +338,7 @@ function renderRealtimeTalkOptions(props: ChatProps) {
               placeholder="500"
             />
           </label>
-          <label class="agent-chat__talk-field">
+          <label>
             <span>Lead-in</span>
             <input
               type="number"
@@ -469,6 +400,10 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  historyRenderSessionKey: string | null;
+  historyRenderMessagesRef: unknown[] | null;
+  historyRenderMessageCount: number;
+  historyRenderLimit: number;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -483,6 +418,10 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    historyRenderSessionKey: null,
+    historyRenderMessagesRef: null,
+    historyRenderMessageCount: 0,
+    historyRenderLimit: 0,
   };
 }
 
@@ -593,9 +532,82 @@ export function resetChatViewState() {
 
 export const cleanupChatModuleState = resetChatViewState;
 
+function resolveChatHistoryRenderCap(messageCount: number): number {
+  return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
+}
+
+function shouldRenderFullChatHistoryWindow(messageCount: number): boolean {
+  return (
+    messageCount <= INITIAL_CHAT_HISTORY_RENDER_WINDOW ||
+    (vs.searchOpen && vs.searchQuery.trim().length > 0)
+  );
+}
+
+function resolveChatHistoryRenderWindow(props: ChatProps): number {
+  const messages = Array.isArray(props.messages) ? props.messages : [];
+  const cap = resolveChatHistoryRenderCap(messages.length);
+  const sessionChanged = vs.historyRenderSessionKey !== props.sessionKey;
+  const refChanged = vs.historyRenderMessagesRef !== messages;
+  const previousCount = vs.historyRenderMessageCount;
+
+  if (cap === 0) {
+    vs.historyRenderSessionKey = props.sessionKey;
+    vs.historyRenderMessagesRef = messages;
+    vs.historyRenderMessageCount = messages.length;
+    vs.historyRenderLimit = 0;
+    return 0;
+  }
+
+  if (shouldRenderFullChatHistoryWindow(messages.length)) {
+    vs.historyRenderSessionKey = props.sessionKey;
+    vs.historyRenderMessagesRef = messages;
+    vs.historyRenderMessageCount = messages.length;
+    vs.historyRenderLimit = cap;
+    return cap;
+  }
+
+  if (sessionChanged || (refChanged && previousCount === 0)) {
+    vs.historyRenderLimit = Math.min(INITIAL_CHAT_HISTORY_RENDER_WINDOW, cap);
+  } else if (refChanged) {
+    const grewBy = messages.length - previousCount;
+    if (vs.historyRenderLimit >= previousCount) {
+      vs.historyRenderLimit = cap;
+    } else if (grewBy > 0 && grewBy <= CHAT_HISTORY_RENDER_WINDOW_BATCH) {
+      vs.historyRenderLimit = Math.min(cap, vs.historyRenderLimit + grewBy);
+    } else {
+      vs.historyRenderLimit = Math.min(
+        Math.max(vs.historyRenderLimit, INITIAL_CHAT_HISTORY_RENDER_WINDOW),
+        cap,
+      );
+    }
+  }
+
+  vs.historyRenderSessionKey = props.sessionKey;
+  vs.historyRenderMessagesRef = messages;
+  vs.historyRenderMessageCount = messages.length;
+  vs.historyRenderLimit = Math.min(Math.max(1, vs.historyRenderLimit), cap);
+  return vs.historyRenderLimit;
+}
+
+function maybeExpandChatHistoryRenderWindow(event: Event, requestUpdate: () => void) {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  if (target.scrollTop > CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX) {
+    return;
+  }
+  const cap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
+  if (vs.historyRenderLimit >= cap) {
+    return;
+  }
+  vs.historyRenderLimit = Math.min(cap, vs.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH);
+  requestUpdate();
+}
+
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
-  el.style.height = `${Math.min(Math.max(el.scrollHeight, 44), 150)}px`;
+  el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
 }
 
 function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
@@ -1404,6 +1416,7 @@ export function renderChat(props: ChatProps) {
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
   const displayStream = props.stream ?? null;
+  const historyRenderLimit = resolveChatHistoryRenderWindow(props);
 
   const handleCodeBlockCopy = (e: Event) => {
     const btn = (e.target as HTMLElement).closest(".code-block-copy");
@@ -1419,6 +1432,10 @@ export function renderChat(props: ChatProps) {
       () => {},
     );
   };
+  const handleChatThreadScroll = (event: Event) => {
+    maybeExpandChatHistoryRenderWindow(event, requestUpdate);
+    props.onChatScroll?.(event);
+  };
 
   const chatItems = buildCachedChatItems({
     sessionKey: props.sessionKey,
@@ -1431,6 +1448,7 @@ export function renderChat(props: ChatProps) {
     showToolCalls: props.showToolCalls,
     searchOpen: vs.searchOpen,
     searchQuery: vs.searchQuery,
+    historyRenderLimit,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
@@ -1449,7 +1467,7 @@ export function renderChat(props: ChatProps) {
       class="chat-thread"
       role="log"
       aria-live="polite"
-      @scroll=${props.onChatScroll}
+      @scroll=${handleChatThreadScroll}
       @click=${handleCodeBlockCopy}
     >
       <div class="chat-thread-inner">
@@ -1814,6 +1832,19 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
+      ${props.focusMode
+        ? html`
+            <button
+              class="chat-focus-exit"
+              type="button"
+              @click=${props.onToggleFocusMode}
+              aria-label="Exit focus mode"
+              title="Exit focus mode"
+            >
+              ${icons.x}
+            </button>
+          `
+        : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
       <div class="chat-workbench">
@@ -1976,34 +2007,25 @@ export function renderChat(props: ChatProps) {
                       : t("chat.composer.startTalk")}
                     ?disabled=${!props.connected}
                   >
-                    ${props.realtimeTalkActive ? icons.volume2 : icons.mic}
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                     <span class="agent-chat__control-label"
                       >${props.realtimeTalkActive
                         ? t("chat.composer.stopTalk")
                         : t("chat.composer.startTalk")}</span
                     >
                   </button>
-                `
-              : nothing}
-            ${props.onToggleRealtimeTalkOptions
-              ? html`
                   <button
                     class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                      ? "agent-chat__input-btn--talk"
+                      ? "agent-chat__input-btn--active"
                       : ""}"
                     @click=${props.onToggleRealtimeTalkOptions}
-                    title="Talk settings"
-                    aria-label="Talk settings"
-                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
+                    title="Talk options"
+                    aria-label="Talk options"
                     ?disabled=${!props.connected || props.realtimeTalkActive}
                   >
                     ${icons.settings}
-                    <span class="agent-chat__control-label">Talk settings</span>
                   </button>
                 `
-              : nothing}
-            ${props.composerControls
-              ? html`<div class="agent-chat__composer-controls">${props.composerControls}</div>`
               : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
             ${renderChatRunStatusIndicator(composerRunStatus)}
@@ -2021,7 +2043,6 @@ export function renderChat(props: ChatProps) {
             onNewSession: props.onNewSession,
             onSend: handleSend,
             onStoreDraft: () => {},
-            showSecondary: false,
           })}
         </div>
       </div>
