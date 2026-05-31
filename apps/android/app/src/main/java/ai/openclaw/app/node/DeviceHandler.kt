@@ -62,12 +62,16 @@ class DeviceHandler(
     val temperatureC: Double?,
   )
 
+  /** Returns battery, storage, network, and uptime state for device.status. */
   fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(statusPayloadJson())
 
+  /** Returns stable Android hardware, OS, app, and locale metadata for device.info. */
   fun handleDeviceInfo(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(infoPayloadJson())
 
+  /** Returns permission and promptability state for Android capabilities exposed to the gateway. */
   fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(permissionsPayloadJson())
 
+  /** Returns coarse device health for memory, power, thermal, battery, and security patch state. */
   fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
 
   private fun statusPayloadJson(): String {

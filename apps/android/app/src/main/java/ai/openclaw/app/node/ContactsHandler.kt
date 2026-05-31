@@ -345,12 +345,16 @@ private object SystemContactsDataSource : ContactsDataSource {
   }
 }
 
+/**
+ * Handles contacts.search and contacts.add gateway commands through Android ContactsProvider.
+ */
 class ContactsHandler private constructor(
   private val appContext: Context,
   private val dataSource: ContactsDataSource,
 ) {
   constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemContactsDataSource)
 
+  /** Searches contacts by optional display-name substring with bounded result count. */
   fun handleContactsSearch(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -384,6 +388,7 @@ class ContactsHandler private constructor(
     }
   }
 
+  /** Adds a local contact after validating that at least one user-visible field is present. */
   fun handleContactsAdd(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasWritePermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -475,6 +480,7 @@ class ContactsHandler private constructor(
     }
 
   companion object {
+    /** Creates a handler with an injected contacts source for parser and payload tests. */
     internal fun forTesting(
       appContext: Context,
       dataSource: ContactsDataSource,
