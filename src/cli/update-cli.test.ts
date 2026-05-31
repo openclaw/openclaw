@@ -1716,6 +1716,44 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("does not treat unrelated config strings as protected route drift", async () => {
+    const beforeConfig = {
+      plugins: {
+        entries: {
+          demo: {
+            config: {
+              note: "codex/gpt-5.5",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const afterConfig = {
+      plugins: {
+        entries: {
+          demo: {
+            config: {
+              note: "openai/gpt-5.5",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce(makeConfigSnapshot(beforeConfig, { hash: "before" }))
+      .mockResolvedValueOnce(makeConfigSnapshot(afterConfig, { hash: "after" }));
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+
+    await updateCommand({ json: true, restart: false });
+
+    const output = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(output?.status).toBe("ok");
+    expect(output?.reason).toBeUndefined();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("detects missing plugin payloads from persisted records before npm updates", async () => {
     const installPath = createCaseDir("openclaw-missing-plugin-payload");
     fsSync.mkdirSync(installPath, { recursive: true });

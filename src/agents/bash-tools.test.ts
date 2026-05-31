@@ -80,6 +80,14 @@ vi.mock("./bash-tools.exec-approval-followup.js", () => ({
   sendExecApprovalFollowup: vi.fn(async () => false),
 }));
 
+vi.mock("./shell-snapshot.js", async () => {
+  const actual = await vi.importActual<typeof import("./shell-snapshot.js")>("./shell-snapshot.js");
+  return {
+    ...actual,
+    maybeWrapCommandWithShellSnapshot: vi.fn(async ({ command }: { command: string }) => command),
+  };
+});
+
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(async () => ({ ok: true })),
   readGatewayCallOptions: vi.fn(() => ({})),

@@ -32,6 +32,14 @@ vi.mock("../infra/exec-approvals.js", async () => {
   return { ...mod, resolveExecApprovals: () => createExecApprovals() };
 });
 
+vi.mock("./shell-snapshot.js", async () => {
+  const actual = await vi.importActual<typeof import("./shell-snapshot.js")>("./shell-snapshot.js");
+  return {
+    ...actual,
+    maybeWrapCommandWithShellSnapshot: vi.fn(async ({ command }: { command: string }) => command),
+  };
+});
+
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
     spawn: async (input: {

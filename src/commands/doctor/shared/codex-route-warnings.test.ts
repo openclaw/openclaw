@@ -2014,6 +2014,49 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.list?.[0]?.agentRuntime).toEqual({ id: "codex" });
   });
 
+  it("keeps non-route Codex repairs when non-interactive model rewrite is protected", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+            compaction: {
+              model: "openai/gpt-5.4",
+              provider: "custom-summary",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+      preserveLegacyCodexModelRefs: true,
+      codexRuntimeReady: true,
+    });
+
+    expect(result.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.5",
+    });
+    expect(result.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
+    expect(result.cfg.agents?.defaults?.compaction).toBeUndefined();
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.changes).toContain(
+      "Removed agents.defaults.compaction.model; Codex runtime uses native server-side compaction.",
+    );
+    expect(result.changes).toContain(
+      "Removed agents.defaults.compaction.provider; Codex runtime uses native server-side compaction.",
+    );
+    expect(result.changes).toContain(
+      "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
+    );
+  });
+
   it("keeps whole-agent runtime pins while repairing compaction-only model refs and overrides", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {

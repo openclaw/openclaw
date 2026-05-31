@@ -1219,6 +1219,7 @@ function rewriteStringModelSlot(params: {
   key: string;
   path: string;
   runtime?: string;
+  preserveLegacyCodexModelRefs?: boolean;
 }): boolean {
   if (!params.container) {
     return false;
@@ -1226,6 +1227,9 @@ function rewriteStringModelSlot(params: {
   const value = params.container[params.key];
   const model = typeof value === "string" ? value.trim() : "";
   if (!model || !isOpenAICodexModelRef(model)) {
+    return false;
+  }
+  if (params.preserveLegacyCodexModelRefs) {
     return false;
   }
   const canonicalModel = recordCodexModelHit({
@@ -1247,6 +1251,7 @@ function rewriteModelConfigSlot(params: {
   key: string;
   path: string;
   runtime?: string;
+  preserveLegacyCodexModelRefs?: boolean;
 }): boolean {
   if (!params.container) {
     return false;
@@ -1259,6 +1264,7 @@ function rewriteModelConfigSlot(params: {
       key: params.key,
       path: params.path,
       runtime: params.runtime,
+      preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
     });
   }
   const record = asMutableRecord(value);
@@ -1271,6 +1277,7 @@ function rewriteModelConfigSlot(params: {
     key: "primary",
     path: `${params.path}.primary`,
     runtime: params.runtime,
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   if (Array.isArray(record.fallbacks)) {
     record.fallbacks = record.fallbacks.map((entry, index) => {
@@ -1278,6 +1285,9 @@ function rewriteModelConfigSlot(params: {
         return entry;
       }
       const model = entry.trim();
+      if (params.preserveLegacyCodexModelRefs) {
+        return entry;
+      }
       const canonicalModel = recordCodexModelHit({
         hits: params.hits,
         path: `${params.path}.fallbacks.${index}`,
@@ -1293,6 +1303,7 @@ function rewriteModelsMap(params: {
   hits: CodexRouteHit[];
   models: MutableRecord | undefined;
   path: string;
+  preserveLegacyCodexModelRefs?: boolean;
 }): void {
   if (!params.models) {
     return;
@@ -1300,6 +1311,9 @@ function rewriteModelsMap(params: {
   for (const legacyRef of Object.keys(params.models)) {
     const canonicalModel = toCanonicalOpenAIModelRef(legacyRef);
     if (!canonicalModel) {
+      continue;
+    }
+    if (params.preserveLegacyCodexModelRefs) {
       continue;
     }
     recordCodexModelHit({
@@ -1563,6 +1577,7 @@ function rewriteAgentModelRefs(params: {
   rewrittenInheritedCompactionModels?: Map<string, string>;
   runtimePolicyChanges: string[];
   unsupportedCompactionChanges: string[];
+  preserveLegacyCodexModelRefs?: boolean;
 }): void {
   if (!params.agent) {
     return;
@@ -1592,6 +1607,7 @@ function rewriteAgentModelRefs(params: {
         key,
         path: `${params.path}.${key}`,
         runtime: params.currentRuntime,
+        preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
       });
       preserveCodexRuntimePolicyForNewHits(start);
     } else {
@@ -1602,6 +1618,7 @@ function rewriteAgentModelRefs(params: {
         container: agent,
         key,
         path: `${params.path}.${key}`,
+        preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
       });
     }
   }
@@ -1612,6 +1629,7 @@ function rewriteAgentModelRefs(params: {
     container: asMutableRecord(agent.heartbeat),
     key: "model",
     path: `${params.path}.heartbeat.model`,
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   rewriteModelConfigSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
@@ -1620,6 +1638,7 @@ function rewriteAgentModelRefs(params: {
     container: asMutableRecord(agent.subagents),
     key: "model",
     path: `${params.path}.subagents.model`,
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   const compaction = asMutableRecord(agent.compaction);
   const inheritedCompaction = asMutableRecord(params.inheritedCompaction);
@@ -1639,6 +1658,7 @@ function rewriteAgentModelRefs(params: {
         container: compaction,
         key: "model",
         path: `${params.path}.compaction.model`,
+        preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
       });
       preserveCodexRuntimePolicyForNewHits(start);
       const localModel = typeof compaction?.model === "string" ? compaction.model.trim() : "";
@@ -1656,6 +1676,7 @@ function rewriteAgentModelRefs(params: {
           container: inheritedCompaction,
           key: "model",
           path: inheritedModelPath,
+          preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
         });
         const inheritedHit = params.hits[inheritedStart];
         const inheritedCanonicalModel =
@@ -1695,6 +1716,7 @@ function rewriteAgentModelRefs(params: {
           container: compaction,
           key: "model",
           path: `${params.path}.compaction.model`,
+          preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
         });
       }
     }
@@ -1706,6 +1728,7 @@ function rewriteAgentModelRefs(params: {
       container: compaction,
       key: "model",
       path: `${params.path}.compaction.model`,
+      preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
     });
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
@@ -1715,6 +1738,7 @@ function rewriteAgentModelRefs(params: {
     container: asMutableRecord(compaction?.memoryFlush),
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
     rewriteModelConfigSlot({
@@ -1722,6 +1746,7 @@ function rewriteAgentModelRefs(params: {
       container: agent,
       key,
       path: `${params.path}.${key}`,
+      preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
     });
   }
   if (params.rewriteModelsMap) {
@@ -1730,6 +1755,7 @@ function rewriteAgentModelRefs(params: {
       hits: params.hits,
       models: asMutableRecord(agent.models),
       path: `${params.path}.models`,
+      preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
     });
     preserveCodexRuntimePolicyForNewHits(start);
   }
@@ -2312,12 +2338,16 @@ function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
+  preserveLegacyCodexModelRefs?: boolean;
 }): void {
   const value = params.container?.[params.key];
   if (typeof value !== "string") {
     return;
   }
   const canonicalModel = toCanonicalOpenAIModelRef(value.trim());
+  if (params.preserveLegacyCodexModelRefs && canonicalModel) {
+    return;
+  }
   if (
     !canonicalModel ||
     !canonicalOpenAIModelUsesCodexRuntime({
@@ -2343,6 +2373,7 @@ function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
+  preserveLegacyCodexModelRefs?: boolean;
 }): void {
   const value = params.container?.[params.key];
   if (typeof value === "string") {
@@ -2360,6 +2391,7 @@ function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
     container: record,
     key: "primary",
     path: `${params.path}.primary`,
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   const fallbacks = Array.isArray(record.fallbacks) ? record.fallbacks : undefined;
   if (!fallbacks) {
@@ -2370,6 +2402,9 @@ function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
       continue;
     }
     const canonicalModel = toCanonicalOpenAIModelRef(entry.trim());
+    if (params.preserveLegacyCodexModelRefs && canonicalModel) {
+      continue;
+    }
     if (
       !canonicalModel ||
       !canonicalOpenAIModelUsesCodexRuntime({
@@ -2436,6 +2471,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
   cfg: OpenClawConfig;
   preserveSharedDefaultCompactionOverrides: SharedDefaultCompactionOverrideConsumers;
   ignoreLegacyAgentRuntimePins?: boolean;
+  preserveLegacyCodexModelRefs?: boolean;
 }): ConfigRouteRepairResult {
   const nextConfig = structuredClone(params.cfg);
   const preRepairCfg = params.cfg;
@@ -2476,6 +2512,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     rewrittenInheritedCompactionModels,
     runtimePolicyChanges,
     unsupportedCompactionChanges,
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   const inheritedModelRef = readAgentPrimaryModelRef(nextConfig.agents?.defaults);
   const agents = Array.isArray(nextConfig.agents?.list) ? nextConfig.agents.list : [];
@@ -2509,6 +2546,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
       rewrittenInheritedCompactionModels,
       runtimePolicyChanges,
       unsupportedCompactionChanges,
+      preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
     });
   }
   const channelsModelByChannel = asMutableRecord(nextConfig.channels?.modelByChannel);
@@ -2525,6 +2563,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
           container: targets,
           key: targetId,
           path: `channels.modelByChannel.${channelId}.${targetId}`,
+          preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
         });
       }
     }
@@ -2536,6 +2575,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
       container: mapping as MutableRecord,
       key: "model",
       path: `hooks.mappings.${index}.model`,
+      preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
     });
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
@@ -2544,6 +2584,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     container: asMutableRecord(nextConfig.hooks?.gmail),
     key: "model",
     path: "hooks.gmail.model",
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: nextConfig,
@@ -2551,6 +2592,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     container: asMutableRecord(nextConfig.messages?.tts),
     key: "summaryModel",
     path: "messages.tts.summaryModel",
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: nextConfig,
@@ -2558,6 +2600,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     container: asMutableRecord(asMutableRecord(nextConfig.channels?.discord)?.voice),
     key: "model",
     path: "channels.discord.voice.model",
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   const shouldClearRuntimePins = hits.some((hit) => !isCompactionOnlyRouteHit(hit));
   const runtimePinChanges = shouldClearRuntimePins
@@ -2587,7 +2630,10 @@ function configRepairWouldClearLegacyRuntimePins(params: { cfg: OpenClawConfig }
   return dryRun.changes.some((hit) => !isCompactionOnlyRouteHit(hit));
 }
 
-function rewriteConfigModelRefs(params: { cfg: OpenClawConfig }): ConfigRouteRepairResult {
+function rewriteConfigModelRefs(params: {
+  cfg: OpenClawConfig;
+  preserveLegacyCodexModelRefs?: boolean;
+}): ConfigRouteRepairResult {
   const preserveSharedDefaultCompactionOverrides = getSharedDefaultCompactionOverrideConsumers({
     cfg: params.cfg,
     ignoreLegacyAgentRuntimePins: configRepairWouldClearLegacyRuntimePins(params),
@@ -2595,6 +2641,7 @@ function rewriteConfigModelRefs(params: { cfg: OpenClawConfig }): ConfigRouteRep
   return rewriteConfigModelRefsWithCompactionPolicy({
     cfg: params.cfg,
     preserveSharedDefaultCompactionOverrides,
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
 }
 
@@ -2823,24 +2870,20 @@ export function maybeRepairCodexRoutes(params: {
       changes: [],
     };
   }
-  if (params.preserveLegacyCodexModelRefs === true && hits.length > 0) {
-    return {
-      cfg: params.cfg,
-      warnings: [
-        ...collectCodexRouteWarnings({ cfg: params.cfg, env: params.env }),
-        formatPreservedLegacyCodexRouteWarning(),
-      ],
-      changes: [],
-    };
-  }
   const repaired = rewriteConfigModelRefs({
     cfg: params.cfg,
+    preserveLegacyCodexModelRefs: params.preserveLegacyCodexModelRefs,
   });
   const codexPluginRepair = enableCodexPluginForRequiredRoutes({
     cfg: repaired.cfg,
     routeHits: collectDisabledCodexPluginRouteHits(repaired.cfg),
   });
-  const warnings = collectCodexRouteWarnings({ cfg: codexPluginRepair.cfg, env: params.env });
+  const warnings = [
+    ...collectCodexRouteWarnings({ cfg: codexPluginRepair.cfg, env: params.env }),
+    ...(params.preserveLegacyCodexModelRefs === true && hits.length > 0
+      ? [formatPreservedLegacyCodexRouteWarning()]
+      : []),
+  ];
   const changes =
     repaired.changes.length > 0
       ? [

@@ -232,6 +232,15 @@ type MissingPluginInstallPayload = {
 };
 
 type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
+const AGENT_ROUTE_MODEL_KEYS = [
+  "model",
+  "imageModel",
+  "imageGenerationModel",
+  "videoGenerationModel",
+  "musicGenerationModel",
+  "voiceModel",
+  "pdfModel",
+] as const;
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
@@ -284,19 +293,110 @@ function normalizeProtectedRouteString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() || undefined : undefined;
 }
 
-function isProtectedRouteValue(pathLabel: string, value: string): boolean {
+function isArrayIndexPathPart(value: string | undefined): boolean {
+  return value !== undefined && /^(?:0|[1-9]\d*)$/.test(value);
+}
+
+function isModelConfigPathSuffix(pathParts: readonly string[]): boolean {
+  const [first, second, third, fourth] = pathParts;
+  if (first && (AGENT_ROUTE_MODEL_KEYS as readonly string[]).includes(first)) {
+    return (
+      pathParts.length === 1 ||
+      (pathParts.length === 2 && second === "primary") ||
+      (pathParts.length === 3 && second === "fallbacks" && isArrayIndexPathPart(third))
+    );
+  }
+  if (first === "heartbeat" && second === "model") {
+    return pathParts.length === 2;
+  }
+  if (first === "subagents" && second === "model") {
+    return (
+      pathParts.length === 2 ||
+      (pathParts.length === 3 && third === "primary") ||
+      (pathParts.length === 4 && third === "fallbacks" && isArrayIndexPathPart(fourth))
+    );
+  }
+  if (first === "compaction" && second === "model") {
+    return pathParts.length === 2;
+  }
+  if (first === "compaction" && second === "memoryFlush" && third === "model") {
+    return pathParts.length === 3;
+  }
+  if (first === "models" && pathParts.length === 2) {
+    return true;
+  }
+  return false;
+}
+
+function isAgentScopedRoutePath(pathParts: readonly string[]): boolean {
+  if (pathParts[0] !== "agents") {
+    return false;
+  }
+  if (pathParts[1] === "defaults") {
+    return isModelConfigPathSuffix(pathParts.slice(2));
+  }
+  if (pathParts[1] === "list" && isArrayIndexPathPart(pathParts[2])) {
+    return isModelConfigPathSuffix(pathParts.slice(3));
+  }
+  return false;
+}
+
+function isAgentRuntimeRoutePath(pathParts: readonly string[]): boolean {
+  if (pathParts[0] !== "agents") {
+    return false;
+  }
+  const suffix =
+    pathParts[1] === "defaults"
+      ? pathParts.slice(2)
+      : pathParts[1] === "list" && isArrayIndexPathPart(pathParts[2])
+        ? pathParts.slice(3)
+        : [];
+  return (
+    suffix.length === 4 &&
+    suffix[0] === "models" &&
+    suffix[2] === "agentRuntime" &&
+    suffix[3] === "id"
+  );
+}
+
+function isProtectedRoutePath(pathParts: readonly string[]): boolean {
+  if (isAgentScopedRoutePath(pathParts) || isAgentRuntimeRoutePath(pathParts)) {
+    return true;
+  }
+  if (pathParts[0] === "channels" && pathParts[1] === "modelByChannel") {
+    return pathParts.length === 4;
+  }
+  if (pathParts[0] === "hooks" && pathParts[1] === "mappings") {
+    return pathParts.length === 4 && isArrayIndexPathPart(pathParts[2]) && pathParts[3] === "model";
+  }
+  if (pathParts[0] === "hooks" && pathParts[1] === "gmail") {
+    return pathParts.length === 3 && pathParts[2] === "model";
+  }
+  if (pathParts[0] === "messages" && pathParts[1] === "tts") {
+    return pathParts.length === 3 && pathParts[2] === "summaryModel";
+  }
+  if (pathParts[0] === "channels" && pathParts[1] === "discord" && pathParts[2] === "voice") {
+    return pathParts.length === 4 && pathParts[3] === "model";
+  }
+  return false;
+}
+
+function isProtectedRouteValue(pathParts: readonly string[], value: string): boolean {
+  if (!isProtectedRoutePath(pathParts)) {
+    return false;
+  }
   const normalized = value.toLowerCase();
   if (normalized.startsWith("openai-codex/") || normalized.startsWith("codex/")) {
     return true;
   }
-  return pathLabel.endsWith(".agentRuntime.id") && ["codex", "openai-codex"].includes(normalized);
+  return isAgentRuntimeRoutePath(pathParts) && ["codex", "openai-codex"].includes(normalized);
 }
 
 function collectProtectedRouteEntries(value: unknown): ProtectedRouteEntry[] {
   const entries: ProtectedRouteEntry[] = [];
   const visit = (candidate: unknown, pathLabel: string, pathParts: string[]) => {
     const normalized = normalizeProtectedRouteString(candidate);
-    if (normalized && isProtectedRouteValue(pathLabel, normalized)) {
+    if (normalized && isProtectedRouteValue(pathParts, normalized)) {
       entries.push({ path: pathLabel, pathParts, value: normalized });
       return;
     }
