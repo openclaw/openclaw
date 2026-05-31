@@ -2750,12 +2750,14 @@ describe("openai transport stream", () => {
         call_id?: string;
         phase?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
+      summary: [],
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
@@ -2856,6 +2858,7 @@ describe("openai transport stream", () => {
         call_id?: string;
         phase?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
@@ -2863,6 +2866,7 @@ describe("openai transport stream", () => {
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
+      summary: [],
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
@@ -2962,6 +2966,7 @@ describe("openai transport stream", () => {
         call_id?: string;
         phase?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
@@ -2969,6 +2974,7 @@ describe("openai transport stream", () => {
     expectRecordFields(reasoningItem, {
       type: "reasoning",
       id: "rs_prior",
+      summary: [],
     });
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
@@ -3067,6 +3073,7 @@ describe("openai transport stream", () => {
         call_id?: string;
         phase?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
@@ -3074,6 +3081,7 @@ describe("openai transport stream", () => {
     expectRecordFields(reasoningItem, {
       type: "reasoning",
       encrypted_content: "ciphertext",
+      summary: [],
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
@@ -3217,12 +3225,14 @@ describe("openai transport stream", () => {
         type?: string;
         id?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
+      summary: [],
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
@@ -3290,12 +3300,14 @@ describe("openai transport stream", () => {
         type?: string;
         id?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
     expectRecordFields(reasoningItem, {
       type: "reasoning",
+      summary: [],
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("encrypted_content");
@@ -3365,6 +3377,7 @@ describe("openai transport stream", () => {
         type?: string;
         id?: string;
         encrypted_content?: string;
+        summary?: unknown;
       }>;
     };
 
@@ -3372,6 +3385,7 @@ describe("openai transport stream", () => {
     expectRecordFields(reasoningItem, {
       type: "reasoning",
       encrypted_content: "ciphertext",
+      summary: [],
     });
     expect(reasoningItem?.id).toBeUndefined();
     expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
@@ -3881,69 +3895,66 @@ describe("openai transport stream", () => {
         baseUrl: "https://proxy.example.com/v1",
       },
     },
-  ])(
-    "omits orphan phase-tagged ids for $label responses payloads",
-    ({ label: _label, model }) => {
-      const params = buildOpenAIResponsesParams(
-        {
-          ...model,
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200000,
-          maxTokens: 8192,
-        } as Model<"openai-responses">,
-        {
-          systemPrompt: "system",
-          messages: [
-            {
-              role: "assistant",
-              api: model.api,
-              provider: model.provider,
-              model: model.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  ])("omits orphan phase-tagged ids for $label responses payloads", ({ label: _label, model }) => {
+    const params = buildOpenAIResponsesParams(
+      {
+        ...model,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "text",
+                text: "Working...",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_commentary",
+                  phase: "commentary",
+                }),
               },
-              stopReason: "stop",
-              timestamp: 1,
-              content: [
-                {
-                  type: "text",
-                  text: "Working...",
-                  textSignature: JSON.stringify({
-                    v: 1,
-                    id: "msg_commentary",
-                    phase: "commentary",
-                  }),
-                },
-              ],
-            },
-            {
-              role: "user",
-              content: "Continue",
-              timestamp: 2,
-            },
-          ],
-          tools: [],
-        } as never,
-        undefined,
-      ) as {
-        input?: Array<{ role?: string; id?: string; phase?: string }>;
-      };
+            ],
+          },
+          {
+            role: "user",
+            content: "Continue",
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ role?: string; id?: string; phase?: string }>;
+    };
 
-      const assistantItem = params.input?.find((item) => item.role === "assistant");
-      expectRecordFields(assistantItem, {
-        role: "assistant",
-        phase: "commentary",
-      });
-      expect(assistantItem?.id).toBeUndefined();
-    },
-  );
+    const assistantItem = params.input?.find((item) => item.role === "assistant");
+    expectRecordFields(assistantItem, {
+      role: "assistant",
+      phase: "commentary",
+    });
+    expect(assistantItem?.id).toBeUndefined();
+  });
 
   it("strips the internal cache boundary from OpenAI system prompts", () => {
     const params = buildOpenAIResponsesParams(

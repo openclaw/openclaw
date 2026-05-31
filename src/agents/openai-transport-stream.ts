@@ -909,6 +909,16 @@ function readOpenAIResponsesReasoningReplayBlockMetadata(
   return isOpenAIResponsesReasoningReplayMetadata(value) ? value : undefined;
 }
 
+function normalizeOpenAIResponsesReasoningReplayItem(
+  item: ReplayableResponseReasoningItem,
+): ReplayableResponseReasoningItem {
+  const record = item as ReplayableResponseReasoningItem & Record<string, unknown>;
+  if (record.type !== "reasoning" || Array.isArray(record.summary)) {
+    return item;
+  }
+  return { ...record, summary: [] } as ReplayableResponseReasoningItem;
+}
+
 function prepareOpenAIResponsesReasoningItemForReplay(
   item: ReplayableResponseReasoningItem,
   context: OpenAIResponsesReplayContext,
@@ -917,16 +927,18 @@ function prepareOpenAIResponsesReasoningItemForReplay(
   const { [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: rawMetadata, ...rest } =
     item as ReplayableResponseReasoningItem & Record<string, unknown>;
   if (!("encrypted_content" in rest)) {
-    return rest as ReplayableResponseReasoningItem;
+    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const metadata =
     blockMetadata ??
     (isOpenAIResponsesReasoningReplayMetadata(rawMetadata) ? rawMetadata : undefined);
   if (encryptedReasoningReplayMetadataMatches(metadata, context)) {
-    return rest as ReplayableResponseReasoningItem;
+    return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const stripped = stripEncryptedContentFields(rest);
-  return stripped.value as ReplayableResponseReasoningItem;
+  return normalizeOpenAIResponsesReasoningReplayItem(
+    stripped.value as ReplayableResponseReasoningItem,
+  );
 }
 
 async function createResponsesStreamWithEncryptedContentRetry(params: {
