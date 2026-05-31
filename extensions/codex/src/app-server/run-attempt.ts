@@ -875,10 +875,7 @@ export async function runCodexAppServerAttempt(
     if (activeContextEngine || !binding?.threadId) {
       return false;
     }
-    const projected = applyResumeStaleBindingContinuityProjection({
-      ...binding,
-      lifecycle: { action: "resumed" },
-    });
+    const projected = applyResumeStaleBindingContinuityProjection(binding);
     precomputedStaleBindingContinuityProjectionApplied = projected;
     return projected;
   };

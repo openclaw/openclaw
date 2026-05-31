@@ -1882,26 +1882,18 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps thread-start developer instructions stable when post-start continuity rebuilds the turn prompt", async () => {
-    const beforePromptBuild = vi
-      .fn<
-        (event: { prompt?: string; messages?: Array<{ role?: string }> }) => Promise<{
-          systemPrompt: string;
-          prependSystemContext: string;
-          appendSystemContext: string;
-          prependContext: string;
-        }>
-      >()
-      .mockImplementation(async (event) => {
-        const projected =
-          typeof event.prompt === "string" &&
-          event.prompt.includes("OpenClaw assembled context for this turn:");
-        return {
-          systemPrompt: projected ? "continuity codex system" : "base codex system",
-          prependSystemContext: projected ? "projected pre system" : "base pre system",
-          appendSystemContext: projected ? "projected post system" : "base post system",
-          prependContext: projected ? "projected queued context" : "base queued context",
-        };
-      });
+    const beforePromptBuild = vi.fn(async (...args: unknown[]) => {
+      const [event] = args as [{ prompt?: string; messages?: Array<{ role?: string }> }];
+      const projected =
+        typeof event.prompt === "string" &&
+        event.prompt.includes("OpenClaw assembled context for this turn:");
+      return {
+        systemPrompt: projected ? "continuity codex system" : "base codex system",
+        prependSystemContext: projected ? "projected pre system" : "base pre system",
+        appendSystemContext: projected ? "projected post system" : "base post system",
+        prependContext: projected ? "projected queued context" : "base queued context",
+      };
+    });
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
     );
