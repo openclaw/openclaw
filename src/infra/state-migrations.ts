@@ -317,6 +317,51 @@ function archiveLegacyTaskStateSidecar(params: {
   );
 }
 
+function hardenLegacyImportSource(params: {
+  sourcePath: string;
+  label: string;
+  warnings: string[];
+}): boolean {
+  try {
+    fs.chmodSync(params.sourcePath, 0o600);
+    return true;
+  } catch (err) {
+    params.warnings.push(`Failed securing ${params.label} legacy source: ${String(err)}`);
+    return false;
+  }
+}
+
+function archiveLegacyImportSource(params: {
+  sourcePath: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  const archivedPath = `${params.sourcePath}.migrated`;
+  if (fileExists(archivedPath)) {
+    params.warnings.push(
+      `Left migrated ${params.label} source in place because ${archivedPath} already exists`,
+    );
+    return;
+  }
+  if (!hardenLegacyImportSource(params)) {
+    return;
+  }
+  try {
+    fs.renameSync(params.sourcePath, archivedPath);
+    try {
+      fs.chmodSync(archivedPath, 0o600);
+    } catch (err) {
+      params.warnings.push(
+        `Failed securing archived ${params.label} legacy source: ${String(err)}`,
+      );
+    }
+    params.changes.push(`Archived ${params.label} legacy source → ${archivedPath}`);
+  } catch (err) {
+    params.warnings.push(`Failed archiving ${params.label} legacy source: ${String(err)}`);
+  }
+}
+
 function listSqliteColumns(db: DatabaseSync, table: string): Set<string> {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string }>;
   return new Set(rows.flatMap((row) => (row.name ? [row.name] : [])));
@@ -1271,7 +1316,13 @@ async function runLegacyMigrationPlans(
         const existingValuesByKey = new Map(storeEntries.map(({ key, value }) => [key, value]));
         const expectedKeys = new Set(existingKeys);
         let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
-        const entries = await plan.readEntries();
+        let entries: Awaited<ReturnType<typeof plan.readEntries>>;
+        try {
+          entries = await plan.readEntries();
+        } catch (err) {
+          warnings.push(`Failed reading ${plan.label} legacy source: ${String(err)}`);
+          return;
+        }
         const candidateEntries: Array<{
           key: string;
           targetKey: string;
@@ -1366,26 +1417,20 @@ async function runLegacyMigrationPlans(
           cleanupKeys = expectedKeys;
         }
         const allEntriesCovered =
-          entries.length > 0 &&
-          entries.every(
-            ({ key }) =>
-              cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
-              !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
-          );
+          (entries.length === 0 && plan.cleanupWhenEmpty === true) ||
+          (entries.length > 0 &&
+            entries.every(
+              ({ key }) =>
+                cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
+                !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+            ));
         if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
-          const archivedPath = `${plan.sourcePath}.migrated`;
-          if (fileExists(archivedPath)) {
-            warnings.push(
-              `Left migrated ${plan.label} source in place because ${archivedPath} already exists`,
-            );
-            return;
-          }
-          try {
-            fs.renameSync(plan.sourcePath, archivedPath);
-            changes.push(`Archived ${plan.label} legacy source → ${archivedPath}`);
-          } catch (err) {
-            warnings.push(`Failed archiving ${plan.label} legacy source: ${String(err)}`);
-          }
+          archiveLegacyImportSource({
+            sourcePath: plan.sourcePath,
+            label: plan.label,
+            changes,
+            warnings,
+          });
         }
       });
       continue;

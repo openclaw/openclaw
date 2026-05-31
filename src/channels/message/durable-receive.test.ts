@@ -42,6 +42,15 @@ function createMemoryStore<T>(): PluginStateKeyedStore<T> {
       values.set(key, { key, value, createdAt: Date.now() });
       return true;
     },
+    async update(key, updateValue) {
+      const next = updateValue(values.get(key)?.value);
+      if (next === undefined) {
+        return false;
+      }
+      assertNoUndefinedFields(next);
+      values.set(key, { key, value: next, createdAt: Date.now() });
+      return true;
+    },
     async lookup(key) {
       return values.get(key)?.value;
     },
@@ -146,6 +155,9 @@ describe("createDurableInboundReceiveJournal", () => {
       async registerIfAbsent() {
         return false;
       },
+      async update() {
+        return false;
+      },
       async lookup() {
         return undefined;
       },
@@ -165,6 +177,9 @@ describe("createDurableInboundReceiveJournal", () => {
     > = {
       async register() {},
       async registerIfAbsent() {
+        return false;
+      },
+      async update() {
         return false;
       },
       async lookup() {
@@ -211,6 +226,9 @@ describe("createDurableInboundReceiveJournal", () => {
     > = {
       async register() {},
       async registerIfAbsent() {
+        return false;
+      },
+      async update() {
         return false;
       },
       async lookup() {

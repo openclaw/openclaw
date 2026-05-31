@@ -215,6 +215,9 @@ describe("ensureConfigReady", () => {
     ["Telegram sticker cache", "telegram/sticker-cache.json"],
     ["Telegram thread bindings", "telegram/thread-bindings-default.json"],
     ["Telegram pairing allowFrom", "credentials/telegram-allowFrom.json"],
+    ["iMessage reply short-id cache", "imessage/reply-cache.jsonl"],
+    ["iMessage sent echo cache", "imessage/sent-echoes.jsonl"],
+    ["iMessage catchup cursor", "imessage/catchup/default.json"],
     ["WhatsApp root auth", "credentials/creds.json"],
   ])("runs doctor flow for bundled channel legacy state: %s", async (_label, relativePath) => {
     const root = useTempOpenClawHome();

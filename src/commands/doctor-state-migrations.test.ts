@@ -1008,6 +1008,85 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("archives empty plugin-state import sources when the channel plan asks for cleanup", async () => {
+    const root = await makeTempRoot();
+    const sourceDir = path.join(root, "imessage");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const sourcePath = path.join(sourceDir, "reply-cache.jsonl");
+    fs.writeFileSync(sourcePath, "expired\n", "utf-8");
+    if (process.platform !== "win32") {
+      fs.chmodSync(sourceDir, 0o755);
+      fs.chmodSync(sourcePath, 0o644);
+    }
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test expired cache",
+        sourcePath,
+        targetPath: "plugin state:test.expired-cache",
+        pluginId: "telegram",
+        namespace: "test.expired-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        cleanupSource: "rename",
+        cleanupWhenEmpty: true,
+        readEntries: () => [],
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      `Archived Test expired cache legacy source → ${sourcePath}.migrated`,
+    );
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(`${sourcePath}.migrated`).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("keeps plugin-state import sources when reading entries fails", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test unreadable cache",
+        sourcePath,
+        targetPath: "plugin state:test.unreadable-cache",
+        pluginId: "telegram",
+        namespace: "test.unreadable-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        cleanupSource: "rename",
+        cleanupWhenEmpty: true,
+        readEntries: () => {
+          throw new Error("read failed");
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      "Failed reading Test unreadable cache legacy source: Error: read failed",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+  });
+
   it("keeps plugin-state import source when plugin cap eviction drops an imported row", async () => {
     const root = await makeTempRoot();
     const maxPluginStateEntries = 40;

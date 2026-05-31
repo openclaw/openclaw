@@ -66,11 +66,22 @@ function isLegacyTelegramStateFile(name: string): boolean {
   );
 }
 
+function hasLegacyIMessageStateFiles(stateDir: string): boolean {
+  return (
+    fileOrDirExists(path.join(stateDir, "imessage", "reply-cache.jsonl")) ||
+    fileOrDirExists(path.join(stateDir, "imessage", "sent-echoes.jsonl")) ||
+    dirHasFile(path.join(stateDir, "imessage", "catchup"), (name) => name.endsWith(".json"))
+  );
+}
+
 function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
   if (fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json"))) {
     return true;
   }
   if (dirHasFile(path.join(stateDir, "feishu", "dedup"), (name) => name.endsWith(".json"))) {
+    return true;
+  }
+  if (hasLegacyIMessageStateFiles(stateDir)) {
     return true;
   }
   if (
