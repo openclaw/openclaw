@@ -328,6 +328,24 @@ describe("RealtimeTalkSession consult handoff", () => {
       waitResult: {
         runId: "run-1",
         status: "timeout",
+        error: "preflight setup timed out",
+        timeoutPhase: "preflight",
+      },
+      expected: "preflight setup timed out",
+    },
+    {
+      waitResult: {
+        runId: "run-1",
+        status: "timeout",
+        error: "post-turn cleanup timed out",
+        timeoutPhase: "post_turn",
+      },
+      expected: "post-turn cleanup timed out",
+    },
+    {
+      waitResult: {
+        runId: "run-1",
+        status: "timeout",
         stopReason: "timeout",
         error: "agent runtime timeout",
       },

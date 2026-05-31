@@ -206,6 +206,8 @@ type AgentWaitResult = {
   timeoutPhase?: string;
   providerStarted?: boolean;
   aborted?: boolean;
+  livenessState?: string;
+  yielded?: boolean;
 };
 
 function extractTextFromMessage(message: unknown): string {
@@ -241,13 +243,21 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     return undefined;
   }
   const stopReason = result.stopReason?.trim();
+  const timeoutPhase = result.timeoutPhase?.trim();
   const hasTerminalTimeoutMetadata =
     result.endedAt !== undefined ||
+    message !== undefined ||
     result.aborted === true ||
+    result.livenessState !== undefined ||
+    result.yielded === true ||
+    stopReason !== undefined ||
     stopReason === "timeout" ||
     stopReason === "timed_out" ||
-    (result.timeoutPhase === "provider" && result.providerStarted === true);
-  if (stopReason || hasTerminalTimeoutMetadata) {
+    timeoutPhase === "preflight" ||
+    timeoutPhase === "provider" ||
+    timeoutPhase === "post_turn" ||
+    result.providerStarted === true;
+  if (hasTerminalTimeoutMetadata) {
     return new Error(message || "OpenClaw tool call timed out");
   }
   return undefined;
