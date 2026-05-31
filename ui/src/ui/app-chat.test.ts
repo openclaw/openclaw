@@ -412,6 +412,60 @@ describe("refreshChat", () => {
     expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
     expect(requestUpdate).toHaveBeenCalled();
   });
+
+  it("drains a restored queue after refresh proves the selected session is idle", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([row("main", { hasActiveRun: false, status: "done" })]);
+      }
+      return {};
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: [{ id: "queued-1", text: "after reload", createdAt: 1 }],
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "after reload",
+      }),
+    );
+    expect(host.chatQueue).toEqual([]);
+  });
+
+  it("keeps a restored queue while the selected session is still active", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([row("main", { hasActiveRun: true, status: "running" })]);
+      }
+      return {};
+    });
+    const restoredQueue = [{ id: "queued-1", text: "after active run", createdAt: 1 }];
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: restoredQueue,
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toEqual(restoredQueue);
+    expect(host.chatRunId).toBeNull();
+  });
 });
 
 describe("refreshChatAvatar", () => {

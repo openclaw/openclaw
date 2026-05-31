@@ -40,7 +40,12 @@ import {
 } from "./controllers/sessions.ts";
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
@@ -952,6 +957,34 @@ async function flushChatQueue(host: ChatHost) {
   }
 }
 
+function isSelectedSessionKnownIdle(host: ChatHost, sessionKey: string): boolean {
+  const row = host.sessionsResult?.sessions.find((session) =>
+    areUiSessionKeysEquivalent(session.key, sessionKey),
+  );
+  return Boolean(row && !isSessionRunActive(row));
+}
+
+function flushChatQueueAfterIdleSessionReconciliation(
+  host: ChatHost,
+  sessionKey: string,
+  historyRefresh: Promise<unknown>,
+  sessionsRefresh: Promise<unknown>,
+) {
+  if (host.chatQueue.length === 0) {
+    return;
+  }
+  void Promise.allSettled([historyRefresh, sessionsRefresh]).then(() => {
+    if (
+      host.chatQueue.length === 0 ||
+      !areUiSessionKeysEquivalent(host.sessionKey, sessionKey) ||
+      !isSelectedSessionKnownIdle(host, sessionKey)
+    ) {
+      return;
+    }
+    void flushChatQueue(host);
+  });
+}
+
 export function removeQueuedMessage(host: ChatHost, id: string) {
   const removed = host.chatQueue.filter((item) => item.id === id);
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
@@ -1326,6 +1359,7 @@ export async function refreshChat(
   host: ChatHost,
   opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
 ) {
+  const refreshedSessionKey = host.sessionKey;
   const requestUpdate = () => host.requestUpdate?.();
   const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
     if (opts?.scheduleScroll !== false) {
@@ -1333,11 +1367,18 @@ export async function refreshChat(
     }
     requestUpdate();
   });
+  const sessionsRefresh = loadSessions(host as unknown as SessionsState, {
+    ...createChatSessionsLoadOverrides(host),
+    ...scopedAgentListParamsForSession(host, refreshedSessionKey),
+  });
+  flushChatQueueAfterIdleSessionReconciliation(
+    host,
+    refreshedSessionKey,
+    historyRefresh,
+    sessionsRefresh,
+  );
   const secondaryRefresh = Promise.allSettled([
-    loadSessions(host as unknown as SessionsState, {
-      ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentListParamsForSession(host, host.sessionKey),
-    }),
+    sessionsRefresh,
     refreshChatAvatar(host),
     refreshChatModels(host),
     refreshChatCommands(host),
