@@ -833,7 +833,7 @@ export async function runCodexAppServerAttempt(
       if (typeof idempotencyKey === "string" && idempotencyKey.startsWith("codex-app-server:")) {
         return false;
       }
-      const meta = record.__openclaw;
+      const meta = record["__openclaw"];
       if (
         meta &&
         typeof meta === "object" &&
