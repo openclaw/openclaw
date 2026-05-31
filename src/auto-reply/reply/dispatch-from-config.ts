@@ -83,6 +83,7 @@ import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
@@ -1600,6 +1601,17 @@ export async function dispatchReplyFromConfig(
     agentId: sessionAgentId,
   });
   const chatType = normalizeChatType(ctx.ChatType);
+  const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
+  const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+  const emptyFinalAllowedAsSilent =
+    silentReplyConversationType !== undefined &&
+    resolveSilentReplyPolicyFromPolicies({
+      conversationType: silentReplyConversationType,
+      defaultPolicy: cfg.agents?.defaults?.silentReply,
+      surfacePolicy: silentReplySurface
+        ? cfg.surfaces?.[silentReplySurface]?.silentReply
+        : undefined,
+    }) === "allow";
   const configuredVisibleReplies =
     chatType === "group" || chatType === "channel"
       ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
@@ -2943,7 +2955,9 @@ export async function dispatchReplyFromConfig(
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
-      ...(!queuedFinal ? { noVisibleReplyFallbackEligible: true } : {}),
+      ...(!queuedFinal && !emptyFinalAllowedAsSilent
+        ? { noVisibleReplyFallbackEligible: true }
+        : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
     });
   } catch (err) {
