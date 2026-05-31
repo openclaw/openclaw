@@ -4,6 +4,7 @@ import android.os.Build
 import java.net.InetAddress
 import java.util.Locale
 
+/** Returns true only for loopback hosts safe to treat as local gateway origins. */
 internal fun isLoopbackGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
@@ -44,6 +45,7 @@ internal fun isLoopbackGatewayHost(
   return isMappedIpv4 && address[12] == 127.toByte()
 }
 
+/** Allows cleartext only for loopback and private/link-local network ranges. */
 internal fun isLocalCleartextGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
@@ -107,6 +109,7 @@ private fun isAndroidEmulatorRuntime(): Boolean {
     product.contains("simulator")
 }
 
+/** Parses strict dotted-quad IPv4, rejecting shorthand and out-of-range octets. */
 private fun parseIpv4Address(host: String): ByteArray? {
   val parts = host.split('.')
   if (parts.size != 4) return null
@@ -119,4 +122,5 @@ private fun parseIpv4Address(host: String): ByteArray? {
   return bytes
 }
 
+/** Cheap prefilter before handing potential IPv6 literals to InetAddress. */
 private fun isIpv6LiteralChar(char: Char): Boolean = char in '0'..'9' || char in 'a'..'f' || char == ':' || char == '.'

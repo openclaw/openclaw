@@ -1,6 +1,7 @@
 package ai.openclaw.app.gateway
 
 internal object DeviceAuthPayload {
+  /** Builds the canonical v3 auth string signed by device registration flows. */
   fun buildV3(
     deviceId: String,
     clientId: String,
