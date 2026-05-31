@@ -27,7 +27,7 @@ type FxTwitterPostAuthor = {
   url?: unknown;
 };
 
-type FxTwitterPost = {
+export type FxTwitterPost = {
   id?: unknown;
   url?: unknown;
   text?: unknown;
@@ -68,6 +68,17 @@ export type FxTwitterPostLookupResult = {
   post: FxTwitterPost;
 };
 
+export type FxTwitterPostFilters = {
+  allowedXHandles?: readonly string[];
+  excludedXHandles?: readonly string[];
+  fromDate?: string;
+  toDate?: string;
+};
+
+export type FxTwitterPostFilterResult =
+  | { passes: true }
+  | { passes: false; reason: string; handle?: string };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -90,6 +101,36 @@ function normalizeHandle(value: string | undefined): string | undefined {
     return undefined;
   }
   return value.replace(/^@/u, "");
+}
+
+function normalizeComparableHandle(value: string | undefined): string | undefined {
+  return normalizeHandle(value)?.toLowerCase();
+}
+
+function readPostHandle(post: FxTwitterPost, ref: FxTwitterPostReference): string | undefined {
+  const author = isRecord(post.author) ? post.author : undefined;
+  return normalizeHandle(readString(author?.screen_name) ?? ref.handle);
+}
+
+function normalizeFilterHandles(values: readonly string[] | undefined): Set<string> {
+  return new Set(
+    (values ?? [])
+      .map((value) => normalizeComparableHandle(value))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function readPostDate(post: FxTwitterPost): string | undefined {
+  const timestamp = readNumber(post.created_timestamp);
+  if (timestamp !== undefined) {
+    return new Date(timestamp * 1000).toISOString().slice(0, 10);
+  }
+  const createdAt = readString(post.created_at);
+  if (!createdAt) {
+    return undefined;
+  }
+  const time = Date.parse(createdAt);
+  return Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : undefined;
 }
 
 export function extractFxTwitterPostReference(input: string): FxTwitterPostReference | null {
@@ -254,6 +295,40 @@ function summarizePostContent(post: FxTwitterPost): string {
     .join("\n");
 }
 
+export function evaluateFxTwitterPostFilters(params: {
+  post: FxTwitterPost;
+  ref: FxTwitterPostReference;
+  filters: FxTwitterPostFilters;
+}): FxTwitterPostFilterResult {
+  const handle = readPostHandle(params.post, params.ref);
+  const comparableHandle = normalizeComparableHandle(handle);
+  const allowedHandles = normalizeFilterHandles(params.filters.allowedXHandles);
+  if (allowedHandles.size > 0 && (!comparableHandle || !allowedHandles.has(comparableHandle))) {
+    return {
+      passes: false,
+      reason: "post_author_not_in_allowed_x_handles",
+      handle,
+    };
+  }
+  const excludedHandles = normalizeFilterHandles(params.filters.excludedXHandles);
+  if (comparableHandle && excludedHandles.has(comparableHandle)) {
+    return {
+      passes: false,
+      reason: "post_author_in_excluded_x_handles",
+      handle,
+    };
+  }
+
+  const postDate = readPostDate(params.post);
+  if (params.filters.fromDate && (!postDate || postDate < params.filters.fromDate)) {
+    return { passes: false, reason: "post_before_from_date", handle };
+  }
+  if (params.filters.toDate && (!postDate || postDate > params.filters.toDate)) {
+    return { passes: false, reason: "post_after_to_date", handle };
+  }
+  return { passes: true };
+}
+
 export function buildFxTwitterPostPayload(params: {
   query: string;
   ref: FxTwitterPostReference;
@@ -279,6 +354,45 @@ export function buildFxTwitterPostPayload(params: {
     },
     content: wrapWebContent(content, "web_search"),
     citations: [readString(params.post.url), params.ref.sourceUrl].filter(
+      (entry, index, array): entry is string => Boolean(entry) && array.indexOf(entry) === index,
+    ),
+  };
+}
+
+export function buildFxTwitterFilteredPostPayload(params: {
+  query: string;
+  ref: FxTwitterPostReference;
+  apiUrl: string;
+  tookMs: number;
+  filter: Exclude<FxTwitterPostFilterResult, { passes: true }>;
+}): Record<string, unknown> {
+  const content = [
+    "Exact X post was excluded by x_search filters.",
+    `Status ID: ${params.ref.id}`,
+    params.filter.handle ? `Handle: @${params.filter.handle}` : undefined,
+    `Reason: ${params.filter.reason}`,
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .join("\n");
+  return {
+    query: params.query,
+    provider: "fxtwitter",
+    mode: "exact_post",
+    filtered: true,
+    filterReason: params.filter.reason,
+    tookMs: params.tookMs,
+    apiUrl: params.apiUrl,
+    sourceUrl: params.ref.sourceUrl,
+    statusId: params.ref.id,
+    handle: params.filter.handle ?? params.ref.handle,
+    externalContent: {
+      untrusted: true,
+      source: "x_search",
+      provider: "fxtwitter",
+      wrapped: true,
+    },
+    content: wrapWebContent(content, "web_search"),
+    citations: [params.ref.sourceUrl].filter(
       (entry, index, array): entry is string => Boolean(entry) && array.indexOf(entry) === index,
     ),
   };

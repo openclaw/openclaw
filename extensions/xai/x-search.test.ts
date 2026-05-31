@@ -62,7 +62,14 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
   return mockFetch;
 }
 
-function installFxTwitterPostFetch() {
+function installFxTwitterPostFetch(params?: {
+  id?: string;
+  handle?: string;
+  createdTimestamp?: number;
+}) {
+  const id = params?.id ?? "1580661436132757506";
+  const handle = params?.handle ?? "Twitter";
+  const createdTimestamp = params?.createdTimestamp ?? 1665694028;
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
     Promise.resolve({
       ok: true,
@@ -73,12 +80,12 @@ function installFxTwitterPostFetch() {
           code: 200,
           status: {
             type: "status",
-            id: "1580661436132757506",
-            url: "https://twitter.com/Twitter/status/1580661436132757506",
+            id,
+            url: `https://twitter.com/${handle}/status/${id}`,
             text: "a hit Tweet",
             created_at: "Thu Oct 13 20:47:08 +0000 2022",
-            created_timestamp: 1665694028,
-            author: { name: "Twitter", screen_name: "Twitter" },
+            created_timestamp: createdTimestamp,
+            author: { name: handle, screen_name: handle },
             likes: 43852,
             reposts: 2422,
             quotes: 12,
@@ -322,6 +329,86 @@ describe("xai x_search tool", () => {
     expect(result?.details).toMatchObject({
       provider: "fxtwitter",
       statusId: "1580661436132757506",
+    });
+  });
+
+  it("filters exact FxTwitter posts by allowed handle", async () => {
+    installFxTwitterPostFetch({ id: "1580661436132757510", handle: "Twitter" });
+    const tool = createXSearchTool({ config: {} });
+
+    const result = await tool?.execute?.("x-search:fxtwitter-allowed-filter", {
+      query: "https://x.com/Twitter/status/1580661436132757510",
+      allowed_x_handles: ["openclaw"],
+    });
+
+    expect(result?.details).toMatchObject({
+      provider: "fxtwitter",
+      filtered: true,
+      filterReason: "post_author_not_in_allowed_x_handles",
+      handle: "Twitter",
+    });
+  });
+
+  it("filters exact FxTwitter posts by excluded handle", async () => {
+    installFxTwitterPostFetch({ id: "1580661436132757511", handle: "Twitter" });
+    const tool = createXSearchTool({ config: {} });
+
+    const result = await tool?.execute?.("x-search:fxtwitter-excluded-filter", {
+      query: "https://x.com/Twitter/status/1580661436132757511",
+      excluded_x_handles: ["twitter"],
+    });
+
+    expect(result?.details).toMatchObject({
+      provider: "fxtwitter",
+      filtered: true,
+      filterReason: "post_author_in_excluded_x_handles",
+      handle: "Twitter",
+    });
+  });
+
+  it("filters exact FxTwitter posts outside the requested date range", async () => {
+    installFxTwitterPostFetch({
+      id: "1580661436132757512",
+      handle: "Twitter",
+      createdTimestamp: 1665694028,
+    });
+    const tool = createXSearchTool({ config: {} });
+
+    const result = await tool?.execute?.("x-search:fxtwitter-date-filter", {
+      query: "https://x.com/Twitter/status/1580661436132757512",
+      from_date: "2026-01-01",
+    });
+
+    expect(result?.details).toMatchObject({
+      provider: "fxtwitter",
+      filtered: true,
+      filterReason: "post_before_from_date",
+      handle: "Twitter",
+    });
+  });
+
+  it("keeps exact FxTwitter cache entries filter-safe", async () => {
+    const mockFetch = installFxTwitterPostFetch({
+      id: "1580661436132757513",
+      handle: "Twitter",
+    });
+    const tool = createXSearchTool({ config: {} });
+
+    const unfiltered = await tool?.execute?.("x-search:fxtwitter-cache-open", {
+      query: "https://x.com/Twitter/status/1580661436132757513",
+    });
+    const filtered = await tool?.execute?.("x-search:fxtwitter-cache-filtered", {
+      query: "https://x.com/Twitter/status/1580661436132757513",
+      excluded_x_handles: ["Twitter"],
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(unfiltered?.details).toMatchObject({ provider: "fxtwitter" });
+    expect((unfiltered?.details as { filtered?: unknown } | undefined)?.filtered).toBeUndefined();
+    expect(filtered?.details).toMatchObject({
+      provider: "fxtwitter",
+      filtered: true,
+      filterReason: "post_author_in_excluded_x_handles",
     });
   });
 

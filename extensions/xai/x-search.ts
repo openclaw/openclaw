@@ -10,6 +10,8 @@ import {
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   buildFxTwitterPostPayload,
+  buildFxTwitterFilteredPostPayload,
+  evaluateFxTwitterPostFilters,
   extractFxTwitterPostReference,
   requestFxTwitterPost,
 } from "./src/fxtwitter-post.js";
@@ -153,9 +155,25 @@ export function createXSearchTool(options?: {
 
   return createXSearchToolDefinition(async (_toolCallId: string, args: Record<string, unknown>) => {
     const query = readStringParam(args, "query", { required: true });
+    const allowedXHandles = readStringArrayParam(args, "allowed_x_handles");
+    const excludedXHandles = readStringArrayParam(args, "excluded_x_handles");
+    const fromDate = normalizeOptionalIsoDate(readStringParam(args, "from_date"), "from_date");
+    const toDate = normalizeOptionalIsoDate(readStringParam(args, "to_date"), "to_date");
+    if (fromDate && toDate && fromDate > toDate) {
+      throw new PluginToolInputError("from_date must be on or before to_date");
+    }
+
     const exactPostRef = extractFxTwitterPostReference(query);
     if (exactPostRef) {
-      const cacheKey = JSON.stringify(["x_search", "fxtwitter", exactPostRef.id]);
+      const cacheKey = JSON.stringify([
+        "x_search",
+        "fxtwitter",
+        exactPostRef.id,
+        allowedXHandles ?? null,
+        excludedXHandles ?? null,
+        fromDate ?? null,
+        toDate ?? null,
+      ]);
       const cached = readCache(X_SEARCH_CACHE, cacheKey);
       if (cached) {
         return jsonResult({ ...cached.value, cached: true });
@@ -165,13 +183,27 @@ export function createXSearchTool(options?: {
         ref: exactPostRef,
         timeoutSeconds: resolveTimeoutSeconds(xSearchConfig?.timeoutSeconds, 30),
       });
-      const payload = buildFxTwitterPostPayload({
-        query,
-        ref: exactPostRef,
-        apiUrl: result.apiUrl,
-        tookMs: Date.now() - startedAt,
+      const tookMs = Date.now() - startedAt;
+      const filterResult = evaluateFxTwitterPostFilters({
         post: result.post,
+        ref: exactPostRef,
+        filters: { allowedXHandles, excludedXHandles, fromDate, toDate },
       });
+      const payload = filterResult.passes
+        ? buildFxTwitterPostPayload({
+            query,
+            ref: exactPostRef,
+            apiUrl: result.apiUrl,
+            tookMs,
+            post: result.post,
+          })
+        : buildFxTwitterFilteredPostPayload({
+            query,
+            ref: exactPostRef,
+            apiUrl: result.apiUrl,
+            tookMs,
+            filter: filterResult,
+          });
       writeCache(
         X_SEARCH_CACHE,
         cacheKey,
@@ -189,14 +221,6 @@ export function createXSearchTool(options?: {
 
     if (!xaiSearchEnabled || !apiKey) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
-    }
-
-    const allowedXHandles = readStringArrayParam(args, "allowed_x_handles");
-    const excludedXHandles = readStringArrayParam(args, "excluded_x_handles");
-    const fromDate = normalizeOptionalIsoDate(readStringParam(args, "from_date"), "from_date");
-    const toDate = normalizeOptionalIsoDate(readStringParam(args, "to_date"), "to_date");
-    if (fromDate && toDate && fromDate > toDate) {
-      throw new PluginToolInputError("from_date must be on or before to_date");
     }
 
     const xSearchOptions: XaiXSearchOptions = {
