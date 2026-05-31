@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import {
+  agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -312,15 +313,8 @@ export function createSessionActions(context: SessionActionContext) {
         includeUnknown: state.currentSessionKey === "unknown",
         agentId: listAgentId,
       });
-      const normalizeMatchKey = (key: string) => parseAgentSessionKey(key)?.rest ?? key;
-      const currentMatchKey = normalizeMatchKey(state.currentSessionKey);
       const entry = result.sessions.find((row) => {
-        // Exact match
-        if (row.key === state.currentSessionKey) {
-          return true;
-        }
-        // Also match canonical keys like "agent:default:main" against "main"
-        return normalizeMatchKey(row.key) === currentMatchKey;
+        return agentSessionKeysMatchByRequestKey(row.key, state.currentSessionKey);
       });
       if (entry?.key && entry.key !== state.currentSessionKey) {
         updateAgentFromSessionKey(entry.key);

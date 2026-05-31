@@ -288,6 +288,81 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.history exposes persisted and synthetic session metadata for startup hydration", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const updatedAt = Date.now();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt,
+            modelProvider: "openai",
+            model: "gpt-5",
+            contextTokens: 128_000,
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "persisted metadata" }],
+            timestamp: updatedAt,
+          },
+        }),
+      ]);
+
+      const persisted = await rpcReq<{
+        defaults?: { modelProvider?: string | null; model?: string | null };
+        sessionInfo?: {
+          key?: string;
+          sessionId?: string;
+          updatedAt?: number | null;
+          modelProvider?: string | null;
+          model?: string | null;
+          contextTokens?: number | null;
+        };
+      }>(ws, "chat.history", { sessionKey: "main" });
+
+      expect(persisted.ok).toBe(true);
+      expect(persisted.payload?.defaults?.modelProvider).toBeTruthy();
+      expect(persisted.payload?.defaults?.model).toBeTruthy();
+      expect(persisted.payload?.sessionInfo).toMatchObject({
+        key: "agent:main:main",
+        sessionId: "sess-main",
+        updatedAt,
+        modelProvider: "openai",
+        model: "gpt-5",
+        contextTokens: 128_000,
+      });
+
+      await writeSessionStore({ entries: {} });
+      const synthetic = await rpcReq<{
+        defaults?: { modelProvider?: string | null; model?: string | null };
+        sessionInfo?: {
+          key?: string;
+          sessionId?: string;
+          updatedAt?: number | null;
+          modelProvider?: string | null;
+          model?: string | null;
+          contextTokens?: number | null;
+        };
+      }>(ws, "chat.history", { sessionKey: "main" });
+
+      expect(synthetic.ok).toBe(true);
+      expect(synthetic.payload?.defaults?.modelProvider).toBeTruthy();
+      expect(synthetic.payload?.defaults?.model).toBeTruthy();
+      expect(synthetic.payload?.sessionInfo?.key).toBe("agent:main:main");
+      expect(synthetic.payload?.sessionInfo?.sessionId).toBeUndefined();
+      expect(synthetic.payload?.sessionInfo?.updatedAt).toBeNull();
+      expect(synthetic.payload?.sessionInfo?.modelProvider).toBeTruthy();
+      expect(synthetic.payload?.sessionInfo?.model).toBeTruthy();
+      expect(synthetic.payload?.sessionInfo?.contextTokens).toEqual(expect.any(Number));
+    });
+  });
+
   test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();
