@@ -54,7 +54,7 @@ export type SessionsState = SessionsChatRunState & {
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscriptionAgentId?: string | null;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
+  agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
   hello?: GatewayHelloOk | null;
 };
 
@@ -108,6 +108,18 @@ function isGlobalSessionKey(value: string | null | undefined): boolean {
   return (value ?? "").trim().toLowerCase() === "global";
 }
 
+function resolveConfiguredMainKey(state: SessionsState): string {
+  const snapshot = state.hello?.snapshot as { sessionDefaults?: { mainKey?: string } } | undefined;
+  const mainKey =
+    typeof state.agentsList?.mainKey === "string" && state.agentsList.mainKey.trim()
+      ? state.agentsList.mainKey
+      : typeof snapshot?.sessionDefaults?.mainKey === "string" &&
+          snapshot.sessionDefaults.mainKey.trim()
+        ? snapshot.sessionDefaults.mainKey
+        : "main";
+  return mainKey.trim().toLowerCase();
+}
+
 function resolveSelectedGlobalAliasAgentId(
   state: SessionsState,
   key: string | null | undefined,
@@ -120,7 +132,8 @@ function resolveSelectedGlobalAliasAgentId(
   if (rest === "global") {
     return normalizeAgentId(parsed.agentId);
   }
-  if (rest !== "main") {
+  const configuredMainKey = resolveConfiguredMainKey(state);
+  if (rest !== "main" && rest !== configuredMainKey) {
     return null;
   }
   const row = state.sessionsResult?.sessions.find((session) => session.key === key);

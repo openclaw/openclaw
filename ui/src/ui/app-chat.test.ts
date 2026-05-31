@@ -567,6 +567,47 @@ describe("refreshChat", () => {
     expect(host.chatRunId).toBeNull();
   });
 
+  it("keeps a restored queue when stale history says a newer active row is idle", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return {
+          messages: [],
+          sessionInfo: row("main", {
+            hasActiveRun: false,
+            status: "done",
+            updatedAt: 5,
+          }),
+        };
+      }
+      return {};
+    });
+    const restoredQueue = [{ id: "queued-1", text: "after active run", createdAt: 1 }];
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: restoredQueue,
+      sessionsResult: createSessionsResult([
+        row("main", {
+          hasActiveRun: true,
+          status: "running",
+          updatedAt: 10,
+          startedAt: 9,
+        }),
+      ]),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toEqual(restoredQueue);
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: true,
+      status: "running",
+      updatedAt: 10,
+    });
+  });
+
   it("keeps a restored queue when history has no selected-session metadata", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.history") {

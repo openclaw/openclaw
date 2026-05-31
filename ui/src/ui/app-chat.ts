@@ -50,7 +50,7 @@ import {
 } from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { ChatModelOverride, GatewaySessionRow, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -249,7 +249,7 @@ function resolveGlobalAliasAgentId(
   const configuredMainKey = normalizeLowercaseStringOrEmpty(
     host.agentsList?.mainKey ?? readHelloMainKey(host) ?? "main",
   );
-  return rest === "main" || rest === configuredMainKey
+  return rest === "global" || rest === "main" || rest === configuredMainKey
     ? normalizeAgentId(parsed.agentId)
     : undefined;
 }
@@ -991,6 +991,47 @@ function isHistorySessionInfoForRequestedSession(
   );
 }
 
+function findSelectedSessionRow(
+  host: ChatHost,
+  sessionsResult: SessionsListResult | null | undefined,
+  sessionKey: string,
+  historySessionKey: string | undefined,
+): GatewaySessionRow | undefined {
+  const requestedGlobalAgentId =
+    historySessionKey && isGlobalSessionKey(historySessionKey)
+      ? resolveGlobalAliasAgentId(host, sessionKey)
+      : undefined;
+  return sessionsResult?.sessions.find((session) => {
+    if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
+      return true;
+    }
+    return (
+      requestedGlobalAgentId != null &&
+      resolveGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
+    );
+  });
+}
+
+function historyIdleProofIsStaleForSelectedRow(
+  historySessionInfo: GatewaySessionRow,
+  selectedRow: GatewaySessionRow | undefined,
+): boolean {
+  if (!selectedRow || !isSessionRunActive(selectedRow) || isSessionRunActive(historySessionInfo)) {
+    return false;
+  }
+  const historyUpdatedAt =
+    typeof historySessionInfo.updatedAt === "number" ? historySessionInfo.updatedAt : null;
+  if (historyUpdatedAt == null) {
+    return true;
+  }
+  const selectedUpdatedAt = typeof selectedRow.updatedAt === "number" ? selectedRow.updatedAt : 0;
+  if (selectedUpdatedAt >= historyUpdatedAt) {
+    return true;
+  }
+  const selectedStartedAt = typeof selectedRow.startedAt === "number" ? selectedRow.startedAt : 0;
+  return selectedStartedAt >= historyUpdatedAt;
+}
+
 function flushChatQueueAfterIdleSessionReconciliation(
   host: ChatHost,
   sessionKey: string,
@@ -1009,10 +1050,17 @@ function flushChatQueueAfterIdleSessionReconciliation(
       historyRefreshSettled.status === "fulfilled"
         ? historyRefreshSettled.value?.sessionInfo
         : null;
+    const selectedSessionRow = findSelectedSessionRow(
+      host,
+      freshSessionsResult,
+      sessionKey,
+      historySessionInfo?.key,
+    );
     const historySessionKnownIdle = Boolean(
       historySessionInfo &&
       isHistorySessionInfoForRequestedSession(host, historySessionInfo.key, sessionKey) &&
-      !isSessionRunActive(historySessionInfo),
+      !isSessionRunActive(historySessionInfo) &&
+      !historyIdleProofIsStaleForSelectedRow(historySessionInfo, selectedSessionRow),
     );
     const sessionsResultKnownIdle = freshSessionsResult
       ? isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
