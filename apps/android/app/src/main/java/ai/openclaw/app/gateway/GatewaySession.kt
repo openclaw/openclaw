@@ -111,6 +111,9 @@ private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
 
+/**
+ * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
+ */
 class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
@@ -126,6 +129,9 @@ class GatewaySession(
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
   }
 
+  /**
+   * Gateway node.invoke request routed to Android command handlers.
+   */
   data class InvokeRequest(
     val id: String,
     val nodeId: String,
@@ -155,6 +161,9 @@ class GatewaySession(
     val details: GatewayConnectErrorDetails? = null,
   )
 
+  /**
+   * Structured RPC result used by callers that need error codes without exceptions.
+   */
   data class RpcResult(
     val ok: Boolean,
     val payloadJson: String?,
@@ -194,6 +203,7 @@ class GatewaySession(
 
   @Volatile private var reconnectPausedForAuthFailure = false
 
+  /** Starts or replaces the desired gateway connection and launches the reconnect loop. */
   fun connect(
     endpoint: GatewayEndpoint,
     token: String?,
@@ -216,6 +226,7 @@ class GatewaySession(
     connectionToClose?.closeQuietly()
   }
 
+  /** Clears desired connection state, closes the socket, and stops reconnect attempts. */
   fun disconnect() {
     val jobToCancel: Job?
     val connectionToClose: Connection?
@@ -239,6 +250,7 @@ class GatewaySession(
     }
   }
 
+  /** Forces the current socket closed so the loop reconnects to the current desired endpoint. */
   fun reconnect() {
     reconnectPausedForAuthFailure = false
     currentConnection?.closeQuietly()
@@ -246,6 +258,7 @@ class GatewaySession(
 
   fun currentCanvasHostUrl(): String? = pluginSurfaceUrls["canvas"]
 
+  /** Refreshes the canvas plugin surface URL and caches the normalized Android-reachable URL. */
   suspend fun refreshCanvasHostUrl(timeoutMs: Long = 8_000): String? {
     val refreshed =
       refreshPluginSurfaceUrl(
@@ -261,6 +274,7 @@ class GatewaySession(
 
   fun currentMainSessionKey(): String? = mainSessionKey
 
+  /** Sends a best-effort node.event and returns false instead of throwing on failure. */
   suspend fun sendNodeEvent(
     event: String,
     payloadJson: String?,
@@ -301,6 +315,7 @@ class GatewaySession(
     }
   }
 
+  /** Sends node.event and preserves the gateway RPC error shape for callers that need diagnostics. */
   suspend fun sendNodeEventDetailed(
     event: String,
     payloadJson: String?,
@@ -337,6 +352,7 @@ class GatewaySession(
       put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
     }
 
+  /** Sends an RPC request and throws a code-prefixed exception when the gateway returns an error. */
   suspend fun request(
     method: String,
     paramsJson: String?,
@@ -348,6 +364,7 @@ class GatewaySession(
     throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
   }
 
+  /** Sends an RPC request and returns the structured success/error payload. */
   suspend fun requestDetailed(
     method: String,
     paramsJson: String?,
@@ -364,6 +381,7 @@ class GatewaySession(
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
+  /** Sends an RPC request frame and reports errors asynchronously through [onError]. */
   suspend fun sendRequestFrame(
     method: String,
     paramsJson: String?,
