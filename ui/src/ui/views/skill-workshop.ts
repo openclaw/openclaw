@@ -120,7 +120,7 @@ const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
 };
 
 export function renderSkillWorkshop(props: SkillWorkshopProps) {
-  const filtered = filterProposals(props.proposals, props.statusFilter, props.query);
+  const filtered = filterSkillWorkshopProposals(props.proposals, props.statusFilter, props.query);
   const selected = filtered.find((p) => p.key === props.selectedKey) ?? filtered[0];
   const groups = groupByRecency(filtered);
   const preview =
@@ -1060,7 +1060,7 @@ function renderInline(text: string): unknown {
   return parts;
 }
 
-function filterProposals(
+export function filterSkillWorkshopProposals(
   proposals: SkillWorkshopProposal[],
   statusFilter: SkillWorkshopStatusFilter,
   query: string,

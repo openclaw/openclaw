@@ -3377,12 +3377,17 @@ export function renderApp(state: AppViewState) {
               );
               const counts = countSkillWorkshopProposals(proposals);
               const selectedKey = state.skillWorkshopSelectedKey ?? proposals[0]?.key ?? null;
-              const currentIndex = proposals.findIndex((p) => p.key === selectedKey);
+              const visibleProposals = m.filterSkillWorkshopProposals(
+                proposals,
+                state.skillWorkshopStatusFilter,
+                state.skillWorkshopQuery,
+              );
+              const currentIndex = visibleProposals.findIndex((p) => p.key === selectedKey);
               const goto = (offset: number) => {
-                if (proposals.length === 0) return;
+                if (visibleProposals.length === 0) return;
                 const idx = currentIndex < 0 ? 0 : currentIndex;
-                const next = (idx + offset + proposals.length) % proposals.length;
-                const proposal = proposals[next];
+                const next = (idx + offset + visibleProposals.length) % visibleProposals.length;
+                const proposal = visibleProposals[next];
                 selectSkillWorkshopProposal(state, proposal.key);
                 state.skillWorkshopReviewedKeys = rememberSkillWorkshopProposalReviewed(
                   state.skillWorkshopReviewedKeys,
