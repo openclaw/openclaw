@@ -30,6 +30,7 @@ describe("loadModelCatalogForBrowse", () => {
 
   afterEach(() => {
     vi.clearAllTimers();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
