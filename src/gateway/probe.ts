@@ -12,6 +12,7 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/t
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
+import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -102,6 +103,43 @@ function isDeviceIdentityRequiredClose(close: GatewayProbeClose | null): boolean
 
 function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
   return Boolean(auth?.token?.trim() || auth?.password?.trim());
+}
+
+function isLoopbackProbeUrl(url: string): boolean {
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function shouldRetryWithoutDeviceIdentity(params: {
+  url: string;
+  auth: GatewayProbeAuth | undefined;
+  deviceIdentity: unknown;
+  result: GatewayProbeResult;
+}): boolean {
+  if (params.deviceIdentity == null || !hasProbeAuth(params.auth)) {
+    return false;
+  }
+  if (!isLoopbackProbeUrl(params.url)) {
+    return false;
+  }
+  if (params.result.connectLatencyMs != null) {
+    return false;
+  }
+  if (params.result.auth.capability !== "pairing_pending") {
+    return false;
+  }
+  const details = params.result.connectErrorDetails;
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+  return (details as { code?: unknown }).code === "PAIRING_REQUIRED";
+}
+
+function shouldPreferRetryResult(result: GatewayProbeResult): boolean {
+  return result.ok || result.connectLatencyMs != null || result.auth.capability !== "unknown";
 }
 
 function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
@@ -233,16 +271,6 @@ export async function probeGateway(opts: {
   tlsFingerprint?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<GatewayProbeResult> {
-  const startedAt = Date.now();
-  const instanceId = randomUUID();
-  let connectLatencyMs: number | null = null;
-  let connectError: string | null = null;
-  let connectErrorDetails: unknown = null;
-  let close: GatewayProbeClose | null = null;
-  let auth = emptyProbeAuth();
-  let server = emptyProbeServer();
-  let authMetadataPresent = false;
-
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
   const deviceIdentity = await (async () => {
@@ -271,150 +299,232 @@ export async function probeGateway(opts: {
       return null;
     }
   })();
-  const cacheKey = resolveDeviceRequiredProbeCacheKey(opts.url);
-  const cacheEligible = deviceIdentity == null && !hasProbeAuth(opts.auth);
-  if (cacheEligible && shouldShortCircuitDeviceRequiredProbe(cacheKey, Date.now())) {
-    return makeDeviceRequiredShortCircuitResult(opts.url);
-  }
-  const initialProbeTimeoutMs = clampProbeTimeoutMs(opts.timeoutMs);
+  const runProbeAttempt = async (attemptDeviceIdentity: unknown): Promise<GatewayProbeResult> => {
+    const startedAt = Date.now();
+    const instanceId = randomUUID();
+    let connectLatencyMs: number | null = null;
+    let connectError: string | null = null;
+    let connectErrorDetails: unknown = null;
+    let close: GatewayProbeClose | null = null;
+    let auth = emptyProbeAuth();
+    let server = emptyProbeServer();
+    let authMetadataPresent = false;
+    const cacheKey = resolveDeviceRequiredProbeCacheKey(opts.url);
+    const cacheEligible = attemptDeviceIdentity == null && !hasProbeAuth(opts.auth);
+    if (cacheEligible && shouldShortCircuitDeviceRequiredProbe(cacheKey, Date.now())) {
+      return makeDeviceRequiredShortCircuitResult(opts.url);
+    }
+    const initialProbeTimeoutMs = clampProbeTimeoutMs(opts.timeoutMs);
 
-  return await new Promise<GatewayProbeResult>((resolve) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const startAbort = new AbortController();
-    const clearProbeTimer = () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-    };
-    const armProbeTimer = (onTimeout: () => void, timeoutMs = initialProbeTimeoutMs) => {
-      clearProbeTimer();
-      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(timeoutMs));
-    };
-    const settle = (
-      result: Omit<GatewayProbeResult, "url" | "connectErrorDetails"> & {
-        connectErrorDetails?: unknown;
-      },
-    ) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      startAbort.abort();
-      clearProbeTimer();
-      void (async () => {
-        try {
-          await client.stopAndWait({ timeoutMs: PROBE_CLIENT_STOP_TIMEOUT_MS });
-        } catch {
-          client.stop();
+    return await new Promise<GatewayProbeResult>((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const startAbort = new AbortController();
+      const clearProbeTimer = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
         }
-        if (result.ok) {
-          clearDeviceRequiredProbeFailures(cacheKey);
-        } else if (cacheEligible && isDeviceIdentityRequiredClose(result.close)) {
-          noteDeviceRequiredProbeFailure(cacheKey, Date.now());
-        }
-        const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
-        resolve({
-          url: opts.url,
-          ...rest,
-          ...(resultConnectErrorDetails != null
-            ? { connectErrorDetails: resultConnectErrorDetails }
-            : {}),
-        });
-      })();
-    };
-    const settleProbe = (params: {
-      ok: boolean;
-      error: string | null;
-      verifiedRead?: boolean;
-      health: unknown;
-      status: unknown;
-      presence: SystemPresence[] | null;
-      configSnapshot: unknown;
-    }) => {
-      settle({
-        ok: params.ok,
-        connectLatencyMs,
-        error: params.error,
-        connectErrorDetails,
-        close,
-        auth: resolveProbeAuthSummary({
-          role: auth.role,
-          scopes: auth.scopes,
-          authMetadataPresent,
-          error: params.error,
-          close,
-          verifiedRead: params.verifiedRead,
-          connectLatencyMs,
-        }),
-        server,
-        health: params.health,
-        status: params.status,
-        presence: params.presence,
-        configSnapshot: params.configSnapshot,
-      });
-    };
-
-    const client = new GatewayClient({
-      url: opts.url,
-      token: opts.auth?.token,
-      password: opts.auth?.password,
-      tlsFingerprint: opts.tlsFingerprint,
-      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
-      env: opts.env,
-      scopes: [READ_SCOPE],
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.PROBE,
-      instanceId,
-      deviceIdentity,
-      onConnectError: (err) => {
-        connectError = formatErrorMessage(err);
-        connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
-      },
-      onClose: (code, reason) => {
-        close = { code, reason };
-        if (connectLatencyMs == null) {
-          settleProbe({
-            ok: false,
-            error: connectError || formatProbeCloseError(close),
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
-          });
-        }
-      },
-      onHelloOk: async (hello) => {
-        connectLatencyMs = Date.now() - startedAt;
-        authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
-        server = {
-          version: typeof hello?.server?.version === "string" ? hello.server.version : null,
-          connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
-        };
-        auth = resolveProbeAuthSummary({
-          role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
-          scopes: Array.isArray(hello?.auth?.scopes)
-            ? hello.auth.scopes.filter((scope): scope is string => typeof scope === "string")
-            : [],
-          authMetadataPresent,
-        });
-        if (detailLevel === "none") {
-          settleProbe({
-            ok: true,
-            error: null,
-            verifiedRead: false,
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
-          });
+      };
+      const armProbeTimer = (onTimeout: () => void, timeoutMs = initialProbeTimeoutMs) => {
+        clearProbeTimer();
+        timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(timeoutMs));
+      };
+      const settle = (
+        result: Omit<GatewayProbeResult, "url" | "connectErrorDetails"> & {
+          connectErrorDetails?: unknown;
+        },
+      ) => {
+        if (settled) {
           return;
         }
-        // Once the gateway has accepted the session, a slow follow-up RPC should no longer
-        // downgrade the probe to "unreachable". Give detail fetching its own budget.
-        armProbeTimer(() => {
+        settled = true;
+        startAbort.abort();
+        clearProbeTimer();
+        void (async () => {
+          try {
+            await client.stopAndWait({ timeoutMs: PROBE_CLIENT_STOP_TIMEOUT_MS });
+          } catch {
+            client.stop();
+          }
+          if (result.ok) {
+            clearDeviceRequiredProbeFailures(cacheKey);
+          } else if (cacheEligible && isDeviceIdentityRequiredClose(result.close)) {
+            noteDeviceRequiredProbeFailure(cacheKey, Date.now());
+          }
+          const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
+          resolve({
+            url: opts.url,
+            ...rest,
+            ...(resultConnectErrorDetails != null
+              ? { connectErrorDetails: resultConnectErrorDetails }
+              : {}),
+          });
+        })();
+      };
+      const settleProbe = (params: {
+        ok: boolean;
+        error: string | null;
+        verifiedRead?: boolean;
+        health: unknown;
+        status: unknown;
+        presence: SystemPresence[] | null;
+        configSnapshot: unknown;
+      }) => {
+        settle({
+          ok: params.ok,
+          connectLatencyMs,
+          error: params.error,
+          connectErrorDetails,
+          close,
+          auth: resolveProbeAuthSummary({
+            role: auth.role,
+            scopes: auth.scopes,
+            authMetadataPresent,
+            error: params.error,
+            close,
+            verifiedRead: params.verifiedRead,
+            connectLatencyMs,
+          }),
+          server,
+          health: params.health,
+          status: params.status,
+          presence: params.presence,
+          configSnapshot: params.configSnapshot,
+        });
+      };
+
+      const client = new GatewayClient({
+        url: opts.url,
+        token: opts.auth?.token,
+        password: opts.auth?.password,
+        tlsFingerprint: opts.tlsFingerprint,
+        preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+        env: opts.env,
+        scopes: [READ_SCOPE],
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        clientVersion: "dev",
+        mode: GATEWAY_CLIENT_MODES.PROBE,
+        instanceId,
+        deviceIdentity: attemptDeviceIdentity,
+        onConnectError: (err) => {
+          connectError = formatErrorMessage(err);
+          connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
+        },
+        onClose: (code, reason) => {
+          close = { code, reason };
+          if (connectLatencyMs == null) {
+            settleProbe({
+              ok: false,
+              error: connectError || formatProbeCloseError(close),
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            });
+          }
+        },
+        onHelloOk: async (hello) => {
+          connectLatencyMs = Date.now() - startedAt;
+          authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
+          server = {
+            version: typeof hello?.server?.version === "string" ? hello.server.version : null,
+            connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
+          };
+          auth = resolveProbeAuthSummary({
+            role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
+            scopes: Array.isArray(hello?.auth?.scopes)
+              ? hello.auth.scopes.filter((scope): scope is string => typeof scope === "string")
+              : [],
+            authMetadataPresent,
+          });
+          if (detailLevel === "none") {
+            settleProbe({
+              ok: true,
+              error: null,
+              verifiedRead: false,
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            });
+            return;
+          }
+          // Once the gateway has accepted the session, a slow follow-up RPC should no longer
+          // downgrade the probe to "unreachable". Give detail fetching its own budget.
+          armProbeTimer(() => {
+            settleProbe({
+              ok: false,
+              error: "timeout",
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            });
+          });
+          try {
+            if (detailLevel === "presence") {
+              const presence = await client.request("system-presence");
+              settleProbe({
+                ok: true,
+                error: null,
+                verifiedRead: true,
+                health: null,
+                status: null,
+                presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+                configSnapshot: null,
+              });
+              return;
+            }
+            const [health, status, presence, configSnapshot] = await Promise.all([
+              client.request("health"),
+              client.request("status"),
+              client.request("system-presence"),
+              client.request("config.get", {}),
+            ]);
+            settleProbe({
+              ok: true,
+              error: null,
+              verifiedRead: true,
+              health,
+              status,
+              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
+              configSnapshot,
+            });
+          } catch (err) {
+            const error = formatErrorMessage(err);
+            settleProbe({
+              ok: false,
+              error,
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            });
+          }
+        },
+      });
+
+      armProbeTimer(() => {
+        const error = connectError ? `connect failed: ${connectError}` : "timeout";
+        settleProbe({
+          ok: false,
+          error,
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        });
+      });
+
+      void startGatewayClientWhenEventLoopReady(client, {
+        timeoutMs: initialProbeTimeoutMs,
+        signal: startAbort.signal,
+      })
+        .then((readiness) => {
+          if (settled || readiness.ready || readiness.aborted) {
+            return;
+          }
           settleProbe({
             ok: false,
             error: "timeout",
@@ -423,92 +533,31 @@ export async function probeGateway(opts: {
             presence: null,
             configSnapshot: null,
           });
-        });
-        try {
-          if (detailLevel === "presence") {
-            const presence = await client.request("system-presence");
-            settleProbe({
-              ok: true,
-              error: null,
-              verifiedRead: true,
-              health: null,
-              status: null,
-              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-              configSnapshot: null,
-            });
+        })
+        .catch((err) => {
+          if (settled) {
             return;
           }
-          const [health, status, presence, configSnapshot] = await Promise.all([
-            client.request("health"),
-            client.request("status"),
-            client.request("system-presence"),
-            client.request("config.get", {}),
-          ]);
-          settleProbe({
-            ok: true,
-            error: null,
-            verifiedRead: true,
-            health,
-            status,
-            presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-            configSnapshot,
-          });
-        } catch (err) {
-          const error = formatErrorMessage(err);
+          connectError = formatErrorMessage(err);
           settleProbe({
             ok: false,
-            error,
+            error: connectError,
             health: null,
             status: null,
             presence: null,
             configSnapshot: null,
           });
-        }
-      },
-    });
-
-    armProbeTimer(() => {
-      const error = connectError ? `connect failed: ${connectError}` : "timeout";
-      settleProbe({
-        ok: false,
-        error,
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
-      });
-    });
-
-    void startGatewayClientWhenEventLoopReady(client, {
-      timeoutMs: initialProbeTimeoutMs,
-      signal: startAbort.signal,
-    })
-      .then((readiness) => {
-        if (settled || readiness.ready || readiness.aborted) {
-          return;
-        }
-        settleProbe({
-          ok: false,
-          error: "timeout",
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
         });
-      })
-      .catch((err) => {
-        if (settled) {
-          return;
-        }
-        connectError = formatErrorMessage(err);
-        settleProbe({
-          ok: false,
-          error: connectError,
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
-        });
-      });
-  });
+    });
+  };
+
+  const result = await runProbeAttempt(deviceIdentity);
+  if (
+    !shouldRetryWithoutDeviceIdentity({ url: opts.url, auth: opts.auth, deviceIdentity, result })
+  ) {
+    return result;
+  }
+
+  const retried = await runProbeAttempt(null);
+  return shouldPreferRetryResult(retried) ? retried : result;
 }
