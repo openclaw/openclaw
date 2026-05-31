@@ -14,17 +14,20 @@ import {
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  type ManagedNpmRootActiveHostDependencySnapshot,
+  type ManagedNpmRootInstalledDependency,
   type ManagedNpmRootPeerDependencySnapshot,
+  readManagedNpmRootActiveHostDependencySnapshot,
   readManagedNpmRootInstalledDependency,
   readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
+  repairManagedNpmRootActiveHostPackage,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
   restoreManagedNpmRootPeerDependencySnapshot,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
-  type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
 import {
   compareOpenClawReleaseVersions,
@@ -527,6 +530,7 @@ async function rollbackManagedNpmPluginInstall(params: {
   timeoutMs: number;
   logger: PluginInstallLogger;
   peerDependencySnapshot?: ManagedNpmRootPeerDependencySnapshot;
+  activeHostDependencySnapshot?: ManagedNpmRootActiveHostDependencySnapshot | null;
 }): Promise<void> {
   try {
     await runCommandWithTimeout(
@@ -639,6 +643,12 @@ async function rollbackManagedNpmPluginInstall(params: {
   }
   if (params.packageName !== "openclaw") {
     try {
+      await repairManagedNpmRootActiveHostPackage({
+        npmRoot: params.npmRoot,
+        dependencySnapshot: params.activeHostDependencySnapshot,
+        timeoutMs: params.timeoutMs,
+        logger: params.logger,
+      });
       await repairManagedNpmRootOpenClawPeer({
         npmRoot: params.npmRoot,
         timeoutMs: params.timeoutMs,
@@ -832,6 +842,10 @@ async function installPluginFromManagedNpmRoot(
     }
   }
   const preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
+  const activeHostDependencySnapshot =
+    params.packageName === "openclaw"
+      ? null
+      : await readManagedNpmRootActiveHostDependencySnapshot({ npmRoot });
   const managedOverrides = await readOpenClawManagedNpmRootOverrides();
   const rollbackPeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
     npmRoot,
@@ -844,6 +858,7 @@ async function installPluginFromManagedNpmRoot(
       timeoutMs,
       logger,
       peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      activeHostDependencySnapshot,
     });
     return { ok: false, error };
   };
@@ -928,6 +943,7 @@ async function installPluginFromManagedNpmRoot(
       timeoutMs,
       logger,
       peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      activeHostDependencySnapshot,
     });
     return {
       ok: false,
@@ -956,6 +972,7 @@ async function installPluginFromManagedNpmRoot(
         timeoutMs,
         logger,
         peerDependencySnapshot: rollbackPeerDependencySnapshot,
+        activeHostDependencySnapshot,
       });
       return {
         ok: false,
@@ -980,6 +997,7 @@ async function installPluginFromManagedNpmRoot(
       timeoutMs,
       logger,
       peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      activeHostDependencySnapshot,
     });
     return {
       ok: false,
@@ -1010,6 +1028,7 @@ async function installPluginFromManagedNpmRoot(
       timeoutMs,
       logger,
       peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      activeHostDependencySnapshot,
     });
     return {
       ok: false,
@@ -1024,6 +1043,7 @@ async function installPluginFromManagedNpmRoot(
       timeoutMs,
       logger,
       peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      activeHostDependencySnapshot,
     });
     return {
       ok: false,
@@ -1045,6 +1065,7 @@ async function installPluginFromManagedNpmRoot(
       timeoutMs,
       logger,
       peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      activeHostDependencySnapshot,
     });
     return {
       ok: false,
@@ -1064,6 +1085,7 @@ async function installPluginFromManagedNpmRoot(
       timeoutMs,
       logger,
       peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      activeHostDependencySnapshot,
     });
     return {
       ok: false,
@@ -1094,8 +1116,33 @@ async function installPluginFromManagedNpmRoot(
       timeoutMs,
       logger,
       peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      activeHostDependencySnapshot,
     });
     return result;
+  }
+  if (params.packageName !== "openclaw") {
+    try {
+      await repairManagedNpmRootActiveHostPackage({
+        npmRoot,
+        dependencySnapshot: activeHostDependencySnapshot,
+        timeoutMs,
+        logger,
+      });
+    } catch (error) {
+      await rollbackManagedNpmPluginInstall({
+        npmRoot,
+        packageName: params.packageName,
+        targetDir: installRoot,
+        timeoutMs,
+        logger,
+        peerDependencySnapshot: rollbackPeerDependencySnapshot,
+        activeHostDependencySnapshot,
+      });
+      return {
+        ok: false,
+        error: `Failed to repair active OpenClaw package after npm plugin install: ${String(error)}`,
+      };
+    }
   }
   return {
     ...result,

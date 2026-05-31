@@ -57,6 +57,12 @@ type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 
 type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
 
+export type ManagedNpmRootActiveHostDependencySnapshot = {
+  packageRoot: string;
+  version: string;
+  dependencyNames: string[];
+};
+
 function readDependencyRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) {
     return {};
@@ -835,6 +841,180 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   }
 
   await scrubManagedNpmRootOpenClawPeer({ npmRoot: params.npmRoot });
+  return true;
+}
+
+async function readManagedNpmRootActiveHostPackage(params: {
+  npmRoot: string;
+  packageRoot?: string | null;
+  includePresentOptionalDependencies?: boolean;
+}): Promise<ManagedNpmRootActiveHostDependencySnapshot | null> {
+  const packageRoot =
+    params.packageRoot === undefined
+      ? resolveOpenClawPackageRootSync({
+          argv1: process.argv[1],
+          moduleUrl: import.meta.url,
+          cwd: process.cwd(),
+        })
+      : params.packageRoot;
+  if (!packageRoot) {
+    return null;
+  }
+
+  const [hostPackageRoot, globalManagedPackageRoot] = await Promise.all([
+    realpathIfExists(packageRoot),
+    realpathIfExists(resolveManagedNpmRootGlobalOpenClawPackageDir(params.npmRoot)),
+  ]);
+  if (!hostPackageRoot || hostPackageRoot !== globalManagedPackageRoot) {
+    return null;
+  }
+
+  const manifest = await readJsonIfExists<unknown>(path.join(hostPackageRoot, "package.json"));
+  if (!isRecord(manifest)) {
+    return null;
+  }
+  const version = readOptionalString(manifest.version);
+  if (!version) {
+    return null;
+  }
+  const dependencyNames = new Set(Object.keys(readDependencyRecord(manifest.dependencies)));
+  if (params.includePresentOptionalDependencies) {
+    for (const packageName of Object.keys(readDependencyRecord(manifest.optionalDependencies))) {
+      if (
+        await pathExists(
+          path.join(resolvePackageDependencyDir(hostPackageRoot, packageName), "package.json"),
+        )
+      ) {
+        dependencyNames.add(packageName);
+      }
+    }
+  }
+  return {
+    packageRoot: hostPackageRoot,
+    version,
+    dependencyNames: [...dependencyNames].toSorted(),
+  };
+}
+
+function resolveManagedNpmRootGlobalOpenClawPackageDir(npmRoot: string): string {
+  return path.join(
+    npmRoot,
+    ...(process.platform === "win32"
+      ? ["node_modules", "openclaw"]
+      : ["lib", "node_modules", "openclaw"]),
+  );
+}
+
+export async function readManagedNpmRootActiveHostDependencySnapshot(params: {
+  npmRoot: string;
+  packageRoot?: string | null;
+}): Promise<ManagedNpmRootActiveHostDependencySnapshot | null> {
+  return await readManagedNpmRootActiveHostPackage({
+    ...params,
+    includePresentOptionalDependencies: true,
+  });
+}
+
+function resolvePackageDependencyDir(rootDir: string, packageName: string): string {
+  return path.join(rootDir, "node_modules", ...packageName.split("/"));
+}
+
+async function listMissingActiveHostDependencies(
+  activeHost: ManagedNpmRootActiveHostDependencySnapshot,
+): Promise<string[]> {
+  const missing: string[] = [];
+  for (const packageName of activeHost.dependencyNames) {
+    if (
+      !(await pathExists(
+        path.join(resolvePackageDependencyDir(activeHost.packageRoot, packageName), "package.json"),
+      ))
+    ) {
+      missing.push(packageName);
+    }
+  }
+  return missing;
+}
+
+function createGlobalOpenClawRepairEnv(npmRoot: string): NodeJS.ProcessEnv {
+  return {
+    ...createSafeNpmInstallEnv(process.env, {
+      npmConfigPrefix: npmRoot,
+      quiet: true,
+    }),
+    npm_config_global: "true",
+    npm_config_location: "global",
+    npm_config_prefix: npmRoot,
+  };
+}
+
+export async function repairManagedNpmRootActiveHostPackage(params: {
+  npmRoot: string;
+  packageRoot?: string | null;
+  dependencySnapshot?: ManagedNpmRootActiveHostDependencySnapshot | null;
+  timeoutMs?: number;
+  logger?: ManagedNpmRootLogger;
+  runCommand?: ManagedNpmRootRunCommand;
+}): Promise<boolean> {
+  const activeHost = await readManagedNpmRootActiveHostPackage({
+    npmRoot: params.npmRoot,
+    packageRoot: params.packageRoot,
+  });
+  if (!activeHost) {
+    return false;
+  }
+
+  const dependencyNames =
+    params.dependencySnapshot?.packageRoot === activeHost.packageRoot &&
+    params.dependencySnapshot.version === activeHost.version
+      ? params.dependencySnapshot.dependencyNames
+      : activeHost.dependencyNames;
+  const repairTarget = { ...activeHost, dependencyNames };
+  const missingBefore = await listMissingActiveHostDependencies(repairTarget);
+  if (missingBefore.length === 0) {
+    return false;
+  }
+
+  const command = params.runCommand ?? runCommandWithTimeout;
+  const packageSpec = `openclaw@${activeHost.version}`;
+  const result = await command(
+    [
+      "npm",
+      ...createSafeNpmInstallArgs({
+        loglevel: "error",
+        noAudit: true,
+        noFund: true,
+      }),
+      "--global",
+      "--prefix",
+      params.npmRoot,
+      packageSpec,
+    ],
+    {
+      timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+      env: createGlobalOpenClawRepairEnv(params.npmRoot),
+    },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `npm install --global ${packageSpec} failed while repairing active OpenClaw package dependencies: ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  }
+
+  const refreshedHost = await readManagedNpmRootActiveHostPackage({
+    npmRoot: params.npmRoot,
+    packageRoot: activeHost.packageRoot,
+  });
+  const missingAfter = refreshedHost
+    ? await listMissingActiveHostDependencies({ ...refreshedHost, dependencyNames })
+    : [];
+  if (missingAfter.length > 0) {
+    throw new Error(
+      `active OpenClaw package still missing runtime dependencies after repair: ${missingAfter.join(", ")}`,
+    );
+  }
+  params.logger?.warn?.(
+    `Repaired active OpenClaw package dependencies in ${activeHost.packageRoot}: ${missingBefore.join(", ")}`,
+  );
   return true;
 }
 

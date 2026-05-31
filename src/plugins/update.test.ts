@@ -743,7 +743,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).not.toBe(true);
   });
 
-  it("skips npm reinstall and config rewrite when the installed artifact is unchanged", async () => {
+  it("refreshes managed npm root state without config rewrite when the installed artifact is unchanged", async () => {
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
@@ -754,7 +754,18 @@ describe("updateNpmInstalledPlugins", () => {
       integrity: "sha512-same",
       shasum: "same",
     });
-    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.0",
+        npmResolution: {
+          name: "@martian-engineering/lossless-claw",
+          version: "0.9.0",
+          resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        },
+      }),
+    );
     const config: OpenClawConfig = {
       plugins: {
         installs: {
@@ -791,7 +802,9 @@ describe("updateNpmInstalledPlugins", () => {
     if (npmViewCall()?.[1] === undefined) {
       throw new Error("Expected npm view command options");
     }
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(npmInstallCall()?.spec).toBe("@martian-engineering/lossless-claw");
+    expect(npmInstallCall()?.mode).toBe("update");
+    expect(npmInstallCall()?.expectedPluginId).toBe("lossless-claw");
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
     expect(result.outcomes).toEqual([
@@ -801,6 +814,219 @@ describe("updateNpmInstalledPlugins", () => {
         currentVersion: "0.9.0",
         nextVersion: "0.9.0",
         message: "lossless-claw is up to date (0.9.0).",
+      },
+    ]);
+  });
+
+  it("records the installer result when unchanged npm maintenance resolves a newer artifact", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.1",
+        npmResolution: {
+          name: "@martian-engineering/lossless-claw",
+          version: "0.9.1",
+          resolvedSpec: "@martian-engineering/lossless-claw@0.9.1",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw",
+        installPath,
+        resolvedName: "@martian-engineering/lossless-claw",
+        resolvedVersion: "0.9.0",
+        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        integrity: "sha512-same",
+        shasum: "same",
+      }),
+      pluginIds: ["lossless-claw"],
+    });
+
+    expect(result.changed).toBe(true);
+    expectRecordFields(result.config.plugins?.installs?.["lossless-claw"], {
+      source: "npm",
+      resolvedName: "@martian-engineering/lossless-claw",
+      resolvedVersion: "0.9.1",
+      resolvedSpec: "@martian-engineering/lossless-claw@0.9.1",
+    });
+    expectRecordFields(result.outcomes[0], {
+      pluginId: "lossless-claw",
+      status: "updated",
+      currentVersion: "0.9.0",
+      nextVersion: "0.9.1",
+    });
+  });
+
+  it("migrates plugin config ids when unchanged npm maintenance resolves a new id", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@legacy/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@legacy/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.1",
+        npmResolution: {
+          name: "@legacy/lossless-claw",
+          version: "0.9.1",
+          resolvedSpec: "@legacy/lossless-claw@0.9.1",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          allow: ["legacy-lossless"],
+          entries: {
+            "legacy-lossless": {
+              enabled: true,
+            },
+          },
+          installs: {
+            "legacy-lossless": {
+              source: "npm",
+              spec: "@legacy/lossless-claw",
+              installPath,
+              resolvedName: "@legacy/lossless-claw",
+              resolvedVersion: "0.9.0",
+              resolvedSpec: "@legacy/lossless-claw@0.9.0",
+              integrity: "sha512-same",
+              shasum: "same",
+            },
+          },
+        },
+      },
+      pluginIds: ["legacy-lossless"],
+    });
+
+    expect(result.config.plugins?.installs?.["legacy-lossless"]).toBeUndefined();
+    expect(result.config.plugins?.entries?.["legacy-lossless"]).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["lossless-claw"]);
+    expectRecordFields(result.config.plugins?.installs?.["lossless-claw"], {
+      source: "npm",
+      resolvedName: "@legacy/lossless-claw",
+      resolvedVersion: "0.9.1",
+      resolvedSpec: "@legacy/lossless-claw@0.9.1",
+    });
+  });
+
+  it("migrates plugin config ids when unchanged npm maintenance keeps the same version", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@legacy/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@legacy/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.0",
+        npmResolution: {
+          name: "@legacy/lossless-claw",
+          version: "0.9.0",
+          resolvedSpec: "@legacy/lossless-claw@0.9.0",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          allow: ["legacy-lossless"],
+          installs: {
+            "legacy-lossless": {
+              source: "npm",
+              spec: "@legacy/lossless-claw",
+              installPath,
+              resolvedName: "@legacy/lossless-claw",
+              resolvedVersion: "0.9.0",
+              resolvedSpec: "@legacy/lossless-claw@0.9.0",
+              integrity: "sha512-same",
+              shasum: "same",
+            },
+          },
+        },
+      },
+      pluginIds: ["legacy-lossless"],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.installs?.["legacy-lossless"]).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["lossless-claw"]);
+    expectRecordFields(result.config.plugins?.installs?.["lossless-claw"], {
+      source: "npm",
+      resolvedName: "@legacy/lossless-claw",
+      resolvedVersion: "0.9.0",
+      resolvedSpec: "@legacy/lossless-claw@0.9.0",
+    });
+    expectRecordFields(result.outcomes[0], {
+      pluginId: "legacy-lossless",
+      status: "unchanged",
+      currentVersion: "0.9.0",
+      nextVersion: "0.9.0",
+    });
+  });
+
+  it("records unchanged npm maintenance exceptions as plugin failures", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer boom"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw",
+        installPath,
+        resolvedName: "@martian-engineering/lossless-claw",
+        resolvedVersion: "0.9.0",
+        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        integrity: "sha512-same",
+        shasum: "same",
+      }),
+      pluginIds: ["lossless-claw"],
+    });
+
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "error",
+        message: "Failed to update lossless-claw: Error: installer boom",
       },
     ]);
   });
@@ -866,7 +1092,7 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it("skips unchanged npm plugins when the openclaw peer link already resolves", async () => {
+  it("refreshes unchanged npm plugins when the openclaw peer link already resolves", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/codex",
       version: "2026.5.3",
@@ -879,7 +1105,18 @@ describe("updateNpmInstalledPlugins", () => {
       integrity: "sha512-same",
       shasum: "same",
     });
-    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "codex",
+        targetDir: installPath,
+        version: "2026.5.3",
+        npmResolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.3",
+          resolvedSpec: "@openclaw/codex@2026.5.3",
+        },
+      }),
+    );
 
     const result = await updateNpmInstalledPlugins({
       config: {
@@ -901,7 +1138,9 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["codex"],
     });
 
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(npmInstallCall()?.spec).toBe("@openclaw/codex");
+    expect(npmInstallCall()?.mode).toBe("update");
+    expect(npmInstallCall()?.expectedPluginId).toBe("codex");
     expect(result.changed).toBe(false);
     expect(result.outcomes).toEqual([
       {
@@ -1200,7 +1439,18 @@ describe("updateNpmInstalledPlugins", () => {
       integrity: "sha512-same",
       shasum: "same",
     });
-    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "lossless-claw",
+        targetDir: installPath,
+        version: "0.9.0",
+        npmResolution: {
+          name: "@martian-engineering/lossless-claw",
+          version: "0.9.0",
+          resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        },
+      }),
+    );
 
     const result = await updateNpmInstalledPlugins({
       config: createNpmInstallConfig({
@@ -1216,7 +1466,8 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["lossless-claw"],
     });
 
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(npmInstallCall()?.spec).toBe("@martian-engineering/lossless-claw");
+    expect(npmInstallCall()?.extensionsDir).toBe(path.join(home, ".openclaw", "extensions"));
     expect(result.changed).toBe(false);
     expect(result.outcomes).toHaveLength(1);
     expectRecordFields(result.outcomes[0], {

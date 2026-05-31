@@ -96,8 +96,20 @@ function isNpmPeerPlannerInstallCommand(argv: unknown): argv is string[] {
   return isNpmInstallCommand(argv) && argv.includes("--package-lock-only");
 }
 
+function isGlobalOpenClawInstallCommand(argv: unknown): argv is string[] {
+  return (
+    isNpmInstallCommand(argv) &&
+    argv.includes("--global") &&
+    argv.some((arg) => arg.startsWith("openclaw@"))
+  );
+}
+
 function isManagedNpmInstallCommand(argv: unknown): argv is string[] {
-  return isNpmInstallCommand(argv) && !isNpmPeerPlannerInstallCommand(argv);
+  return (
+    isNpmInstallCommand(argv) &&
+    !isNpmPeerPlannerInstallCommand(argv) &&
+    !isGlobalOpenClawInstallCommand(argv)
+  );
 }
 
 function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string }) {
@@ -230,6 +242,7 @@ type MockNpmPackage = {
   skipLockfileEntry?: boolean;
   packArchivePath?: string;
   packTarballName?: string;
+  afterManagedInstall?: () => void;
 };
 
 function writeNpmRootPackageLock(params: {
@@ -453,6 +466,41 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
           dependencies: manifest.dependencies ?? {},
           packages: installedPackages,
         });
+        for (const pkg of installedPackages) {
+          pkg.afterManagedInstall?.();
+        }
+        return successfulSpawn();
+      }
+      if (isGlobalOpenClawInstallCommand(argv)) {
+        const prefixIndex = argv.indexOf("--prefix");
+        const npmRoot = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
+        if (!npmRoot) {
+          throw new Error(`unexpected npm global install command: ${(argv as string[]).join(" ")}`);
+        }
+        const hostPackageRoot = path.join(npmRoot, "lib", "node_modules", "openclaw");
+        const hostManifest = JSON.parse(
+          fs.readFileSync(path.join(hostPackageRoot, "package.json"), "utf8"),
+        ) as {
+          dependencies?: Record<string, string>;
+          optionalDependencies?: Record<string, string>;
+        };
+        const hostDependencies = {
+          ...(hostManifest.dependencies ?? {}),
+          ...(hostManifest.optionalDependencies ?? {}),
+        };
+        for (const [packageName, version] of Object.entries(hostDependencies)) {
+          const dependencyRoot = path.join(
+            hostPackageRoot,
+            "node_modules",
+            ...packageName.split("/"),
+          );
+          fs.mkdirSync(dependencyRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(dependencyRoot, "package.json"),
+            JSON.stringify({ name: packageName, version }),
+            "utf8",
+          );
+        }
         return successfulSpawn();
       }
       if (argv[0] === "npm" && argv[1] === "uninstall") {
@@ -1395,6 +1443,75 @@ describe("installPluginFromNpmSpec", () => {
           argv.includes("openclaw"),
       ),
     ).toBe(false);
+  });
+
+  it("repairs active global-prefix OpenClaw package deps after npm plugin installs", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const hostPackageRoot = path.join(npmRoot, "lib", "node_modules", "openclaw");
+    const hostJson5Root = path.join(hostPackageRoot, "node_modules", "json5");
+    const hostSharpRoot = path.join(hostPackageRoot, "node_modules", "sharp");
+    fs.mkdirSync(hostJson5Root, { recursive: true });
+    fs.mkdirSync(hostSharpRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(hostPackageRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "openclaw",
+          version: "2026.5.27-beta.1",
+          dependencies: {
+            json5: "2.2.3",
+          },
+          optionalDependencies: {
+            sharp: "0.34.5",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(hostJson5Root, "package.json"),
+      JSON.stringify({ name: "json5", version: "2.2.3" }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(hostSharpRoot, "package.json"),
+      JSON.stringify({ name: "sharp", version: "0.34.5" }),
+      "utf-8",
+    );
+    resolveOpenClawPackageRootSyncMock.mockReturnValue(hostPackageRoot);
+    mockNpmViewAndInstall({
+      spec: "@srinathh/openclaw-channel-twilio-whatsapp@2.1.8",
+      packageName: "@srinathh/openclaw-channel-twilio-whatsapp",
+      version: "2.1.8",
+      pluginId: "twilio-whatsapp",
+      npmRoot,
+      expectedDependencySpec: "2.1.8",
+      afterManagedInstall: () => {
+        fs.rmSync(hostJson5Root, { recursive: true, force: true });
+        fs.rmSync(hostSharpRoot, { recursive: true, force: true });
+      },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@srinathh/openclaw-channel-twilio-whatsapp@2.1.8",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(path.join(hostJson5Root, "package.json"))).toBe(true);
+    expect(fs.existsSync(path.join(hostSharpRoot, "package.json"))).toBe(true);
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(
+        ([argv]) =>
+          isGlobalOpenClawInstallCommand(argv) &&
+          Array.isArray(argv) &&
+          argv.includes("openclaw@2026.5.27-beta.1"),
+      ),
+    ).toBe(true);
   });
 
   it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
