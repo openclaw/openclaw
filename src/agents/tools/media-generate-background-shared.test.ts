@@ -567,3 +567,81 @@ describe("createMediaGenerationTaskLifecycle", () => {
     expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("buildMediaGenerationReplyInstruction determinism", () => {
+  const minimalConfig = { messages: {} } as any;
+
+  it("includes 'Do NOT use the message tool' for channel sessions (automatic mode)", async () => {
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+      path: "steered",
+    });
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+    await lifecycle.wakeTaskCompletion({
+      config: minimalConfig,
+      handle: {
+        taskId: "task-determinism-1",
+        runId: "tool:image_generate:det1",
+        requesterSessionKey: "agent:main:discord:channel:456",
+        taskLabel: "test image",
+        requesterOrigin: { channel: "discord", to: "channel:456" },
+      },
+      status: "ok",
+      statusLabel: "completed successfully",
+      result: "generated",
+    });
+    const call = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0];
+    const internalEvents = call[0].internalEvents;
+    const instruction = internalEvents[0].replyInstruction;
+    expect(instruction).toContain("Do NOT use the message tool for delivery");
+    expect(instruction).not.toContain("message(action=\"send\")");
+  });
+
+  it("includes message tool instruction when sourceReplyDeliveryMode is message_tool_only", async () => {
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+      path: "steered",
+    });
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+    await lifecycle.wakeTaskCompletion({
+      config: minimalConfig,
+      handle: {
+        taskId: "task-determinism-2",
+        runId: "tool:image_generate:det2",
+        requesterSessionKey: "agent:main:discord:dm:789",
+        taskLabel: "test image dm",
+        requesterOrigin: { channel: "discord", to: "user:789" },
+      },
+      status: "ok",
+      statusLabel: "completed successfully",
+      result: "generated",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const call = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0];
+    const internalEvents = call[0].internalEvents;
+    const instruction = internalEvents[0].replyInstruction;
+    expect(instruction).toContain("message(action=\"send\")");
+    expect(instruction).toContain("Do NOT use MEDIA: lines");
+    expect(instruction).not.toContain("Do NOT use the message tool");
+  });
+});

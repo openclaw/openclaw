@@ -26,6 +26,9 @@ import {
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
+import { resolveCompletionChatType } from "../../auto-reply/reply/completion-delivery-policy.js";
+import { resolveSourceReplyDeliveryMode } from "../../auto-reply/reply/source-reply-delivery-mode.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
@@ -93,6 +96,7 @@ type WakeMediaGenerationTaskCompletionParams = {
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
 type MediaGenerationTaskLifecycle = {
@@ -268,18 +272,36 @@ function failMediaGenerationTaskRun(params: {
 function buildMediaGenerationReplyInstruction(params: {
   status: "ok" | "error";
   completionLabel: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }) {
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    if (params.status === "ok") {
+      return [
+        `The ${params.completionLabel} is ready for the original chat.`,
+        "This session requires message-tool replies.",
+        'Call message(action="send") with a short caption and every structured attachment from the internal event, then reply only NO_REPLY.',
+        "Do NOT use MEDIA: lines.",
+      ].join(" ");
+    }
+    return [
+      `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
+      "This session requires message-tool replies.",
+      'Call message(action="send") with a short failure notice.',
+      "Keep internal task/session details private.",
+    ].join(" ");
+  }
   if (params.status === "ok") {
     return [
       `The ${params.completionLabel} is ready for the original chat.`,
-      'Use the current visible-reply contract: if this session requires message-tool replies, call message(action="send") with a short caption and every structured attachment from the internal event, then reply only NO_REPLY.',
-      "Otherwise, write the normal final reply and attach every generated media path with final-reply MEDIA lines.",
+      "Write the normal final reply and attach every generated media path with final-reply MEDIA lines.",
+      "Do NOT use the message tool for delivery.",
     ].join(" ");
   }
   return [
     `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
-    'Use the current visible-reply contract: call message(action="send") when message-tool replies are required, otherwise write the normal final reply.',
-    "Keep internal task/session details private and do not copy the internal event text verbatim.",
+    "Write the normal final reply with a short failure notice.",
+    "Do NOT use the message tool for delivery.",
+    "Keep internal task/session details private.",
   ].join(" ");
 }
 
@@ -495,10 +517,24 @@ async function wakeMediaGenerationTaskCompletion(params: {
   announceType: string;
   toolName: string;
   completionLabel: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): Promise<boolean> {
   if (!params.handle) {
     return true;
   }
+  const resolvedSourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
+    params.sourceReplyDeliveryMode ??
+    (params.config
+      ? resolveSourceReplyDeliveryMode({
+          cfg: params.config,
+          ctx: {
+            ChatType: resolveCompletionChatType({
+              requesterSessionKey: params.handle.requesterSessionKey,
+              requesterSessionOrigin: params.handle.requesterOrigin,
+            }),
+          },
+        })
+      : undefined);
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
   const mediaUrls = Array.from(
     new Set([
@@ -523,6 +559,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,
         completionLabel: params.completionLabel,
+        sourceReplyDeliveryMode: resolvedSourceReplyDeliveryMode,
       }),
     },
   ];

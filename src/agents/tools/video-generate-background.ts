@@ -5,6 +5,7 @@ import {
   createMediaGenerationTaskLifecycle,
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 
 export type VideoGenerationTaskHandle = MediaGenerationTaskHandle;
 
@@ -45,6 +46,7 @@ export async function wakeVideoGenerationTaskCompletion(params: {
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }) {
   return await videoGenerationTaskLifecycle.wakeTaskCompletion(params);
 }
