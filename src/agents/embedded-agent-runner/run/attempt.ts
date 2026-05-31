@@ -2966,9 +2966,24 @@ export async function runEmbeddedAttempt(
         prompt: string,
         options?: Parameters<typeof activeSession.prompt>[1],
       ): Promise<void> =>
-        withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
-          abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
-        );
+        withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () => {
+          // Guard: if the run is already aborted, throw immediately before calling
+          // activeSession.prompt(). Without this, JS evaluates prompt() first (creating
+          // a new Agent._runLoop with a fresh abortController), then abortable() rejects —
+          // the floating Promise escapes and loops indefinitely. See #74859.
+          if (runAbortController.signal.aborted) {
+            const reason = runAbortController.signal.reason;
+            const err =
+              reason instanceof Error
+                ? new Error(reason.message, { cause: reason })
+                : reason
+                  ? new Error("aborted", { cause: reason })
+                  : new Error("aborted");
+            err.name = "AbortError";
+            throw err;
+          }
+          return abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+        });
       const onBlockReply = params.onBlockReply
         ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReply)
         : undefined;
