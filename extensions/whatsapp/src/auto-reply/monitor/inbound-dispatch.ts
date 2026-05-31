@@ -779,6 +779,9 @@ export async function dispatchWhatsAppBufferedReply(params: {
       },
     },
     replyOptions: {
+      // In group chats where the bot was not mentioned, suppress composing — spurious typing
+      // indicators are especially visible and disruptive when the run produces no reply.
+      suppressTyping: params.msg.chatType === "group" && !params.msg.wasMentioned,
       disableBlockStreaming,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,
