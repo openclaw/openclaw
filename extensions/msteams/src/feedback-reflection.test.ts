@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { storeSessionLearning } from "./feedback-reflection-store.js";
 import {
   buildFeedbackEvent,
@@ -12,6 +13,10 @@ import {
   parseReflectionResponse,
   recordReflectionTime,
 } from "./feedback-reflection.js";
+import { setMSTeamsRuntime } from "./runtime.js";
+import { msteamsRuntimeStub } from "./test-support/runtime.js";
+
+const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 
 describe("buildFeedbackEvent", () => {
   it("builds a well-formed custom event", () => {
@@ -161,7 +166,17 @@ describe("reflection cooldown", () => {
 describe("loadSessionLearnings", () => {
   let tmpDir: string;
 
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    setMSTeamsRuntime(msteamsRuntimeStub);
+  });
+
   afterEach(async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     if (tmpDir) {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -169,12 +184,14 @@ describe("loadSessionLearnings", () => {
 
   it("returns empty array when file doesn't exist", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
     const learnings = await loadSessionLearnings(tmpDir, "nonexistent");
     expect(learnings).toStrictEqual([]);
   });
 
   it("reads existing learnings", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
     const safeKey = Buffer.from("msteams:user1", "utf8").toString("base64url");
     const filePath = path.join(tmpDir, `${safeKey}.learnings.json`);
     await writeFile(filePath, JSON.stringify(["Be concise", "Use examples"]), "utf-8");
@@ -185,6 +202,7 @@ describe("loadSessionLearnings", () => {
 
   it("keeps distinct session keys isolated across the filename persistence boundary", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
 
     await storeSessionLearning({
       storePath: tmpDir,
@@ -203,6 +221,7 @@ describe("loadSessionLearnings", () => {
 
   it("reads and migrates legacy sanitized session learning files", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
     const legacyFile = path.join(tmpDir, "msteams_user1.learnings.json");
     await writeFile(legacyFile, JSON.stringify(["Legacy learning"]), "utf-8");
 
@@ -216,10 +235,6 @@ describe("loadSessionLearnings", () => {
       learning: "New learning",
     });
 
-    const migratedFile = path.join(
-      tmpDir,
-      `${Buffer.from("msteams:user1", "utf8").toString("base64url")}.learnings.json`,
-    );
     await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
       "Legacy learning",
       "New learning",
@@ -231,7 +246,9 @@ describe("loadSessionLearnings", () => {
     ]);
     await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toStrictEqual([]);
     await expect(
-      import("node:fs/promises").then((fs) => fs.readFile(migratedFile, "utf-8")),
-    ).resolves.toContain("Legacy learning");
+      import("node:fs/promises").then((fs) =>
+        fs.access(path.join(tmpDir, "state", "openclaw.sqlite")),
+      ),
+    ).resolves.toBeUndefined();
   });
 });

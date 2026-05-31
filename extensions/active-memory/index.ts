@@ -24,7 +24,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
-import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
@@ -289,6 +289,12 @@ type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
 
 type ActiveMemoryToggleStore = {
   sessions?: Record<string, { disabled?: boolean; updatedAt?: number }>;
+};
+
+type ActiveMemoryToggleEntry = {
+  sessionKey: string;
+  disabled: true;
+  updatedAt: number;
 };
 
 type AsyncLock = <T>(task: () => Promise<T>) => Promise<T>;
@@ -705,7 +711,18 @@ function resolveToggleStatePath(api: OpenClawPluginApi): string {
   );
 }
 
-async function readToggleStore(statePath: string): Promise<ActiveMemoryToggleStore> {
+function activeMemoryToggleKey(sessionKey: string): string {
+  return crypto.createHash("sha256").update(sessionKey, "utf8").digest("hex");
+}
+
+function openActiveMemoryToggleStore(api: OpenClawPluginApi) {
+  return api.runtime.state.openKeyedStore<ActiveMemoryToggleEntry>({
+    namespace: "session-toggles",
+    maxEntries: 10_000,
+  });
+}
+
+async function readLegacyToggleStore(statePath: string): Promise<ActiveMemoryToggleStore> {
   try {
     const raw = await fs.readFile(statePath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
@@ -739,12 +756,23 @@ async function readToggleStore(statePath: string): Promise<ActiveMemoryToggleSto
   }
 }
 
-async function writeToggleStore(statePath: string, store: ActiveMemoryToggleStore): Promise<void> {
-  await replaceFileAtomic({
-    filePath: statePath,
-    content: `${JSON.stringify(store, null, 2)}\n`,
-    tempPrefix: ".active-memory",
-  });
+async function importLegacyToggleStore(params: {
+  api: OpenClawPluginApi;
+  statePath: string;
+}): Promise<void> {
+  const legacy = await readLegacyToggleStore(params.statePath);
+  const sessions = Object.entries(legacy.sessions ?? {});
+  const store = openActiveMemoryToggleStore(params.api);
+  for (const [sessionKey, value] of sessions) {
+    if (value.disabled === true) {
+      await store.register(activeMemoryToggleKey(sessionKey), {
+        sessionKey,
+        disabled: true,
+        updatedAt: value.updatedAt ?? Date.now(),
+      });
+    }
+  }
+  await fs.rm(params.statePath, { force: true }).catch(() => undefined);
 }
 
 async function isSessionActiveMemoryDisabled(params: {
@@ -756,8 +784,15 @@ async function isSessionActiveMemoryDisabled(params: {
     return false;
   }
   try {
-    const store = await readToggleStore(resolveToggleStatePath(params.api));
-    return store.sessions?.[sessionKey]?.disabled === true;
+    const store = openActiveMemoryToggleStore(params.api);
+    const key = activeMemoryToggleKey(sessionKey);
+    const stored = await store.lookup(key);
+    if (stored?.disabled === true) {
+      return true;
+    }
+    const statePath = resolveToggleStatePath(params.api);
+    await importLegacyToggleStore({ api: params.api, statePath });
+    return (await store.lookup(key))?.disabled === true;
   } catch (error) {
     params.api.logger.debug?.(
       `active-memory: failed to read session toggle (${error instanceof Error ? error.message : String(error)})`,
@@ -773,14 +808,18 @@ async function setSessionActiveMemoryDisabled(params: {
 }): Promise<void> {
   const statePath = resolveToggleStatePath(params.api);
   await withToggleStoreLock(statePath, async () => {
-    const store = await readToggleStore(statePath);
-    const sessions = { ...store.sessions };
+    const store = openActiveMemoryToggleStore(params.api);
+    await importLegacyToggleStore({ api: params.api, statePath });
     if (params.disabled) {
-      sessions[params.sessionKey] = { disabled: true, updatedAt: Date.now() };
+      await store.register(activeMemoryToggleKey(params.sessionKey), {
+        sessionKey: params.sessionKey,
+        disabled: true,
+        updatedAt: Date.now(),
+      });
     } else {
-      delete sessions[params.sessionKey];
+      await store.delete(activeMemoryToggleKey(params.sessionKey));
     }
-    await writeToggleStore(statePath, Object.keys(sessions).length > 0 ? { sessions } : {});
+    await fs.rm(statePath, { force: true }).catch(() => undefined);
   });
 }
 

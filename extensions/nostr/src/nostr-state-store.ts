@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
@@ -79,6 +80,22 @@ function resolveNostrProfileStatePath(
   return path.join(stateDir, "nostr", `profile-state-${normalized}.json`);
 }
 
+function openNostrBusStateStore(env?: NodeJS.ProcessEnv) {
+  return getNostrRuntime().state.openKeyedStore<NostrBusState>({
+    namespace: "bus-state",
+    maxEntries: 256,
+    ...(env ? { env } : {}),
+  });
+}
+
+function openNostrProfileStateStore(env?: NodeJS.ProcessEnv) {
+  return getNostrRuntime().state.openKeyedStore<NostrProfileState>({
+    namespace: "profile-state",
+    maxEntries: 256,
+    ...(env ? { env } : {}),
+  });
+}
+
 function safeParseState(raw: string): NostrBusState | null {
   const parsedV2 = safeParseJsonWithSchema(NostrBusStateSchema, raw);
   if (parsedV2) {
@@ -103,6 +120,11 @@ export async function readNostrBusState(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrBusState | null> {
+  const key = normalizeAccountId(params.accountId);
+  const stored = await openNostrBusStateStore(params.env).lookup(key);
+  if (stored) {
+    return stored;
+  }
   const filePath = resolveNostrStatePath(params.accountId, params.env);
   try {
     const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
@@ -111,7 +133,12 @@ export async function readNostrBusState(params: {
     if (raw === null) {
       return null;
     }
-    return safeParseState(raw);
+    const parsed = safeParseState(raw);
+    if (parsed) {
+      await openNostrBusStateStore(params.env).register(key, parsed);
+      await fs.rm(filePath, { force: true }).catch(() => undefined);
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -131,9 +158,8 @@ export async function writeNostrBusState(params: {
     gatewayStartedAt: params.gatewayStartedAt,
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
-  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
-    trailingNewline: true,
-  });
+  await openNostrBusStateStore(params.env).register(normalizeAccountId(params.accountId), payload);
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
 }
 
 /**
@@ -172,6 +198,11 @@ export async function readNostrProfileState(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrProfileState | null> {
+  const key = normalizeAccountId(params.accountId);
+  const stored = await openNostrProfileStateStore(params.env).lookup(key);
+  if (stored) {
+    return stored;
+  }
   const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
   try {
     const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
@@ -180,7 +211,12 @@ export async function readNostrProfileState(params: {
     if (raw === null) {
       return null;
     }
-    return safeParseProfileState(raw);
+    const parsed = safeParseProfileState(raw);
+    if (parsed) {
+      await openNostrProfileStateStore(params.env).register(key, parsed);
+      await fs.rm(filePath, { force: true }).catch(() => undefined);
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -200,7 +236,9 @@ export async function writeNostrProfileState(params: {
     lastPublishedEventId: params.lastPublishedEventId,
     lastPublishResults: params.lastPublishResults,
   };
-  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
-    trailingNewline: true,
-  });
+  await openNostrProfileStateStore(params.env).register(
+    normalizeAccountId(params.accountId),
+    payload,
+  );
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
 }

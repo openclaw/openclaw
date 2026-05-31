@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
@@ -16,8 +21,14 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   const previous = process.env.OPENCLAW_STATE_DIR;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-"));
   process.env.OPENCLAW_STATE_DIR = dir;
+  resetPluginStateStoreForTests();
   setNostrRuntime({
     state: {
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("nostr", {
+          ...options,
+          env: { ...process.env, OPENCLAW_STATE_DIR: dir },
+        }),
       resolveStateDir: (env, homedir) => {
         const stateEnv = env ?? process.env;
         const override = stateEnv.OPENCLAW_STATE_DIR?.trim();
