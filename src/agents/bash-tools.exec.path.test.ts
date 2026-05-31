@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
@@ -134,6 +134,13 @@ describe("exec PATH login shell merge", () => {
 
   beforeAll(async () => {
     ({ createExecTool } = await import("./bash-tools.exec.js"));
+  });
+
+  afterAll(async () => {
+    vi.doUnmock("../infra/shell-env.js");
+    vi.doUnmock("../infra/exec-approvals.js");
+    vi.doUnmock("../process/supervisor/index.js");
+    await vi.resetModules();
   });
 
   beforeEach(() => {
