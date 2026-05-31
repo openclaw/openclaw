@@ -1,9 +1,15 @@
 import {
   reconcileChatRunFromCurrentSessionRow,
+  reconcileChatRunFromSessionRow,
   type ChatRunUiStatus,
 } from "../chat/run-lifecycle.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
-import { isSubagentSessionKey, normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../session-key.ts";
 import type {
   GatewaySessionRow,
   SessionCompactionCheckpoint,
@@ -366,6 +372,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
   return Object.hasOwn(record, key);
+}
+
+function sanitizeChatHistorySessionRow(row: GatewaySessionRow): GatewaySessionRow {
+  const next: Partial<GatewaySessionRow> = {};
+  for (const [key, value] of Object.entries(row) as Array<[keyof GatewaySessionRow, unknown]>) {
+    if (value === undefined) {
+      continue;
+    }
+    if (key === "totalTokensFresh" && value === false && row.totalTokens === undefined) {
+      continue;
+    }
+    next[key] = value as never;
+  }
+  return next as GatewaySessionRow;
 }
 
 export function parseSessionsFilterInteger(value: string): number {
@@ -775,6 +795,71 @@ export function applySessionsChangedEvent(
         }
       : {}),
   };
+}
+
+export function applyChatHistorySessionInfo(
+  state: SessionsState,
+  row: GatewaySessionRow | undefined,
+  defaults?: SessionsListResult["defaults"],
+): boolean {
+  if (!row?.key) {
+    return false;
+  }
+  const session = sanitizeChatHistorySessionRow(row);
+  if (!state.sessionsResult) {
+    const sessions = state.sessionsShowArchived || !isArchivedSessionRow(session) ? [session] : [];
+    state.sessionsResult = {
+      ts: Date.now(),
+      path: "",
+      count: sessions.length,
+      defaults: defaults ?? {
+        modelProvider: null,
+        model: null,
+        contextTokens: null,
+      },
+      sessions,
+    };
+    upsertCachedChatAgentSessionRow(state, session);
+    if (hasCurrentChatSession(state)) {
+      const reconciled = reconcileChatRunFromSessionRow(state, session, { publishRunStatus: true });
+      if (!reconciled) {
+        reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
+      }
+    }
+    return true;
+  }
+  const visibleKey =
+    state.sessionsResult.sessions.find((existing) =>
+      areUiSessionKeysEquivalent(existing.key, session.key),
+    )?.key ?? session.key;
+  const visibleSession = visibleKey === session.key ? session : { ...session, key: visibleKey };
+  const applied = applySessionsChangedEvent(state, {
+    session: visibleSession,
+    sessionKey: visibleSession.key,
+    ...(isGlobalSessionKey(visibleSession.key)
+      ? { agentId: resolveSelectedGlobalAgentId(state) }
+      : {}),
+  });
+  if (applied.applied) {
+    upsertCachedChatAgentSessionRow(state, visibleSession);
+    if (hasCurrentChatSession(state)) {
+      const reconciled = reconcileChatRunFromSessionRow(state, visibleSession, {
+        publishRunStatus: true,
+      });
+      if (!reconciled) {
+        reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true });
+      }
+    }
+    return true;
+  }
+  const cached = upsertCachedChatAgentSessionRow(state, visibleSession);
+  if (hasCurrentChatSession(state)) {
+    const reconciled =
+      reconcileChatRunFromSessionRow(state, visibleSession, { publishRunStatus: true }) ||
+      (cached && reconcileChatRunFromCurrentSessionRow(state, { publishRunStatus: true }));
+    return cached || reconciled;
+  }
+  return cached;
 }
 
 export async function subscribeSessions(state: SessionsState) {

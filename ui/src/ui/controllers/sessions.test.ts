@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
+  applyChatHistorySessionInfo,
   applySessionsChangedEvent,
   branchSessionFromCheckpoint,
   createSessionAndRefresh,
@@ -2041,6 +2042,196 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions[0]?.totalTokens).toBeUndefined();
     expect(state.sessionsResult?.sessions[0]?.totalTokensFresh).toBe(false);
     expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(200_000);
+  });
+
+  it("keeps richer token metadata when applying lightweight chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5.4", contextTokens: 200_000 },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            totalTokens: 190_000,
+            totalTokensFresh: true,
+            contextTokens: 200_000,
+          },
+        ],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      totalTokens: undefined,
+      totalTokensFresh: false,
+      contextTokens: undefined,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      key: "agent:main:main",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+      totalTokens: 190_000,
+      totalTokensFresh: true,
+      contextTokens: 200_000,
+    });
+  });
+
+  it("applies chat history session info for the selected non-default global agent", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "global", kind: "global", updatedAt: 1, status: "running" }],
+      },
+      chatRunId: "run-work",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      key: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("clears current runs from canonical chat history rows outside the visible list", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "main",
+      sessionsResultAgentId: "work",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:work:main", kind: "direct", updatedAt: 1, status: "done" }],
+      },
+      chatRunId: "run-main",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions.map((row) => row.key)).toEqual(["agent:work:main"]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("clears alias-selected runs from first-load canonical chat history rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "main",
+      sessionsResult: null,
+      chatRunId: "run-main",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:main");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("merges canonical chat history rows into visible legacy alias rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "main", kind: "direct", updatedAt: 1, status: "running" }],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.count).toBe(1);
+    expect(state.sessionsResult?.sessions).toEqual([
+      expect.objectContaining({
+        key: "main",
+        updatedAt: 2,
+        status: "done",
+        hasActiveRun: false,
+      }),
+    ]);
+  });
+
+  it("clears current global runs even when the visible list is scoped elsewhere", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResultAgentId: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1, status: "done" }],
+      },
+      chatRunId: "run-work-global",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions.map((row) => row.key)).toEqual(["agent:main:main"]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
   });
 
   it("keeps updated existing rows sorted like sessions.list", () => {

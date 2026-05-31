@@ -245,10 +245,28 @@ describe("gateway server chat", () => {
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
-        | { sessionKey?: string; sessionId?: string; messages?: unknown }
+        | {
+            sessionKey?: string;
+            sessionId?: string;
+            messages?: unknown;
+            defaults?: { modelProvider?: string | null };
+            sessionInfo?: {
+              key?: string;
+              sessionId?: string;
+              modelProvider?: string;
+              model?: string;
+            };
+          }
         | undefined;
       expect(payload?.sessionKey).toBe("main");
       expect(payload?.sessionId).toBe("sess-main");
+      expect(payload?.defaults?.modelProvider).toBe("test-provider");
+      expect(payload?.sessionInfo).toMatchObject({
+        key: "agent:main:main",
+        sessionId: "sess-main",
+        modelProvider: "test-provider",
+        model: "slow-catalog-model",
+      });
       expect(Array.isArray(payload?.messages)).toBe(true);
     } finally {
       clearConfigCache();

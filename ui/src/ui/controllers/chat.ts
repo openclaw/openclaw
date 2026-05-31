@@ -17,6 +17,7 @@ import {
   parseAgentSessionKey,
 } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import type { GatewaySessionRow, GatewaySessionsDefaults } from "../types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
@@ -293,6 +294,14 @@ export type ChatState = {
   hello?: GatewayHelloOk | null;
 };
 
+export type ChatHistoryResult = {
+  messages?: Array<unknown>;
+  sessionId?: string;
+  thinkingLevel?: string;
+  defaults?: GatewaySessionsDefaults;
+  sessionInfo?: GatewaySessionRow;
+};
+
 export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;
@@ -403,14 +412,14 @@ type InFlightChatHistoryRequest = {
   client: NonNullable<ChatState["client"]>;
   key: string;
   messages: unknown[];
-  promise: Promise<void>;
+  promise: Promise<ChatHistoryResult | undefined>;
 };
 
 const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRequest>();
 
-export async function loadChatHistory(state: ChatState) {
+export async function loadChatHistory(state: ChatState): Promise<ChatHistoryResult | undefined> {
   if (!state.client || !state.connected) {
-    return;
+    return undefined;
   }
   const sessionKey = state.sessionKey;
   const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
@@ -446,7 +455,7 @@ async function loadChatHistoryUncached(
   client: NonNullable<ChatState["client"]>,
   sessionKey: string,
   requestAgentId: string | undefined,
-) {
+): Promise<ChatHistoryResult | undefined> {
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
@@ -455,14 +464,10 @@ async function loadChatHistoryUncached(
   state.chatLoading = true;
   setChatError(state, null);
   try {
-    let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
+    let res: ChatHistoryResult;
     for (;;) {
       try {
-        res = await client.request<{
-          messages?: Array<unknown>;
-          sessionId?: string;
-          thinkingLevel?: string;
-        }>("chat.history", {
+        res = await client.request<ChatHistoryResult>("chat.history", {
           sessionKey,
           ...(requestAgentId ? { agentId: requestAgentId } : {}),
           limit: CHAT_HISTORY_REQUEST_LIMIT,
@@ -470,14 +475,14 @@ async function loadChatHistoryUncached(
         break;
       } catch (err) {
         if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-          return;
+          return undefined;
         }
         const withinStartupRetryWindow =
           Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
         if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
           await sleep(resolveStartupRetryDelayMs(err));
           if (!state.client || !state.connected) {
-            return;
+            return undefined;
           }
           continue;
         }
@@ -485,22 +490,27 @@ async function loadChatHistoryUncached(
       }
     }
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-      return;
+      return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
     state.currentSessionId =
-      typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
-    state.chatThinkingLevel = res.thinkingLevel ?? null;
+      typeof res.sessionInfo?.sessionId === "string" && res.sessionInfo.sessionId.trim()
+        ? res.sessionInfo.sessionId
+        : typeof res.sessionId === "string" && res.sessionId.trim()
+          ? res.sessionId
+          : null;
+    state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    return res;
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey, requestAgentId)) {
-      return;
+      return undefined;
     }
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
@@ -514,6 +524,7 @@ async function loadChatHistoryUncached(
       state.chatLoading = false;
     }
   }
+  return undefined;
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {

@@ -45,6 +45,8 @@ type SessionInfoDefaults = {
 };
 
 type SessionInfoEntry = SessionInfo & {
+  key?: string;
+  sessionId?: string;
   modelOverride?: string;
   providerOverride?: string;
 };
@@ -401,16 +403,38 @@ export function createSessionActions(context: SessionActionContext) {
       const record = history as {
         messages?: unknown[];
         sessionId?: string;
+        sessionInfo?: SessionInfoEntry;
+        defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
         fastMode?: boolean;
         verboseLevel?: string;
         traceLevel?: string;
       };
-      state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
-      state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
-      state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
-      state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
-      state.sessionInfo.traceLevel = record.traceLevel ?? state.sessionInfo.traceLevel;
+      const sessionInfo = record.sessionInfo;
+      if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
+        updateAgentFromSessionKey(sessionInfo.key);
+        state.currentSessionKey = sessionInfo.key;
+        updateHeader();
+      }
+      state.currentSessionId =
+        typeof sessionInfo?.sessionId === "string"
+          ? sessionInfo.sessionId
+          : typeof record.sessionId === "string"
+            ? record.sessionId
+            : null;
+      applySessionInfo({
+        entry: sessionInfo ?? {
+          sessionId: record.sessionId,
+          thinkingLevel: record.thinkingLevel,
+          fastMode: record.fastMode,
+          verboseLevel: record.verboseLevel,
+          traceLevel: record.traceLevel,
+        },
+        defaults: record.defaults,
+      });
+      if (!sessionInfo) {
+        await refreshSessionInfo();
+      }
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
       btw.clear();
@@ -469,7 +493,6 @@ export function createSessionActions(context: SessionActionContext) {
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
-    await refreshSessionInfo();
     tui.requestRender();
   };
 

@@ -133,11 +133,12 @@ import { resolveSessionHistoryTailReadOptions } from "../session-history-state.j
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
+  buildGatewaySessionInfo,
+  getSessionDefaults,
   loadSessionEntry,
   readSessionMessageByIdAsync,
   readSessionMessagesAsync,
   resolveGatewayModelSupportsImages,
-  resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
   readRecentSessionMessagesAsync,
   resolveSessionModelRef,
@@ -156,6 +157,7 @@ import {
   buildWebchatAssistantMessageFromReplyPayloads,
   buildWebchatAudioContentBlocksFromReplyPayloads,
 } from "./chat-webchat-media.js";
+import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -2418,7 +2420,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: agentIdOverride,
     });
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey, sessionLoadOptions);
+    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+      sessionKey,
+      sessionLoadOptions,
+    );
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: sessionKey,
@@ -2508,20 +2513,34 @@ export const chatHandlers: GatewayRequestHandlers = {
         `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
       );
     }
-    let thinkingLevel = entry?.thinkingLevel;
-    if (!thinkingLevel) {
-      thinkingLevel = resolveGatewaySessionThinkingDefault({
-        cfg,
-        agentId: sessionAgentId,
-        provider: resolvedSessionModel.provider,
-        model: resolvedSessionModel.model,
-      });
-    }
+    const sessionInfo = buildGatewaySessionInfo({
+      cfg,
+      storePath,
+      store,
+      key: canonicalKey,
+      entry,
+      agentId: selectedAgent.agentId,
+    });
+    sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
+      context,
+      requestedKey: sessionKey,
+      canonicalKey,
+      ...(canonicalKey === "global" && selectedAgent.agentId
+        ? { agentId: selectedAgent.agentId }
+        : {}),
+      defaultAgentId: resolveDefaultAgentId(cfg),
+    });
+    const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
+    const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    sessionInfo.thinkingLevel = thinkingLevel;
+    sessionInfo.verboseLevel = verboseLevel;
     respond(true, {
       sessionKey,
       sessionId,
       messages: bounded.messages,
+      defaults,
+      sessionInfo,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,

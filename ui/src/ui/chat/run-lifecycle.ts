@@ -1,6 +1,7 @@
 import { resetToolStream, type CompactionStatus, type FallbackStatus } from "../app-tool-stream.ts";
+import { areUiSessionKeysEquivalent } from "../session-key.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
-import type { SessionRunStatus, SessionsListResult } from "../types.ts";
+import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../types.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -270,6 +271,20 @@ export function reconcileChatRunFromCurrentSessionRow(
   if (!row) {
     return false;
   }
+  return reconcileChatRunFromSessionRow(host, row, options);
+}
+
+export function reconcileChatRunFromSessionRow(
+  host: RunLifecycleHost,
+  row: GatewaySessionRow,
+  options: { publishRunStatus?: boolean } = {},
+): boolean {
+  if (!areUiSessionKeysEquivalent(row.key, host.sessionKey)) {
+    return false;
+  }
+  if (!host.chatRunId && host.chatStream == null) {
+    return false;
+  }
   if (isSessionRunActive(row)) {
     return false;
   }
@@ -282,6 +297,7 @@ export function reconcileChatRunFromCurrentSessionRow(
     sessionStatus: row.status === "done" ? "done" : (row.status ?? "killed"),
     runId: host.chatRunId,
     sessionKey: host.sessionKey,
+    sessionKeys: [row.key],
     clearLocalRun: true,
     clearChatStream: true,
     publishRunStatus: options.publishRunStatus,
