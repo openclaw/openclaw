@@ -1,9 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
+type ExecAsk = import("../infra/exec-approvals.js").ExecAsk;
+type ExecSecurity = import("../infra/exec-approvals.js").ExecSecurity;
 type MockAllowlistSegment = {
   raw?: string;
   resolution: null;
@@ -16,10 +19,20 @@ type MockAllowlistResult = {
   segments: MockAllowlistSegment[];
   segmentAllowlistEntries: unknown[];
 };
-type MockExecApprovalAllowlistEntry = {
+type MockExecAllowlistEntry = {
   pattern: string;
-  source?: string;
+  source?: "allow-always";
   commandText?: string;
+};
+type MockExecApprovalsResolved = {
+  allowlist: MockExecAllowlistEntry[];
+  file: { version: 1; agents: Record<string, unknown> };
+  agent: {
+    security: ExecSecurity;
+    ask: ExecAsk;
+    askFallback: "deny";
+    autoAllowSkills: false;
+  };
 };
 
 const INLINE_EVAL_HIT = {
@@ -59,22 +72,24 @@ const evaluateShellAllowlistMock = vi.hoisted(() =>
   ),
 );
 const resolveExecApprovalsFromFileMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    allowlist: [] as MockExecApprovalAllowlistEntry[],
-    file: { version: 1, agents: {} },
-    agent: {
-      security: "full",
-      ask: "off",
-      askFallback: "deny",
-      autoAllowSkills: false,
-    },
-  })),
+  vi.fn(
+    (): MockExecApprovalsResolved => ({
+      allowlist: [],
+      file: { version: 1, agents: {} },
+      agent: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    }),
+  ),
 );
 const requiresExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
-    approvals: { allowlist: [], file: { version: 1, agents: {} } },
+    approvals: { allowlist: [] as ExecAllowlistEntry[], file: { version: 1, agents: {} } },
     hostSecurity: "full",
     hostAsk: "off",
     askFallback: "deny",
@@ -153,7 +168,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   buildDefaultExecApprovalRequestArgs: vi.fn(() => ({})),
   createAndRegisterDefaultExecApprovalRequest: createAndRegisterDefaultExecApprovalRequestMock,
   shouldResolveExecApprovalUnavailableInline: vi.fn(() => false),
-  buildExecApprovalFollowupTarget: vi.fn(() => ({ approvalId: "approval-1" })),
+  buildExecApprovalFollowupTarget: vi.fn((value) => value),
   resolveApprovalDecisionOrUndefined: resolveApprovalDecisionOrUndefinedMock,
   createExecApprovalDecisionState: createExecApprovalDecisionStateMock,
   enforceStrictInlineEvalApprovalBoundary: enforceStrictInlineEvalApprovalBoundaryMock,
@@ -1350,7 +1365,10 @@ describe("executeNodeHostCommand", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        { approvalId: "approval-1" },
+        expect.objectContaining({
+          approvalId: "approval-1",
+          sessionKey: "requested-session",
+        }),
         "Exec denied (node=node-1 id=approval-1, approval-timeout): bun ./script.ts",
       );
     });
@@ -1623,7 +1641,10 @@ describe("executeNodeHostCommand", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        { approvalId: "approval-1" },
+        expect.objectContaining({
+          approvalId: "approval-1",
+          sessionKey: "requested-session",
+        }),
         "Exec denied (node=node-1 id=approval-1, approval-timeout): echo 'unterminated",
       );
     });
@@ -1678,7 +1699,10 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        { approvalId: "approval-1" },
+        expect.objectContaining({
+          approvalId: "approval-1",
+          sessionKey: "requested-session",
+        }),
         "Exec denied (node=node-1 id=approval-1, approval-timeout): bun ./script.ts",
       );
     });
@@ -1894,6 +1918,27 @@ describe("executeNodeHostCommand", () => {
       invokeTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
       runTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
     });
+
+    callGatewayToolMock.mockClear();
+
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: Number.MAX_VALUE,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expectSystemRunInvoke({
+      invokeTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+      runTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+    });
   });
 
   it("forwards timeout zero to node system.run and keeps the invoke wait bounded", async () => {
@@ -2021,7 +2066,10 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-        { approvalId: "approval-1" },
+        expect.objectContaining({
+          approvalId: "approval-1",
+          sessionKey: "requested-session",
+        }),
         "Exec denied (node=node-1 id=approval-1, approval-timeout): python3 -c 'print(1)'",
       );
     });

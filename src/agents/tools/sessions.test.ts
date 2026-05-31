@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -926,5 +927,40 @@ describe("sessions_send gating", () => {
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+  });
+
+  it("caps oversized timeoutSeconds before waiting for the target run", async () => {
+    const tool = createMainSessionsSendTool();
+    const waitTimeouts: unknown[] = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; timeoutMs?: unknown };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-huge-timeout", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        waitTimeouts.push(request.timeoutMs);
+        return { runId: "run-huge-timeout", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-huge-timeout", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(requireDetails(result).status).toBe("ok");
+    expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });

@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { hydrateSessionStoreSkillPromptRefs } from "../config/sessions/skill-prompt-blobs.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { isRecord } from "../shared/record-coerce.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 type SnapshotPathSource =

@@ -1,5 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 export type ChannelMatchSource = "direct" | "parent" | "wildcard";
 

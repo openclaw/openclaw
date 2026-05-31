@@ -1,8 +1,8 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveChannelDmAllowFrom } from "../../../channels/plugins/dm-access.js";
 import { normalizeAnyChannelId } from "../../../channels/registry.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeUniqueStringEntries } from "../../../shared/string-normalization.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import { asObjectRecord } from "./object.js";
 

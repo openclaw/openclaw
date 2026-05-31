@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -56,7 +57,6 @@ import {
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
@@ -146,6 +146,7 @@ import {
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "../../local-model-lean.js";
@@ -378,6 +379,7 @@ import {
   sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
+  wrapStreamFnPromoteStandaloneTextToolCalls,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -453,6 +455,7 @@ export {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 export {
+  wrapStreamFnPromoteStandaloneTextToolCalls,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -1882,7 +1885,7 @@ export async function runEmbeddedAttempt(
         missingToolResultText:
           params.model.api === "openai-responses" ||
           params.model.api === "azure-openai-responses" ||
-          params.model.api === "openai-codex-responses"
+          params.model.api === "openai-chatgpt-responses"
             ? "aborted"
             : undefined,
         allowedToolNames: replayAllowedToolNames,
@@ -2025,7 +2028,7 @@ export async function runEmbeddedAttempt(
       });
       // Exact raw names of every tool registered for this run, including
       // bundled/plugin tools. Used as the raw-name set for the trusted local
-      // MEDIA: passthrough gate: a normalized alias is not sufficient — the
+      // media passthrough gate: a normalized alias is not sufficient — the
       // emitted tool name must match an exact registration of this run.
       const builtinToolNames = new Set(
         uncompactedEffectiveTools.flatMap((tool) => {
@@ -2561,7 +2564,7 @@ export async function runEmbeddedAttempt(
       const isOpenAIResponsesApi =
         params.model.api === "openai-responses" ||
         params.model.api === "azure-openai-responses" ||
-        params.model.api === "openai-codex-responses";
+        params.model.api === "openai-chatgpt-responses";
 
       const replayToolCallIdSanitizerDecision = {
         sanitizeToolCallIds: transcriptPolicy.sanitizeToolCallIds,
@@ -2614,6 +2617,10 @@ export async function runEmbeddedAttempt(
         allowedToolNames,
         transcriptPolicy,
         params.provider,
+      );
+      activeSession.agent.streamFn = wrapStreamFnPromoteStandaloneTextToolCalls(
+        activeSession.agent.streamFn,
+        allowedToolNames,
       );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
@@ -4393,33 +4400,26 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        // Run agent_end hooks to allow plugins to analyze the conversation
-        // This is fire-and-forget, so we don't await
-        // Run even on compaction timeout so plugins can log/cleanup
-        if (hookRunner?.hasHooks("agent_end")) {
-          hookRunner
-            .runAgentEnd(
-              {
-                messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? formatErrorMessage(promptError) : undefined,
-                durationMs: Date.now() - promptStartedAt,
-              },
-              {
-                runId: params.runId,
-                trace: freezeDiagnosticTraceContext(diagnosticTrace),
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                workspaceDir: params.workspaceDir,
-                trigger: params.trigger,
-                ...buildAgentHookContextChannelFields(params),
-              },
-            )
-            .catch((err) => {
-              log.warn(`agent_end hook failed: ${err}`);
-            });
-        }
+        runAgentEndSideEffects({
+          event: {
+            messages: messagesSnapshot,
+            success: !aborted && !promptError,
+            error: promptError ? formatErrorMessage(promptError) : undefined,
+            durationMs: Date.now() - promptStartedAt,
+          },
+          ctx: {
+            runId: params.runId,
+            trace: freezeDiagnosticTraceContext(diagnosticTrace),
+            agentId: hookAgentId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            workspaceDir: params.workspaceDir,
+            trigger: params.trigger,
+            ...(params.config ? { config: params.config } : {}),
+            ...buildAgentHookContextChannelFields(params),
+          },
+          hookRunner,
+        });
       } finally {
         clearTimeout(abortTimer);
         if (abortWarnTimer) {

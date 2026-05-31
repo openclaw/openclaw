@@ -21,9 +21,9 @@ describe("provider auth profile helpers", () => {
     const fallbackStore: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "api_key",
-          provider: "openai-codex",
+          provider: "openai",
           key: "fallback-key",
         },
       },
@@ -71,16 +71,16 @@ describe("provider auth profile helpers", () => {
     const { listUsableProviderAuthProfileIds, resolveProviderAuthProfileApiKey } =
       await import("./provider-auth.js");
 
-    expect(listUsableProviderAuthProfileIds({ provider: "openai-codex" }).profileIds).toEqual([
-      "openai-codex:default",
+    expect(listUsableProviderAuthProfileIds({ provider: "openai" }).profileIds).toEqual([
+      "openai:default",
     ]);
-    await expect(resolveProviderAuthProfileApiKey({ provider: "openai-codex" })).resolves.toBe(
+    await expect(resolveProviderAuthProfileApiKey({ provider: "openai" })).resolves.toBe(
       "fallback-key",
     );
     expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw-agent",
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         store: fallbackStore,
       }),
     );
@@ -96,16 +96,16 @@ describe("provider auth profile helpers", () => {
     const externalStore: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: Date.now() + 60_000,
         },
       },
     };
-    const externalCli = { mode: "scoped", providerIds: ["openai-codex"] };
+    const externalCli = { mode: "scoped", providerIds: ["openai"] };
     const loadAuthProfileStoreForSecretsRuntime = vi.fn(
       (_agentDir?: string, options?: { externalCli?: unknown }) =>
         options?.externalCli ? externalStore : primaryStore,
@@ -142,10 +142,10 @@ describe("provider auth profile helpers", () => {
 
     const { isProviderAuthProfileConfigured } = await import("./provider-auth.js");
 
-    expect(isProviderAuthProfileConfigured({ provider: "openai-codex" })).toBe(false);
+    expect(isProviderAuthProfileConfigured({ provider: "openai" })).toBe(false);
     expect(
       isProviderAuthProfileConfigured({
-        provider: "openai-codex",
+        provider: "openai",
         includeExternalCliAuth: true,
       }),
     ).toBe(true);
@@ -187,6 +187,76 @@ describe("provider auth profile helpers", () => {
       expect.objectContaining({
         expiresAt: 2_000_000_000_000,
         token: "token;proxy-ep=proxy.individual.githubcopilot.com",
+      }),
+    ]);
+  });
+
+  it("rejects Copilot token expiry values outside the supported date range", async () => {
+    vi.resetModules();
+
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "token;proxy-ep=proxy.individual.githubcopilot.com",
+            expires_at: Number.MAX_SAFE_INTEGER,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    await expect(
+      resolveCopilotApiToken({
+        githubToken: "github-token",
+        fetchImpl,
+        cachePath: "/tmp/copilot-token.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {
+          throw new Error("should not save invalid token");
+        },
+      }),
+    ).rejects.toThrow("Copilot token response has invalid expires_at");
+  });
+
+  it("refreshes cached Copilot tokens with out-of-range expiry values", async () => {
+    vi.resetModules();
+
+    const saved: unknown[] = [];
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
+            expires_at: "+2000000000",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    const result = await resolveCopilotApiToken({
+      githubToken: "github-token",
+      fetchImpl,
+      cachePath: "/tmp/copilot-token.json",
+      loadJsonFileImpl: () => ({
+        token: "cached;proxy-ep=proxy.individual.githubcopilot.com",
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        updatedAt: Date.now(),
+        integrationId: COPILOT_INTEGRATION_ID,
+      }),
+      saveJsonFileImpl: (_path, value) => saved.push(value),
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.source).toBe("fetched:https://api.github.com/copilot_internal/v2/token");
+    expect(result.token).toBe("fresh;proxy-ep=proxy.individual.githubcopilot.com");
+    expect(saved).toEqual([
+      expect.objectContaining({
+        expiresAt: 2_000_000_000_000,
+        token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
       }),
     ]);
   });

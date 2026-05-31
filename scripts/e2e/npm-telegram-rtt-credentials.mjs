@@ -350,12 +350,20 @@ async function acquireWithRetry(config) {
   let attempt = 0;
   while (true) {
     attempt += 1;
+    const attemptElapsedMs = Date.now() - startedAt;
+    const attemptRemainingMs = config.acquireTimeoutMs - attemptElapsedMs;
+    if (attemptRemainingMs <= 0) {
+      throw taggedError(
+        `credential broker acquire timed out after ${config.acquireTimeoutMs}ms before retry`,
+        "ETIMEDOUT",
+      );
+    }
     try {
       return await postBroker({
         authToken: config.authToken,
         bodyMaxBytes: config.httpBodyMaxBytes,
         label: "credential broker acquire",
-        timeoutMs: config.httpTimeoutMs,
+        timeoutMs: Math.min(config.httpTimeoutMs, attemptRemainingMs),
         url: config.acquireUrl,
         body: {
           kind: "telegram",
@@ -369,15 +377,26 @@ async function acquireWithRetry(config) {
       const code = error instanceof BrokerError ? error.code : undefined;
       const retryable = code ? RETRYABLE_ACQUIRE_CODES.has(code) : false;
       const elapsedMs = Date.now() - startedAt;
-      if (!retryable || elapsedMs >= config.acquireTimeoutMs) {
+      if (!retryable) {
         throw error;
+      }
+      if (elapsedMs >= config.acquireTimeoutMs) {
+        throw taggedError(
+          `credential broker acquire timed out after ${config.acquireTimeoutMs}ms before retry`,
+          "ETIMEDOUT",
+        );
       }
       const fallbackDelay = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
       const retryAfterMs = error instanceof BrokerError ? error.retryAfterMs : undefined;
       const delayMs = retryAfterMs ?? fallbackDelay;
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(delayMs, Math.max(config.acquireTimeoutMs - elapsedMs, 0))),
-      );
+      const remainingMs = config.acquireTimeoutMs - elapsedMs;
+      if (delayMs >= remainingMs) {
+        throw taggedError(
+          `credential broker acquire timed out after ${config.acquireTimeoutMs}ms before retry`,
+          "ETIMEDOUT",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
 }

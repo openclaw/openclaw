@@ -676,7 +676,7 @@ describe("installed plugin index", () => {
     const config = {
       plugins: {
         entries: {
-          "openai-codex": {
+          openai: {
             enabled: false,
           },
         },

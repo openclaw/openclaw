@@ -78,6 +78,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -116,6 +117,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -221,8 +223,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 40867,
-    "roughTokens": 10217
+    "chars": 41226,
+    "roughTokens": 10307
   },
   "openClawDeveloperInstructions": {
     "chars": 1964,
@@ -233,8 +235,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6544
   },
   "totalWithDynamicToolsJson": {
-    "chars": 67045,
-    "roughTokens": 16762
+    "chars": 67404,
+    "roughTokens": 16851
   },
   "userInputText": {
     "chars": 1129,
@@ -660,6 +662,17 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "media": {
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
+        },
+        "mediaUrl": {
+          "description": "Alias for media.",
+          "type": "string"
+        },
+        "mediaUrls": {
+          "description": "Multiple media URLs/paths.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "message": {
           "type": "string"

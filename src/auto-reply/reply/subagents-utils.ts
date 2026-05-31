@@ -1,8 +1,8 @@
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { truncateUtf16Safe } from "../../utils.js";
 

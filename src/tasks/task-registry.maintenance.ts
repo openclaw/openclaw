@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
   listAcpSessionEntries,
@@ -12,7 +16,7 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
-import { readCronRunLogEntriesSync, resolveCronRunLogPath } from "../cron/run-log.js";
+import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
 import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
@@ -29,10 +33,6 @@ import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import {
   CODEX_NATIVE_SUBAGENT_STALE_ERROR,
   isChildlessCodexNativeSubagentTask,
@@ -114,7 +114,6 @@ type TaskRegistryMaintenanceRuntime = {
   isCronRuntimeAuthoritative: () => boolean;
   resolveCronStorePath: typeof resolveCronStorePath;
   loadCronStoreSync: typeof loadCronStoreSync;
-  resolveCronRunLogPath: typeof resolveCronRunLogPath;
   readCronRunLogEntriesSync: typeof readCronRunLogEntriesSync;
 };
 
@@ -154,7 +153,6 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   isCronRuntimeAuthoritative: () => configuredCronRuntimeAuthoritative,
   resolveCronStorePath: () => configuredCronStorePath ?? resolveCronStorePath(),
   loadCronStoreSync,
-  resolveCronRunLogPath,
   readCronRunLogEntriesSync,
 };
 
@@ -367,11 +365,8 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   }
   let entries: CronRunLogEntry[] = [];
   try {
-    const logPath = taskRegistryMaintenanceRuntime.resolveCronRunLogPath({
+    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync({
       storePath: context.storePath,
-      jobId,
-    });
-    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync(logPath, {
       jobId,
       limit: 5000,
     });
@@ -503,6 +498,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   if (task.runtime === "acp") {
     const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
       sessionKey: childSessionKey,
+      clone: false,
     });
     if (!acpEntry || acpEntry.storeReadFailed) {
       return true;
@@ -648,7 +644,10 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   ) {
     return false;
   }
-  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
+    sessionKey,
+    clone: false,
+  });
   if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.acp) {
     return false;
   }
@@ -686,7 +685,10 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   if (!sessionKey) {
     return;
   }
-  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
+    sessionKey,
+    clone: false,
+  });
   const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
   if (!acpEntry || !closeAcpSession) {
     return;
@@ -722,7 +724,7 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
 async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
   let acpSessions: AcpSessionStoreEntry[];
   try {
-    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({});
+    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({ clone: false });
   } catch (error) {
     log.warn("Failed to list ACP sessions during task maintenance", { error });
     return;

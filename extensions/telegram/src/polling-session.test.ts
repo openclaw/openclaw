@@ -2257,7 +2257,10 @@ describe("TelegramPollingSession", () => {
     });
 
     try {
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "wedged topic 10 turn")]);
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "wedged topic 10 turn"),
+        topicUpdate(43, 10, "later blocked topic 10 turn"),
+      ]);
       const { runPromise, stopWorker } = startIsolatedIngressSession({
         abort,
         spoolDir: tempDir,

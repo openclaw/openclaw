@@ -1,4 +1,5 @@
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
@@ -12,7 +13,6 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
-import { uniqueStrings } from "../../../shared/string-normalization.js";
 import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([

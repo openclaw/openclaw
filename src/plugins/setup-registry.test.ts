@@ -454,6 +454,50 @@ describe("setup-registry module loader", () => {
     expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(pluginRoot, "setup-api.js"));
   });
 
+  it("uses provider auth aliases to route setup provider owner lookup", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          providerAuthAliases: { openai: "openai" },
+          setup: {
+            providers: [{ id: "openai" }],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: {
+              id: string;
+              aliases: string[];
+              label: string;
+              auth: [];
+            }) => void;
+          }) {
+            api.registerProvider({
+              id: "openai",
+              aliases: ["openai"],
+              label: "OpenAI",
+              auth: [],
+            });
+          },
+        },
+      });
+    });
+
+    const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
+    expect(provider.id).toBe("openai");
+    expect(provider.label).toBe("OpenAI");
+  });
+
   it("treats explicit descriptor-only setup as a runtime cutoff", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(

@@ -629,7 +629,7 @@ export class TelegramPollingSession {
         continue;
       }
       const ageMs = now - handler.startedAt;
-      if (ageMs <= this.#spooledUpdateHandlerTimeoutMs) {
+      if (ageMs < this.#spooledUpdateHandlerTimeoutMs) {
         continue;
       }
       if (!timedOut || ageMs > timedOut.ageMs) {

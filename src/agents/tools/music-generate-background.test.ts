@@ -136,13 +136,14 @@ describe("music generate background helpers", () => {
     });
 
     expectReplyInstructionContains("visible-reply contract");
-    expectReplyInstructionContains("MEDIA:");
+    expectReplyInstructionContains("final-reply MEDIA lines");
   });
 
   it("delivers failure completion notices directly", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
       path: "direct",
+      reason: "generated_media_missing",
       error: "completion agent did not deliver generated media",
     });
     const completion = createMediaCompletionFixture({
@@ -189,7 +190,7 @@ describe("music generate background helpers", () => {
       });
 
       expectReplyInstructionContains("visible-reply contract");
-      expectReplyInstructionContains("MEDIA:");
+      expectReplyInstructionContains("final-reply MEDIA lines");
     },
   );
 

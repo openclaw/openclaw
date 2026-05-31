@@ -1,3 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession } from "../../agents/cli-session.js";
@@ -5,11 +10,6 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
-import { isRecord } from "../../shared/record-coerce.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 
 function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
   return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
@@ -95,10 +95,15 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
   const existingSessionId = normalizeOptionalString(params.existingSessionId);
   const agentMeta = params.result.meta.agentMeta;
   const returnedSessionId = normalizeOptionalString(agentMeta?.cliSessionBinding?.sessionId);
-  if (agentMeta === undefined || (existingSessionId && returnedSessionId === existingSessionId)) {
+  const shouldClearStoredSession = agentMeta?.clearCliSessionBinding === true;
+  if (
+    agentMeta === undefined ||
+    (!shouldClearStoredSession && existingSessionId === undefined) ||
+    returnedSessionId === existingSessionId
+  ) {
     return params.result;
   }
-  if (returnedSessionId) {
+  if (returnedSessionId || shouldClearStoredSession) {
     params.onDroppedReplacement?.();
   }
   return {
@@ -109,6 +114,7 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
         ...agentMeta,
         sessionId: "",
         cliSessionBinding: undefined,
+        clearCliSessionBinding: undefined,
       },
     },
   };

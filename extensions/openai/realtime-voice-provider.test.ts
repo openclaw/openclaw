@@ -300,7 +300,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
 
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg: {},
       includeExternalCliAuth: true,
     });
@@ -588,7 +588,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     expect(provider.isConfigured({ cfg, providerConfig: {} })).toBe(true);
     expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
       includeExternalCliAuth: true,
     });
@@ -632,7 +632,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
       includeExternalCliAuth: true,
     });
@@ -664,7 +664,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
       includeExternalCliAuth: true,
     });

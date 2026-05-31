@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   type ConnectParams,
   ErrorCodes,
@@ -38,11 +44,6 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeUniqueTrimmedStringList } from "../../shared/string-normalization.js";
 import {
   recordRemoteNodeInfo,
   refreshRemoteNodeBins,
@@ -672,8 +673,8 @@ export async function waitForNodeReconnect(params: {
   timeoutMs?: number;
   pollMs?: number;
 }): Promise<boolean> {
-  const timeoutMs = Math.max(250, params.timeoutMs ?? NODE_WAKE_RECONNECT_WAIT_MS);
-  const pollMs = Math.max(50, params.pollMs ?? NODE_WAKE_RECONNECT_POLL_MS);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 250);
+  const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {

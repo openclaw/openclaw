@@ -1,10 +1,11 @@
-import { sanitizeAgentId } from "../routing/session-key.js";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,
@@ -104,10 +105,11 @@ function coerceSchedule(schedule: UnknownRecord) {
     }
   }
 
+  const parsedAtIso = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
   if (atString) {
-    next.at = parsedAtMs !== null ? new Date(parsedAtMs).toISOString() : atString;
-  } else if (parsedAtMs !== null) {
-    next.at = new Date(parsedAtMs).toISOString();
+    next.at = parsedAtIso ?? atString;
+  } else if (parsedAtIso !== undefined) {
+    next.at = parsedAtIso;
   }
   if ("atMs" in next) {
     delete next.atMs;

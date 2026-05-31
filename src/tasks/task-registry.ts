@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -12,8 +14,6 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
@@ -280,7 +280,17 @@ function persistTaskUpsert(task: TaskRecord) {
     return;
   }
   if (store.upsertTask) {
+    if (deliveryState && !store.upsertDeliveryState) {
+      store.saveSnapshot({
+        tasks,
+        deliveryStates: taskDeliveryStates,
+      });
+      return;
+    }
     store.upsertTask(task);
+    if (deliveryState && store.upsertDeliveryState) {
+      store.upsertDeliveryState(deliveryState);
+    }
     return;
   }
   store.saveSnapshot({
@@ -1662,10 +1672,13 @@ export function createTaskRecord(params: {
     record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
   tasks.set(taskId, record);
-  upsertTaskDeliveryState({
-    taskId,
-    requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
-  });
+  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  if (requesterOrigin) {
+    taskDeliveryStates.set(taskId, {
+      taskId,
+      requesterOrigin,
+    });
+  }
   addRunIdIndex(taskId, record.runId);
   addOwnerKeyIndex(taskId, record);
   addParentFlowIdIndex(taskId, record);

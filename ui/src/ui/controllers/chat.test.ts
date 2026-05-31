@@ -797,6 +797,82 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([existingMessage]);
   });
 
+  it("appends visible assistant text for error events with an error message", () => {
+    const existingMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Ping" }],
+      timestamp: 1,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [existingMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: 'No API key found for provider "openai".',
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(
+      state.chatMessages[1],
+      "assistant",
+      'Error: No API key found for provider "openai".',
+    );
+    expect(state.lastError).toBe('No API key found for provider "openai".');
+  });
+
+  it("prefers server-provided assistant error messages", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Configure provider auth, then try again." }],
+      timestamp: 10,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "raw gateway error",
+      message,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([message]);
+    expect(state.lastError).toBe("raw gateway error");
+  });
+
+  it("does not append an orphan error bubble when no run was active", () => {
+    const existingMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Error: request failed before start" }],
+      timestamp: 1,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: null,
+      chatMessages: [existingMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-failed-before-start",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "request failed before start",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toEqual([existingMessage]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.lastError).toBe("request failed before start");
+  });
+
   it("drops NO_REPLY final payload from another run", () => {
     const state = createActiveStreamingState();
     const payload = createOtherRunNoReplyFinalPayload();

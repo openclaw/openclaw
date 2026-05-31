@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -25,8 +26,7 @@ import {
   formatExecCommand,
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
-import { normalizeNullableString } from "../shared/string-coerce.js";
-import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -81,12 +81,12 @@ function resolveNodeInvokeTimeoutMs(runTimeoutSec: number, defaultTimeoutSec: nu
   if (!Number.isFinite(baseTimeoutSec) || baseTimeoutSec <= 0) {
     return 10_000;
   }
-  return Math.max(10_000, resolveSafeTimeoutDelayMs(baseTimeoutSec * 1000 + 5_000));
+  return Math.max(10_000, addSafeTimeoutDelayGraceMs(baseTimeoutSec * 1000, 5_000));
 }
 
 function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
   return Number.isFinite(runTimeoutSec) && runTimeoutSec > 0
-    ? resolveSafeTimeoutDelayMs(runTimeoutSec * 1000, { minMs: 0 })
+    ? addSafeTimeoutDelayGraceMs(runTimeoutSec * 1000, 0, { minMs: 0 })
     : 0;
 }
 

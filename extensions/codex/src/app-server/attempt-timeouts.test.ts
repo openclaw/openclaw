@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
@@ -6,6 +7,7 @@ import {
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
+  resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
   resolveCodexTurnAssistantCompletionIdleTimeoutMs,
   resolveCodexTurnCompletionIdleTimeoutMs,
@@ -28,6 +30,15 @@ describe("Codex app-server attempt timeouts", () => {
       CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
     );
     expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500, timeoutFloorMs: Number.NaN })).toBe(500);
+    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.MAX_SAFE_INTEGER })).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(
+      resolveCodexStartupTimeoutMs({
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        timeoutFloorMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(
       resolveCodexStartupTimeoutMs({
         timeoutMs: Number.NaN,
@@ -50,6 +61,9 @@ describe("Codex app-server attempt timeouts", () => {
     );
     expect(resolveCodexTurnCompletionIdleTimeoutMs(2.9)).toBe(2);
     expect(resolveCodexTurnCompletionIdleTimeoutMs(0)).toBe(1);
+    expect(resolveCodexTurnCompletionIdleTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
 
     expect(resolveCodexTurnAssistantCompletionIdleTimeoutMs(undefined)).toBe(
       CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
@@ -77,6 +91,12 @@ describe("Codex app-server attempt timeouts", () => {
     );
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(7.9, 123)).toBe(7);
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(0, 123)).toBe(1);
+    expect(
+      resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
+        Number.MAX_SAFE_INTEGER,
+        Number.MAX_SAFE_INTEGER,
+      ),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
 
     expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined)).toBe(
       CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
@@ -86,6 +106,20 @@ describe("Codex app-server attempt timeouts", () => {
     );
     expect(resolveCodexTurnTerminalIdleTimeoutMs(3.7)).toBe(3);
     expect(resolveCodexTurnTerminalIdleTimeoutMs(-1)).toBe(1);
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+  });
+
+  it("caps gateway timeout grace", () => {
+    expect(resolveCodexGatewayTimeoutWithGraceMs(120_000)).toBe(130_000);
+    expect(resolveCodexGatewayTimeoutWithGraceMs(120_000, 500)).toBe(120_500);
+    expect(resolveCodexGatewayTimeoutWithGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(resolveCodexGatewayTimeoutWithGraceMs(MAX_TIMER_TIMEOUT_MS - 100, 500)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 
   it("returns the startup operation result before timeout", async () => {

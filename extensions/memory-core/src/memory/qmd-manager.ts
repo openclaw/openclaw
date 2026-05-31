@@ -50,6 +50,11 @@ import {
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  addTimerTimeoutGraceMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   uniqueValues,
@@ -197,6 +202,10 @@ function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
     },
     stale: Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 2),
   };
+}
+
+export function resolveQmdMcporterSearchProcessTimeoutMs(timeoutMs: number): number {
+  return Math.max(addTimerTimeoutGraceMs(timeoutMs, 2_000) ?? 1, 5_000);
 }
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
@@ -1696,7 +1705,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     const now = Date.now();
-    if (this.embedBackoffUntil !== null && now < this.embedBackoffUntil) {
+    if (this.embedBackoffUntil !== null && isFutureDateTimestampMs(this.embedBackoffUntil)) {
       return false;
     }
     const embedIntervalMs = this.qmd.update.embedIntervalMs;
@@ -1803,7 +1812,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       QMD_EMBED_BACKOFF_MAX_MS,
       QMD_EMBED_BACKOFF_BASE_MS * 2 ** Math.max(0, this.embedFailureCount - 1),
     );
-    this.embedBackoffUntil = Date.now() + delayMs;
+    this.embedBackoffUntil = resolveExpiresAtMsFromDurationMs(delayMs) ?? null;
     log.warn(
       `qmd embed failed (${reason}): ${String(err)}; backing off for ${Math.ceil(delayMs / 1000)}s`,
     );
@@ -2130,7 +2139,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           "--timeout",
           String(Math.max(0, params.timeoutMs)),
         ],
-        { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
+        { timeoutMs: resolveQmdMcporterSearchProcessTimeoutMs(params.timeoutMs) },
       );
       // If we got here with the v2 "query" tool, confirm v2 for future calls.
       if (useUnifiedQueryTool && this.qmdMcpToolVersion === null) {

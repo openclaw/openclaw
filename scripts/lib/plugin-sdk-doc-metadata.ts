@@ -119,6 +119,9 @@ export const pluginSdkDocMetadata = {
   "tts-runtime": {
     category: "runtime",
   },
+  "inline-image-data-url-runtime": {
+    category: "runtime",
+  },
   "allow-from": {
     category: "utilities",
   },

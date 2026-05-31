@@ -97,12 +97,18 @@ export function hasMatchingOAuthIdentity(
   return false;
 }
 
-export function isSafeToOverwriteStoredOAuthIdentity(
+type OAuthIdentitySafetyPolicy = {
+  whenExistingCredentialMissing: boolean;
+  whenExistingIdentityMissing: boolean;
+};
+
+function isSafeOAuthIdentityTransition(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
+  policy: OAuthIdentitySafetyPolicy,
 ): boolean {
   if (!existing || existing.type !== "oauth") {
-    return true;
+    return policy.whenExistingCredentialMissing;
   }
   if (existing.provider !== incoming.provider) {
     return false;
@@ -111,47 +117,39 @@ export function isSafeToOverwriteStoredOAuthIdentity(
     return true;
   }
   if (!hasOAuthIdentity(existing)) {
-    return false;
+    return policy.whenExistingIdentityMissing;
   }
   return hasMatchingOAuthIdentity(existing, incoming);
+}
+
+export function isSafeToOverwriteStoredOAuthIdentity(
+  existing: OAuthCredential | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  return isSafeOAuthIdentityTransition(existing, incoming, {
+    whenExistingCredentialMissing: true,
+    whenExistingIdentityMissing: false,
+  });
 }
 
 export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  if (!existing || existing.type !== "oauth") {
-    return true;
-  }
-  if (existing.provider !== incoming.provider) {
-    return false;
-  }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
-    return true;
-  }
-  if (!hasOAuthIdentity(existing)) {
-    return true;
-  }
-  return hasMatchingOAuthIdentity(existing, incoming);
+  return isSafeOAuthIdentityTransition(existing, incoming, {
+    whenExistingCredentialMissing: true,
+    whenExistingIdentityMissing: true,
+  });
 }
 
 export function isSafeToAdoptMainStoreOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  if (!existing || existing.type !== "oauth") {
-    return false;
-  }
-  if (existing.provider !== incoming.provider) {
-    return false;
-  }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
-    return true;
-  }
-  if (!hasOAuthIdentity(existing)) {
-    return true;
-  }
-  return hasMatchingOAuthIdentity(existing, incoming);
+  return isSafeOAuthIdentityTransition(existing, incoming, {
+    whenExistingCredentialMissing: false,
+    whenExistingIdentityMissing: true,
+  });
 }
 
 export function shouldBootstrapFromExternalCliCredential(params: {

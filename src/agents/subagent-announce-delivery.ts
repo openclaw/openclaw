@@ -1,3 +1,9 @@
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
@@ -17,9 +23,6 @@ import {
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -1248,6 +1251,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "none",
+        reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
       };
     }
@@ -1454,6 +1458,7 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
+          reason: "completion_handoff_pending",
           error: "completion agent handoff is still pending",
         };
       }
@@ -1493,6 +1498,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: "generated_media_missing",
         error: "completion agent did not deliver generated media",
       };
     }
@@ -1525,6 +1531,7 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
+          reason: "visible_reply_missing",
           error: "completion agent did not produce a visible reply",
         };
       }
@@ -1539,6 +1546,7 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
+          reason: "visible_reply_missing",
           error: "completion agent did not produce a visible reply",
         };
       }
@@ -1557,6 +1565,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: "message_tool_delivery_missing",
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
@@ -1569,6 +1578,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: "visible_reply_missing",
         error: "completion agent did not produce a visible reply",
       };
     }

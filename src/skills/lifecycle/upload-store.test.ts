@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSkillUploadStore,
@@ -270,6 +271,60 @@ describe("skill upload store", () => {
       }),
       "too many active skill uploads",
     );
+  });
+
+  it("rejects new uploads when the clock cannot produce a valid expiry", async () => {
+    const rootDir = await makeTempDir();
+    const invalidClockStore = createSkillUploadStore({
+      rootDir,
+      now: () => Number.NaN,
+    });
+    await expectUploadError(
+      invalidClockStore.begin({
+        kind: "skill-archive",
+        slug: "invalid-clock",
+        sizeBytes: 1,
+      }),
+      "invalid upload expiry",
+    );
+
+    const overflowStore = createSkillUploadStore({
+      rootDir,
+      now: () => MAX_DATE_TIMESTAMP_MS,
+    });
+    await expectUploadError(
+      overflowStore.begin({
+        kind: "skill-archive",
+        slug: "overflow-clock",
+        sizeBytes: 1,
+      }),
+      "invalid upload expiry",
+    );
+  });
+
+  it("does not count uploads with invalid stored expiry as active", async () => {
+    const rootDir = await makeTempDir();
+    const store = createSkillUploadStore({ rootDir });
+    const begin = await store.begin({
+      kind: "skill-archive",
+      slug: "invalid-expiry",
+      sizeBytes: 1,
+      idempotencyKey: "invalid-expiry",
+    });
+    const metadataPath = path.join(rootDir, begin.uploadId, "metadata.json");
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8")) as Record<string, unknown>;
+    metadata.expiresAt = null;
+    await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+
+    const repeated = await store.begin({
+      kind: "skill-archive",
+      slug: "invalid-expiry",
+      sizeBytes: 1,
+      idempotencyKey: "invalid-expiry",
+    });
+
+    expect(repeated.uploadId).not.toBe(begin.uploadId);
+    await expectMissingPath(path.join(rootDir, begin.uploadId));
   });
 
   it("expires unfinished and committed uploads", async () => {

@@ -1,3 +1,5 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,7 +10,6 @@ import {
   type ExecAutoReviewInput,
   type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT } from "./exec-auto-reviewer.prompt.js";
 import {
   completeWithPreparedSimpleCompletionModel,
@@ -186,10 +187,8 @@ function resolveReviewerModelRef(config?: ExecReviewerConfig): string | undefine
   return coerceToolModelConfig(config?.model).primary;
 }
 
-function resolveReviewerTimeoutMs(config?: ExecReviewerConfig): number {
-  return typeof config?.timeoutMs === "number" && Number.isFinite(config.timeoutMs)
-    ? Math.max(1_000, Math.floor(config.timeoutMs))
-    : DEFAULT_EXEC_REVIEWER_TIMEOUT_MS;
+export function resolveExecReviewerTimeoutMs(config?: ExecReviewerConfig): number {
+  return resolveTimerTimeoutMs(config?.timeoutMs, DEFAULT_EXEC_REVIEWER_TIMEOUT_MS, 1_000);
 }
 
 function buildReviewerTimeoutDecision(timeoutMs: number): ExecAutoReviewDecision {
@@ -240,7 +239,7 @@ export function createModelExecAutoReviewer(params: {
     params.deps?.completeWithPreparedSimpleCompletionModel ??
     completeWithPreparedSimpleCompletionModel;
   const modelRef = resolveReviewerModelRef(params.reviewer);
-  const timeoutMs = resolveReviewerTimeoutMs(params.reviewer);
+  const timeoutMs = resolveExecReviewerTimeoutMs(params.reviewer);
   return async (input) => {
     let completionController: AbortController | undefined;
     try {

@@ -22,10 +22,10 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
     try {
       const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
         {
-          profileId: "openai-codex:default",
+          profileId: "openai:default",
           credential: {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-1",
             refresh: "refresh-1",
             expires: Date.now() + 60_000,
@@ -33,13 +33,13 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
         },
       ]);
 
-      const overlaidCodexProfile = overlaid.profiles["openai-codex:default"];
+      const overlaidCodexProfile = overlaid.profiles["openai:default"];
       expect(overlaidCodexProfile?.type).toBe("oauth");
       if (overlaidCodexProfile?.type !== "oauth") {
         throw new Error("expected overlaid Codex OAuth profile");
       }
       expect(overlaidCodexProfile.access).toBe("access-1");
-      expect(store.profiles["openai-codex:default"]).toBeUndefined();
+      expect(store.profiles["openai:default"]?.type).toBe("api_key");
 
       overlaid.profiles["openai:default"].provider = "mutated";
       overlaid.order!.openai.push("mutated");
