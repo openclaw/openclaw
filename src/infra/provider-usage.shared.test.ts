@@ -8,6 +8,7 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
+    { value: "deepseek", expected: "deepseek" },
     { value: "zai", expected: "zai" },
     { value: "z-ai", expected: undefined },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },

@@ -302,6 +302,65 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
+  it("adds DeepSeek API-key balance summaries to auth status usage", async () => {
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [
+        {
+          profileId: "deepseek:default",
+          provider: "deepseek",
+          type: "api_key",
+          status: "static",
+          source: "store",
+          label: "deepseek:default",
+        },
+      ],
+      providers: [
+        {
+          provider: "deepseek",
+          status: "static",
+          profiles: [
+            {
+              profileId: "deepseek:default",
+              provider: "deepseek",
+              type: "api_key",
+              status: "static",
+              source: "store",
+              label: "deepseek:default",
+            },
+          ],
+        },
+      ],
+    });
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      providers: [
+        {
+          provider: "deepseek",
+          displayName: "DeepSeek",
+          windows: [],
+          summary: "Balance ¥42.50",
+        },
+      ],
+    });
+
+    const opts = createOptions();
+    await handler(opts);
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      providers: ["deepseek"],
+      agentDir: "/tmp/agent",
+      timeoutMs: 3500,
+    });
+    const [, payload] = firstRespondCall(opts) ?? [];
+    const result = payload as ModelAuthStatusResult;
+    expect(result.providers[0]?.usage).toEqual({
+      windows: [],
+      summary: "Balance ¥42.50",
+    });
+  });
+
   it("scopes external CLI auth overlays to configured providers", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       auth: {

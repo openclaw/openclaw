@@ -53,6 +53,9 @@ title: "Usage tracking"
     name in the plan label.
 - **Xiaomi MiMo**: API key via env/config/auth store (`XIAOMI_API_KEY`).
 - **z.ai**: API key via env/config/auth store.
+- **DeepSeek**: API key via env/config/auth store (`DEEPSEEK_API_KEY`).
+  OpenClaw calls DeepSeek's balance endpoint and shows the provider-reported
+  balance as text instead of a percent-left quota window.
 
 Usage is hidden when no usable provider usage auth can be resolved. Providers
 can supply plugin-specific usage auth logic; otherwise OpenClaw falls back to
