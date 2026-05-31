@@ -1609,7 +1609,7 @@ export async function spawnAcpDirect(
     }
     parentRelay?.notifyStarted();
     try {
-      createRunningTaskRun({
+      const task = createRunningTaskRun({
         runtime: "acp",
         sourceId: childRunId,
         ownerKey: requesterInternalKey,
@@ -1623,6 +1623,12 @@ export async function spawnAcpDirect(
         deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
         startedAt: Date.now(),
       });
+      if (!task) {
+        log.warn("Failed to persist background task for ACP spawn", {
+          sessionKey,
+          runId: childRunId,
+        });
+      }
     } catch (error) {
       log.warn("Failed to create background task for ACP spawn", {
         sessionKey,
@@ -1641,7 +1647,7 @@ export async function spawnAcpDirect(
   }
 
   try {
-    createRunningTaskRun({
+    const task = createRunningTaskRun({
       runtime: "acp",
       sourceId: childRunId,
       ownerKey: requesterInternalKey,
@@ -1655,6 +1661,12 @@ export async function spawnAcpDirect(
       deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
       startedAt: Date.now(),
     });
+    if (!task) {
+      log.warn("Failed to persist background task for ACP spawn", {
+        sessionKey,
+        runId: childRunId,
+      });
+    }
   } catch (error) {
     log.warn("Failed to create background task for ACP spawn", {
       sessionKey,

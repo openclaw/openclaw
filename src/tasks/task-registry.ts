@@ -262,16 +262,22 @@ function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObserverEv
   }
 }
 
-function persistTaskRegistry() {
-  getTaskRegistryStore().saveSnapshot({
-    tasks,
-    deliveryStates: taskDeliveryStates,
-  });
+function persistTaskRegistry(): boolean {
+  try {
+    getTaskRegistryStore().saveSnapshot({
+      tasks,
+      deliveryStates: taskDeliveryStates,
+    });
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task registry snapshot", { error });
+    return false;
+  }
 }
 
-function persistTaskUpsert(task: TaskRecord) {
+function persistTaskUpsert(task: TaskRecord, pendingDeliveryState?: TaskDeliveryState): void {
   const store = getTaskRegistryStore();
-  const deliveryState = taskDeliveryStates.get(task.taskId);
+  const deliveryState = pendingDeliveryState ?? taskDeliveryStates.get(task.taskId);
   if (store.upsertTaskWithDeliveryState) {
     store.upsertTaskWithDeliveryState({
       task,
@@ -282,8 +288,8 @@ function persistTaskUpsert(task: TaskRecord) {
   if (store.upsertTask) {
     if (deliveryState && !store.upsertDeliveryState) {
       store.saveSnapshot({
-        tasks,
-        deliveryStates: taskDeliveryStates,
+        tasks: new Map(tasks).set(task.taskId, task),
+        deliveryStates: new Map(taskDeliveryStates).set(task.taskId, deliveryState),
       });
       return;
     }
@@ -297,8 +303,29 @@ function persistTaskUpsert(task: TaskRecord) {
   // even though we persist before mutating the in-memory `tasks` map.
   store.saveSnapshot({
     tasks: new Map(tasks).set(task.taskId, task),
-    deliveryStates: taskDeliveryStates,
+    deliveryStates: deliveryState
+      ? new Map(taskDeliveryStates).set(task.taskId, deliveryState)
+      : taskDeliveryStates,
   });
+}
+
+function tryPersistTaskUpsert(
+  task: TaskRecord,
+  operation: string,
+  pendingDeliveryState?: TaskDeliveryState,
+): boolean {
+  try {
+    persistTaskUpsert(task, pendingDeliveryState);
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task registry upsert", {
+      operation,
+      taskId: task.taskId,
+      runId: task.runId,
+      error,
+    });
+    return false;
+  }
 }
 
 function persistTaskDelete(taskId: string) {
@@ -328,16 +355,44 @@ function persistTaskDelete(taskId: string) {
   });
 }
 
+function tryPersistTaskDelete(taskId: string): boolean {
+  try {
+    persistTaskDelete(taskId);
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task registry delete", {
+      taskId,
+      error,
+    });
+    return false;
+  }
+}
+
 function persistTaskDeliveryStateUpsert(state: TaskDeliveryState) {
   const store = getTaskRegistryStore();
   if (store.upsertDeliveryState) {
     store.upsertDeliveryState(state);
     return;
   }
+  const projectedDeliveryStates = new Map(taskDeliveryStates);
+  projectedDeliveryStates.set(state.taskId, cloneTaskDeliveryState(state));
   store.saveSnapshot({
     tasks,
-    deliveryStates: taskDeliveryStates,
+    deliveryStates: projectedDeliveryStates,
   });
+}
+
+function tryPersistTaskDeliveryStateUpsert(state: TaskDeliveryState): boolean {
+  try {
+    persistTaskDeliveryStateUpsert(state);
+    return true;
+  } catch (error) {
+    log.warn("Failed to persist task delivery state", {
+      taskId: state.taskId,
+      error,
+    });
+    return false;
+  }
 }
 
 function clearTaskRegistryMemory(): void {
@@ -812,16 +867,19 @@ function mergeExistingTaskForCreate(
     deliveryStatus?: TaskDeliveryStatus;
     notifyPolicy?: TaskNotifyPolicy;
   },
-): TaskRecord {
+): TaskRecord | null {
   const patch: Partial<TaskRecord> = {};
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const currentDeliveryState = taskDeliveryStates.get(existing.taskId);
   if (requesterOrigin && !currentDeliveryState?.requesterOrigin) {
-    upsertTaskDeliveryState({
+    const deliveryState = upsertTaskDeliveryState({
       taskId: existing.taskId,
       requesterOrigin,
       lastNotifiedEventAt: currentDeliveryState?.lastNotifiedEventAt,
     });
+    if (!deliveryState.requesterOrigin) {
+      return null;
+    }
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
@@ -870,7 +928,7 @@ function mergeExistingTaskForCreate(
   if (Object.keys(patch).length === 0) {
     return cloneTaskRecord(existing);
   }
-  return updateTask(existing.taskId, patch) ?? cloneTaskRecord(existing);
+  return updateTask(existing.taskId, patch);
 }
 
 function resolveTaskAgentId(params: {
@@ -1051,13 +1109,11 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     normalizeOptionalString(current.childSessionKey) !==
       normalizeOptionalString(next.childSessionKey);
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
-  // Persist to the store before mutating in-memory state. The store is the
-  // source of truth and may reject the write (e.g. the sqlite store rolls back
-  // and re-throws on SQLITE_BUSY/FULL/IOERR). Mutating the in-memory maps first
-  // would leave them ahead of sqlite on a persist failure, so the two stores
-  // diverge until the next reload. Persisting first means a throw leaves the
-  // in-memory state untouched and consistent with sqlite.
-  persistTaskUpsert(next);
+  // Persist before mutating memory. If the store rejects the write, keep the
+  // in-memory mirror at the durable value and report that no mutation applied.
+  if (!tryPersistTaskUpsert(next, "update")) {
+    return null;
+  }
   tasks.set(taskId, next);
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
@@ -1112,8 +1168,12 @@ function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
   if (!next.requesterOrigin && typeof next.lastNotifiedEventAt !== "number" && !current) {
     return cloneTaskDeliveryState({ taskId: state.taskId });
   }
+  if (!tryPersistTaskDeliveryStateUpsert(next)) {
+    return current
+      ? cloneTaskDeliveryState(current)
+      : cloneTaskDeliveryState({ taskId: state.taskId });
+  }
   taskDeliveryStates.set(state.taskId, next);
-  persistTaskDeliveryStateUpsert(next);
   return cloneTaskDeliveryState(next);
 }
 
@@ -1592,7 +1652,7 @@ export function createTaskRecord(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
-}): TaskRecord {
+}): TaskRecord | null {
   ensureTaskRegistryReady();
   const requesterSessionKey = resolveTaskRequesterSessionKey(params);
   const scopeKind = resolveTaskScopeKind({
@@ -1678,19 +1738,24 @@ export function createTaskRecord(params: {
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
     record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
-  tasks.set(taskId, record);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  const deliveryState = requesterOrigin
+    ? {
+        taskId,
+        requesterOrigin,
+      }
+    : undefined;
+  if (!tryPersistTaskUpsert(record, "create", deliveryState)) {
+    return null;
+  }
+  tasks.set(taskId, record);
   if (requesterOrigin) {
-    taskDeliveryStates.set(taskId, {
-      taskId,
-      requesterOrigin,
-    });
+    taskDeliveryStates.set(taskId, deliveryState!);
   }
   addRunIdIndex(taskId, record.runId);
   addOwnerKeyIndex(taskId, record);
   addParentFlowIdIndex(taskId, record);
   addRelatedSessionKeyIndex(taskId, record);
-  persistTaskUpsert(record);
   try {
     syncFlowFromTask(record);
   } catch (error) {
@@ -2026,6 +2091,14 @@ export async function cancelTaskById(params: {
       lastEventAt: Date.now(),
       error: params.reason?.trim() || "Cancelled by operator.",
     });
+    if (!updated) {
+      return {
+        found: true,
+        cancelled: false,
+        reason: "Task persistence failed.",
+        task: cloneTaskRecord(task),
+      };
+    }
     if (updated) {
       void maybeDeliverTaskTerminalUpdate(updated.taskId);
     }
@@ -2237,14 +2310,12 @@ export function deleteTaskRecordById(taskId: string): boolean {
   if (!current) {
     return false;
   }
-  // Persist the delete before mutating in-memory state, as a single atomic
-  // store operation. If the persist throws (the sqlite store rolls back and
-  // re-throws on SQLITE_BUSY/FULL/IOERR), the in-memory record is left intact
-  // and stays consistent with sqlite, instead of being dropped from memory
-  // while sqlite still holds the row (which would resurrect the task on the
-  // next reload). persistTaskDelete removes the task and its delivery state
-  // together, so no separate delivery-state delete is issued here.
-  persistTaskDelete(taskId);
+  // Persist the delete before mutating memory, as a single atomic store
+  // operation. If persistence fails, leave the in-memory record intact and
+  // report that no delete was applied.
+  if (!tryPersistTaskDelete(taskId)) {
+    return false;
+  }
   deleteOwnerKeyIndex(taskId, current);
   deleteParentFlowIdIndex(taskId, current);
   deleteRelatedSessionKeyIndex(taskId, current);

@@ -611,6 +611,10 @@ function scheduleDeferredTurnMaintenance(
     buildTurnMaintenanceTaskDescriptor({
       sessionKey,
     });
+  if (!task) {
+    log.warn("[context-engine] failed to create deferred turn maintenance task", { sessionKey });
+    return undefined;
+  }
   log.info(
     `[context-engine] deferred turn maintenance ${reusableTask ? "resuming" : "queued"} ` +
       `taskId=${task.taskId} sessionKey=${sessionKey} lane=${resolveDeferredTurnMaintenanceLane(sessionKey)}`,
