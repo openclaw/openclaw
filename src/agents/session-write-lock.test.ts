@@ -1,9 +1,11 @@
+import { spawn } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { SessionWriteLockStaleError } from "./session-write-lock-error.js";
 
 const FAKE_STARTTIME = 12345;
 let testing: typeof import("./session-write-lock.js").testing;
@@ -119,12 +121,13 @@ async function withSymlinkedSessionPaths(
 
 async function expectActiveInProcessLockIsNotReclaimed(params?: {
   legacyStarttime?: unknown;
+  createdAt?: string;
 }): Promise<void> {
   await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
     const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
     const lockPayload = {
       pid: process.pid,
-      createdAt: new Date().toISOString(),
+      createdAt: params?.createdAt ?? new Date().toISOString(),
       ...(params && "legacyStarttime" in params ? { starttime: params.legacyStarttime } : {}),
     };
     await fs.writeFile(lockPath, JSON.stringify(lockPayload), "utf8");
@@ -407,6 +410,46 @@ describe("acquireSessionWriteLock", () => {
       ).rejects.toThrow(/session file locked/);
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
       await lock.release();
+    });
+  });
+
+  it("does not report or remove active in-process locks that pass staleMs", async () => {
+    await expectActiveInProcessLockIsNotReclaimed({
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+  });
+
+  it("reports live OpenClaw-owned stale locks without removing them", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      try {
+        await expect(
+          acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 }),
+        ).rejects.toMatchObject({
+          name: "SessionWriteLockStaleError",
+          staleReasons: ["too-old"],
+        });
+        await expect(
+          acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 }),
+        ).rejects.toBeInstanceOf(SessionWriteLockStaleError);
+        await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      } finally {
+        owner.kill("SIGTERM");
+      }
     });
   });
 

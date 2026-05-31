@@ -6,7 +6,10 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
-import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+import {
+  SessionWriteLockStaleError,
+  SessionWriteLockTimeoutError,
+} from "./session-write-lock-error.js";
 
 type LockFilePayload = {
   pid?: number;
@@ -563,7 +566,34 @@ function lockInspectionNeedsMtimeStaleFallback(details: LockInspectionDetails): 
   );
 }
 
-async function shouldReclaimContendedLockFile(
+async function shouldReportContendedLockStale(params: {
+  lockPath: string;
+  details: LockInspectionDetails;
+  heldByThisProcess: boolean;
+  staleMs: number;
+  nowMs: number;
+  orphanPayloadGraceMs: number;
+}): Promise<boolean> {
+  if (!params.details.stale) {
+    return false;
+  }
+  if (params.heldByThisProcess) {
+    return false;
+  }
+  if (lockInspectionNeedsMtimeStaleFallback(params.details)) {
+    try {
+      const stat = await fs.stat(params.lockPath);
+      const ageMs = Math.max(0, params.nowMs - stat.mtimeMs);
+      return ageMs > Math.min(params.staleMs, params.orphanPayloadGraceMs);
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      return code !== "ENOENT";
+    }
+  }
+  return true;
+}
+
+async function shouldRemoveContendedLockFile(
   lockPath: string,
   details: LockInspectionDetails,
   staleMs: number,
@@ -571,6 +601,9 @@ async function shouldReclaimContendedLockFile(
   orphanPayloadGraceMs = ORPHAN_LOCK_PAYLOAD_GRACE_MS,
 ): Promise<boolean> {
   if (!details.stale) {
+    return false;
+  }
+  if (details.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))) {
     return false;
   }
   if (!lockInspectionNeedsMtimeStaleFallback(details)) {
@@ -602,10 +635,7 @@ async function shouldRemoveLockDuringCleanup(
   if (!details.stale) {
     return false;
   }
-  if (details.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))) {
-    return false;
-  }
-  return await shouldReclaimContendedLockFile(lockPath, details, staleMs, nowMs);
+  return await shouldRemoveContendedLockFile(lockPath, details, staleMs, nowMs);
 }
 
 function sessionLockHeldByThisProcess(normalizedSessionFile: string): boolean {
@@ -636,6 +666,25 @@ function shouldTreatAsOrphanSelfLock(params: {
 
   const currentStarttime = resolveProcessStartTimeForLock(process.pid);
   return currentStarttime !== null && currentStarttime === storedStarttime;
+}
+
+function describeLockOwnerForError(params: {
+  payload: LockFilePayload | null;
+  inspected: LockInspectionDetails;
+}): string {
+  const parts: string[] = [];
+  if (params.inspected.pid !== null) {
+    parts.push(`pid=${params.inspected.pid}`);
+    parts.push(`alive=${params.inspected.pidAlive ? "true" : "false"}`);
+  } else if (typeof params.payload?.pid === "number") {
+    parts.push(`pid=${params.payload.pid}`);
+  } else {
+    parts.push("owner=unknown");
+  }
+  if (typeof params.inspected.ageMs === "number") {
+    parts.push(`ageMs=${Math.floor(params.inspected.ageMs)}`);
+  }
+  return parts.join(" ");
 }
 
 function inspectLockPayloadForSession(params: {
@@ -828,13 +877,14 @@ export async function acquireSessionWriteLock(params: {
             readOwnerProcessArgs: readProcessArgsSync,
             respectMaxHold: !heldByThisProcess,
           });
-          return await shouldReclaimContendedLockFile(
+          return await shouldReportContendedLockStale({
             lockPath,
-            inspected,
+            details: inspected,
+            heldByThisProcess,
             staleMs,
             nowMs,
             orphanPayloadGraceMs,
-          );
+          });
         },
         shouldRemoveStaleLock: async ({ lockPath, normalizedTargetPath, payload }) => {
           await yieldEventLoop();
@@ -849,7 +899,7 @@ export async function acquireSessionWriteLock(params: {
             readOwnerProcessArgs: readProcessArgsSync,
             respectMaxHold: !heldByThisProcess,
           });
-          return await shouldReclaimContendedLockFile(
+          return await shouldRemoveContendedLockFile(
             lockPath,
             inspected,
             staleMs,
@@ -860,13 +910,31 @@ export async function acquireSessionWriteLock(params: {
       });
       return { release: lock.release };
     } catch (err) {
-      if (!isFileLockError(err, "file_lock_timeout")) {
+      if (!isFileLockError(err, "file_lock_timeout") && !isFileLockError(err, "file_lock_stale")) {
         throw err;
       }
-      const timeoutLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
-      const payload = await readLockPayload(timeoutLockPath);
-      const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
-      throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath: timeoutLockPath });
+      const errorLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
+      const payload = await readLockPayload(errorLockPath);
+      const nowMs = Date.now();
+      const heldByThisProcess = sessionLockHeldByThisProcess(normalizedSessionFile);
+      const inspected = inspectLockPayloadForSession({
+        payload,
+        staleMs,
+        nowMs,
+        heldByThisProcess,
+        reclaimLockWithoutStarttime: true,
+        readOwnerProcessArgs: readProcessArgsSync,
+        respectMaxHold: !heldByThisProcess,
+      });
+      const owner = describeLockOwnerForError({ payload, inspected });
+      if (isFileLockError(err, "file_lock_stale")) {
+        throw new SessionWriteLockStaleError({
+          owner,
+          lockPath: errorLockPath,
+          staleReasons: inspected.staleReasons,
+        });
+      }
+      throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath: errorLockPath });
     }
   }
 }
