@@ -4101,6 +4101,9 @@ public struct AgentSummary: Codable, Sendable {
     public let workspace: String?
     public let model: [String: AnyCodable]?
     public let agentruntime: [String: AnyCodable]?
+    public let thinkinglevels: [[String: AnyCodable]]?
+    public let thinkingoptions: [String]?
+    public let thinkingdefault: String?
 
     public init(
         id: String,
@@ -4108,7 +4111,10 @@ public struct AgentSummary: Codable, Sendable {
         identity: [String: AnyCodable]?,
         workspace: String?,
         model: [String: AnyCodable]?,
-        agentruntime: [String: AnyCodable]?)
+        agentruntime: [String: AnyCodable]?,
+        thinkinglevels: [[String: AnyCodable]]? = nil,
+        thinkingoptions: [String]? = nil,
+        thinkingdefault: String? = nil)
     {
         self.id = id
         self.name = name
@@ -4116,6 +4122,9 @@ public struct AgentSummary: Codable, Sendable {
         self.workspace = workspace
         self.model = model
         self.agentruntime = agentruntime
+        self.thinkinglevels = thinkinglevels
+        self.thinkingoptions = thinkingoptions
+        self.thinkingdefault = thinkingdefault
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4125,6 +4134,9 @@ public struct AgentSummary: Codable, Sendable {
         case workspace
         case model
         case agentruntime = "agentRuntime"
+        case thinkinglevels = "thinkingLevels"
+        case thinkingoptions = "thinkingOptions"
+        case thinkingdefault = "thinkingDefault"
     }
 }
 

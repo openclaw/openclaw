@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -89,6 +89,7 @@ export type ToolSearchCatalogEntry = {
   id: string;
   source: CatalogSource;
   sourceName?: string;
+  mcp?: PluginToolMcpMeta;
   name: string;
   label?: string;
   description: string;
@@ -523,6 +524,7 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.id,
         entry.source,
         entry.sourceName ?? "",
+        stableJsonFingerprint(entry.mcp),
         entry.name,
         entry.label ?? "",
         entry.description,
@@ -602,11 +604,20 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
   }
 }
 
-function classifyTool(tool: CatalogTool): { source: CatalogSource; sourceName?: string } {
+function classifyTool(tool: CatalogTool): {
+  source: CatalogSource;
+  sourceName?: string;
+  mcp?: PluginToolMcpMeta;
+} {
   const meta = getPluginToolMeta(tool as AnyAgentTool);
   const pluginId = meta?.pluginId?.trim();
   if (pluginId === "bundle-mcp") {
-    return { source: "mcp", sourceName: pluginId };
+    const mcp = meta?.mcp;
+    return {
+      source: "mcp",
+      sourceName: pluginId,
+      ...(mcp ? { mcp } : {}),
+    };
   }
   if (pluginId) {
     return { source: "openclaw", sourceName: pluginId };
@@ -640,6 +651,7 @@ function toCatalogEntry(
     id: makeCatalogId(tool, source, sourceName),
     source,
     sourceName,
+    ...(source === "mcp" && classified.mcp ? { mcp: classified.mcp } : {}),
     name: tool.name,
     label: tool.label,
     description: tool.description ?? "",
@@ -953,6 +965,7 @@ function compactEntry(entry: ToolSearchCatalogEntry) {
     id: entry.id,
     source: entry.source,
     sourceName: entry.sourceName,
+    ...(entry.mcp ? { mcp: entry.mcp } : {}),
     name: entry.name,
     label: entry.label,
     description: entry.description,
@@ -1108,6 +1121,15 @@ export class ToolSearchRuntime {
   all = () => {
     const catalog = resolveCatalog(this.ctx);
     return catalog.entries.map((entry) => compactEntry(entry));
+  };
+
+  namespaceEntries = () => {
+    const catalog = resolveCatalog(this.ctx);
+    return catalog.entries.map((entry) =>
+      Object.assign(compactEntry(entry), {
+        parameters: entry.parameters ?? {},
+      }),
+    );
   };
 
   describe = async (id: string) => {

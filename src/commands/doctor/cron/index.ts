@@ -8,9 +8,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { migrateLegacyNotifyFallback } from "../../../cron/migrations/legacy-notify.js";
 import {
   loadCronQuarantineFile,
-  loadCronStore,
+  loadCronStoreWithConfigJobs,
   resolveCronQuarantinePath,
   resolveCronStorePath,
+  saveCronQuarantineFile,
   saveCronStore,
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
@@ -29,6 +30,12 @@ import {
   legacyCronStoreFilesExist,
   loadLegacyCronStoreForMigration,
 } from "./legacy-store-migration.js";
+import {
+  formatLegacyIssuePreview,
+  mergeLegacyCronJobs,
+  mergeRuntimeEntryIntoConfigJob,
+  needsSqliteProjectionBackfill,
+} from "./repair-plan.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
 
 type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
@@ -46,66 +53,6 @@ function formatRunLogMigrationNote(importedFiles: number): string {
   return importedFiles > 0
     ? ` Imported ${pluralize(importedFiles, "legacy cron run log")} into SQLite.`
     : "";
-}
-
-function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): string[] {
-  const lines: string[] = [];
-  if (issues.jobId) {
-    lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
-  }
-  if (issues.missingId) {
-    lines.push(`- ${pluralize(issues.missingId, "job")} is missing a canonical string \`id\``);
-  }
-  if (issues.nonStringId) {
-    lines.push(`- ${pluralize(issues.nonStringId, "job")} stores \`id\` as a non-string value`);
-  }
-  if (issues.legacyScheduleString) {
-    lines.push(
-      `- ${pluralize(issues.legacyScheduleString, "job")} stores schedule as a bare string`,
-    );
-  }
-  if (issues.legacyScheduleCron) {
-    lines.push(`- ${pluralize(issues.legacyScheduleCron, "job")} still uses \`schedule.cron\``);
-  }
-  if (issues.legacyPayloadKind) {
-    lines.push(`- ${pluralize(issues.legacyPayloadKind, "job")} needs payload kind normalization`);
-  }
-  if (issues.legacyPayloadCodexModel) {
-    lines.push(
-      `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
-    );
-  }
-  if (issues.legacyPayloadProvider) {
-    lines.push(
-      `- ${pluralize(issues.legacyPayloadProvider, "job")} still uses payload \`provider\` as a delivery alias`,
-    );
-  }
-  if (issues.legacyTopLevelPayloadFields) {
-    lines.push(
-      `- ${pluralize(issues.legacyTopLevelPayloadFields, "job")} still uses top-level payload fields`,
-    );
-  }
-  if (issues.legacyTopLevelDeliveryFields) {
-    lines.push(
-      `- ${pluralize(issues.legacyTopLevelDeliveryFields, "job")} still uses top-level delivery fields`,
-    );
-  }
-  if (issues.legacyDeliveryMode) {
-    lines.push(
-      `- ${pluralize(issues.legacyDeliveryMode, "job")} still uses delivery mode \`deliver\``,
-    );
-  }
-  if (issues.invalidSchedule) {
-    lines.push(
-      `- ${pluralize(issues.invalidSchedule, "job")} has an invalid persisted schedule and will be removed`,
-    );
-  }
-  if (issues.invalidPayload) {
-    lines.push(
-      `- ${pluralize(issues.invalidPayload, "job")} has an invalid persisted payload and will be removed`,
-    );
-  }
-  return lines;
 }
 
 function normalizeModelProvider(value: unknown): string | undefined {
@@ -142,35 +89,6 @@ function getRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
-  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
-}
-
-function mergeLegacyCronJobs(params: {
-  currentJobs: Array<Record<string, unknown>>;
-  legacyJobs: Array<Record<string, unknown>>;
-}): { jobs: Array<Record<string, unknown>>; importedCount: number } {
-  const merged = [...params.currentJobs];
-  const currentKeys = new Set(
-    params.currentJobs.map((job) => cronJobMigrationKey(job)).filter((key) => key !== undefined),
-  );
-  let importedCount = 0;
-
-  for (const legacyJob of params.legacyJobs) {
-    const key = cronJobMigrationKey(legacyJob);
-    if (key && currentKeys.has(key)) {
-      continue;
-    }
-    if (key) {
-      currentKeys.add(key);
-    }
-    merged.push(legacyJob);
-    importedCount += 1;
-  }
-
-  return { jobs: merged, importedCount };
 }
 
 function formatProviderCounts(counts: Map<string, number>): string {
@@ -319,14 +237,34 @@ export async function maybeRepairLegacyCronStore(params: {
 }) {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
   const quarantinePath = resolveCronQuarantinePath(storePath);
-  let store: Awaited<ReturnType<typeof loadCronStore>>;
+  let store: Awaited<ReturnType<typeof loadCronStoreWithConfigJobs>>["store"];
   let legacyStoreDetected = false;
   let legacyRunLogDetected = false;
   let legacyImportCount = 0;
+  let sqliteProjectionBackfillCount = 0;
   try {
     legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
     legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
-    store = await loadCronStore(storePath);
+    const loaded = await loadCronStoreWithConfigJobs(storePath);
+    const currentJobs =
+      loaded.configJobs.length > 0
+        ? loaded.configJobs.map((job, index) =>
+            mergeRuntimeEntryIntoConfigJob({
+              job,
+              runtimeEntry: loaded.configJobRuntimeEntries[index],
+            }),
+          )
+        : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
+    sqliteProjectionBackfillCount =
+      loaded.configJobs.length > 0
+        ? currentJobs.filter((job, index) =>
+            needsSqliteProjectionBackfill({
+              configJob: job,
+              projectedJob: loaded.store.jobs[index],
+            }),
+          ).length
+        : 0;
+    store = { version: 1, jobs: currentJobs as unknown as CronJob[] };
     if (legacyStoreDetected) {
       const legacyStore = (await loadLegacyCronStoreForMigration(storePath)).store;
       const merged = mergeLegacyCronJobs({
@@ -434,6 +372,11 @@ export async function maybeRepairLegacyCronStore(params: {
   if (legacyRunLogDetected) {
     previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
   }
+  if (sqliteProjectionBackfillCount > 0) {
+    previewLines.push(
+      `- ${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns`,
+    );
+  }
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
@@ -473,6 +416,7 @@ export async function maybeRepairLegacyCronStore(params: {
   const changed =
     legacyStoreDetected ||
     legacyRunLogDetected ||
+    sqliteProjectionBackfillCount > 0 ||
     normalized.mutated ||
     notifyMigration.changed ||
     dreamingMigration.changed;
@@ -481,6 +425,17 @@ export async function maybeRepairLegacyCronStore(params: {
   }
 
   if (changed) {
+    if (normalized.removedJobs.length > 0) {
+      await saveCronQuarantineFile({
+        storePath,
+        nowMs: Date.now(),
+        entries: normalized.removedJobs.map((entry) => ({
+          sourceIndex: entry.sourceIndex,
+          reason: entry.reason,
+          job: entry.job,
+        })),
+      });
+    }
     await saveCronStore(storePath, {
       version: 1,
       jobs: rawJobs as unknown as CronJob[],

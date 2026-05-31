@@ -8,7 +8,10 @@ import {
   runWithOwnedSessionTranscriptWritePublication,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
-import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
+import {
+  SessionWriteLockStaleError,
+  SessionWriteLockTimeoutError,
+} from "../../session-write-lock-error.js";
 import {
   acquireSessionWriteLock,
   resetSessionWriteLockStateForTest,
@@ -1169,6 +1172,36 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.releaseForPrompt();
     await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
       SessionWriteLockTimeoutError,
+    );
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(controller.hasSessionTakeover()).toBe(true);
+    expect(releases).toEqual(["prep"]);
+  });
+
+  it("skips cleanup lock reacquisition after a post-prompt stale lock", async () => {
+    const releases: string[] = [];
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("prep")) })
+      .mockRejectedValueOnce(
+        new SessionWriteLockStaleError({
+          owner: "pid=789 alive=true ageMs=1800001",
+          lockPath: `${lockOptions.sessionFile}.lock`,
+          staleReasons: ["too-old"],
+        }),
+      );
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      SessionWriteLockStaleError,
     );
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();

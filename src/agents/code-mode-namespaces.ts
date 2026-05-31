@@ -14,6 +14,7 @@ const RESERVED_NAMESPACE_GLOBALS = new Set([
   "JSON",
   "Map",
   "Math",
+  "MCP",
   "namespaces",
   "Number",
   "Object",
@@ -45,6 +46,7 @@ export type CodeModeNamespaceToolInputMapper = (args: unknown[]) => unknown;
 export type CodeModeNamespaceToolCall = {
   readonly [CODE_MODE_NAMESPACE_TOOL_CALL]: true;
   readonly toolName: string;
+  readonly catalogId?: string;
   readonly input?: CodeModeNamespaceToolInputMapper;
 };
 
@@ -84,8 +86,17 @@ type CodeModeNamespaceRuntimeEntry = {
 };
 
 type CodeModeNamespaceCatalogEntry = {
+  id?: string;
+  source?: string;
   name: string;
   sourceName?: string;
+  parameters?: unknown;
+  mcp?: {
+    serverName: string;
+    safeServerName: string;
+    toolName: string;
+    operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  };
 };
 
 export type CodeModeNamespaceRuntime = {
@@ -97,6 +108,7 @@ export type CodeModeNamespaceRuntime = {
     executeTool: (params: {
       pluginId: string;
       toolName: string;
+      catalogId?: string;
       input: unknown;
       namespaceId: string;
       path: string[];
@@ -151,6 +163,27 @@ export function createCodeModeNamespaceTool(
   }
   return {
     [CODE_MODE_NAMESPACE_TOOL_CALL]: true,
+    toolName: normalizedToolName,
+    ...(input ? { input } : {}),
+  };
+}
+
+function createCodeModeNamespaceCatalogTool(
+  catalogId: string,
+  toolName: string,
+  input?: CodeModeNamespaceToolInputMapper,
+): CodeModeNamespaceToolCall {
+  const normalizedCatalogId = catalogId.trim();
+  const normalizedToolName = toolName.trim();
+  if (!normalizedCatalogId) {
+    throw new Error("Code mode namespace catalogId must be non-empty.");
+  }
+  if (!normalizedToolName) {
+    throw new Error("Code mode namespace toolName must be non-empty.");
+  }
+  return {
+    [CODE_MODE_NAMESPACE_TOOL_CALL]: true,
+    catalogId: normalizedCatalogId,
     toolName: normalizedToolName,
     ...(input ? { input } : {}),
   };
@@ -265,6 +298,233 @@ function filterRegistrationsByVisibleTools(
   );
 }
 
+function toIdentifier(value: string, fallback: string): string {
+  const words = value
+    .trim()
+    .split(/[^A-Za-z0-9]+/u)
+    .map((word) => word.trim())
+    .filter(Boolean);
+  const base =
+    words.length === 0
+      ? fallback
+      : words
+          .map((word, index) =>
+            index === 0
+              ? word.charAt(0).toLowerCase() + word.slice(1)
+              : word.charAt(0).toUpperCase() + word.slice(1),
+          )
+          .join("");
+  const safe = base.replace(/^[^A-Za-z_$]+/u, "").replace(/[^A-Za-z0-9_$]/gu, "");
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(safe) ? safe : fallback;
+}
+
+function uniqueIdentifier(base: string, used: Set<string>): string {
+  let candidate = base;
+  let index = 2;
+  while (
+    used.has(candidate) ||
+    RESERVED_NAMESPACE_GLOBALS.has(candidate) ||
+    FORBIDDEN_NAMESPACE_PATH_SEGMENTS.has(candidate)
+  ) {
+    candidate = `${base}${index}`;
+    index += 1;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+function readSchemaRecord(schema: unknown): Record<string, unknown> | undefined {
+  return isRecord(schema) ? schema : undefined;
+}
+
+function readSchemaProperties(schema: unknown): Record<string, unknown> {
+  const record = readSchemaRecord(schema);
+  return isRecord(record?.properties) ? record.properties : {};
+}
+
+function readRequiredKeys(schema: unknown): string[] {
+  const record = readSchemaRecord(schema);
+  return Array.isArray(record?.required)
+    ? record.required.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function orderedSchemaKeys(schema: unknown): string[] {
+  const required = readRequiredKeys(schema);
+  const properties = Object.keys(readSchemaProperties(schema));
+  return [...new Set([...required, ...properties])];
+}
+
+function applySchemaDefaults(
+  schema: unknown,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const result = { ...input };
+  for (const [key, descriptor] of Object.entries(readSchemaProperties(schema))) {
+    if (!isRecord(descriptor) || !("default" in descriptor) || result[key] !== undefined) {
+      continue;
+    }
+    result[key] = descriptor.default;
+  }
+  return result;
+}
+
+function mapMcpNamespaceInput(schema: unknown, args: unknown[]): unknown {
+  const orderedKeys = orderedSchemaKeys(schema);
+  const [firstArg, ...restArgs] = args;
+  const recordInput = isRecord(firstArg) && restArgs.length === 0 ? { ...firstArg } : undefined;
+  const result: Record<string, unknown> = recordInput ?? {};
+  const positional = recordInput ? [] : args;
+  if (positional.length > orderedKeys.length) {
+    throw new Error("Too many positional arguments for MCP namespace tool.");
+  }
+  positional.forEach((value, index) => {
+    const key = orderedKeys[index];
+    if (key) {
+      result[key] = value;
+    }
+  });
+  const withDefaults = applySchemaDefaults(schema, result);
+  const missing = readRequiredKeys(schema).filter((key) => withDefaults[key] === undefined);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required MCP namespace argument${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`,
+    );
+  }
+  return withDefaults;
+}
+
+function scopeAtPath(
+  root: CodeModeNamespaceScope,
+  path: readonly string[],
+): CodeModeNamespaceScope {
+  let current: CodeModeNamespaceScope = root;
+  for (const segment of path) {
+    const next = current[segment];
+    if (!isRecord(next)) {
+      const object = Object.create(null) as CodeModeNamespaceScope;
+      current[segment] = object;
+      current = object;
+      continue;
+    }
+    current = next;
+  }
+  return current;
+}
+
+function toolIdentifiersForServer(
+  usedToolIdentifiers: Map<string, Set<string>>,
+  serverIdentifier: string,
+): Set<string> {
+  const existing = usedToolIdentifiers.get(serverIdentifier);
+  if (existing) {
+    return existing;
+  }
+  const created = new Set<string>(["resources", "prompts"]);
+  usedToolIdentifiers.set(serverIdentifier, created);
+  return created;
+}
+
+function createMcpNamespaceScope(
+  catalog: readonly CodeModeNamespaceCatalogEntry[],
+): CodeModeNamespaceScope | undefined {
+  const mcpEntries = catalog.filter((entry) => entry.source === "mcp" && entry.id && entry.mcp);
+  if (mcpEntries.length === 0) {
+    return undefined;
+  }
+  const serverNames = new Map<string, string>();
+  const usedServerIdentifiers = new Set<string>();
+  for (const entry of mcpEntries) {
+    const safeServerName = entry.mcp?.safeServerName ?? entry.sourceName ?? "mcp";
+    if (serverNames.has(safeServerName)) {
+      continue;
+    }
+    serverNames.set(
+      safeServerName,
+      uniqueIdentifier(toIdentifier(safeServerName, "server"), usedServerIdentifiers),
+    );
+  }
+  const usedToolIdentifiers = new Map<string, Set<string>>();
+  const root = Object.create(null) as CodeModeNamespaceScope;
+  for (const entry of mcpEntries.toSorted((a, b) => (a.id ?? "").localeCompare(b.id ?? ""))) {
+    const mcp = entry.mcp;
+    if (!mcp || !entry.id) {
+      continue;
+    }
+    const serverIdentifier =
+      serverNames.get(mcp.safeServerName) ?? uniqueIdentifier("server", usedServerIdentifiers);
+    const serverScope = scopeAtPath(root, [serverIdentifier]);
+    serverScope.$serverName = mcp.serverName;
+    const path =
+      mcp.operation === "resources_list"
+        ? ["resources", "list"]
+        : mcp.operation === "resources_read"
+          ? ["resources", "read"]
+          : mcp.operation === "prompts_list"
+            ? ["prompts", "list"]
+            : mcp.operation === "prompts_get"
+              ? ["prompts", "get"]
+              : [
+                  uniqueIdentifier(
+                    toIdentifier(mcp.toolName, "tool"),
+                    toolIdentifiersForServer(usedToolIdentifiers, serverIdentifier),
+                  ),
+                ];
+    const parent = scopeAtPath(serverScope, path.slice(0, -1));
+    parent[path.at(-1) ?? "tool"] = createCodeModeNamespaceCatalogTool(
+      entry.id,
+      entry.name,
+      (args) => mapMcpNamespaceInput(entry.parameters, args),
+    );
+  }
+  return root;
+}
+
+function createMcpNamespaceEntry(
+  catalog: readonly CodeModeNamespaceCatalogEntry[],
+): CodeModeNamespaceRuntimeEntry | undefined {
+  const scope = createMcpNamespaceScope(catalog);
+  if (!scope) {
+    return undefined;
+  }
+  const callablePaths = new Set<string>();
+  return {
+    registration: {
+      id: "mcp",
+      pluginId: "bundle-mcp",
+      globalName: "MCP",
+      requiredToolNames: [],
+      description: "MCP server tools grouped by server.",
+      createScope: () => scope,
+    },
+    callablePaths,
+    scope,
+    descriptor: {
+      id: "mcp",
+      globalName: "MCP",
+      description: "MCP server tools grouped by server.",
+      scope: serializeNamespaceScopeValue(scope, [], new WeakSet<object>(), callablePaths),
+    },
+  };
+}
+
+function describeMcpNamespaceForPrompt(
+  catalog: readonly CodeModeNamespaceCatalogEntry[],
+): string[] {
+  const scope = createMcpNamespaceScope(catalog);
+  if (!scope) {
+    return [];
+  }
+  const servers = Object.keys(scope).toSorted();
+  if (servers.length === 0) {
+    return [];
+  }
+  return [
+    "- MCP: MCP server tools grouped by server.",
+    `Use MCP.<server>.<tool>(args) for MCP tools; visible servers: ${servers.join(", ")}.`,
+  ];
+}
+
 export function describeCodeModeNamespacesForPrompt(
   ctx: CodeModeNamespaceContext,
   catalog?: readonly CodeModeNamespaceCatalogEntry[],
@@ -273,10 +533,12 @@ export function describeCodeModeNamespacesForPrompt(
     return "";
   }
   const registrations = filterRegistrationsByVisibleTools(catalog);
-  if (registrations.length === 0) {
+  const mcpPrompt = describeMcpNamespaceForPrompt(catalog);
+  if (registrations.length === 0 && mcpPrompt.length === 0) {
     return "";
   }
   const lines = ["Registered namespace globals are available in code mode:"];
+  lines.push(...mcpPrompt);
   for (const registration of registrations) {
     const description = registration.description?.trim();
     lines.push(
@@ -410,6 +672,10 @@ export async function createCodeModeNamespaceRuntime(
   catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
 ): Promise<CodeModeNamespaceRuntime> {
   const entries: CodeModeNamespaceRuntimeEntry[] = [];
+  const mcpEntry = createMcpNamespaceEntry(catalog);
+  if (mcpEntry) {
+    entries.push(mcpEntry);
+  }
   for (const registration of listCodeModeNamespaces()) {
     if (!registrationHasVisibleRequiredTools(registration, catalog)) {
       continue;
@@ -448,7 +714,7 @@ export async function createCodeModeNamespaceRuntime(
       if (!isCodeModeNamespaceToolCall(target)) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      if (!entry.registration.requiredToolNames.includes(target.toolName)) {
+      if (!target.catalogId && !entry.registration.requiredToolNames.includes(target.toolName)) {
         throw new Error(`Code mode namespace path targets undeclared tool: ${target.toolName}`);
       }
       const input = target.input ? await target.input(args) : (args[0] ?? {});
@@ -456,6 +722,7 @@ export async function createCodeModeNamespaceRuntime(
         await executeTool({
           pluginId: entry.registration.pluginId,
           toolName: target.toolName,
+          ...(target.catalogId ? { catalogId: target.catalogId } : {}),
           input,
           namespaceId,
           path: [...path],

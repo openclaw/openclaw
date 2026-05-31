@@ -40,6 +40,8 @@ let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRun
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
+let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
 
 function makeTool(name: string) {
   return {
@@ -480,6 +482,8 @@ describe("resolvePluginTools optional tools", () => {
       resetPluginRuntimeStateForTest,
       setActivePluginRegistry,
     } = await import("./runtime.js"));
+    ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
+      await import("./runtime/gateway-request-scope.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata-snapshot.js"));
   });
@@ -508,6 +512,213 @@ describe("resolvePluginTools optional tools", () => {
     loggingState.rawConsole = null;
     resetLogger();
     vi.useRealTimers();
+  });
+
+  it("runs plugin tool factories, prepare callbacks, and execute callbacks under the owning plugin scope", async () => {
+    const context = createContext();
+    const observed: Array<{
+      phase: "factory" | "prepare" | "execute";
+      pluginId?: string;
+      pluginSource?: string;
+    }> = [];
+
+    setRegistry(
+      ["multi", "optional-demo"].map((pluginId) => ({
+        pluginId,
+        optional: false,
+        source: `/tmp/${pluginId}.js`,
+        names: [`${pluginId}_tool`],
+        factory: () => {
+          const scope = getPluginRuntimeGatewayRequestScope();
+          observed.push({
+            phase: "factory",
+            pluginId: scope?.pluginId,
+            pluginSource: scope?.pluginSource,
+          });
+          return {
+            name: `${pluginId}_tool`,
+            description: `${pluginId} tool`,
+            parameters: { type: "object", properties: {} },
+            prepareArguments(args: unknown) {
+              const prepareScope = getPluginRuntimeGatewayRequestScope();
+              observed.push({
+                phase: "prepare",
+                pluginId: prepareScope?.pluginId,
+                pluginSource: prepareScope?.pluginSource,
+              });
+              return args;
+            },
+            async execute() {
+              const executeScope = getPluginRuntimeGatewayRequestScope();
+              observed.push({
+                phase: "execute",
+                pluginId: executeScope?.pluginId,
+                pluginSource: executeScope?.pluginSource,
+              });
+              return { content: [{ type: "text", text: pluginId }] };
+            },
+          };
+        },
+      })),
+    );
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        pluginId: "outer",
+        pluginSource: "/tmp/outer.js",
+        isWebchatConnect: () => false,
+      },
+      async () => {
+        const tools = resolvePluginTools(createResolveToolsParams({ context }));
+        expect(tools.map((tool) => tool.name)).toEqual(["multi_tool", "optional-demo_tool"]);
+        for (const tool of tools) {
+          await tool.execute(`call-${tool.name}`, tool.prepareArguments?.({}) ?? {}, undefined);
+          expect(getPluginRuntimeGatewayRequestScope()).toMatchObject({
+            pluginId: "outer",
+            pluginSource: "/tmp/outer.js",
+          });
+        }
+      },
+    );
+
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    expect(observed).toEqual([
+      { phase: "factory", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      {
+        phase: "factory",
+        pluginId: "optional-demo",
+        pluginSource: "/tmp/optional-demo.js",
+      },
+      { phase: "prepare", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      { phase: "execute", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      {
+        phase: "prepare",
+        pluginId: "optional-demo",
+        pluginSource: "/tmp/optional-demo.js",
+      },
+      {
+        phase: "execute",
+        pluginId: "optional-demo",
+        pluginSource: "/tmp/optional-demo.js",
+      },
+    ]);
+  });
+
+  it("wraps every array tool callback and restores caller scope after errors", async () => {
+    const context = createContext();
+    const observed: Array<{ name: string; pluginId?: string; pluginSource?: string }> = [];
+    setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["array_first", "array_second"],
+        factory: () =>
+          ["array_first", "array_second"].map((name) => ({
+            name,
+            description: `${name} tool`,
+            parameters: { type: "object", properties: {} },
+            prepareArguments() {
+              const scope = getPluginRuntimeGatewayRequestScope();
+              observed.push({ name: `${name}:prepare`, pluginId: scope?.pluginId });
+              if (name === "array_second") {
+                throw new Error("bad args");
+              }
+              return {};
+            },
+            async execute() {
+              const scope = getPluginRuntimeGatewayRequestScope();
+              observed.push({
+                name,
+                pluginId: scope?.pluginId,
+                pluginSource: scope?.pluginSource,
+              });
+              return { content: [{ type: "text", text: name }] };
+            },
+          })),
+      },
+    ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        pluginId: "outer",
+        pluginSource: "/tmp/outer.js",
+        isWebchatConnect: () => false,
+      },
+      async () => {
+        const tools = resolvePluginTools(createResolveToolsParams({ context }));
+        await tools[0]?.execute("call-first", tools[0].prepareArguments?.({}) ?? {}, undefined);
+        expect(() => tools[1]?.prepareArguments?.({})).toThrow("bad args");
+        expect(getPluginRuntimeGatewayRequestScope()).toMatchObject({
+          pluginId: "outer",
+          pluginSource: "/tmp/outer.js",
+        });
+      },
+    );
+
+    expect(observed).toEqual([
+      { name: "array_first:prepare", pluginId: "multi" },
+      { name: "array_first", pluginId: "multi", pluginSource: "/tmp/multi.js" },
+      { name: "array_second:prepare", pluginId: "multi" },
+    ]);
+  });
+
+  it("preserves class-backed plugin tool shape while scoping callbacks", async () => {
+    const context = createContext();
+    const observed: Array<{ phase: string; pluginId?: string }> = [];
+
+    class AccessorTool {
+      #name = "class_tool";
+      #parameters = { type: "object", properties: {} };
+
+      get name() {
+        return this.#name;
+      }
+
+      get description() {
+        return "class backed tool";
+      }
+
+      get parameters() {
+        return this.#parameters;
+      }
+
+      prepareArguments(args: unknown) {
+        observed.push({
+          phase: "prepare",
+          pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+        });
+        return args;
+      }
+
+      async execute() {
+        observed.push({
+          phase: "execute",
+          pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+        });
+        return { content: [{ type: "text", text: "ok" }] };
+      }
+    }
+
+    setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["class_tool"],
+        factory: () => new AccessorTool(),
+      },
+    ]);
+
+    const [tool] = resolvePluginTools(createResolveToolsParams({ context }));
+    expect(tool?.name).toBe("class_tool");
+    expect(Object.getPrototypeOf(tool)).toBe(AccessorTool.prototype);
+    await tool?.execute("call-class", tool.prepareArguments?.({}) ?? {}, undefined);
+
+    expect(observed).toEqual([
+      { phase: "prepare", pluginId: "multi" },
+      { phase: "execute", pluginId: "multi" },
+    ]);
   });
 
   it("does not load plugin-owned tools whose manifest metadata has no available signal", () => {

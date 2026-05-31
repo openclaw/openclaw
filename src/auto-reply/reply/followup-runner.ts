@@ -542,13 +542,6 @@ export function createFollowupRunner(params: {
           provider: run.messageProvider,
         }),
       );
-      if (run.sessionKey) {
-        registerAgentRunContext(runId, {
-          sessionKey: run.sessionKey,
-          verboseLevel: run.verboseLevel,
-          isControlUiVisible: shouldSurfaceToControlUi,
-        });
-      }
       let autoCompactionCount = 0;
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
@@ -566,6 +559,18 @@ export function createFollowupRunner(params: {
         isHeartbeat: opts?.isHeartbeat === true,
         replyOperation,
       });
+      if (run.sessionKey) {
+        const owningSessionId =
+          activeSessionEntry?.sessionId === run.sessionId
+            ? activeSessionEntry.sessionId
+            : run.sessionId;
+        registerAgentRunContext(runId, {
+          sessionKey: run.sessionKey,
+          ...(owningSessionId ? { sessionId: owningSessionId } : {}),
+          verboseLevel: run.verboseLevel,
+          isControlUiVisible: shouldSurfaceToControlUi,
+        });
+      }
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );

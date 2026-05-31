@@ -10,7 +10,7 @@ Skills own workflows; root owns hard policy and routing.
 - Docs/user-visible work: `pnpm docs:list`, then read relevant docs only.
 - Fix/triage answers need source, tests, current/shipped behavior, and dependency contract proof.
 - Reviews/answers: high confidence required. Default to exhaustive relevant codebase search/read, including owners, callers, siblings, tests, docs, and upstream/dependency contracts before verdict. Diff-only review is insufficient.
-- Dependency-touching work: direct dependency inspection is mandatory when feasible; do not rely on assumptions, wrappers, or memory. Most dependencies are OSS, so read their source/docs/types. For any Codex-related code or protocol behavior, read sibling `../codex`; clone `https://github.com/openai/codex.git` there if missing, then verify against its source before verdict.
+- Dependency-touching work: direct dependency inspection is mandatory when feasible; do not rely on assumptions, wrappers, or memory. Most dependencies are OSS, so read their source/docs/types. Codex-related work: before any verdict, comment, approval, merge recommendation, or `proof sufficient` claim, inspect sibling `../codex` source for the exact protocol/runtime behavior involved; if missing, clone `https://github.com/openai/codex.git` there first. Do not rely on PR text, OpenClaw wrappers, generated schemas, memory, or prior bot reviews as a substitute. Cite Codex files/lines checked in final/review/comment.
 - Dependency-backed behavior: read upstream docs/source/types first. No API/default/error/timing guesses.
 - Live-verify when feasible. Never print secrets.
 - Missing deps: `pnpm install`, retry once, then report first actionable error.
@@ -85,6 +85,9 @@ Skills own workflows; root owns hard policy and routing.
 - Plugin SDK exception: shipped external API gets new API first plus named compat/deprecation, small tests/docs if useful, removal plan.
 - Migrate internal/bundled callers to modern API in the same change. Do not let internal compat become permanent architecture.
 - Channels are implementation under `src/channels/**`; plugin authors get SDK seams. Providers own auth/catalog/runtime hooks; core owns generic loop.
+- Message/channel plugins stay transport-only. They render portable presentation/actions, enforce transport limits, and map native callback envelopes. They do not own product command trees, plugin/provider policy, or feature-specific menus.
+- Portable command UI must use typed presentation actions, not raw string inference. Do not make channels guess that `value` starting with `/` means a native command; core/owner plugins declare command actions, channels map them when supported.
+- Raw callback data is transport/private. Approval, command, URL, web-app, and select actions must stay distinguishable before channel encoding so transport adapters do not special-case product strings.
 - Agent run terminal state: normalize/merge via `src/agents/agent-run-terminal-outcome.ts`; do not rederive timeout/cancel precedence in projections.
 - Hot paths should carry prepared facts forward: provider id, model ref, channel id, target, capability family, attachment class. Do not rediscover with broad plugin/provider/channel/capability loaders.
 - Do not fix repeated request-time discovery with scattered caches. Move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches.
@@ -140,6 +143,7 @@ Skills own workflows; root owns hard policy and routing.
 - Maintainer decision closes the cluster: if deciding reported behavior/proposed fix is not planned, comment+close all directly associated open issues/PRs unless explicitly told to keep one open. Associated means linked PRs/issues, duplicates, companion workaround PRs, and the canonical issue for the rejected behavior.
 - Do not leave associated issues open for hypothetical future repros. Close with rationale; ask for a new issue or reopen only if concrete new evidence appears. Close comment states: decision, why, supported alternative, and what evidence would change the decision.
 - Issue/PR numbers need a short summary every time; assume the reader has not opened or read them.
+- Before presenting a batch of issues/PRs, use smart subagents to verify live state and current `main`; omit closed/fixed items, and comment+close items already fixed on `main` when maintainer action is authorized.
 - PR review answer: bug/behavior, URL(s), affected surface, provenance for regressions when traceable, best-fix judgment, evidence from code/tests/CI/current or shipped behavior.
 - PR reviewable findings: post them on the PR, not chat-only, so author sees actionable feedback.
 - Issue/PR final answer: last line is the full GitHub URL.
@@ -148,6 +152,9 @@ Skills own workflows; root owns hard policy and routing.
 - After landing or requested close/sweep: search duplicates; comment proof + canonical commit/PR/release before closing.
 - After landing/ship final: include 2-5 sentence recap of what landed: behavior change, key files/surface, proof run, issue/PR state. Do not answer with only status/links.
 - `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
+- Public GH comments: show draft in chat first unless user explicitly asked to post/comment/reply/close/merge/land. After work starts and changes/proof exist, post the review/proof/commit comment.
+- Representing user: if user already has a comment/thread for the point, update/reply there when possible; avoid duplicate PR/issue comments.
+- No surprise GH writes: chat must mention every posted/updated public comment with URL.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
 - PR create: real body required. Include Summary + Verification; mention refs, behavior, and proof.
 - PR create/refresh: keep PR branches takeover-ready. Use a branch maintainers can push to, or for fork PRs ensure `maintainer_can_modify` / GitHub's `Allow edits by maintainers` is enabled unless explicitly told otherwise or GitHub's Actions/secrets warning makes that unsafe.
@@ -224,7 +231,7 @@ Skills own workflows; root owns hard policy and routing.
 - User says `commit`: your changes only. `commit all`: all changes in grouped chunks. `push`: may `git pull --rebase` first.
 - User says `ship it`: commit intended changes, pull --rebase, push.
 - Do not delete/rename unexpected files; ask if blocking, else ignore.
-- Bulk PR close/reopen >5: ask with count/scope.
+- Bulk PR close/reopen >20: ask with count/scope.
 
 ## Security / Release
 

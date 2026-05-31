@@ -484,16 +484,64 @@ describe("modelsAuthLoginCommand", () => {
       agentDir: "/tmp/openclaw/agents/main",
       provider: "openai",
       profileId: "openai:user@example.com",
+      createIfMissing: false,
     });
-    const savedProfile = lastUpdatedConfig?.auth?.profiles?.["openai:user@example.com"];
-    expect(savedProfile?.provider).toBe("openai");
-    expect(savedProfile?.mode).toBe("oauth");
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
+    expect(lastUpdatedConfig).toBeNull();
     expect(runtime.log).toHaveBeenCalledWith(
       "Auth profile: openai:user@example.com (openai/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai/gpt-5.5 (use --set-default to apply)",
     );
+  });
+
+  it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      auth: {
+        profiles: {
+          "openai:old-login": {
+            provider: "openai",
+            mode: "oauth",
+          },
+        },
+      },
+    };
+
+    await modelsAuthLoginCommand({ provider: "openai" }, runtime);
+
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      provider: "openai",
+      profileId: "openai:user@example.com",
+      createIfMissing: true,
+      createFromOrder: ["openai:old-login"],
+    });
+  });
+
+  it("creates store order for relogin when configured order would shadow the new profile", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      auth: {
+        order: {
+          openai: ["openai:old-login"],
+        },
+      },
+    };
+
+    await modelsAuthLoginCommand({ provider: "openai" }, runtime);
+
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      provider: "openai",
+      profileId: "openai:user@example.com",
+      createIfMissing: true,
+      createFromOrder: ["openai:old-login"],
+    });
   });
 
   it("defaults OpenAI login to ChatGPT OAuth when API key is also available", async () => {
@@ -1059,6 +1107,7 @@ describe("modelsAuthLoginCommand", () => {
       "anthropic/claude-sonnet-4-6": {},
       "openai/gpt-5.5": { alias: "GPT" },
     });
+    expect(lastUpdatedConfig?.auth).toBeUndefined();
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai/gpt-5.5 (use --set-default to apply)",
     );

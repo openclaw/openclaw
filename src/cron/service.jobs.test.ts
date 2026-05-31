@@ -836,29 +836,15 @@ describe("createJob delivery defaults", () => {
     });
     expect(job.delivery).toBeUndefined();
   });
-
-  it("uses legacy systemEvent message text without throwing", () => {
-    const state = createMockState(now, { defaultAgentId: "main" });
-    const job = createJob(state, {
-      name: "legacy system event",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", message: "legacy text" } as never,
-    });
-
-    expect(resolveJobPayloadTextForMain(job)).toBe("legacy text");
-  });
 });
 
 describe("recomputeNextRuns", () => {
-  it("backfills missing every anchorMs for legacy loaded jobs", () => {
+  it("backfills missing every anchorMs for loaded jobs", () => {
     const now = Date.parse("2026-03-01T12:00:00.000Z");
     const createdAtMs = now - 120_000;
     const job: CronJob = {
-      id: "legacy-every",
-      name: "legacy-every",
+      id: "loaded-every",
+      name: "loaded-every",
       enabled: true,
       createdAtMs,
       updatedAtMs: createdAtMs,

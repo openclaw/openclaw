@@ -933,7 +933,7 @@ describe("createVideoGenerateTool", () => {
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect((details.task as { taskId?: string }).taskId).toBe("task-123");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     if (!scheduledWork) {
       throw new Error("expected scheduled video generation work");
     }

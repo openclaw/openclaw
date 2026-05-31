@@ -6,7 +6,7 @@ import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
-import { loadCronStore } from "../store.js";
+import { loadCronStore, loadCronStoreWithConfigJobs } from "../store.js";
 import type { CronJob } from "../types.js";
 import { add, run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
@@ -113,23 +113,34 @@ function insertCronJobRow(storePath: string, job: CronJob) {
     db.prepare(
       `INSERT INTO cron_jobs (
         store_key, job_id, name, enabled, created_at_ms, schedule_kind,
-        session_target, wake_mode, payload_kind, payload_message, job_json, state_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      path.resolve(storePath),
-      job.id,
-      job.name,
-      job.enabled ? 1 : 0,
-      job.createdAtMs,
-      job.schedule.kind,
-      job.sessionTarget,
-      job.wakeMode,
-      job.payload.kind,
-      "message" in job.payload ? job.payload.message : null,
-      JSON.stringify(job),
-      JSON.stringify(job.state),
-      job.updatedAtMs,
-    );
+        at, every_ms, anchor_ms, schedule_expr, session_target, wake_mode, payload_kind,
+        payload_message, delivery_mode, delivery_to, job_json, state_json, updated_at
+      ) VALUES (
+        $storeKey, $jobId, $name, $enabled, $createdAtMs, $scheduleKind,
+        $at, $everyMs, $anchorMs, $scheduleExpr, $sessionTarget, $wakeMode, $payloadKind,
+        $payloadMessage, $deliveryMode, $deliveryTo, $jobJson, $stateJson, $updatedAt
+      )`,
+    ).run({
+      $storeKey: path.resolve(storePath),
+      $jobId: job.id,
+      $name: job.name,
+      $enabled: job.enabled ? 1 : 0,
+      $createdAtMs: job.createdAtMs,
+      $scheduleKind: job.schedule.kind,
+      $at: job.schedule.kind === "at" ? job.schedule.at : null,
+      $everyMs: job.schedule.kind === "every" ? job.schedule.everyMs : null,
+      $anchorMs: job.schedule.kind === "every" ? (job.schedule.anchorMs ?? null) : null,
+      $scheduleExpr: job.schedule.kind === "cron" ? job.schedule.expr : null,
+      $sessionTarget: job.sessionTarget,
+      $wakeMode: job.wakeMode,
+      $payloadKind: job.payload.kind,
+      $payloadMessage: "message" in job.payload ? job.payload.message : null,
+      $deliveryMode: job.delivery ? (job.delivery.mode ?? "announce") : null,
+      $deliveryTo: job.delivery?.to ?? null,
+      $jobJson: JSON.stringify(job),
+      $stateJson: JSON.stringify(job.state),
+      $updatedAt: job.updatedAtMs,
+    });
   });
 }
 
@@ -249,7 +260,7 @@ describe("cron service ops seam coverage", () => {
       enabled: true,
       createdAtMs: now - 60_000,
       updatedAtMs: now - 60_000,
-      schedule: { kind: "every", everyMs: 3_600_000 },
+      schedule: { kind: "every", everyMs: 3_600_000, anchorMs: now },
       sessionTarget: "isolated",
       wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "do work" },
@@ -274,13 +285,14 @@ describe("cron service ops seam coverage", () => {
       clearTimeout(state.timer);
     }
 
-    const loaded = await loadCronStore(storePath);
-    const persisted = loaded.jobs[0] as CronJob & { notify?: unknown };
-    expect(persisted.notify).toBe(true);
+    const loaded = await loadCronStoreWithConfigJobs(storePath);
+    const persisted = loaded.store.jobs[0] as CronJob & { notify?: unknown };
+    expect(persisted.notify).toBeUndefined();
     expect(persisted.delivery).toEqual({
       mode: "announce",
       to: "telegram:chat-1",
     });
+    expect(loaded.configJobs[0]?.notify).toBe(true);
     expect(logger.info).not.toHaveBeenCalledWith(
       { storePath },
       "cron: migrated legacy notify fallback jobs before scheduler startup",

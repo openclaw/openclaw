@@ -56,6 +56,19 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    thinkingLevels: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            id: NonEmptyString,
+            label: NonEmptyString,
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
+    thinkingDefault: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

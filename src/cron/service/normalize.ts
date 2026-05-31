@@ -29,7 +29,7 @@ export function normalizeOptionalAgentId(raw: unknown) {
   return normalizeAgentId(trimmed);
 }
 
-export function inferLegacyName(job: {
+export function inferCronJobName(job: {
   schedule?: { kind?: unknown; everyMs?: unknown; expr?: unknown };
   payload?: { kind?: unknown; text?: unknown; message?: unknown };
 }) {
@@ -63,12 +63,7 @@ export function inferLegacyName(job: {
 
 export function normalizePayloadToSystemText(payload: CronPayload) {
   if (payload.kind === "systemEvent") {
-    const text = (payload as { text?: unknown }).text;
-    if (typeof text === "string") {
-      return text.trim();
-    }
-    const legacyMessage = (payload as { message?: unknown }).message;
-    return typeof legacyMessage === "string" ? legacyMessage.trim() : "";
+    return typeof payload.text === "string" ? payload.text.trim() : "";
   }
   return typeof payload.message === "string" ? payload.message.trim() : "";
 }

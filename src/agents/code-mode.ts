@@ -517,7 +517,13 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("call id must be a string.");
         }
-        value = await params.runtime.call(id, values[1] ?? {}, {
+        const described = await params.runtime.describe(id);
+        if (described.source === "mcp") {
+          throw new ToolInputError(
+            "MCP tools are available in code mode only through the MCP namespace.",
+          );
+        }
+        value = await params.runtime.callExactId(described.id, values[1] ?? {}, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
@@ -543,12 +549,17 @@ async function runBridgeRequest(params: {
           path,
           Array.isArray(callArgs) ? callArgs : [],
           async (request) => {
-            const entry = params.runtime
-              .all()
-              .find(
-                (candidate) =>
-                  candidate.name === request.toolName && candidate.sourceName === request.pluginId,
-              );
+            const entry = request.catalogId
+              ? params.runtime
+                  .namespaceEntries()
+                  .find((candidate) => candidate.id === request.catalogId)
+              : params.runtime
+                  .namespaceEntries()
+                  .find(
+                    (candidate) =>
+                      candidate.name === request.toolName &&
+                      candidate.sourceName === request.pluginId,
+                  );
             if (!entry) {
               throw new ToolInputError(
                 `namespace tool is not visible in the run catalog: ${request.toolName}`,
@@ -559,6 +570,9 @@ async function runBridgeRequest(params: {
               signal: params.signal,
               onUpdate: params.onUpdate,
             });
+            if (request.catalogId) {
+              return called.result;
+            }
             return isRecord(called.result) && "details" in called.result
               ? called.result.details
               : called.result;
@@ -769,7 +783,7 @@ function createCodeModeExecDescription(
 ): string {
   const namespacePrompt = describeCodeModeNamespacesForPrompt(ctx, catalog);
   return (
-    'Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
+    'Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. MCP tools are available only through the `MCP` namespace. Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "")
   );
 }
@@ -792,7 +806,10 @@ async function runExec(params: {
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
   const catalog = runtime.all();
-  const namespaceRuntime = await createCodeModeNamespaceRuntime(params.ctx, catalog);
+  const namespaceRuntime = await createCodeModeNamespaceRuntime(
+    params.ctx,
+    runtime.namespaceEntries(),
+  );
   let source: string;
   try {
     source = await prepareSource({ code: params.code, language: params.language, config });

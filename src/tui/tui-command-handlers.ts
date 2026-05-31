@@ -23,7 +23,7 @@ import {
   createSearchableSelectList,
   createSettingsList,
 } from "./components/selectors.js";
-import type { TuiBackend } from "./tui-backend.js";
+import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
@@ -50,11 +50,13 @@ type CommandHandlerContext = {
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<void>;
   setSession: (key: string) => Promise<void>;
+  setEmptySession: (key: string) => Promise<void>;
   refreshAgents: () => Promise<void>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
+  applySessionMutationResult: (result?: TuiSessionMutationResult | null) => boolean;
   noteLocalRunId?: (runId: string) => void;
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
@@ -104,11 +106,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     refreshSessionInfo,
     loadHistory,
     setSession,
+    setEmptySession,
     refreshAgents,
     abortActive,
     setActivityStatus,
     formatSessionKey,
     applySessionInfoFromPatch,
+    applySessionMutationResult,
     noteLocalRunId,
     noteLocalBtwRunId,
     forgetLocalRunId,
@@ -503,7 +507,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           });
           chatLog.addSystem(`verbose set to ${args}`);
           applySessionInfoFromPatch(result);
-          await loadHistory();
+          if (args === "off") {
+            chatLog.clearTools();
+            await refreshSessionInfo();
+          } else {
+            await loadHistory();
+          }
         } catch (err) {
           chatLog.addSystem(`verbose failed: ${String(err)}`);
         }
@@ -520,7 +529,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           });
           chatLog.addSystem(`trace set to ${args}`);
           applySessionInfoFromPatch(result);
-          await loadHistory();
+          await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`trace failed: ${String(err)}`);
         }
@@ -642,7 +651,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           // This ensures /new creates a fresh session that doesn't broadcast
           // to other connected TUI clients sharing the original session key.
           const uniqueKey = `tui-${randomUUID()}`;
-          await setSession(uniqueKey);
+          await setEmptySession(uniqueKey);
           chatLog.addSystem(`new session: ${uniqueKey}`);
         } catch (err) {
           chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
@@ -656,13 +665,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.totalTokens = null;
           tui.requestRender();
 
-          await client.resetSession(
+          const result = await client.resetSession(
             state.currentSessionKey,
             name,
             state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : undefined,
           );
+          if (applySessionMutationResult(result)) {
+            await refreshSessionInfo();
+          } else {
+            await loadHistory();
+          }
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
-          await loadHistory();
         } catch (err) {
           chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
         }

@@ -267,6 +267,7 @@ export const vi: TranslationMap = {
       openFilesTab: "Mở tab Tệp",
       primaryModel: "Mô hình chính",
       runtime: "Runtime",
+      thinkingDefault: "Mức suy luận mặc định",
       identityName: "Tên danh tính",
       identityAvatar: "Ảnh đại diện danh tính",
       skillsFilter: "Bộ lọc Skills",

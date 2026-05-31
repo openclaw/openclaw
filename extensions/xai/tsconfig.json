@@ -240,11 +240,38 @@
       "@openclaw/acp-core/normalize-text": [
         "../../dist/plugin-sdk/packages/acp-core/src/normalize-text.d.ts"
       ],
+      "@openclaw/acp-core/meta": [
+        "../../dist/plugin-sdk/packages/acp-core/src/meta.d.ts"
+      ],
+      "@openclaw/acp-core/numeric-options": [
+        "../../dist/plugin-sdk/packages/acp-core/src/numeric-options.d.ts"
+      ],
       "@openclaw/acp-core/record-shared": [
         "../../dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts"
       ],
+      "@openclaw/acp-core/session": [
+        "../../dist/plugin-sdk/packages/acp-core/src/session.d.ts"
+      ],
+      "@openclaw/acp-core/session-interaction-mode": [
+        "../../dist/plugin-sdk/packages/acp-core/src/session-interaction-mode.d.ts"
+      ],
+      "@openclaw/acp-core/session-lineage-meta": [
+        "../../dist/plugin-sdk/packages/acp-core/src/session-lineage-meta.d.ts"
+      ],
+      "@openclaw/acp-core/types": [
+        "../../dist/plugin-sdk/packages/acp-core/src/types.d.ts"
+      ],
+      "@openclaw/acp-core/runtime/error-text": [
+        "../../dist/plugin-sdk/packages/acp-core/src/runtime/error-text.d.ts"
+      ],
       "@openclaw/acp-core/runtime/errors": [
         "../../dist/plugin-sdk/packages/acp-core/src/runtime/errors.d.ts"
+      ],
+      "@openclaw/acp-core/runtime/session-identifiers": [
+        "../../dist/plugin-sdk/packages/acp-core/src/runtime/session-identifiers.d.ts"
+      ],
+      "@openclaw/acp-core/runtime/session-identity": [
+        "../../dist/plugin-sdk/packages/acp-core/src/runtime/session-identity.d.ts"
       ],
       "@openclaw/acp-core/runtime/types": [
         "../../dist/plugin-sdk/packages/acp-core/src/runtime/types.d.ts"
