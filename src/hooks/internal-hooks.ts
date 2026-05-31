@@ -190,16 +190,29 @@ export type AgentTurnEndHookEvent = InternalHookEvent & {
 };
 
 /**
- * Context provided to `agent:turn:saved` hook handlers.
- * Fired after a completed agent turn has been saved to durable session state.
+ * Context provided to `agent:turn:save` hook handlers.
+ * Fired after the ACP turn save phase reaches an outcome.
  */
-export type AgentTurnSavedHookContext = AgentTurnLifecycleHookContext;
+export type AgentTurnSaveHookContext = {
+  /** Session key identifying the agent session whose turn save phase completed. */
+  sessionKey: string;
+  /** Whether the save phase completed successfully. */
+  success: boolean;
+  /** Whether the underlying ACP runtime turn completed successfully. */
+  turnSuccess: boolean;
+  /** Wall-clock duration of the turn in milliseconds. */
+  durationMs: number;
+  /** ACP runtime error code when the turn failed. Omitted for successful turns. */
+  turnErrorCode?: string;
+  /** Error message when the save phase failed by throwing. */
+  saveError?: string;
+};
 
-/** Internal hook event emitted after each agent turn is saved. */
-export type AgentTurnSavedHookEvent = InternalHookEvent & {
+/** Internal hook event emitted after each agent turn save phase reaches an outcome. */
+export type AgentTurnSaveHookEvent = InternalHookEvent & {
   type: "agent";
-  action: "turn:saved";
-  context: AgentTurnSavedHookContext;
+  action: "turn:save";
+  context: AgentTurnSaveHookContext;
 };
 
 export type SessionPatchHookContext = {
@@ -504,19 +517,21 @@ export function isAgentTurnEndEvent(event: InternalHookEvent): event is AgentTur
   );
 }
 
-export function isAgentTurnSavedEvent(event: InternalHookEvent): event is AgentTurnSavedHookEvent {
-  if (!isHookEventTypeAndAction(event, "agent", "turn:saved")) {
+export function isAgentTurnSaveEvent(event: InternalHookEvent): event is AgentTurnSaveHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "turn:save")) {
     return false;
   }
-  const context = getHookContext<AgentTurnSavedHookContext>(event);
+  const context = getHookContext<AgentTurnSaveHookContext>(event);
   if (!context) {
     return false;
   }
   return (
     hasStringContextField(context, "sessionKey") &&
     hasBooleanContextField(context, "success") &&
+    hasBooleanContextField(context, "turnSuccess") &&
     hasNumberContextField(context, "durationMs") &&
-    (context.errorCode === undefined || typeof context.errorCode === "string")
+    (context.turnErrorCode === undefined || typeof context.turnErrorCode === "string") &&
+    (context.saveError === undefined || typeof context.saveError === "string")
   );
 }
 

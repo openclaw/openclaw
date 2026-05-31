@@ -339,7 +339,7 @@ async function runDispatch(params: {
 
 type MockRunTurnInput = {
   onEvent?: (event: unknown) => Promise<void> | void;
-  onBeforeTurnSavedHook?: (context: {
+  onBeforeTurnSaveHook?: (context: {
     sessionKey: string;
     success: boolean;
     durationMs: number;
@@ -348,7 +348,7 @@ type MockRunTurnInput = {
 };
 
 async function completeMockAcpTurn(input: MockRunTurnInput, errorCode?: string): Promise<void> {
-  await input.onBeforeTurnSavedHook?.({
+  await input.onBeforeTurnSaveHook?.({
     sessionKey,
     success: !errorCode,
     durationMs: 1,
@@ -520,7 +520,7 @@ describe("tryDispatchAcpReply", () => {
     expect(routeCall().mirror).toBe(false);
   });
 
-  it("persists the ACP transcript before the manager emits agent:turn:saved", async () => {
+  it("persists the ACP transcript before the manager emits successful agent:turn:save", async () => {
     setReadyAcpResolution();
     const order: string[] = [];
     transcriptMocks.persistAcpDispatchTranscript.mockImplementationOnce(async () => {
@@ -529,13 +529,13 @@ describe("tryDispatchAcpReply", () => {
     managerMocks.runTurn.mockImplementationOnce(async (input: MockRunTurnInput) => {
       await input.onEvent?.({ type: "text_delta", text: "memory", tag: "agent_message_chunk" });
       await input.onEvent?.({ type: "done" });
-      const shouldEmitSaved = await input.onBeforeTurnSavedHook?.({
+      const shouldEmitSave = await input.onBeforeTurnSaveHook?.({
         sessionKey,
         success: true,
         durationMs: 1,
       });
-      if (shouldEmitSaved !== false) {
-        order.push("saved");
+      if (shouldEmitSave !== false) {
+        order.push("save-success");
       }
     });
 
@@ -544,7 +544,7 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    expect(order).toEqual(["transcript", "saved"]);
+    expect(order).toEqual(["transcript", "save-success"]);
     expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,
@@ -554,7 +554,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("surfaces ACP transcript persistence failures before agent:turn:saved", async () => {
+  it("surfaces ACP transcript persistence failures before successful agent:turn:save", async () => {
     setReadyAcpResolution();
     const order: string[] = [];
     transcriptMocks.persistAcpDispatchTranscript.mockRejectedValueOnce(new Error("disk full"));
@@ -562,7 +562,7 @@ describe("tryDispatchAcpReply", () => {
       await input.onEvent?.({ type: "text_delta", text: "memory", tag: "agent_message_chunk" });
       await input.onEvent?.({ type: "done" });
       await expect(
-        input.onBeforeTurnSavedHook?.({ sessionKey, success: true, durationMs: 1 }),
+        input.onBeforeTurnSaveHook?.({ sessionKey, success: true, durationMs: 1 }),
       ).rejects.toThrow("disk full");
       order.push("save failed");
     });

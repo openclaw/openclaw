@@ -587,7 +587,7 @@ export async function tryDispatchAcpReply(params: {
       requestId: resolveAcpRequestId(params.ctx),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onEvent: async (event) => await projector.onEvent(event),
-      onBeforeTurnSavedHook: async (completion) => {
+      onBeforeTurnSaveHook: async (completion) => {
         await projector.flush(true);
         if (!completion.success || params.abortSignal?.aborted) {
           return false;

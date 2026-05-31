@@ -6,7 +6,7 @@ import {
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
   isAgentTurnEndEvent,
-  isAgentTurnSavedEvent,
+  isAgentTurnSaveEvent,
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
@@ -16,7 +16,7 @@ import {
   unregisterInternalHook,
   type AgentBootstrapHookContext,
   type AgentTurnEndHookContext,
-  type AgentTurnSavedHookContext,
+  type AgentTurnSaveHookContext,
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
@@ -324,25 +324,38 @@ describe("hooks", () => {
     });
   });
 
-  describe("isAgentTurnSavedEvent", () => {
+  describe("isAgentTurnSaveEvent", () => {
     it.each([
       {
-        name: "returns true for agent:turn:saved events with all required context fields",
-        event: createInternalHookEvent("agent", "turn:saved", "test-session", {
+        name: "returns true for agent:turn:save events with all required context fields",
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
           sessionKey: "test-session",
           success: true,
+          turnSuccess: true,
           durationMs: 1234,
-        } satisfies AgentTurnSavedHookContext),
+        } satisfies AgentTurnSaveHookContext),
         expected: true,
       },
       {
-        name: "returns true for failed saved-turn context",
-        event: createInternalHookEvent("agent", "turn:saved", "test-session", {
+        name: "returns true for failed save context after a failed turn",
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
           sessionKey: "test-session",
           success: false,
+          turnSuccess: false,
           durationMs: 500,
-          errorCode: "ACP_TURN_FAILED",
-        } satisfies AgentTurnSavedHookContext),
+          turnErrorCode: "ACP_TURN_FAILED",
+        } satisfies AgentTurnSaveHookContext),
+        expected: true,
+      },
+      {
+        name: "returns true for failed save context with a save error",
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
+          sessionKey: "test-session",
+          success: false,
+          turnSuccess: true,
+          durationMs: 500,
+          saveError: "disk full",
+        } satisfies AgentTurnSaveHookContext),
         expected: true,
       },
       {
@@ -355,35 +368,59 @@ describe("hooks", () => {
         expected: false,
       },
       {
-        name: "returns false when errorCode is not a string",
-        event: createInternalHookEvent("agent", "turn:saved", "test-session", {
+        name: "returns false when turnErrorCode is not a string",
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
           sessionKey: "test-session",
           success: false,
+          turnSuccess: false,
           durationMs: 100,
-          errorCode: 500,
+          turnErrorCode: 500,
+        }),
+        expected: false,
+      },
+      {
+        name: "returns false when saveError is not a string",
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
+          sessionKey: "test-session",
+          success: false,
+          turnSuccess: true,
+          durationMs: 100,
+          saveError: 500,
         }),
         expected: false,
       },
       {
         name: "returns false when success field is missing",
-        event: createInternalHookEvent("agent", "turn:saved", "test-session", {
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
           sessionKey: "test-session",
+          turnSuccess: true,
           durationMs: 100,
         }),
         expected: false,
       },
       {
         name: "returns false when durationMs field is missing",
-        event: createInternalHookEvent("agent", "turn:saved", "test-session", {
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
           sessionKey: "test-session",
           success: true,
+          turnSuccess: true,
+        }),
+        expected: false,
+      },
+      {
+        name: "returns false when turnSuccess field is missing",
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
+          sessionKey: "test-session",
+          success: true,
+          durationMs: 100,
         }),
         expected: false,
       },
       {
         name: "returns false when sessionKey field is missing",
-        event: createInternalHookEvent("agent", "turn:saved", "test-session", {
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
           success: true,
+          turnSuccess: true,
           durationMs: 100,
         }),
         expected: false,
@@ -393,7 +430,7 @@ describe("hooks", () => {
       event: ReturnType<typeof createInternalHookEvent>;
       expected: boolean;
     }>)("$name", ({ event, expected }) => {
-      expect(isAgentTurnSavedEvent(event)).toBe(expected);
+      expect(isAgentTurnSaveEvent(event)).toBe(expected);
     });
   });
 

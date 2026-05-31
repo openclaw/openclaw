@@ -63,7 +63,14 @@ export type AcpTurnCompletionHookContext = {
 
 export type AcpTurnEndHookContext = AcpTurnCompletionHookContext;
 
-export type AcpTurnSavedHookContext = AcpTurnCompletionHookContext;
+export type AcpTurnSaveHookContext = {
+  sessionKey: string;
+  success: boolean;
+  turnSuccess: boolean;
+  durationMs: number;
+  turnErrorCode?: AcpRuntimeError["code"];
+  saveError?: string;
+};
 
 export type AcpRunTurnInput = {
   cfg: OpenClawConfig;
@@ -75,8 +82,8 @@ export type AcpRunTurnInput = {
   signal?: AbortSignal;
   onLifecycle?: (event: AcpTurnLifecycleEvent) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
-  onBeforeTurnSavedHook?: (
-    context: AcpTurnSavedHookContext,
+  onBeforeTurnSaveHook?: (
+    context: AcpTurnCompletionHookContext,
   ) => Promise<boolean | void> | boolean | void;
 };
 
