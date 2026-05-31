@@ -112,6 +112,7 @@ async function deliverCronAnnouncePayload(params: {
   }
 }
 
+/** Sends a cron announce payload and throws if target resolution or delivery fails. */
 export async function sendCronAnnouncePayloadStrict(params: {
   deps: CliDeps;
   cfg: OpenClawConfig;
@@ -134,6 +135,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   });
 }
 
+/** Sends a best-effort cron failure notification, logging resolution/send failures. */
 export async function sendFailureNotificationAnnounce(
   deps: CliDeps,
   cfg: OpenClawConfig,
@@ -145,6 +147,7 @@ export async function sendFailureNotificationAnnounce(
   const delivery = await resolveCronAnnounceDelivery({ cfg, agentId, jobId, target });
 
   if (!delivery.ok) {
+    // Failure alerts must not mask the original cron run failure.
     cronDeliveryLogger.warn(
       { error: delivery.error.message },
       "cron: failed to resolve failure destination target",
