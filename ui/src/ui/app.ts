@@ -639,6 +639,11 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopFilePreviewQuery = "";
   @state() skillWorkshopReviewedKeys = loadSkillWorkshopReviewedKeys();
   @state() skillWorkshopQueueWidth = loadSkillWorkshopQueueWidth();
+  @state() skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null =
+    null;
+  @state() skillWorkshopActionNotice: { key: string; label: string; slug: string } | null = null;
+  @state() skillWorkshopStatusOverrides: Record<string, "applied" | "rejected"> = {};
+  skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;

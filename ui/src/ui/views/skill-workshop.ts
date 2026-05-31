@@ -32,6 +32,18 @@ export type SkillWorkshopProposal = {
 };
 
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
+export type SkillWorkshopAction = "apply" | "revise" | "reject";
+
+export type SkillWorkshopActionBusy = {
+  key: string;
+  action: SkillWorkshopAction;
+};
+
+export type SkillWorkshopActionNotice = {
+  key: string;
+  label: string;
+  slug: string;
+};
 
 export type SkillWorkshopProps = {
   loading: boolean;
@@ -42,6 +54,8 @@ export type SkillWorkshopProps = {
   filePreviewKey: string | null;
   filePreviewQuery: string;
   queueWidth: number;
+  actionBusy: SkillWorkshopActionBusy | null;
+  actionNotice: SkillWorkshopActionNotice | null;
   counts: Record<SkillWorkshopStatusFilter, number>;
   onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
   onQueryChange: (query: string) => void;
@@ -313,23 +327,47 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
           : nothing}
       </div>
 
+      ${props.actionNotice?.key === proposal.key ? renderActionNotice(props.actionNotice) : nothing}
       ${proposal.status === "pending" ? renderPendingActions(props, proposal) : nothing}
     </div>
   `;
 }
 
-function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
+function renderActionNotice(notice: SkillWorkshopActionNotice) {
   return html`
-    <div class="sw-action-bar">
-      <button class="sw-btn sw-btn--primary" @click=${() => props.onApply(proposal.key)}>
-        Apply
-      </button>
-      <button class="sw-btn" @click=${() => props.onRevise(proposal.key)}>Revise</button>
+    <div class="sw-action-toast" role="status" aria-live="polite">
+      <span>${notice.label}</span>
+      <strong>${notice.slug}</strong>
+      <span>·</span>
+    </div>
+  `;
+}
+
+function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
+  const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
+  const disabled = Boolean(props.actionBusy);
+  return html`
+    <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
       <button
-        class="sw-btn sw-btn--ghost sw-btn--danger"
+        class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
+        ?disabled=${disabled}
+        @click=${() => props.onApply(proposal.key)}
+      >
+        ${busy === "apply" ? "Applying…" : "Apply"}
+      </button>
+      <button
+        class="sw-btn ${busy === "revise" ? "is-busy" : ""}"
+        ?disabled=${disabled}
+        @click=${() => props.onRevise(proposal.key)}
+      >
+        ${busy === "revise" ? "Opening…" : "Revise"}
+      </button>
+      <button
+        class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
+        ?disabled=${disabled}
         @click=${() => props.onReject(proposal.key)}
       >
-        Reject
+        ${busy === "reject" ? "Rejecting…" : "Reject"}
       </button>
     </div>
   `;

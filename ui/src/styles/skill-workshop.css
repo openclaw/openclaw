@@ -257,6 +257,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .sw-detail--empty {
@@ -472,6 +473,30 @@
 }
 
 /* ── Action bar (sticky bottom) ─────────────────────────────────────── */
+.sw-action-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 68px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(520px, calc(100% - 48px));
+  padding: 10px 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  white-space: nowrap;
+}
+
+.sw-action-toast strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .sw-action-bar {
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 60%, var(--bg-elevated) 40%);
@@ -501,6 +526,15 @@
   background: var(--bg-hover);
 }
 
+.sw-btn:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.sw-btn:disabled:hover {
+  background: var(--bg-elevated);
+}
+
 .sw-btn--primary {
   background: var(--accent);
   color: white;
@@ -509,6 +543,28 @@
 
 .sw-btn--primary:hover {
   background: color-mix(in srgb, var(--accent) 90%, white 10%);
+}
+
+.sw-btn--primary:disabled:hover {
+  background: var(--accent);
+}
+
+.sw-btn.is-busy {
+  animation: sw-action-pulse 900ms ease-in-out infinite;
+  opacity: 0.82;
+}
+
+@keyframes sw-action-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  50% {
+    transform: scale(1.015);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
 }
 
 .sw-btn--ghost {

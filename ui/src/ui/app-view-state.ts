@@ -432,6 +432,10 @@ export type AppViewState = {
     skillWorkshopFilePreviewQuery: string;
     skillWorkshopReviewedKeys: string[];
     skillWorkshopQueueWidth: number;
+    skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null;
+    skillWorkshopActionNotice: { key: string; label: string; slug: string } | null;
+    skillWorkshopStatusOverrides: Record<string, "applied" | "rejected">;
+    skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
