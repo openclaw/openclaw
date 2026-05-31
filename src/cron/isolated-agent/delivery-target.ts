@@ -19,6 +19,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
+/** Result of resolving a cron job delivery request into a sendable outbound channel target. */
 export type DeliveryTargetResolution =
   | {
       ok: true;
@@ -108,6 +109,8 @@ function shouldCarrySessionThread(params: {
       params.resolved.to === params.resolved.lastTo
     );
   }
+  // Explicit targets may reuse a stored thread only when both targets resolve
+  // to the same channel peer; otherwise cron could reply into a stale thread.
   return routesSharePeer(params.route, params.lastRoute);
 }
 
