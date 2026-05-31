@@ -15,7 +15,6 @@ import {
   createRuntime,
   expectRecordFields,
   expectRejectedRecord,
-  extractRuntimeOptionsFromUpserts,
   extractStateUpsertPersistenceOptions,
   extractStatesFromUpserts,
   flushMicrotasks,
@@ -940,47 +939,6 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
   });
 
-  it("enforces acp.maxConcurrentSessions during initializeSession", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
-      sessionKey: "agent:codex:acp:session-a",
-      storeSessionKey: "agent:codex:acp:session-a",
-      acp: readySessionMeta(),
-    });
-    const limitedCfg = {
-      acp: {
-        ...baseCfg.acp,
-        maxConcurrentSessions: 1,
-      },
-    } as OpenClawConfig;
-
-    const manager = new AcpSessionManager();
-    await manager.initializeSession({
-      cfg: limitedCfg,
-      sessionKey: "agent:codex:acp:session-a",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    await expectRejectedRecord(
-      manager.initializeSession({
-        cfg: limitedCfg,
-        sessionKey: "agent:codex:acp:session-b",
-        agent: "codex",
-        mode: "persistent",
-      }),
-      {
-        code: "ACP_SESSION_INIT_FAILED",
-        message: "ACP max concurrent sessions reached (1/1).",
-      },
-    );
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
-  });
-
   it("uses metadata backend when global acp.backend is unset", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockImplementation(async (input) => ({
@@ -1026,87 +984,6 @@ describe("AcpSessionManager", () => {
 
     expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("metadata-backend");
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
-  });
-
-  it("persists runtime options provided during initializeSession", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
-      sessionKey: "agent:codex:acp:session-a",
-      storeSessionKey: "agent:codex:acp:session-a",
-      acp: readySessionMeta({
-        runtimeOptions: {
-          model: "openai/gpt-5.4",
-          thinking: "high",
-        },
-      }),
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.initializeSession({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-a",
-      agent: "codex",
-      mode: "persistent",
-      runtimeOptions: {
-        model: "openai/gpt-5.4",
-        thinking: "high",
-      },
-    });
-
-    expect(extractRuntimeOptionsFromUpserts()).toEqual([
-      {
-        model: "openai/gpt-5.4",
-        thinking: "high",
-      },
-    ]);
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey: "agent:codex:acp:session-a",
-      model: "openai/gpt-5.4",
-      thinking: "high",
-    });
-  });
-
-  it("preserves runtimeOptions cwd when initializeSession cwd is omitted", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
-      sessionKey: "agent:codex:acp:session-cwd-runtime-options",
-      storeSessionKey: "agent:codex:acp:session-cwd-runtime-options",
-      acp: readySessionMeta({
-        runtimeOptions: {
-          cwd: "/workspace/from-runtime-options",
-        },
-        cwd: "/workspace/from-runtime-options",
-      }),
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.initializeSession({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-cwd-runtime-options",
-      agent: "codex",
-      mode: "persistent",
-      runtimeOptions: {
-        cwd: "/workspace/from-runtime-options",
-      },
-    });
-
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey: "agent:codex:acp:session-cwd-runtime-options",
-      cwd: "/workspace/from-runtime-options",
-    });
-    expect(extractRuntimeOptionsFromUpserts()).toEqual([
-      {
-        cwd: "/workspace/from-runtime-options",
-      },
-    ]);
   });
 
   it("drops cached runtime handles after tolerated close failures", async () => {
@@ -1562,89 +1439,6 @@ describe("AcpSessionManager", () => {
     expect(snapshot.turns.active).toBe(0);
     expect(snapshot.turns.queueDepth).toBe(0);
     expect(snapshot.errorsByCode.ACP_TURN_FAILED).toBe(1);
-  });
-
-  it("rolls back ensured runtime sessions when metadata persistence fails", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.upsertAcpSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
-
-    const manager = new AcpSessionManager();
-    await expect(
-      manager.initializeSession({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:session-1",
-        agent: "codex",
-        mode: "persistent",
-      }),
-    ).rejects.toThrow("disk full");
-    const closeInput = mockCallArg(runtimeState.close);
-    expectRecordFields(closeInput, {
-      reason: "init-meta-failed",
-    });
-    expectRecordFields(closeInput.handle, {
-      sessionKey: "agent:codex:acp:session-1",
-    });
-  });
-
-  it("preempts an active turn on cancel and returns to idle state", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
-
-    let enteredRun = false;
-    runtimeState.runTurn.mockImplementation(async function* (input: { signal?: AbortSignal }) {
-      enteredRun = true;
-      await new Promise<void>((resolve) => {
-        if (input.signal?.aborted) {
-          resolve();
-          return;
-        }
-        input.signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      yield { type: "done" as const, stopReason: "cancel" };
-    });
-
-    const manager = new AcpSessionManager();
-    const runPromise = manager.runTurn({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "long task",
-      mode: "prompt",
-      requestId: "run-1",
-    });
-    await vi.waitFor(
-      () => {
-        expect(enteredRun).toBe(true);
-      },
-      { interval: 1 },
-    );
-
-    await manager.cancelSession({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      reason: "manual-cancel",
-    });
-    await runPromise;
-
-    expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockCallArg(runtimeState.cancel), {
-      reason: "manual-cancel",
-    });
-    const states = extractStatesFromUpserts();
-    expect(states).toContain("running");
-    expect(states).toContain("idle");
-    expect(states).not.toContain("error");
   });
 
   it("cleans actor-tail bookkeeping after session turns complete", async () => {

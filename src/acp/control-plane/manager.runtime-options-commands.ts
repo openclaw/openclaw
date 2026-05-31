@@ -4,9 +4,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
-  AcpSessionResolution,
   AcpSessionRuntimeOptions,
-  SessionAcpMeta,
+  EnsureManagerRuntimeHandle,
+  ResolveManagerSession,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 import { createUnsupportedControlError, requireReadySessionMeta } from "./manager.utils.js";
@@ -20,12 +20,8 @@ import {
 
 export type RuntimeOptionCommandServices = {
   runtimeHandles: ManagerRuntimeHandleCache;
-  resolveSession: (params: { cfg: OpenClawConfig; sessionKey: string }) => AcpSessionResolution;
-  ensureRuntimeHandle: (params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    meta: SessionAcpMeta;
-  }) => Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }>;
+  resolveSession: ResolveManagerSession;
+  ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   resolveRuntimeCapabilities: (params: {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
