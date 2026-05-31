@@ -1589,8 +1589,8 @@ export async function runCodexAppServerAttempt(
             durationMs: toolDurationMs,
           });
         }
+        pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
         if (response.terminate === true) {
-          pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
           scheduleTurnReleaseAfterTerminalDynamicTool({
             call,
             response,
@@ -1604,6 +1604,7 @@ export async function runCodexAppServerAttempt(
         }
         return protocolResponse as JsonValue;
       } catch (error) {
+        pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
         if (
           !terminalDiagnosticObserved &&
           !hasPendingDynamicToolTerminalDiagnostic({
