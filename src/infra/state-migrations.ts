@@ -374,6 +374,34 @@ function legacyInstalledPluginIndexMatches(
   );
 }
 
+function mergeLegacyInstalledPluginIndexRecords(
+  current: InstalledPluginIndex,
+  legacy: InstalledPluginIndex,
+): { merged: InstalledPluginIndex; addedCount: number; conflicts: string[] } {
+  const installRecords = { ...current.installRecords };
+  const conflicts: string[] = [];
+  let addedCount = 0;
+  for (const [pluginId, legacyRecord] of Object.entries(legacy.installRecords)) {
+    const currentRecord = installRecords[pluginId];
+    if (!currentRecord) {
+      installRecords[pluginId] = legacyRecord;
+      addedCount += 1;
+      continue;
+    }
+    if (JSON.stringify(currentRecord) !== JSON.stringify(legacyRecord)) {
+      conflicts.push(pluginId);
+    }
+  }
+  return {
+    merged: {
+      ...current,
+      installRecords,
+    },
+    addedCount,
+    conflicts,
+  };
+}
+
 function archiveLegacyInstalledPluginIndex(params: {
   sourcePath: string;
   changes: string[];
@@ -1389,12 +1417,28 @@ async function migrateLegacyInstalledPluginIndex(params: {
   const storeOptions = { stateDir: params.stateDir };
   const current = readPersistedInstalledPluginIndexSync(storeOptions);
   if (current && !legacyInstalledPluginIndexMatches(current, legacy)) {
-    return {
-      changes,
-      warnings: [
-        `Left plugin install index in place because shared SQLite state already has different plugin install metadata: ${sourcePath}`,
-      ],
-    };
+    const merged = mergeLegacyInstalledPluginIndexRecords(current, legacy);
+    if (merged.addedCount > 0) {
+      try {
+        writePersistedInstalledPluginIndexSync(merged.merged, storeOptions);
+        changes.push(
+          `Merged ${merged.addedCount} legacy plugin install ${merged.addedCount === 1 ? "record" : "records"} → shared SQLite state`,
+        );
+      } catch (err) {
+        return {
+          changes,
+          warnings: [`Failed merging plugin install index ${sourcePath}: ${String(err)}`],
+        };
+      }
+    }
+    if (merged.conflicts.length > 0) {
+      return {
+        changes,
+        warnings: [
+          `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
+        ],
+      };
+    }
   }
 
   if (!current) {

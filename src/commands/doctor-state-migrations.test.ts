@@ -11,7 +11,10 @@ import {
   setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
-import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import {
+  readPersistedInstalledPluginIndex,
+  writePersistedInstalledPluginIndex,
+} from "../plugins/installed-plugin-index-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -1294,6 +1297,59 @@ describe("doctor legacy state migrations", () => {
     await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
       installRecords: { demo: { source: "path", sourcePath: "/tmp/demo" } },
       plugins: [],
+    });
+  });
+
+  it("merges missing legacy plugin install records into an existing SQLite index", async () => {
+    const root = await makeTempRoot();
+    await writePersistedInstalledPluginIndex(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 1,
+        installRecords: {
+          existing: {
+            source: "npm",
+            spec: "existing@1.0.0",
+          },
+        },
+        plugins: [],
+        diagnostics: [],
+      },
+      { stateDir: root },
+    );
+    const sourcePath = path.join(root, "plugins", "installs.json");
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(
+      sourcePath,
+      JSON.stringify({
+        records: {
+          legacy: {
+            source: "git",
+            spec: "git:file:///tmp/legacy",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Merged 1 legacy plugin install record → shared SQLite state");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        existing: { source: "npm", spec: "existing@1.0.0" },
+        legacy: { source: "git", spec: "git:file:///tmp/legacy" },
+      },
     });
   });
 
