@@ -327,7 +327,7 @@ function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string)
     return true;
   }
   const ext = getFileExtension(filePath);
-  return !!ext && allowedExtensions.includes(ext);
+  return ext !== undefined && allowedExtensions.includes(ext);
 }
 
 function formatMb(bytes: number, digits = 2): string {
