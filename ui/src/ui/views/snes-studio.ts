@@ -1079,7 +1079,8 @@ function parseAgentStreamRecord(value: unknown): SnesAgentStreamRecord | null {
   const record = value as Record<string, unknown>;
   const id = typeof record.id === "string" ? record.id : "";
   const requestedAgent = record.requestedAgent === "codex" ? "codex" : "openclaw";
-  const surface = String(record.surface ?? "full-game") as SnesAiAuthoringSurface;
+  const surface =
+    typeof record.surface === "string" ? (record.surface as SnesAiAuthoringSurface) : "full-game";
   const knownSurfaces = new Set<SnesAiAuthoringSurface>([
     "full-game",
     "level",
@@ -1515,8 +1516,10 @@ async function decodePngTilesetFile(file: File): Promise<DecodedRgbaImage> {
   try {
     const image = new Image();
     const loaded = new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("PNG tileset decode failed."));
+      image.addEventListener("load", () => resolve(), { once: true });
+      image.addEventListener("error", () => reject(new Error("PNG tileset decode failed.")), {
+        once: true,
+      });
     });
     image.src = objectUrl;
     if (typeof image.decode === "function") {
@@ -1612,20 +1615,40 @@ function selectedSceneThing(): SnesSelectedSceneThing | null {
 }
 
 function selectedThingSurface(entity: SnesSceneEntityDraft): SnesAiAuthoringSurface {
-  if (entity.kind === "player") return "player";
-  if (entity.kind === "enemy") return "enemies";
-  if (entity.kind === "item") return "items";
-  if (entity.kind === "npc") return "dialogue";
+  if (entity.kind === "player") {
+    return "player";
+  }
+  if (entity.kind === "enemy") {
+    return "enemies";
+  }
+  if (entity.kind === "item") {
+    return "items";
+  }
+  if (entity.kind === "npc") {
+    return "dialogue";
+  }
   return "level";
 }
 
 function selectedThingLabel(entity: SnesSceneEntityDraft): string {
-  if (entity.kind === "player") return "Hero";
-  if (entity.kind === "enemy") return "Enemy";
-  if (entity.kind === "item") return "Item";
-  if (entity.name.toLowerCase().includes("door")) return "Door";
-  if (entity.name.toLowerCase().includes("goal")) return "Goal";
-  if (entity.kind === "npc") return "Guide";
+  if (entity.kind === "player") {
+    return "Hero";
+  }
+  if (entity.kind === "enemy") {
+    return "Enemy";
+  }
+  if (entity.kind === "item") {
+    return "Item";
+  }
+  if (entity.name.toLowerCase().includes("door")) {
+    return "Door";
+  }
+  if (entity.name.toLowerCase().includes("goal")) {
+    return "Goal";
+  }
+  if (entity.kind === "npc") {
+    return "Guide";
+  }
   return "Thing";
 }
 
@@ -1646,7 +1669,9 @@ function aiGameStageResolvedProvider(surface: SnesAiAuthoringSurface = aiGameSta
 }
 
 function aiGameStageProviderLabel(provider: SnesAiGameStageProvider = aiGameStageProvider) {
-  if (provider === "auto-team") return "Cost-aware Auto Team";
+  if (provider === "auto-team") {
+    return "Cost-aware Auto Team";
+  }
   return provider === "openclaw" ? "OpenClaw Workers" : "Codex Review Gate";
 }
 
@@ -1885,7 +1910,9 @@ function applyPromptToSelectedThing(host: HostUpdate) {
 
 function changeSelectedThingLookWithAi(host: HostUpdate) {
   const selected = selectedSceneThing();
-  if (!selected) return;
+  if (!selected) {
+    return;
+  }
   const prompt =
     selected.entity.kind === "enemy"
       ? "Make this enemy rounder and colorful with a classic SNES platformer look."
@@ -1965,23 +1992,30 @@ function guidedStepItems(): Array<{
   };
   const currentIndex = order.indexOf(selectedGuidedStep);
   const hasPlayableDraft = lastAppliedFullGamePrompt.trim().length > 0 || previewSimulationState;
-  return order.map((id, index) => ({
-    id,
-    ...labels[id],
-    status:
+  return order.map((id, index) => {
+    const status: "current" | "done" | "next" =
       id === selectedGuidedStep
         ? "current"
         : hasPlayableDraft && index < Math.max(currentIndex, 1)
           ? "done"
-          : "next",
-  }));
+          : "next";
+    return Object.assign({ id }, labels[id], { status });
+  });
 }
 
 function guidedThingSurface(kind: SnesGuidedThingKind): SnesAiAuthoringSurface {
-  if (kind === "hero") return "player";
-  if (kind === "enemy") return "enemies";
-  if (kind === "item" || kind === "powerup" || kind === "coin-trail") return "items";
-  if (kind === "music") return "audio";
+  if (kind === "hero") {
+    return "player";
+  }
+  if (kind === "enemy") {
+    return "enemies";
+  }
+  if (kind === "item" || kind === "powerup" || kind === "coin-trail") {
+    return "items";
+  }
+  if (kind === "music") {
+    return "audio";
+  }
   if (kind === "level" || kind === "platform" || kind === "block" || kind === "hazard") {
     return "level";
   }
@@ -1991,9 +2025,15 @@ function guidedThingSurface(kind: SnesGuidedThingKind): SnesAiAuthoringSurface {
 function guidedThingLibraryKind(
   kind: SnesGuidedThingKind,
 ): NonNullable<SnesStudioProject["thingLibrary"]>[number]["kind"] {
-  if (kind === "platform") return "block";
-  if (kind === "coin-trail") return "item";
-  if (kind === "level" || kind === "music") return "item";
+  if (kind === "platform") {
+    return "block";
+  }
+  if (kind === "coin-trail") {
+    return "item";
+  }
+  if (kind === "level" || kind === "music") {
+    return "item";
+  }
   return kind;
 }
 
@@ -2017,40 +2057,75 @@ function guidedThingLabel(kind: SnesGuidedThingKind) {
 
 function guidedThingKindFromPrompt(prompt: string): SnesGuidedThingKind {
   const lower = prompt.toLowerCase();
-  if (lower.includes("music") || lower.includes("song") || lower.includes("theme")) return "music";
-  if (lower.includes("level") || lower.includes("stage") || lower.includes("map")) return "level";
+  if (lower.includes("music") || lower.includes("song") || lower.includes("theme")) {
+    return "music";
+  }
+  if (lower.includes("level") || lower.includes("stage") || lower.includes("map")) {
+    return "level";
+  }
   if (lower.includes("hero") || lower.includes("player") || lower.includes("character")) {
     return "hero";
   }
-  if (lower.includes("boss") || lower.includes("enemy") || lower.includes("turtle")) return "enemy";
+  if (lower.includes("boss") || lower.includes("enemy") || lower.includes("turtle")) {
+    return "enemy";
+  }
   if (lower.includes("power") || lower.includes("mushroom") || lower.includes("upgrade")) {
     return "powerup";
   }
-  if (lower.includes("coin trail") || lower.includes("trail")) return "coin-trail";
-  if (lower.includes("coin") || lower.includes("gem") || lower.includes("key")) return "item";
-  if (lower.includes("door") || lower.includes("pipe") || lower.includes("portal")) return "door";
-  if (lower.includes("goal") || lower.includes("flag") || lower.includes("finish")) return "goal";
-  if (lower.includes("spike") || lower.includes("lava") || lower.includes("hazard"))
+  if (lower.includes("coin trail") || lower.includes("trail")) {
+    return "coin-trail";
+  }
+  if (lower.includes("coin") || lower.includes("gem") || lower.includes("key")) {
+    return "item";
+  }
+  if (lower.includes("door") || lower.includes("pipe") || lower.includes("portal")) {
+    return "door";
+  }
+  if (lower.includes("goal") || lower.includes("flag") || lower.includes("finish")) {
+    return "goal";
+  }
+  if (lower.includes("spike") || lower.includes("lava") || lower.includes("hazard")) {
     return "hazard";
-  if (lower.includes("platform")) return "platform";
-  if (lower.includes("block") || lower.includes("ground")) return "block";
+  }
+  if (lower.includes("platform")) {
+    return "platform";
+  }
+  if (lower.includes("block") || lower.includes("ground")) {
+    return "block";
+  }
   return "enemy";
 }
 
 function guidedThingNameFromPrompt(prompt: string, kind: SnesGuidedThingKind) {
   const quoted = quotedPromptName(prompt);
-  if (quoted) return quoted;
+  if (quoted) {
+    return quoted;
+  }
   const lower = prompt.toLowerCase();
   if (kind === "enemy" && (lower.includes("turtle") || lower.includes("shell"))) {
     return "Shell Walker";
   }
-  if (kind === "enemy" && lower.includes("boss")) return "First Boss";
-  if (kind === "hero" && lower.includes("robot")) return "Robot Hero";
-  if (kind === "item" && lower.includes("gem")) return "Gem";
-  if (kind === "item" && lower.includes("key")) return "Key";
-  if (kind === "powerup") return "Powerup";
-  if (kind === "music") return "Main Theme";
-  if (kind === "level") return `Level ${project.scenes.length + 1}`;
+  if (kind === "enemy" && lower.includes("boss")) {
+    return "First Boss";
+  }
+  if (kind === "hero" && lower.includes("robot")) {
+    return "Robot Hero";
+  }
+  if (kind === "item" && lower.includes("gem")) {
+    return "Gem";
+  }
+  if (kind === "item" && lower.includes("key")) {
+    return "Key";
+  }
+  if (kind === "powerup") {
+    return "Powerup";
+  }
+  if (kind === "music") {
+    return "Main Theme";
+  }
+  if (kind === "level") {
+    return `Level ${project.scenes.length + 1}`;
+  }
   return guidedThingLabel(kind);
 }
 
@@ -2130,7 +2205,9 @@ function addGuidedThingToLevel(
   prompt = guidedThingPromptDraft,
 ) {
   const scene = selectedScene();
-  if (!scene) return null;
+  if (!scene) {
+    return null;
+  }
   const name = guidedThingNameFromPrompt(prompt, kind);
   const safeId = name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || guidedThingLabel(kind);
   const createdId = `${safeId}-${Date.now()}`;
@@ -2139,7 +2216,9 @@ function addGuidedThingToLevel(
       kind === "hero" ? "player" : kind === "enemy" ? "enemy" : "item";
     updateProject(host, (draft) => {
       const draftScene = draft.scenes[selectedSceneIndex];
-      if (!draftScene) return;
+      if (!draftScene) {
+        return;
+      }
       if (kind === "hero") {
         draftScene.entities = draftScene.entities.filter((entity) => entity.kind !== "player");
       }
@@ -2170,7 +2249,9 @@ function addGuidedThingToLevel(
   if (kind === "door" || kind === "goal") {
     updateProject(host, (draft) => {
       const draftScene = draft.scenes[selectedSceneIndex];
-      if (!draftScene) return;
+      if (!draftScene) {
+        return;
+      }
       draftScene.entities.push({
         id: createdId,
         kind: kind === "goal" ? "item" : "npc",
@@ -2190,7 +2271,9 @@ function addGuidedThingToLevel(
   if (kind === "coin-trail") {
     updateProject(host, (draft) => {
       const draftScene = draft.scenes[selectedSceneIndex];
-      if (!draftScene) return;
+      if (!draftScene) {
+        return;
+      }
       const startX = position?.x ?? 96;
       for (let index = 0; index < 5; index += 1) {
         draftScene.entities.push({
@@ -2214,7 +2297,9 @@ function addGuidedThingToLevel(
   const collision = kind === "hazard" ? 2 : 1;
   updateProject(host, (draft) => {
     const draftScene = draft.scenes[selectedSceneIndex];
-    if (!draftScene) return;
+    if (!draftScene) {
+      return;
+    }
     const width = kind === "hazard" ? 2 : 4;
     for (let offset = 0; offset < width; offset += 1) {
       const nextColumn = clampInteger(column + offset, 0, draftScene.widthMetatiles - 1);
@@ -2312,12 +2397,16 @@ function createGuidedThingFromPrompt(host: HostUpdate) {
 
 function duplicateSelectedThing(host: HostUpdate) {
   const selected = selectedSceneThing();
-  if (!selected) return;
+  if (!selected) {
+    return;
+  }
   const copyId = `${selected.entity.id}-copy-${Date.now().toString(36)}`;
   updateProject(host, (draft) => {
     const draftScene = draft.scenes.find((scene) => scene.id === selected.scene.id);
     const entity = draftScene?.entities.find((candidate) => candidate.id === selected.entity.id);
-    if (!draftScene || !entity) return;
+    if (!draftScene || !entity) {
+      return;
+    }
     draftScene.entities.push({
       ...entity,
       id: copyId,
@@ -2331,10 +2420,14 @@ function duplicateSelectedThing(host: HostUpdate) {
 
 function deleteSelectedThing(host: HostUpdate) {
   const selected = selectedSceneThing();
-  if (!selected) return;
+  if (!selected) {
+    return;
+  }
   updateProject(host, (draft) => {
     const draftScene = draft.scenes.find((scene) => scene.id === selected.scene.id);
-    if (!draftScene) return;
+    if (!draftScene) {
+      return;
+    }
     draftScene.entities = draftScene.entities.filter((entity) => entity.id !== selected.entity.id);
   });
   focusedGeneratedObjectId = null;
@@ -2347,11 +2440,15 @@ function updateSelectedEntityField(
   value: string | number,
 ) {
   const selected = selectedSceneThing();
-  if (!selected) return;
+  if (!selected) {
+    return;
+  }
   updateProject(host, (draft) => {
     const draftScene = draft.scenes.find((scene) => scene.id === selected.scene.id);
     const entity = draftScene?.entities.find((candidate) => candidate.id === selected.entity.id);
-    if (!entity || !draftScene) return;
+    if (!entity || !draftScene) {
+      return;
+    }
     if (field === "name") {
       entity.name = String(value).slice(0, 48);
       return;
@@ -2380,11 +2477,15 @@ function updateSelectedEnemyBehavior(
   value: string | number,
 ) {
   const selected = selectedSceneThing();
-  if (!selected || selected.entity.kind !== "enemy") return;
+  if (!selected || selected.entity.kind !== "enemy") {
+    return;
+  }
   updateProject(host, (draft) => {
     const draftScene = draft.scenes.find((scene) => scene.id === selected.scene.id);
     const entity = draftScene?.entities.find((candidate) => candidate.id === selected.entity.id);
-    if (!entity || entity.kind !== "enemy") return;
+    if (!entity || entity.kind !== "enemy") {
+      return;
+    }
     const behavior = defaultBehaviorForEntity(entity);
     if (field === "kind") {
       behavior.kind = value as SnesEnemyBehaviorKind;
@@ -2724,7 +2825,7 @@ function paintSceneCell(host: HostUpdate, cellIndex: number) {
             cellIndex,
             tile,
             collisionMaterial > 0,
-            collisionMaterial as SnesCollisionMaterial,
+            collisionMaterial,
           )
         : paintSnesSceneRect(
             project,
@@ -2735,7 +2836,7 @@ function paintSceneCell(host: HostUpdate, cellIndex: number) {
             selectedBrushSize,
             tile,
             collisionMaterial > 0,
-            collisionMaterial as SnesCollisionMaterial,
+            collisionMaterial,
           );
     saveProject();
     pushConsole(
@@ -3816,9 +3917,15 @@ function ensurePlayableContentBeforePlay(host: HostUpdate) {
 }
 
 function collisionLabelForPlaytest(scene: SnesStudioProject["scenes"][number], collision: string) {
-  if (collision === "ground") return "safe ground";
-  if (collision === "water") return "water";
-  if (collision === "hazard") return "danger";
+  if (collision === "ground") {
+    return "safe ground";
+  }
+  if (collision === "water") {
+    return "water";
+  }
+  if (collision === "hazard") {
+    return "danger";
+  }
   return scene.entities.find((entity) => entity.id === collision)?.name ?? collision;
 }
 
@@ -3828,10 +3935,18 @@ function newValues(previous: string[], current: string[]) {
 }
 
 function playtestActionLabel(input: SnesPreviewControllerInput, frames?: number) {
-  if (frames && frames > 1) return "Auto run";
-  if (input.jump) return "Jump";
-  if (input.right) return "Move Right";
-  if (input.left) return "Move Left";
+  if (frames && frames > 1) {
+    return "Auto run";
+  }
+  if (input.jump) {
+    return "Jump";
+  }
+  if (input.right) {
+    return "Move Right";
+  }
+  if (input.left) {
+    return "Move Left";
+  }
   return "Test";
 }
 
@@ -3980,7 +4095,9 @@ function nearestPlaytestEntity(
 ) {
   return entities.reduce<SnesStudioProject["scenes"][number]["entities"][number] | undefined>(
     (nearest, entity) => {
-      if (!nearest) return entity;
+      if (!nearest) {
+        return entity;
+      }
       return playtestDistanceToHero(entity, state) < playtestDistanceToHero(nearest, state)
         ? entity
         : nearest;
@@ -4267,7 +4384,7 @@ function livePlaytestTick(host: HostUpdate, timestamp: number) {
   livePlaytestAccumulatorMs += deltaMs;
 
   let stepped = 0;
-  while (livePlaytestAccumulatorMs >= frameMs && stepped < 5 && livePlaytestRunning) {
+  while (livePlaytestAccumulatorMs >= frameMs && stepped < 5) {
     advanceLivePlaytest(host);
     livePlaytestAccumulatorMs -= frameMs;
     stepped += 1;
@@ -4739,7 +4856,7 @@ function renderRecoveryPanel(host: HostUpdate) {
             ? html`
                 <button
                   type="button"
-                  @click=${() => restoreProjectVersion(host, projectVersions[0]!)}
+                  @click=${() => restoreProjectVersion(host, projectVersions[0])}
                 >
                   Restore Latest Version
                 </button>
@@ -5122,7 +5239,9 @@ function removeSoundEffect(host: HostUpdate, effectIndex: number) {
 function addSoundEffectStep(host: HostUpdate, effectIndex: number) {
   updateProject(host, (draft) => {
     const effect = draft.assets.audio.soundEffects[effectIndex];
-    if (!effect) return;
+    if (!effect) {
+      return;
+    }
     effect.steps.push({ note: "C5", ticks: 8, instrument: "pulse", volume: 12 });
     refreshSoundEffectEstimate(effect);
   });
@@ -5132,7 +5251,9 @@ function addSoundEffectStep(host: HostUpdate, effectIndex: number) {
 function removeSoundEffectStep(host: HostUpdate, effectIndex: number, stepIndex: number) {
   updateProject(host, (draft) => {
     const effect = draft.assets.audio.soundEffects[effectIndex];
-    if (!effect) return;
+    if (!effect) {
+      return;
+    }
     effect.steps.splice(stepIndex, 1);
     if (effect.steps.length === 0) {
       effect.steps.push({ note: "C5", ticks: 8, instrument: "pulse", volume: 12 });
@@ -5530,7 +5651,7 @@ async function requestGatewayAgentPatch(
   requestedAgent: SnesAgentProvider,
   surface: SnesAiAuthoringSurface,
 ): Promise<GatewayAgentPatchResult | null> {
-  const accepted = await host.client.request<unknown>(handoff.method, handoff.request, {
+  const accepted = await host.client.request(handoff.method, handoff.request, {
     timeoutMs: 15000,
   });
   const immediate = parseGatewayAgentPatchResult(accepted, currentProject, requestedAgent, surface);
@@ -5541,7 +5662,7 @@ async function requestGatewayAgentPatch(
   if (!runId) {
     return null;
   }
-  const wait = await host.client.request<unknown>(
+  const wait = await host.client.request(
     handoff.wait.method,
     { runId, timeoutMs: handoff.wait.timeoutMs },
     { timeoutMs: handoff.wait.timeoutMs + 5000 },
@@ -5560,7 +5681,7 @@ async function requestGatewayAgentPatch(
       typeof waitRecord?.message === "string" ? waitRecord.message : "agent.wait failed";
     throw new Error(detail);
   }
-  const history = await host.client.request<unknown>(
+  const history = await host.client.request(
     handoff.history.method,
     {
       sessionKey: handoff.sessionKey,
@@ -7276,7 +7397,9 @@ function terrainChunkRectAtCell(scene: SnesStudioProject["scenes"][number], cell
   let maxRow = 0;
   while (stack.length > 0) {
     const current = stack.pop()!;
-    if (visited.has(current)) continue;
+    if (visited.has(current)) {
+      continue;
+    }
     const column = current % SNES_STUDIO_EDIT_GRID.width;
     const row = Math.floor(current / SNES_STUDIO_EDIT_GRID.width);
     if (
@@ -7287,17 +7410,29 @@ function terrainChunkRectAtCell(scene: SnesStudioProject["scenes"][number], cell
     ) {
       continue;
     }
-    if ((scene.tilemap[current] ?? 0) !== targetTile) continue;
-    if ((scene.collisionMap[current] ?? 0) !== targetCollision) continue;
+    if ((scene.tilemap[current] ?? 0) !== targetTile) {
+      continue;
+    }
+    if ((scene.collisionMap[current] ?? 0) !== targetCollision) {
+      continue;
+    }
     visited.add(current);
     minColumn = Math.min(minColumn, column);
     maxColumn = Math.max(maxColumn, column);
     minRow = Math.min(minRow, row);
     maxRow = Math.max(maxRow, row);
-    if (column > 0) stack.push(current - 1);
-    if (column < SNES_STUDIO_EDIT_GRID.width - 1) stack.push(current + 1);
-    if (row > 0) stack.push(current - SNES_STUDIO_EDIT_GRID.width);
-    if (row < SNES_STUDIO_EDIT_GRID.height - 1) stack.push(current + SNES_STUDIO_EDIT_GRID.width);
+    if (column > 0) {
+      stack.push(current - 1);
+    }
+    if (column < SNES_STUDIO_EDIT_GRID.width - 1) {
+      stack.push(current + 1);
+    }
+    if (row > 0) {
+      stack.push(current - SNES_STUDIO_EDIT_GRID.width);
+    }
+    if (row < SNES_STUDIO_EDIT_GRID.height - 1) {
+      stack.push(current + SNES_STUDIO_EDIT_GRID.width);
+    }
   }
   if (visited.size === 0) {
     const column = cellIndex % SNES_STUDIO_EDIT_GRID.width;
@@ -7673,10 +7808,18 @@ function selectedAreaMoveDeltaFromPrompt(lower: string) {
   }
   let deltaColumn = 0;
   let deltaRow = 0;
-  if (promptHasAny(lower, ["left"])) deltaColumn -= 1;
-  if (promptHasAny(lower, ["right"])) deltaColumn += 1;
-  if (promptHasAny(lower, ["up", "higher", "raise"])) deltaRow -= 1;
-  if (promptHasAny(lower, ["down", "lower"])) deltaRow += 1;
+  if (promptHasAny(lower, ["left"])) {
+    deltaColumn -= 1;
+  }
+  if (promptHasAny(lower, ["right"])) {
+    deltaColumn += 1;
+  }
+  if (promptHasAny(lower, ["up", "higher", "raise"])) {
+    deltaRow -= 1;
+  }
+  if (promptHasAny(lower, ["down", "lower"])) {
+    deltaRow += 1;
+  }
   if (deltaColumn === 0 && deltaRow === 0) {
     return null;
   }
@@ -7788,7 +7931,9 @@ function paintSelectedArea(
   tile: SnesTileBrush,
   collision: SnesCollisionMaterial,
 ) {
-  if (!selectedScreenArea) return;
+  if (!selectedScreenArea) {
+    return;
+  }
   const rect = selectedAreaTileRect(selectedScreenArea);
   rememberUndo();
   project = paintSnesSceneRect(
@@ -7843,15 +7988,21 @@ function selectedAreaPromptMatchesEntity(lower: string, entity: SnesSceneEntityD
     return true;
   }
   const name = entity.name.toLowerCase();
-  if (wantsEnemy && entity.kind === "enemy") return true;
-  if (wantsReward && entity.kind === "item") return true;
+  if (wantsEnemy && entity.kind === "enemy") {
+    return true;
+  }
+  if (wantsReward && entity.kind === "item") {
+    return true;
+  }
   if (wantsDoor && (entity.kind === "npc" || name.includes("door") || name.includes("pipe"))) {
     return true;
   }
   if (wantsGoal && (name.includes("goal") || name.includes("flag") || name.includes("finish"))) {
     return true;
   }
-  if (wantsGuide && entity.kind === "npc" && !name.includes("door")) return true;
+  if (wantsGuide && entity.kind === "npc" && !name.includes("door")) {
+    return true;
+  }
   return false;
 }
 
@@ -7901,7 +8052,9 @@ function moveSelectedAreaContent(
   }
   updateProject(host, (draft) => {
     const draftScene = draft.scenes[selectedSceneIndex];
-    if (!draftScene) return;
+    if (!draftScene) {
+      return;
+    }
     const sourceCells = [];
     for (let y = 0; y < startRect.height; y += 1) {
       for (let x = 0; x < startRect.width; x += 1) {
@@ -7972,7 +8125,9 @@ function resizeSelectedAreaContent(
   }
   updateProject(host, (draft) => {
     const draftScene = draft.scenes[selectedSceneIndex];
-    if (!draftScene) return;
+    if (!draftScene) {
+      return;
+    }
     let tile =
       draftScene.tilemap[startRect.row * SNES_STUDIO_EDIT_GRID.width + startRect.column] ?? 1;
     let collision =
@@ -8019,9 +8174,15 @@ function selectedAreaAddKindFromPrompt(lower: string): SnesGuidedThingKind | nul
   if (promptHasAny(lower, ["platform", "ground", "bridge", "safe", "stairs", "steps", "ramp"])) {
     return "platform";
   }
-  if (promptHasAny(lower, ["lava", "spike", "spikes", "danger", "hazard"])) return "hazard";
-  if (promptHasAny(lower, ["water", "river", "pond"])) return "hazard";
-  if (promptHasAny(lower, ["enemy", "enemies", "boss", "challenge"])) return "enemy";
+  if (promptHasAny(lower, ["lava", "spike", "spikes", "danger", "hazard"])) {
+    return "hazard";
+  }
+  if (promptHasAny(lower, ["water", "river", "pond"])) {
+    return "hazard";
+  }
+  if (promptHasAny(lower, ["enemy", "enemies", "boss", "challenge"])) {
+    return "enemy";
+  }
   if (
     promptHasAny(lower, ["door", "exit", "pipe", "portal"]) ||
     (lower.includes("secret") &&
@@ -8029,9 +8190,15 @@ function selectedAreaAddKindFromPrompt(lower: string): SnesGuidedThingKind | nul
   ) {
     return "door";
   }
-  if (promptHasAny(lower, ["goal", "flag", "finish"])) return "goal";
-  if (promptHasAny(lower, ["coin trail", "coins", "gems", "trail"])) return "coin-trail";
-  if (promptHasAny(lower, ["power", "powerup", "ability", "upgrade"])) return "powerup";
+  if (promptHasAny(lower, ["goal", "flag", "finish"])) {
+    return "goal";
+  }
+  if (promptHasAny(lower, ["coin trail", "coins", "gems", "trail"])) {
+    return "coin-trail";
+  }
+  if (promptHasAny(lower, ["power", "powerup", "ability", "upgrade"])) {
+    return "powerup";
+  }
   if (
     promptHasAny(lower, [
       "checkpoint",
@@ -8345,7 +8512,9 @@ function applyPromptToSelectedScreenArea(host: HostUpdate) {
     const rect = selectedAreaTileRect(area);
     updateProject(host, (draft) => {
       const draftScene = draft.scenes[selectedSceneIndex];
-      if (!draftScene) return;
+      if (!draftScene) {
+        return;
+      }
       const removed = removeMatchingEntitiesFromSelectedArea(draftScene, area, lower);
       clearSelectedAreaCells(draftScene, rect);
       changed =
@@ -8358,7 +8527,9 @@ function applyPromptToSelectedScreenArea(host: HostUpdate) {
   } else if (asksToRemove) {
     updateProject(host, (draft) => {
       const draftScene = draft.scenes[selectedSceneIndex];
-      if (!draftScene) return;
+      if (!draftScene) {
+        return;
+      }
       const removed = removeMatchingEntitiesFromSelectedArea(draftScene, area, lower);
       changed =
         removed > 0
@@ -9336,7 +9507,9 @@ function renderInspector(host: HostUpdate) {
                 @input=${(event: Event) =>
                   updateProject(host, (draft) => {
                     const current = draft.scenes[selectedSceneIndex];
-                    if (current) current.widthMetatiles = inputNumber(event);
+                    if (current) {
+                      current.widthMetatiles = inputNumber(event);
+                    }
                   })}
               />
             </label>
@@ -9448,7 +9621,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.scenes[selectedSceneIndex]?.entities[index];
-                            if (current) current.name = inputValue(event);
+                            if (current) {
+                              current.name = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -9462,7 +9637,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.scenes[selectedSceneIndex]?.entities[index];
-                            if (current) current.x = inputNumber(event);
+                            if (current) {
+                              current.x = inputNumber(event);
+                            }
                           })}
                       />
                     </label>
@@ -9476,7 +9653,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.scenes[selectedSceneIndex]?.entities[index];
-                            if (current) current.y = inputNumber(event);
+                            if (current) {
+                              current.y = inputNumber(event);
+                            }
                           })}
                       />
                     </label>
@@ -9490,7 +9669,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.scenes[selectedSceneIndex]?.entities[index];
-                            if (current) current.metaspriteTiles = inputNumber(event);
+                            if (current) {
+                              current.metaspriteTiles = inputNumber(event);
+                            }
                           })}
                       />
                     </label>
@@ -9761,7 +9942,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.assets.audio.musicTracks[trackIndex];
-                            if (current) current.name = inputValue(event);
+                            if (current) {
+                              current.name = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -9775,7 +9958,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.assets.audio.musicTracks[trackIndex];
-                            if (current) current.tempo = inputNumber(event);
+                            if (current) {
+                              current.tempo = inputNumber(event);
+                            }
                           })}
                       />
                     </label>
@@ -9789,7 +9974,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.assets.audio.musicTracks[trackIndex];
-                            if (current) current.patternRows = inputNumber(event);
+                            if (current) {
+                              current.patternRows = inputNumber(event);
+                            }
                           })}
                       />
                     </label>
@@ -9803,7 +9990,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.assets.audio.musicTracks[trackIndex];
-                            if (current) current.estimatedBytes = inputNumber(event);
+                            if (current) {
+                              current.estimatedBytes = inputNumber(event);
+                            }
                           })}
                       />
                     </label>
@@ -9846,7 +10035,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.assets.audio.soundEffects[effectIndex];
-                            if (current) current.name = inputValue(event);
+                            if (current) {
+                              current.name = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -9860,7 +10051,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.assets.audio.soundEffects[effectIndex];
-                            if (current) current.priority = inputNumber(event);
+                            if (current) {
+                              current.priority = inputNumber(event);
+                            }
                           })}
                       />
                     </label>
@@ -9888,7 +10081,9 @@ function renderInspector(host: HostUpdate) {
                                     current.instrument = value;
                                     const effectDraft =
                                       draft.assets.audio.soundEffects[effectIndex];
-                                    if (effectDraft) refreshSoundEffectEstimate(effectDraft);
+                                    if (effectDraft) {
+                                      refreshSoundEffectEstimate(effectDraft);
+                                    }
                                   }
                                 })}
                             >
@@ -9906,7 +10101,9 @@ function renderInspector(host: HostUpdate) {
                                 updateProject(host, (draft) => {
                                   const current =
                                     draft.assets.audio.soundEffects[effectIndex]?.steps[stepIndex];
-                                  if (current) current.note = inputValue(event).slice(0, 8);
+                                  if (current) {
+                                    current.note = inputValue(event).slice(0, 8);
+                                  }
                                 })}
                             />
                           </label>
@@ -9925,7 +10122,9 @@ function renderInspector(host: HostUpdate) {
                                     current.ticks = inputNumber(event);
                                     const effectDraft =
                                       draft.assets.audio.soundEffects[effectIndex];
-                                    if (effectDraft) refreshSoundEffectEstimate(effectDraft);
+                                    if (effectDraft) {
+                                      refreshSoundEffectEstimate(effectDraft);
+                                    }
                                   }
                                 })}
                             />
@@ -9941,7 +10140,9 @@ function renderInspector(host: HostUpdate) {
                                 updateProject(host, (draft) => {
                                   const current =
                                     draft.assets.audio.soundEffects[effectIndex]?.steps[stepIndex];
-                                  if (current) current.volume = inputNumber(event);
+                                  if (current) {
+                                    current.volume = inputNumber(event);
+                                  }
                                 })}
                             />
                           </label>
@@ -10101,7 +10302,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.animations[animationIndex];
-                            if (current) current.name = inputValue(event);
+                            if (current) {
+                              current.name = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -10159,7 +10362,9 @@ function renderInspector(host: HostUpdate) {
                                   updateProject(host, (draft) => {
                                     const current =
                                       draft.animations[animationIndex]?.frames[frameIndex];
-                                    if (current) current.durationTicks = inputNumber(event);
+                                    if (current) {
+                                      current.durationTicks = inputNumber(event);
+                                    }
                                   })}
                               />
                             </label>
@@ -10174,7 +10379,9 @@ function renderInspector(host: HostUpdate) {
                                   updateProject(host, (draft) => {
                                     const current =
                                       draft.animations[animationIndex]?.frames[frameIndex];
-                                    if (current) current.tileIndex = inputNumber(event);
+                                    if (current) {
+                                      current.tileIndex = inputNumber(event);
+                                    }
                                   })}
                               />
                             </label>
@@ -10189,7 +10396,9 @@ function renderInspector(host: HostUpdate) {
                                   updateProject(host, (draft) => {
                                     const current =
                                       draft.animations[animationIndex]?.frames[frameIndex];
-                                    if (current) current.xOffset = inputNumber(event);
+                                    if (current) {
+                                      current.xOffset = inputNumber(event);
+                                    }
                                   })}
                               />
                             </label>
@@ -10204,7 +10413,9 @@ function renderInspector(host: HostUpdate) {
                                   updateProject(host, (draft) => {
                                     const current =
                                       draft.animations[animationIndex]?.frames[frameIndex];
-                                    if (current) current.yOffset = inputNumber(event);
+                                    if (current) {
+                                      current.yOffset = inputNumber(event);
+                                    }
                                   })}
                               />
                             </label>
@@ -10374,7 +10585,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.dialogue[cutsceneIndex];
-                            if (current) current.name = inputValue(event);
+                            if (current) {
+                              current.name = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -10385,7 +10598,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.dialogue[cutsceneIndex];
-                            if (current) current.trigger = inputValue(event);
+                            if (current) {
+                              current.trigger = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -10398,7 +10613,9 @@ function renderInspector(host: HostUpdate) {
                             @input=${(event: Event) =>
                               updateProject(host, (draft) => {
                                 const current = draft.dialogue[cutsceneIndex]?.lines[lineIndex];
-                                if (current) current.speaker = inputValue(event);
+                                if (current) {
+                                  current.speaker = inputValue(event);
+                                }
                               })}
                           />
                         </label>
@@ -10410,7 +10627,9 @@ function renderInspector(host: HostUpdate) {
                             @input=${(event: Event) =>
                               updateProject(host, (draft) => {
                                 const current = draft.dialogue[cutsceneIndex]?.lines[lineIndex];
-                                if (current) current.text = inputValue(event);
+                                if (current) {
+                                  current.text = inputValue(event);
+                                }
                               })}
                           ></textarea>
                         </label>
@@ -10421,7 +10640,9 @@ function renderInspector(host: HostUpdate) {
                       @click=${() =>
                         updateProject(host, (draft) => {
                           const current = draft.dialogue[cutsceneIndex];
-                          if (!current) return;
+                          if (!current) {
+                            return;
+                          }
                           const index = current.lines.length + 1;
                           current.lines.push({
                             id: `${current.id}-line-${index}`,
@@ -10476,7 +10697,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.events[eventIndex];
-                            if (current) current.name = inputValue(event);
+                            if (current) {
+                              current.name = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -10518,7 +10741,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.events[eventIndex];
-                            if (current) current.targetId = inputValue(event);
+                            if (current) {
+                              current.targetId = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -10806,7 +11031,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.save.fields[index];
-                            if (current) current.key = inputValue(event);
+                            if (current) {
+                              current.key = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -10817,7 +11044,9 @@ function renderInspector(host: HostUpdate) {
                         @input=${(event: Event) =>
                           updateProject(host, (draft) => {
                             const current = draft.save.fields[index];
-                            if (current) current.label = inputValue(event);
+                            if (current) {
+                              current.label = inputValue(event);
+                            }
                           })}
                       />
                     </label>
@@ -11102,14 +11331,30 @@ function surfaceForCreateTarget(target: SnesCreateTarget): SnesAiAuthoringSurfac
   if (!object) {
     return "level";
   }
-  if (object.kind === "game") return "full-game";
-  if (object.kind === "level") return "level";
-  if (object.kind === "audio") return "audio";
-  if (object.kind === "dialogue") return "dialogue";
-  if (object.kind === "save") return "save";
-  if (object.kind === "export") return "export";
-  if (object.kind === "entity" && object.label.toLowerCase().includes("player")) return "player";
-  if (object.kind === "entity") return "enemies";
+  if (object.kind === "game") {
+    return "full-game";
+  }
+  if (object.kind === "level") {
+    return "level";
+  }
+  if (object.kind === "audio") {
+    return "audio";
+  }
+  if (object.kind === "dialogue") {
+    return "dialogue";
+  }
+  if (object.kind === "save") {
+    return "save";
+  }
+  if (object.kind === "export") {
+    return "export";
+  }
+  if (object.kind === "entity" && object.label.toLowerCase().includes("player")) {
+    return "player";
+  }
+  if (object.kind === "entity") {
+    return "enemies";
+  }
   return "level";
 }
 
@@ -11396,8 +11641,12 @@ function selectStudioMode(host: HostUpdate, mode: SnesStudioMode) {
       selectedCreateTarget = "full-game";
     }
   }
-  if (mode === "edit") selectedPanel = "scene";
-  if (mode === "ship") selectedPanel = "export";
+  if (mode === "edit") {
+    selectedPanel = "scene";
+  }
+  if (mode === "ship") {
+    selectedPanel = "export";
+  }
   host.requestUpdate?.();
 }
 
@@ -11432,14 +11681,22 @@ function promptChangeGeneratedObject(host: HostUpdate, object: SnesEditableObjec
 }
 
 function selectedObjectPromptTarget(object: SnesEditableObjectCard): SnesCreateTarget {
-  if (object.kind === "game") return "full-game";
-  if (object.kind === "level") return "level";
+  if (object.kind === "game") {
+    return "full-game";
+  }
+  if (object.kind === "level") {
+    return "level";
+  }
   return "selected-object";
 }
 
 function selectedObjectPromptSurface(object: SnesEditableObjectCard): SnesAiAuthoringSurface {
-  if (object.kind === "game") return "full-game";
-  if (object.kind === "level") return "level";
+  if (object.kind === "game") {
+    return "full-game";
+  }
+  if (object.kind === "level") {
+    return "level";
+  }
   return surfaceForCreateTarget("selected-object");
 }
 
@@ -11602,9 +11859,15 @@ function objectCardDisplayKind(object: SnesEditableObjectCard): string {
     return object.kind;
   }
   const lower = object.label.toLowerCase();
-  if (lower.includes("player") || lower.includes("hero")) return "hero";
-  if (lower.includes("goal")) return "goal";
-  if (lower.includes("door")) return "door";
+  if (lower.includes("player") || lower.includes("hero")) {
+    return "hero";
+  }
+  if (lower.includes("goal")) {
+    return "goal";
+  }
+  if (lower.includes("door")) {
+    return "door";
+  }
   return object.detail.startsWith("enemy")
     ? "enemy"
     : object.detail.startsWith("item")
@@ -11681,19 +11944,29 @@ function objectCardDisplayDetail(object: SnesEditableObjectCard): string {
 }
 
 function objectCardMatchesFilter(object: SnesEditableObjectCard): boolean {
-  if (objectCardFilter === "all") return true;
-  if (objectCardFilter === "levels") return object.kind === "game" || object.kind === "level";
+  if (objectCardFilter === "all") {
+    return true;
+  }
+  if (objectCardFilter === "levels") {
+    return object.kind === "game" || object.kind === "level";
+  }
   if (objectCardFilter === "characters") {
     return object.kind === "entity" || object.kind === "animation";
   }
-  if (objectCardFilter === "story") return object.kind === "dialogue" || object.kind === "event";
-  if (objectCardFilter === "audio") return object.kind === "audio";
+  if (objectCardFilter === "story") {
+    return object.kind === "dialogue" || object.kind === "event";
+  }
+  if (objectCardFilter === "audio") {
+    return object.kind === "audio";
+  }
   return object.kind === "save" || object.kind === "export";
 }
 
 function objectCardMatchesSearch(object: SnesEditableObjectCard): boolean {
   const query = objectCardSearchDraft.trim().toLowerCase();
-  if (!query) return true;
+  if (!query) {
+    return true;
+  }
   return `${object.label} ${objectCardDisplayDetail(object)} ${objectCardDisplayKind(object)}`
     .toLowerCase()
     .includes(query);
@@ -12275,12 +12548,24 @@ function renderUniversalCreateBar(host: HostUpdate, compact = false) {
 }
 
 function summarizeAiReviewValue(value: unknown): string {
-  if (value === undefined) return "missing";
-  if (value === null) return "empty";
-  if (typeof value === "string") return value.slice(0, 72) || "empty text";
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? "" : "s"}`;
-  if (typeof value === "object") return `${Object.keys(value).length} field object`;
+  if (value === undefined) {
+    return "missing";
+  }
+  if (value === null) {
+    return "empty";
+  }
+  if (typeof value === "string") {
+    return value.slice(0, 72) || "empty text";
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `${value.length} item${value.length === 1 ? "" : "s"}`;
+  }
+  if (typeof value === "object") {
+    return `${Object.keys(value).length} field object`;
+  }
   return "changed";
 }
 
@@ -12734,12 +13019,24 @@ function renderMakeMode(host: HostUpdate) {
 }
 
 function sceneEntityCanvasLabel(entity: SnesStudioProject["scenes"][number]["entities"][number]) {
-  if (entity.name.toLowerCase().includes("door")) return "Door";
-  if (entity.name.toLowerCase().includes("goal")) return "Goal";
-  if (entity.kind === "player") return "Hero";
-  if (entity.kind === "enemy") return "Enemy";
-  if (entity.kind === "item") return "Item";
-  if (entity.kind === "npc") return "Guide";
+  if (entity.name.toLowerCase().includes("door")) {
+    return "Door";
+  }
+  if (entity.name.toLowerCase().includes("goal")) {
+    return "Goal";
+  }
+  if (entity.kind === "player") {
+    return "Hero";
+  }
+  if (entity.kind === "enemy") {
+    return "Enemy";
+  }
+  if (entity.kind === "item") {
+    return "Item";
+  }
+  if (entity.kind === "npc") {
+    return "Guide";
+  }
   return "Thing";
 }
 
@@ -12815,7 +13112,9 @@ function renderBuildNextStepCoach(host: HostUpdate, scene: SnesStudioProject["sc
 }
 
 function formatReadinessCoachMeter(meter: SnesBudgetMeter | undefined) {
-  if (!meter) return "Waiting for project data.";
+  if (!meter) {
+    return "Waiting for project data.";
+  }
   const remaining = Math.max(0, meter.limit - meter.used);
   const unit =
     meter.unit === "bytes"
@@ -13400,18 +13699,34 @@ function renderBuildHelpDrawer(
 }
 
 function sceneCellMaterialLabel(material: string) {
-  if (material === "ground") return "Ground";
-  if (material === "danger") return "Danger";
-  if (material === "water") return "Water";
-  if (material === "path") return "Path";
+  if (material === "ground") {
+    return "Ground";
+  }
+  if (material === "danger") {
+    return "Danger";
+  }
+  if (material === "water") {
+    return "Water";
+  }
+  if (material === "path") {
+    return "Path";
+  }
   return "Air";
 }
 
 function sceneCellMaterial(tile: number, collisionMaterial: SnesCollisionMaterial) {
-  if (collisionMaterial === 2) return "danger";
-  if (collisionMaterial === 4) return "water";
-  if (collisionMaterial === 1 || collisionMaterial === 3) return "ground";
-  if (tile > 0) return "path";
+  if (collisionMaterial === 2) {
+    return "danger";
+  }
+  if (collisionMaterial === 4) {
+    return "water";
+  }
+  if (collisionMaterial === 1 || collisionMaterial === 3) {
+    return "ground";
+  }
+  if (tile > 0) {
+    return "path";
+  }
   return "air";
 }
 
@@ -13516,24 +13831,32 @@ function updateEditableObjectLabel(
     if (object.kind === "level") {
       const levelIndex = Number(object.id.replace("level:", ""));
       const scene = draft.scenes[levelIndex];
-      if (scene) scene.name = nextLabel;
+      if (scene) {
+        scene.name = nextLabel;
+      }
       return;
     }
     if (object.kind === "entity") {
       const [sceneId, entityId] = object.id.split(":");
       const scene = draft.scenes.find((candidate) => candidate.id === sceneId);
       const entity = scene?.entities.find((candidate) => candidate.id === entityId);
-      if (entity) entity.name = nextLabel;
+      if (entity) {
+        entity.name = nextLabel;
+      }
       return;
     }
     if (object.kind === "dialogue") {
       const cutscene = draft.dialogue.find((candidate) => candidate.id === object.id);
-      if (cutscene) cutscene.name = nextLabel;
+      if (cutscene) {
+        cutscene.name = nextLabel;
+      }
       return;
     }
     if (object.kind === "event") {
       const event = draft.events.find((candidate) => candidate.id === object.id);
-      if (event) event.name = nextLabel;
+      if (event) {
+        event.name = nextLabel;
+      }
       return;
     }
     if (object.kind === "audio") {
@@ -13541,8 +13864,12 @@ function updateEditableObjectLabel(
       const effect = draft.assets.audio.soundEffects.find(
         (candidate) => candidate.id === object.id,
       );
-      if (track) track.name = nextLabel;
-      if (effect) effect.name = nextLabel;
+      if (track) {
+        track.name = nextLabel;
+      }
+      if (effect) {
+        effect.name = nextLabel;
+      }
       return;
     }
     if (object.kind === "export") {
@@ -14346,9 +14673,15 @@ function renderShipMode(host: HostUpdate) {
 }
 
 function renderCurrentStudioMode(host: HostUpdate) {
-  if (selectedMode === "edit") return renderEditMode(host);
-  if (selectedMode === "play") return renderPlayMode(host);
-  if (selectedMode === "ship") return renderShipMode(host);
+  if (selectedMode === "edit") {
+    return renderEditMode(host);
+  }
+  if (selectedMode === "play") {
+    return renderPlayMode(host);
+  }
+  if (selectedMode === "ship") {
+    return renderShipMode(host);
+  }
   return renderMakeMode(host);
 }
 
@@ -16068,7 +16401,9 @@ function renderGuidedThingsShelf(host: HostUpdate) {
               }}
               @click=${() => {
                 const name = addGuidedThingToLevel(host, entry.kind);
-                if (name) pushConsole(host, `Added ${name} from the Things Shelf.`);
+                if (name) {
+                  pushConsole(host, `Added ${name} from the Things Shelf.`);
+                }
               }}
             >
               <strong>${guidedThingLabel(entry.kind)}</strong>

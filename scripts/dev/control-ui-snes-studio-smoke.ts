@@ -205,7 +205,9 @@ function detectSupportedEmulators(): string[] {
 }
 
 function detectFxpakVolumes(): string[] {
-  if (!existsSync("/Volumes")) return [];
+  if (!existsSync("/Volumes")) {
+    return [];
+  }
   const likelyPattern = /(?:fxpak|sd2snes|sd2-snes|sdcard|snes\s*sd|everdrive)/iu;
   return readdirSync("/Volumes")
     .filter((entry) => likelyPattern.test(entry))
@@ -282,9 +284,13 @@ function localChromeCandidates(): string[] {
 
 function resolveBrowserExecutable(): string | undefined {
   const explicit = process.env.OPENCLAW_CONTROL_UI_SMOKE_BROWSER?.trim();
-  if (explicit) return explicit;
+  if (explicit) {
+    return explicit;
+  }
   const bundled = chromium.executablePath();
-  if (bundled && existsSync(bundled)) return bundled;
+  if (bundled && existsSync(bundled)) {
+    return bundled;
+  }
   return localChromeCandidates().find((candidate) => existsSync(candidate));
 }
 
@@ -470,7 +476,7 @@ async function runDesktopFlow(browser: Browser, url: string, artifactDir: string
   await requireText(page, "OpenClaw Level Designer");
   await requireText(page, "Codex QA Gate");
   await requireText(page, "Gateway production route not verified");
-  const liveAgentStatus = await page.locator(".snes-ai-production-route").first().innerText();
+  const liveAgentStatus = await page.locator(".snes-ai-production-route").first().textContent();
   const liveAgentReady =
     liveAgentStatus.includes("Dashboard Gateway ready") ||
     liveAgentStatus.includes("Gateway route verified");

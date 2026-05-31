@@ -65,7 +65,7 @@ describe("control-ui-snes-studio-smoke milestone gates", () => {
       downloads: ["game.sfc", "game.oc-snes.json", "game.oc-snes-bundle.json"],
       externalProof,
     });
-    const outOfOrder: MilestoneGate[] = [gates[1]!, gates[0]!, ...gates.slice(2)];
+    const outOfOrder: MilestoneGate[] = [gates[1], gates[0], ...gates.slice(2)];
     const missingEvidence: MilestoneGate[] = gates.map((gate) =>
       gate.id === 5 ? { ...gate, evidence: [] } : gate,
     );

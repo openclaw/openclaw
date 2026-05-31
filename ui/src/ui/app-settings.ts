@@ -436,6 +436,8 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "activity":
         break;
       case "workboard":
+      case "projects":
+      case "snesStudio":
         await Promise.all([
           loadConfig(app),
           loadSessions(app),

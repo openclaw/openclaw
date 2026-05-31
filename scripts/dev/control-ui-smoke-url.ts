@@ -158,7 +158,7 @@ export function resolveControlUiSmokeProfileDir(
   );
 }
 
-async function loadConfig(options: ResolveControlUiSmokeUrlOptions): Promise<OpenClawConfig> {
+async function readSmokeConfig(options: ResolveControlUiSmokeUrlOptions): Promise<OpenClawConfig> {
   if (options.cfg) {
     return options.cfg;
   }
@@ -207,7 +207,7 @@ export async function resolveControlUiSmokeUrl(
         auth: { mode: "explicit-url-auth", tokenInOutput: false },
       };
     }
-    const cfg = await loadConfig({ ...options, readConfig });
+    const cfg = await readSmokeConfig({ ...options, readConfig });
     const token = await resolveSmokeToken(cfg, env, resolveToken);
     return {
       displayUrl: displayControlUiSmokeUrl(explicitUrl),
@@ -220,7 +220,7 @@ export async function resolveControlUiSmokeUrl(
     };
   }
 
-  const cfg = await loadConfig({ ...options, readConfig });
+  const cfg = await readSmokeConfig({ ...options, readConfig });
   const port = resolveGatewayPort(cfg);
   const bind = cfg.gateway?.bind ?? "loopback";
   const token = await resolveSmokeToken(cfg, env, resolveToken);

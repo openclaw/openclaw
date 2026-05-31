@@ -2047,6 +2047,7 @@ function bytesForSaveField(field: SnesSaveField): number {
     case "u32":
       return 4;
   }
+  throw new Error(`Unsupported save field type: ${String(field.type)}`);
 }
 
 function normalizeSaveField(value: unknown, index: number): SnesSaveField | null {
@@ -2851,7 +2852,7 @@ function normalizeStyleWarnings(
     const message =
       typeof record.message === "string" && record.message.trim()
         ? record.message.trim().slice(0, 240)
-        : createDefaultStyleWarnings(provenance)[0]!.message;
+        : createDefaultStyleWarnings(provenance)[0].message;
     return [{ code, severity, message }];
   });
   return warnings.length > 0 ? warnings.slice(0, 6) : createDefaultStyleWarnings(provenance);
@@ -3281,7 +3282,9 @@ function createDefaultLevelChapters(scenes: SnesStudioScene[]): SnesLevelChapter
 function normalizeGameStoryBible(value: unknown, fallbackName: string): SnesGameStoryBible {
   const record = recordValue(value);
   const fallback = createDefaultGameStoryBible(fallbackName);
-  if (!record) return fallback;
+  if (!record) {
+    return fallback;
+  }
   return {
     premise:
       typeof record.premise === "string" && record.premise.trim()
@@ -3320,11 +3323,15 @@ function normalizeGameStoryBible(value: unknown, fallbackName: string): SnesGame
 
 function normalizeLevelChapters(value: unknown, scenes: SnesStudioScene[]): SnesLevelChapter[] {
   const fallback = createDefaultLevelChapters(scenes);
-  if (!Array.isArray(value)) return fallback;
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
   const sceneIds = new Set(scenes.map((scene) => scene.id));
   const chapters = value.flatMap((entry, index): SnesLevelChapter[] => {
     const record = recordValue(entry);
-    if (!record) return [];
+    if (!record) {
+      return [];
+    }
     const fallbackChapter =
       fallback[index] ??
       createDefaultLevelChapter(scenes[0] ?? createSnesStudioScene("Level 1"), index);
@@ -3379,10 +3386,14 @@ function normalizeLevelChapters(value: unknown, scenes: SnesStudioScene[]): Snes
 }
 
 function normalizeGamePartLocks(value: unknown): SnesGamePartLock[] {
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
   return value.flatMap((entry, index): SnesGamePartLock[] => {
     const record = recordValue(entry);
-    if (!record) return [];
+    if (!record) {
+      return [];
+    }
     const label =
       typeof record.label === "string" && record.label.trim()
         ? record.label.trim().slice(0, 80)
@@ -3576,7 +3587,9 @@ export function createSnesAiGapReport(project: SnesStudioProject): SnesAiGapRepo
 function normalizeGameplayBlueprint(value: unknown, fallbackName: string): SnesGameplayBlueprint {
   const record = recordValue(value);
   const fallback = createDefaultGameplayBlueprint(fallbackName);
-  if (!record) return fallback;
+  if (!record) {
+    return fallback;
+  }
   return {
     genre: "side-scrolling-platformer",
     premise:
@@ -3603,10 +3616,14 @@ function normalizeGameplayBlueprint(value: unknown, fallbackName: string): SnesG
 
 function normalizeThingLibrary(value: unknown): SnesThingLibraryEntry[] {
   const fallback = createDefaultThingLibrary();
-  if (!Array.isArray(value)) return fallback;
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
   const entries = value.flatMap((entry, index): SnesThingLibraryEntry[] => {
     const record = recordValue(entry);
-    if (!record) return [];
+    if (!record) {
+      return [];
+    }
     const name =
       typeof record.name === "string" && record.name.trim()
         ? record.name.trim().slice(0, 48)
@@ -3647,7 +3664,9 @@ function normalizeThingLibrary(value: unknown): SnesThingLibraryEntry[] {
 function normalizePlatformerRules(value: unknown): SnesPlatformerRules {
   const record = recordValue(value);
   const fallback = createDefaultPlatformerRules();
-  if (!record) return fallback;
+  if (!record) {
+    return fallback;
+  }
   return {
     movement:
       typeof record.movement === "string" ? record.movement.slice(0, 200) : fallback.movement,
@@ -3668,7 +3687,9 @@ function normalizePlatformerRules(value: unknown): SnesPlatformerRules {
 function normalizeLevelPlan(value: unknown, fallbackName: string): SnesLevelPlan {
   const record = recordValue(value);
   const fallback = createDefaultLevelPlan(fallbackName);
-  if (!record) return fallback;
+  if (!record) {
+    return fallback;
+  }
   return {
     id:
       typeof record.id === "string" && record.id.trim()
@@ -4178,11 +4199,10 @@ export function estimateSnesProjectBudgets(project: SnesStudioProject): SnesBudg
 
   return meters.map((meter) => {
     const ratio = clampRatio(meter.used, meter.limit);
-    return {
-      ...meter,
+    return Object.assign({}, meter, {
       ratio,
       severity: severityForRatio(meter.used / meter.limit),
-    };
+    });
   });
 }
 
@@ -4352,7 +4372,7 @@ export function createSnesScanlineOamPlan(project: SnesStudioProject): SnesScanl
     const bottom = Math.min(223, top + rows * 8 - 1);
     const sliversPerTouchedScanline = Math.min(entries, columns);
     for (let y = top; y <= bottom; y += 1) {
-      const scanline = scanlines[y]!;
+      const scanline = scanlines[y];
       scanline.spriteEntries += entries;
       scanline.spriteSlivers += sliversPerTouchedScanline;
       scanline.entityIds.push(entity.id);
@@ -4904,6 +4924,8 @@ function spriteAccentForPrompt(promptLower: string, kind: SnesSceneEntityKind): 
     case "npc":
       return 5;
   }
+  const exhaustive: never = kind;
+  return exhaustive;
 }
 
 function createPromptSpritePixels(promptLower: string, kind: SnesSceneEntityKind): number[] {
@@ -5195,16 +5217,28 @@ function promptStoryWorld(promptLower: string): string {
 }
 
 function promptStoryHero(promptLower: string): string {
-  if (includesAny(promptLower, ["robot", "mech", "android"])) return "Robot Hero";
-  if (includesAny(promptLower, ["ninja"])) return "Ninja Hero";
-  if (includesAny(promptLower, ["wizard", "magic", "mage"])) return "Magic Hero";
+  if (includesAny(promptLower, ["robot", "mech", "android"])) {
+    return "Robot Hero";
+  }
+  if (includesAny(promptLower, ["ninja"])) {
+    return "Ninja Hero";
+  }
+  if (includesAny(promptLower, ["wizard", "magic", "mage"])) {
+    return "Magic Hero";
+  }
   return "Platform Hero";
 }
 
 function promptStoryVillain(promptLower: string): string {
-  if (includesAny(promptLower, ["drone", "robot", "rival"])) return "Rival Drone";
-  if (includesAny(promptLower, ["boss", "guardian"])) return "Gate Guardian";
-  if (includesAny(promptLower, ["ghost", "haunted"])) return "Lantern Ghost";
+  if (includesAny(promptLower, ["drone", "robot", "rival"])) {
+    return "Rival Drone";
+  }
+  if (includesAny(promptLower, ["boss", "guardian"])) {
+    return "Gate Guardian";
+  }
+  if (includesAny(promptLower, ["ghost", "haunted"])) {
+    return "Lantern Ghost";
+  }
   return "Rival Guardian";
 }
 
@@ -5477,7 +5511,7 @@ function createSurfaceProjectDraft(
       });
     } else {
       scene.entities = scene.entities.map((entity) =>
-        entity.kind === "npc" ? { ...entity, name: npcName } : entity,
+        entity.kind === "npc" ? Object.assign({}, entity, { name: npcName }) : entity,
       );
     }
     project.dialogue = [
@@ -6286,16 +6320,36 @@ function productionTaskId(role: SnesOpenClawAgentRole): string {
 }
 
 function surfaceForOpenClawRole(role: SnesOpenClawAgentRole): SnesAiAuthoringSurface {
-  if (role === "level-designer") return "level";
-  if (role === "gameplay-designer") return "dialogue";
-  if (role === "character-agent") return "player";
-  if (role === "enemy-agent") return "enemies";
-  if (role === "item-powerup-agent") return "items";
-  if (role === "story-dialog-agent") return "dialogue";
-  if (role === "art-direction-agent") return "level";
-  if (role === "audio-direction-agent") return "audio";
-  if (role === "hardware-constraint-agent") return "export";
-  if (role === "playtest-fun-agent") return "level";
+  if (role === "level-designer") {
+    return "level";
+  }
+  if (role === "gameplay-designer") {
+    return "dialogue";
+  }
+  if (role === "character-agent") {
+    return "player";
+  }
+  if (role === "enemy-agent") {
+    return "enemies";
+  }
+  if (role === "item-powerup-agent") {
+    return "items";
+  }
+  if (role === "story-dialog-agent") {
+    return "dialogue";
+  }
+  if (role === "art-direction-agent") {
+    return "level";
+  }
+  if (role === "audio-direction-agent") {
+    return "audio";
+  }
+  if (role === "hardware-constraint-agent") {
+    return "export";
+  }
+  if (role === "playtest-fun-agent") {
+    return "level";
+  }
   return "full-game";
 }
 
@@ -7669,7 +7723,7 @@ function collectJsonDiffs(
     !Array.isArray(after)
   ) {
     const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const key of [...keys].sort()) {
+    for (const key of [...keys].toSorted()) {
       collectJsonDiffs(
         (before as Record<string, unknown>)[key],
         (after as Record<string, unknown>)[key],
@@ -7989,7 +8043,7 @@ export function parseSnesAgentDispatchQueue(raw: string | null): SnesAgentDispat
       typeof candidate.id !== "string" ||
       candidate.status !== "queued" ||
       candidate.target !== "openclaw-codex" ||
-      candidate.approvalRequired !== true ||
+      !candidate.approvalRequired ||
       candidate.handoff?.eventName !== SNES_AGENT_DISPATCH_EVENT ||
       candidate.handoff?.queueStorageKey !== SNES_AGENT_DISPATCH_QUEUE_KEY ||
       candidate.taskPacket?.target !== "openclaw-codex"
@@ -8010,16 +8064,15 @@ export function parseSnesAgentDispatchQueue(raw: string | null): SnesAgentDispat
       : isSnesAiAuthoringSurface(packet.surface)
         ? packet.surface
         : "full-game";
-    return {
-      ...candidate,
+    const normalizedTaskPacket = Object.assign({}, candidate.taskPacket, {
       requestedAgent,
       surface,
-      taskPacket: {
-        ...candidate.taskPacket,
-        requestedAgent,
-        surface,
-      },
-    };
+    });
+    return Object.assign({}, candidate, {
+      requestedAgent,
+      surface,
+      taskPacket: normalizedTaskPacket,
+    });
   });
 }
 
@@ -8048,13 +8101,12 @@ export function parseSnesAgentResultQueue(raw: string | null): SnesAgentResultRe
     ) {
       throw new Error("SNES Studio agent result queue entry is invalid.");
     }
-    return {
-      ...candidate,
+    return Object.assign({}, candidate, {
       requestedAgent: isSnesAgentProvider(candidate.requestedAgent)
         ? candidate.requestedAgent
         : "codex",
       surface: isSnesAiAuthoringSurface(candidate.surface) ? candidate.surface : "full-game",
-    };
+    });
   });
 }
 
@@ -8210,6 +8262,8 @@ function readSaveValue(bytes: Uint8Array, offset: number, type: SnesSaveFieldTyp
         0
       );
   }
+  const exhaustive: never = type;
+  return exhaustive;
 }
 
 export function createSnesSramImage(project: SnesStudioProject): Uint8Array {
@@ -8356,8 +8410,8 @@ export function createSnesSramSerializationReport(
 }
 
 function equalSaveSlotValues(before: SnesSramSlotValues, after: SnesSramSlotValues): boolean {
-  const beforeKeys = Object.keys(before).sort();
-  const afterKeys = Object.keys(after).sort();
+  const beforeKeys = Object.keys(before).toSorted();
+  const afterKeys = Object.keys(after).toSorted();
   return (
     beforeKeys.length === afterKeys.length &&
     beforeKeys.every((key, index) => key === afterKeys[index] && before[key] === after[key])
@@ -8542,10 +8596,18 @@ function encode4BppTile(pixels: number[]): Uint8Array {
     for (let x = 0; x < 8; x++) {
       const color = pixels[y * 8 + x] & 0x0f;
       const mask = 1 << (7 - x);
-      if (color & 0x01) plane0 |= mask;
-      if (color & 0x02) plane1 |= mask;
-      if (color & 0x04) plane2 |= mask;
-      if (color & 0x08) plane3 |= mask;
+      if (color & 0x01) {
+        plane0 |= mask;
+      }
+      if (color & 0x02) {
+        plane1 |= mask;
+      }
+      if (color & 0x04) {
+        plane2 |= mask;
+      }
+      if (color & 0x08) {
+        plane3 |= mask;
+      }
     }
     bytes[y * 2] = plane0;
     bytes[y * 2 + 1] = plane1;
@@ -8606,7 +8668,7 @@ export function importSnesIndexedTileAsset(
   }
   const chrBytes = new Uint8Array(uniqueTileBytes.length * TILE_BYTES_4BPP);
   uniqueTileBytes.forEach((tile, index) => chrBytes.set(tile, index * TILE_BYTES_4BPP));
-  const paletteColorsUsed = [...new Set(normalizedPixels)].sort((left, right) => left - right);
+  const paletteColorsUsed = [...new Set(normalizedPixels)].toSorted((left, right) => left - right);
   const sourceTileCount = tilesWide * tilesHigh;
   const uniqueTileCount = uniqueTileBytes.length;
   return {
@@ -8730,7 +8792,7 @@ export function importSnesRgbaTileAsset(
       visibleSamples.set(key, { key, red, green, blue, count: 1 });
     }
   }
-  const sortedSamples = [...visibleSamples.values()].sort(
+  const sortedSamples = [...visibleSamples.values()].toSorted(
     (left, right) => right.count - left.count || left.key.localeCompare(right.key),
   );
   const visibleColorLimit = 15;
@@ -8903,9 +8965,15 @@ function makeTile(pattern: (x: number, y: number) => number): Uint8Array {
 function backdropColorForProject(project: SnesStudioProject): number {
   if (project.visualStylePreset === SNES_CLASSIC_PLATFORMER_STYLE_PRESET) {
     const theme = project.artDirection?.backgroundTheme ?? "grassland";
-    if (theme === "cave") return snesColor(5, 6, 11);
-    if (theme === "mountain") return snesColor(15, 22, 29);
-    if (theme === "sky") return snesColor(13, 24, 31);
+    if (theme === "cave") {
+      return snesColor(5, 6, 11);
+    }
+    if (theme === "mountain") {
+      return snesColor(15, 22, 29);
+    }
+    if (theme === "sky") {
+      return snesColor(13, 24, 31);
+    }
     return snesColor(14, 24, 31);
   }
   const seed = Array.from(project.name).reduce(
@@ -8929,6 +8997,8 @@ function tileIndexForEntity(kind: SnesSceneEntityKind): number {
     case "npc":
       return 6;
   }
+  const exhaustive: never = kind;
+  return exhaustive;
 }
 
 function editLayerBytes(values: number[]): Uint8Array {
@@ -9519,7 +9589,7 @@ export function createSnesSceneRuntimeTable(
 export function createSnesLevelTransitionPlan(project: SnesStudioProject): SnesLevelTransitionPlan {
   const normalized = normalizeSnesStudioProject(project);
   const transitions = normalized.scenes.slice(0, -1).map((scene, index) => {
-    const nextScene = normalized.scenes[index + 1]!;
+    const nextScene = normalized.scenes[index + 1];
     return {
       fromSceneId: scene.id,
       fromSceneName: scene.name,
@@ -10256,9 +10326,7 @@ export function validateSnesPreviewRomArtifact(
       nestedNumber(runtimeData, "checksum") === artifact.runtimeDataChecksum &&
       nestedNumber(runtimeData, "offset") === RUNTIME_DATA_OFFSET &&
       nestedNumber(runtimeData, "sizeBytes") === artifact.runtimeDataSizeBytes,
-    `Runtime data offset $${formatHex(RUNTIME_DATA_OFFSET, 5)}, size ${String(
-      runtimeData.sizeBytes ?? "missing",
-    )} bytes.`,
+    `Runtime data offset $${formatHex(RUNTIME_DATA_OFFSET, 5)}, size ${String(nestedNumber(runtimeData, "sizeBytes") ?? "missing")} bytes.`,
   );
   validationCheck(
     checks,
@@ -10276,9 +10344,7 @@ export function validateSnesPreviewRomArtifact(
       nestedNumber(playtestRuntime, "frameRate") === artifact.runtimeManifest.frameRate &&
       nestedNumber(playtestRuntime, "sceneCount") === artifact.runtimeManifest.sceneCount &&
       nestedNumber(playtestRuntime, "fixedPointScale") === artifact.runtimeManifest.fixedPointScale,
-    `Runtime hash ${String(playtestRuntime.runtimeHash ?? "missing")} at ${String(
-      playtestRuntime.frameRate ?? "missing",
-    )} FPS.`,
+    `Runtime hash ${typeof playtestRuntime.runtimeHash === "string" ? playtestRuntime.runtimeHash : "missing"} at ${String(nestedNumber(playtestRuntime, "frameRate") ?? "missing")} FPS.`,
   );
   validationCheck(
     checks,
@@ -10287,7 +10353,7 @@ export function validateSnesPreviewRomArtifact(
     fxpak.requiredFileSystem === "FAT32" &&
       typeof fxpak.romPath === "string" &&
       fxpak.romPath.endsWith(".sfc"),
-    `FXPAK path ${String(fxpak.romPath ?? "missing")}.`,
+    `FXPAK path ${typeof fxpak.romPath === "string" ? fxpak.romPath : "missing"}.`,
   );
   validationCheck(
     checks,
@@ -10299,7 +10365,7 @@ export function validateSnesPreviewRomArtifact(
       nestedNumber(save, "sramSizeKib") !== null &&
       (nestedNumber(save, "totalBytes") ?? 0) <= (nestedNumber(save, "sramSizeKib") ?? 0) * 1024 &&
       (save.savePath === null || save.savePath === fxpak.savePath),
-    `Save path ${String(save.savePath ?? "none")}, total bytes ${String(save.totalBytes ?? "missing")}.`,
+    `Save path ${typeof save.savePath === "string" ? save.savePath : "none"}, total bytes ${String(nestedNumber(save, "totalBytes") ?? "missing")}.`,
   );
   const sramHeader =
     typeof save.sramHeaderHex === "string" ? hexToBytes(save.sramHeaderHex) : new Uint8Array();
@@ -10345,9 +10411,7 @@ export function validateSnesPreviewRomArtifact(
       graphics.assetProvenance === artifact.graphics.assetProvenance &&
       graphics.stylePackName === artifact.graphics.stylePackName &&
       graphics.assetProvenance === "original-generated",
-    `Style ${String(graphics.visualStylePreset ?? "missing")}, provenance ${String(
-      graphics.assetProvenance ?? "missing",
-    )}.`,
+    `Style ${typeof graphics.visualStylePreset === "string" ? graphics.visualStylePreset : "missing"}, provenance ${typeof graphics.assetProvenance === "string" ? graphics.assetProvenance : "missing"}.`,
   );
   const audio = nestedRecord(assets, "audio");
   validationCheck(
@@ -10358,7 +10422,7 @@ export function validateSnesPreviewRomArtifact(
       (nestedNumber(audio, "totalBytes") ?? SNES_HARDWARE_LIMITS.aramBytes + 1) <=
         SNES_HARDWARE_LIMITS.aramBytes &&
       (nestedNumber(audio, "aramLimitBytes") ?? 0) === SNES_HARDWARE_LIMITS.aramBytes,
-    `Audio bytes ${String(audio.totalBytes ?? "missing")} / ${SNES_HARDWARE_LIMITS.aramBytes}.`,
+    `Audio bytes ${String(nestedNumber(audio, "totalBytes") ?? "missing")} / ${SNES_HARDWARE_LIMITS.aramBytes}.`,
   );
   validationCheck(
     checks,
@@ -10417,9 +10481,7 @@ export function validateSnesPreviewRomArtifact(
           LEVEL_TABLE_DATA_OFFSET + (nestedNumber(manifestLevelLoaderTable, "sizeBytes") ?? 0),
         ),
       ) === nestedNumber(manifestLevelLoaderTable, "checksum"),
-    `Level table offset $${formatHex(LEVEL_TABLE_DATA_OFFSET, 5)} with ${String(
-      manifestLevelLoaderTable.sceneCount ?? "unknown",
-    )} scene entries.`,
+    `Level table offset $${formatHex(LEVEL_TABLE_DATA_OFFSET, 5)} with ${String(nestedNumber(manifestLevelLoaderTable, "sceneCount") ?? "unknown")} scene entries.`,
   );
   const manifestEventBytecode = nestedRecord(manifest, "eventBytecode");
   validationCheck(
@@ -10436,9 +10498,7 @@ export function validateSnesPreviewRomArtifact(
           EVENT_BYTECODE_DATA_OFFSET + (nestedNumber(manifestEventBytecode, "sizeBytes") ?? 0),
         ),
       ) === nestedNumber(manifestEventBytecode, "checksum"),
-    `Event bytecode offset $${formatHex(EVENT_BYTECODE_DATA_OFFSET, 5)} with ${String(
-      manifestEventBytecode.eventCount ?? "unknown",
-    )} event scripts.`,
+    `Event bytecode offset $${formatHex(EVENT_BYTECODE_DATA_OFFSET, 5)} with ${String(nestedNumber(manifestEventBytecode, "eventCount") ?? "unknown")} event scripts.`,
   );
   validationCheck(
     checks,
@@ -10502,7 +10562,7 @@ export function validateSnesPreviewRomArtifact(
         (nestedNumber(runtime, "joypadLoopOffset") ?? -1) &&
       artifact.bytes[nestedNumber(runtime, "entityOamUpdateOffset") ?? -1] === 0xa9 &&
       artifact.mapText.includes("EntityOamUpdate"),
-    `Entity OAM sprites ${String(runtime.entityOamSpriteCount ?? "missing")}.`,
+    `Entity OAM sprites ${String(nestedNumber(runtime, "entityOamSpriteCount") ?? "missing")}.`,
   );
   validationCheck(
     checks,
@@ -11454,7 +11514,7 @@ function runtimeScene(
   runtime: SnesRuntimeProject,
   sceneId = runtime.activeSceneId,
 ): SnesRuntimeScene {
-  return runtime.scenes.find((scene) => scene.id === sceneId) ?? runtime.scenes[0]!;
+  return runtime.scenes.find((scene) => scene.id === sceneId) ?? runtime.scenes[0];
 }
 
 function createInitialSnesRuntimeFrameState(
@@ -12139,7 +12199,9 @@ export function renderSnesRuntimeFrame(
   };
 
   for (const entity of scene.entities) {
-    if (entity.role === "hero") continue;
+    if (entity.role === "hero") {
+      continue;
+    }
     if (state.collectedItems.includes(entity.id) || state.defeatedEnemies.includes(entity.id)) {
       continue;
     }
@@ -13029,7 +13091,7 @@ function stableStringify(value: unknown, depth: number): string {
     return `[\n${value.map((item) => `${childIndent}${stableStringify(item, depth + 1)}`).join(",\n")}\n${indent}]`;
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
+  const keys = Object.keys(record).toSorted();
   if (keys.length === 0) {
     return "{}";
   }

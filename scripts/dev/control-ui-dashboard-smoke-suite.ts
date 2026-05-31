@@ -122,7 +122,7 @@ export function runDashboardSmokeSuite(options: {
       });
       continue;
     }
-    const result = runner(step.command[0]!, step.command.slice(1), {
+    const result = runner(step.command[0], step.command.slice(1), {
       env: { ...process.env, ...step.env },
       stdio: "inherit",
     });

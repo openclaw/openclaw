@@ -293,7 +293,7 @@ describe("SNES Studio core", () => {
   it("reports sprite OAM budget pressure by entity", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
     const ready = createSnesSpriteOamBudgetReport(project);
-    project.scenes[0]!.entities.push({
+    project.scenes[0].entities.push({
       id: "giant-boss",
       kind: "enemy",
       name: "Giant Boss",
@@ -1566,7 +1566,7 @@ describe("SNES Studio core", () => {
     );
     const queue = appendSnesAgentResultRecord([], result);
     const parsed = parseSnesAgentResultQueue(JSON.stringify(queue));
-    const proposal = createSnesAgentPatchProposalFromResult(parsed[0]!, project);
+    const proposal = createSnesAgentPatchProposalFromResult(parsed[0], project);
 
     expect(result.handoff.eventName).toBe("openclaw:snes-studio:codex-result");
     expect(result.handoff.queueStorageKey).toBe("openclaw:snes-studio:codex-result-queue:v1");
@@ -1655,7 +1655,7 @@ describe("SNES Studio core", () => {
       "codex",
     ]);
     expect(plan.stages.every((stage) => stage.handoff.method === "agent")).toBe(true);
-    expect(plan.stages.every((stage) => stage.handoff.request.deliver === false)).toBe(true);
+    expect(plan.stages.every((stage) => !stage.handoff.request.deliver)).toBe(true);
     expect(plan.stages[0]?.handoff.request.model).toBe("openai/gpt-5.5");
     expect(
       plan.stages.slice(1, 6).every((stage) => stage.handoff.request.model === undefined),
@@ -1716,10 +1716,10 @@ describe("SNES Studio core", () => {
     ).toBe(true);
     expect(team.members.filter((member) => member.fillsTextBoxes)).toHaveLength(4);
 
-    const codexPreflight = createSnesAgentTeamPreflight(team.members[0]!, {
+    const codexPreflight = createSnesAgentTeamPreflight(team.members[0], {
       createdAt: "2026-05-19T02:21:00.000Z",
     });
-    const openClawPreflight = createSnesAgentTeamPreflight(team.members[1]!, {
+    const openClawPreflight = createSnesAgentTeamPreflight(team.members[1], {
       createdAt: "2026-05-19T02:21:00.000Z",
     });
     expect(codexPreflight.request.model).toBe("openai/gpt-5.5");
@@ -2115,8 +2115,8 @@ describe("SNES Studio core", () => {
   it("plans level transitions, runtime events, collision materials, and local persistence", () => {
     let project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
     project = addSnesProjectScene(project, "Sky Dock");
-    project.scenes[0]!.collisionMap[0] = 2;
-    project.scenes[1]!.collisionMap[1] = 3;
+    project.scenes[0].collisionMap[0] = 2;
+    project.scenes[1].collisionMap[1] = 3;
     project.events = [
       {
         id: "grant-key",
@@ -2203,15 +2203,15 @@ describe("SNES Studio core", () => {
         fromSceneId: "ridge-1",
         runtimeStatus: "loader-table-tested",
         status: "verified",
-        toSceneId: project.scenes[1]!.id,
+        toSceneId: project.scenes[1].id,
         trigger: "right-edge",
       }),
     );
     expect(levelLoaderExecution.selectedEntry).toEqual(
       expect.objectContaining({
-        id: project.scenes[1]!.id,
-        collisionMapChecksum: levelLoaderTable.entries[1]!.collisionMapChecksum,
-        tilemapChecksum: levelLoaderTable.entries[1]!.tilemapChecksum,
+        id: project.scenes[1].id,
+        collisionMapChecksum: levelLoaderTable.entries[1].collisionMapChecksum,
+        tilemapChecksum: levelLoaderTable.entries[1].tilemapChecksum,
       }),
     );
     expect(collisionPlan.materials.find((material) => material.id === "solid")?.cellCount).toBe(
@@ -2280,7 +2280,7 @@ describe("SNES Studio core", () => {
 
   it("simulates the preview game loop for movement, jump, and item collection", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
-    project.scenes[0]!.entities = [
+    project.scenes[0].entities = [
       { id: "player", kind: "player", name: "Player Start", x: 32, y: 176, metaspriteTiles: 8 },
       { id: "item-1", kind: "item", name: "Moon Coin", x: 33, y: 176, metaspriteTiles: 2 },
     ];
@@ -2422,8 +2422,8 @@ describe("SNES Studio core", () => {
 
   it("creates deterministic collision parity proof until emulator state comparison exists", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
-    project.scenes[0]!.collisionMap[0] = 2;
-    project.scenes[0]!.collisionMap[1] = 4;
+    project.scenes[0].collisionMap[0] = 2;
+    project.scenes[0].collisionMap[1] = 4;
 
     const report = createSnesCollisionParityReport(project, [
       { right: true },
@@ -2445,7 +2445,7 @@ describe("SNES Studio core", () => {
 
   it("plans scanline OAM pressure before hardware sprite stress testing", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
-    project.scenes[0]!.entities = Array.from({ length: 20 }, (_, index) => ({
+    project.scenes[0].entities = Array.from({ length: 20 }, (_, index) => ({
       id: `enemy-${index}`,
       kind: "enemy" as const,
       metaspriteTiles: 4,
@@ -2494,7 +2494,7 @@ describe("SNES Studio core", () => {
 
   it("simulates enemy patrol positions and enemy collision state", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
-    project.scenes[0]!.entities = [
+    project.scenes[0].entities = [
       { id: "enemy-1", kind: "enemy", name: "Patrol Bot", x: 121, y: 184, metaspriteTiles: 8 },
     ];
 
@@ -2510,7 +2510,7 @@ describe("SNES Studio core", () => {
 
   it("normalizes editable enemy behaviors and simulates chase movement", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
-    project.scenes[0]!.entities = [
+    project.scenes[0].entities = [
       { id: "player", kind: "player", name: "Player Start", x: 121, y: 176, metaspriteTiles: 8 },
       {
         id: "enemy-1",
@@ -2553,13 +2553,13 @@ describe("SNES Studio core", () => {
 
   it("simulates advanced collision materials for hazards and one-way platforms", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
-    project.scenes[0]!.entities = [
+    project.scenes[0].entities = [
       { id: "player", kind: "player", name: "Player Start", x: 112, y: 176, metaspriteTiles: 8 },
     ];
-    project.scenes[0]!.collisionMap = Array.from({ length: SNES_STUDIO_EDIT_GRID.cells }, () => 0);
-    project.scenes[0]!.collisionMap[11 * SNES_STUDIO_EDIT_GRID.width + 7] = 2;
+    project.scenes[0].collisionMap = Array.from({ length: SNES_STUDIO_EDIT_GRID.cells }, () => 0);
+    project.scenes[0].collisionMap[11 * SNES_STUDIO_EDIT_GRID.width + 7] = 2;
     const hazard = simulateSnesPreviewFrame(project, null, {});
-    project.scenes[0]!.collisionMap[11 * SNES_STUDIO_EDIT_GRID.width + 7] = 3;
+    project.scenes[0].collisionMap[11 * SNES_STUDIO_EDIT_GRID.width + 7] = 3;
     const oneWay = simulateSnesPreviewFrame(project, null, {});
 
     expect(hazard.collisions).toContain("hazard");
@@ -2569,7 +2569,7 @@ describe("SNES Studio core", () => {
   it("paints rectangle fills for professional level editing", () => {
     const project = createDefaultSnesStudioProject("2026-05-19T00:00:00.000Z");
     const painted = paintSnesSceneRect(project, 0, 0, 0, 3, 2, 2, true);
-    const scene = painted.scenes[0]!;
+    const scene = painted.scenes[0];
 
     expect(scene.tilemap.slice(0, 3)).toEqual([2, 2, 2]);
     expect(scene.tilemap.slice(16, 19)).toEqual([2, 2, 2]);
@@ -2687,7 +2687,7 @@ describe("SNES Studio core", () => {
     expect(
       validateSnesStudioProject(project).filter((issue) => issue.severity === "error"),
     ).toEqual([]);
-    project.events[0]!.actions = [{ type: "show-dialogue", cutsceneId: "missing" }];
+    project.events[0].actions = [{ type: "show-dialogue", cutsceneId: "missing" }];
     expect(validateSnesStudioProject(project)).toContainEqual(
       expect.objectContaining({ code: "EVENT_DIALOGUE_TARGET", severity: "error" }),
     );
