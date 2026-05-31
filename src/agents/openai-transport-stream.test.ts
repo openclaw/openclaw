@@ -3679,7 +3679,7 @@ describe("openai transport stream", () => {
       },
     },
   ])(
-    "replays assistant phase metadata for $label responses payloads",
+    "omits orphan phase-tagged ids for $label responses payloads",
     ({ label: _label, model }) => {
       const params = buildOpenAIResponsesParams(
         {
@@ -3738,11 +3738,7 @@ describe("openai transport stream", () => {
         role: "assistant",
         phase: "commentary",
       });
-      if (model.api === "openai-chatgpt-responses") {
-        expect(assistantItem?.id).toBeUndefined();
-      } else {
-        expect(assistantItem?.id).toBe("msg_commentary");
-      }
+      expect(assistantItem?.id).toBeUndefined();
     },
   );
 
