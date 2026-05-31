@@ -341,6 +341,7 @@ describe("resolveCliAuthEpoch", () => {
           type: "token",
           provider: "anthropic",
           token: "token-a",
+          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
           email: "user@example.com",
           displayName: "Work",
         },
@@ -362,6 +363,7 @@ describe("resolveCliAuthEpoch", () => {
           type: "token",
           provider: "anthropic",
           token: "token-b",
+          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
           email: "user@example.com",
           displayName: "Work",
         },
@@ -373,8 +375,8 @@ describe("resolveCliAuthEpoch", () => {
     });
 
     expectCliAuthEpoch(first);
-    // Static-token auth-profile rotation must not flip the epoch when stable
-    // identity fields exist; the token material is only a refreshable secret.
+    // Ref-backed token rotation must not flip the epoch; the token material is
+    // only a refreshable secret when the profile has a stable secret owner.
     expect(second).toBe(first);
   });
 

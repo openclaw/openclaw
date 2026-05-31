@@ -112,10 +112,7 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         encodeUnknown(credential.metadata),
       ]);
     case "token":
-      if (
-        normalizeOptionalString(credential.email) !== undefined ||
-        credential.tokenRef !== undefined
-      ) {
+      if (credential.tokenRef !== undefined) {
         // When a token profile has a stable account/ref identity, token
         // material is a refreshable secret rather than the session owner.
         // Plain token-only profiles still hash the token below so manual token
@@ -133,6 +130,7 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         credential.provider,
         credential.token ?? null,
         encodeUnknown(credential.tokenRef),
+        credential.email ?? null,
         credential.displayName ?? null,
       ]);
     case "oauth":
