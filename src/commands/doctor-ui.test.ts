@@ -69,10 +69,10 @@ describe("UI protocol freshness health mapping", () => {
       kind: "stale-assets",
       changesSinceBuild: ["abc123 schema change"],
     });
+    const finding = uiProtocolFreshnessIssueToHealthFinding(current);
 
-    expect(uiProtocolFreshnessIssueToHealthFinding(current).message).toContain(
-      "abc123 schema change",
-    );
+    expect(finding.message).toContain("abc123 schema change");
+    expect(finding.fixHint).toContain("openclaw doctor --fix --force");
     expect(uiProtocolFreshnessIssueToRepairEffects(current)).toEqual([
       {
         kind: "process",
