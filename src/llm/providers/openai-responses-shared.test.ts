@@ -299,7 +299,7 @@ describe("convertResponsesMessages", () => {
       } satisfies Context,
       allowedToolCallProviders,
       { includeSystemPrompt: false, replayResponsesItemIds: false },
-    ) as Array<Record<string, unknown>>;
+    ) as unknown as Array<Record<string, unknown>>;
 
     const reasoningItem = input.find((item) => item.type === "reasoning");
     expect(reasoningItem).toMatchObject({
