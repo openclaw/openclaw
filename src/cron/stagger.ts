@@ -1,6 +1,7 @@
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { CronSchedule } from "./types.js";
 
+/** Default jitter window applied to recurring top-of-hour cron schedules. */
 export const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function parseCronFields(expr: string) {
