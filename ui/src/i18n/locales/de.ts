@@ -1295,6 +1295,7 @@ export const de: TranslationMap = {
       clearSessionSearch: "Sitzungssuche löschen",
       loadMoreSessions: "Weitere Sitzungen laden",
       renameSession: "Rename session",
+      renameFailed: "Couldn't rename the session. Please try again.",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

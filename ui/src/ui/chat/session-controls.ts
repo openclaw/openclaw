@@ -217,7 +217,7 @@ function openChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSu
   focusChatSessionPickerSearch(state);
 }
 
-function closeChatSessionPicker(state: AppViewState) {
+export function closeChatSessionPicker(state: AppViewState) {
   clearChatSessionPickerSearchTimer(state);
   state.chatSessionPickerOpen = false;
   state.chatSessionPickerSurface = null;
@@ -581,9 +581,28 @@ function cancelChatSessionRename(state: AppViewState) {
 
 async function commitChatSessionRename(state: AppViewState, key: string) {
   const label = normalizeOptionalString(state.chatSessionPickerRenameDraft) ?? null;
+  const draft = state.chatSessionPickerRenameDraft;
   state.chatSessionPickerRenameKey = null;
   state.chatSessionPickerRenameDraft = "";
-  await patchSession(state as unknown as Parameters<typeof patchSession>[0], key, { label });
+  state.chatSessionPickerError = null;
+  const ok = await patchSession(state as unknown as Parameters<typeof patchSession>[0], key, {
+    label,
+  });
+  if (!ok) {
+    // Surface the failure on the chat picker surface. Only restore the inline
+    // editor when the picker is still open and no newer rename has started, so a
+    // late failure cannot resurrect stale edit state after a close or another edit.
+    if (state.chatSessionPickerOpen && state.chatSessionPickerRenameKey === null) {
+      state.chatSessionPickerRenameKey = key;
+      state.chatSessionPickerRenameDraft = draft;
+    }
+    state.chatSessionPickerError = state.sessionsError ?? t("chat.selectors.renameFailed");
+    requestHostUpdate(state);
+    return;
+  }
+  if (state.chatSessionPickerOpen) {
+    await loadChatSessionPickerPage(state);
+  }
 }
 
 function renderChatSessionPickerPopover(

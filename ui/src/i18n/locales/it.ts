@@ -1293,6 +1293,7 @@ export const it: TranslationMap = {
       clearSessionSearch: "Cancella ricerca sessioni",
       loadMoreSessions: "Carica altre sessioni",
       renameSession: "Rename session",
+      renameFailed: "Couldn't rename the session. Please try again.",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

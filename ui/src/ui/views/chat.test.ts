@@ -44,7 +44,7 @@ const loadSessionsMock = vi.hoisted(() =>
     }
   }),
 );
-const patchSessionMock = vi.hoisted(() => vi.fn(async () => undefined));
+const patchSessionMock = vi.hoisted(() => vi.fn(async (): Promise<boolean> => true));
 
 function requireFirstAttachmentsChange(
   onAttachmentsChange: ReturnType<typeof vi.fn>,
@@ -2820,5 +2820,153 @@ describe("chat session controls", () => {
     expect(state.chatSessionPickerRenameKey).toBeNull();
     expect(state.chatSessionPickerRenameDraft).toBe("");
     expect(patchSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads the picker cache after a successful rename", async () => {
+    patchSessionMock.mockClear();
+    patchSessionMock.mockResolvedValueOnce(true);
+    const { state, request } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const rows: GatewaySessionRow[] = [
+      { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
+      { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
+    ];
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const option = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ].find((button) => button.dataset.sessionKey === "agent:main:work");
+    option
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.value = "Renamed work";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushTasks();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(patchSessionMock).toHaveBeenCalledWith(state, "agent:main:work", {
+      label: "Renamed work",
+    });
+    expect(
+      request.mock.calls.filter((call) => call[0] === "sessions.list").length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(state.chatSessionPickerError).toBeNull();
+  });
+
+  it("surfaces a failed rename in the picker and restores the editor", async () => {
+    patchSessionMock.mockClear();
+    patchSessionMock.mockImplementationOnce(async (...args: unknown[]) => {
+      (args[0] as AppViewState).sessionsError = "sessions.patch failed";
+      return false;
+    });
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const rows: GatewaySessionRow[] = [
+      { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
+      { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
+    ];
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const option = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ].find((button) => button.dataset.sessionKey === "agent:main:work");
+    option
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.value = "Renamed work";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushTasks();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(state.chatSessionPickerError).toBe("sessions.patch failed");
+    expect(state.chatSessionPickerRenameKey).toBe("agent:main:work");
+    expect(state.chatSessionPickerRenameDraft).toBe("Renamed work");
+  });
+
+  it("does not restore the rename editor when the picker closed before the failure resolved", async () => {
+    patchSessionMock.mockClear();
+    let failPatch: () => void = () => {};
+    patchSessionMock.mockImplementationOnce(
+      (...args: unknown[]) =>
+        new Promise<boolean>((resolve) => {
+          failPatch = () => {
+            (args[0] as AppViewState).sessionsError = "late failure";
+            resolve(false);
+          };
+        }),
+    );
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const rows: GatewaySessionRow[] = [
+      { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
+      { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
+    ];
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const option = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ].find((button) => button.dataset.sessionKey === "agent:main:work");
+    option
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.value = "Renamed work";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    // Dismiss the picker while the patch is still in flight.
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    expect(state.chatSessionPickerOpen).toBe(false);
+
+    failPatch();
+    await flushTasks();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(state.chatSessionPickerOpen).toBe(false);
+    expect(state.chatSessionPickerRenameKey).toBeNull();
+    expect(state.chatSessionPickerRenameDraft).toBe("");
   });
 });

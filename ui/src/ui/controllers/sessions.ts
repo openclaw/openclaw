@@ -1016,9 +1016,10 @@ export async function patchSession(
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
   },
-) {
+): Promise<boolean> {
+  state.sessionsError = null;
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const params: Record<string, unknown> = {
     key,
@@ -1041,8 +1042,10 @@ export async function patchSession(
       state,
       isGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
     );
+    return true;
   } catch (err) {
     state.sessionsError = String(err);
+    return false;
   }
 }
 

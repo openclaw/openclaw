@@ -1278,6 +1278,7 @@ export const vi: TranslationMap = {
       clearSessionSearch: "Xóa tìm kiếm phiên",
       loadMoreSessions: "Tải thêm phiên",
       renameSession: "Rename session",
+      renameFailed: "Couldn't rename the session. Please try again.",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
