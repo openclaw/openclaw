@@ -1375,7 +1375,11 @@ describe("gateway server chat", () => {
           expect(waitRes.ok).toBe(true);
           expect(waitRes.payload?.status).toBe("ok");
 
-          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const sessionStorePath = testState.sessionStorePath;
+          if (!sessionStorePath) {
+            throw new Error("session store path was not initialized");
+          }
+          const raw = await fs.readFile(sessionStorePath, "utf-8");
           const stored = JSON.parse(raw) as {
             "agent:main:main"?: {
               verboseLevel?: string;
@@ -1416,7 +1420,11 @@ describe("gateway server chat", () => {
           expect(waitRes.ok).toBe(true);
           expect(waitRes.payload?.status).toBe("ok");
 
-          const raw = await fs.readFile(testState.sessionStorePath!, "utf-8");
+          const sessionStorePath = testState.sessionStorePath;
+          if (!sessionStorePath) {
+            throw new Error("session store path was not initialized");
+          }
+          const raw = await fs.readFile(sessionStorePath, "utf-8");
           const stored = JSON.parse(raw) as {
             "agent:main:main"?: {
               sessionId?: string;

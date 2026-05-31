@@ -573,7 +573,7 @@ describe("loadBundledEntryExportSync", () => {
     const result = compiledEsmSidecarFastPathResult;
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("adapter");
+    expect(String(result.stdout).trim()).toBe("adapter");
     expect(result.stderr).toMatch(/sourceLoaderCreateMs=0(?:\.0+)?(?:\s|$)/u);
     expect(result.stderr).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);
   });

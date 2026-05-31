@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { legacyOAuthSidecarTestUtils } from "../commands/doctor/shared/legacy-oauth-sidecar.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../shared/number-coercion.js";
-import { legacyOAuthSidecarTestUtils } from "./auth-profiles/legacy-oauth-sidecar.js";
 import { resolveAuthStatePath, resolveAuthStorePath } from "./auth-profiles/paths.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
 import {
