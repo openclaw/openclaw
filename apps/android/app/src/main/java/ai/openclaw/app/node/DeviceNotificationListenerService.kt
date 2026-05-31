@@ -23,9 +23,13 @@ private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
 
 internal fun sanitizeNotificationText(value: CharSequence?): String? {
   val normalized = value?.toString()?.trim().orEmpty()
+  // Notification extras can include long previews; cap before sending over node events.
   return normalized.take(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
 }
 
+/**
+ * Stable notification snapshot entry exposed through the Android notifications command.
+ */
 data class DeviceNotificationEntry(
   val key: String,
   val packageName: String,
@@ -53,24 +57,36 @@ internal fun DeviceNotificationEntry.toJsonObject(): JsonObject =
     channelId?.let { put("channelId", JsonPrimitive(it)) }
   }
 
+/**
+ * Listener state exposed to the gateway, including whether Android has connected the service.
+ */
 data class DeviceNotificationSnapshot(
   val enabled: Boolean,
   val connected: Boolean,
   val notifications: List<DeviceNotificationEntry>,
 )
 
+/**
+ * Gateway-supported notification actions mapped to Android listener operations.
+ */
 enum class NotificationActionKind {
   Open,
   Dismiss,
   Reply,
 }
 
+/**
+ * Gateway action request; [key] must match Android's StatusBarNotification key.
+ */
 data class NotificationActionRequest(
   val key: String,
   val kind: NotificationActionKind,
   val replyText: String? = null,
 )
 
+/**
+ * Normalized notification action result returned through node.invoke.
+ */
 data class NotificationActionResult(
   val ok: Boolean,
   val code: String? = null,
@@ -109,6 +125,7 @@ private object DeviceNotificationStore {
     synchronized(lock) {
       connected = value
       if (!value) {
+        // Android invalidates activeNotifications when the listener disconnects.
         byKey.clear()
       }
     }
@@ -226,6 +243,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     if (policy.isWithinQuietHours(nowEpochMs = nowEpochMs)) {
       return null
     }
+    // Apply burst limits after package/quiet-hour filters so blocked notifications do not consume quota.
     if (!forwardingLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)) {
       return null
     }
@@ -299,6 +317,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       val hasNew = prefs.contains(recentPackagesPref)
       val legacy = prefs.getString(legacyRecentPackagesPref, null)?.trim().orEmpty()
       if (!hasNew && legacy.isNotEmpty()) {
+        // Keep recent package suggestions across the preference-key rename.
         prefs.edit {
           putString(recentPackagesPref, legacy)
           remove(legacyRecentPackagesPref)
@@ -376,6 +395,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           .map { it.trim() }
           .filter { it.isNotEmpty() && it != normalized }
           .take(recentPackagesLimit - 1)
+      // Most recent package first keeps settings suggestions useful without storing notification content.
       val updated = listOf(normalized) + existing
       prefs.edit { putString(recentPackagesPref, updated.joinToString(",")) }
     }
@@ -449,6 +469,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
         val action =
           sbn.notification.actions
             ?.firstOrNull { candidate ->
+              // Android reply actions are identified by RemoteInput, not by a stable action title.
               candidate.actionIntent != null && !candidate.remoteInputs.isNullOrEmpty()
             }
             ?: return NotificationActionResult(

@@ -10,6 +10,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
+/**
+ * Injectable notification listener facade so command parsing can be tested without Android service state.
+ */
 internal interface NotificationsStateProvider {
   fun readSnapshot(context: Context): DeviceNotificationSnapshot
 
@@ -123,6 +126,7 @@ class NotificationsHandler private constructor(
   private fun readSnapshotWithRebind(): DeviceNotificationSnapshot {
     val snapshot = stateProvider.readSnapshot(appContext)
     if (snapshot.enabled && !snapshot.connected) {
+      // Access can be granted while Android has not rebound the listener yet.
       stateProvider.requestServiceRebind(appContext)
     }
     return snapshot

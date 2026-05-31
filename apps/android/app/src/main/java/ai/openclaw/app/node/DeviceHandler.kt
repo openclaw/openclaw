@@ -31,6 +31,9 @@ class DeviceHandler(
   private val photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
 ) {
   companion object {
+    /**
+     * SMS is available only when the feature flag, telephony hardware, and at least one SMS permission align.
+     */
     internal fun hasAnySmsCapability(
       smsEnabled: Boolean,
       telephonyAvailable: Boolean,
@@ -38,6 +41,9 @@ class DeviceHandler(
       smsReadGranted: Boolean,
     ): Boolean = smsEnabled && telephonyAvailable && (smsSendGranted || smsReadGranted)
 
+    /**
+     * Prompt only when Android can grant a missing SMS permission that this build can use.
+     */
     internal fun isSmsPromptable(
       smsEnabled: Boolean,
       telephonyAvailable: Boolean,
@@ -349,6 +355,7 @@ class DeviceHandler(
   }
 
   private fun readBatterySnapshot(): BatterySnapshot {
+    // ACTION_BATTERY_CHANGED is sticky; registerReceiver(null, ...) reads the last system snapshot.
     val intent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
     val status =
       intent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
@@ -410,6 +417,7 @@ class DeviceHandler(
     if (caps == null) return "unsatisfied"
     return when {
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "satisfied"
+      // Internet without validation mirrors iOS "requiresConnection" for captive or unproven networks.
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "requiresConnection"
       else -> "unsatisfied"
     }
