@@ -20,6 +20,7 @@ type CronSessionModelOverrides = {
 
 type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "payload" | "session";
 
+/** Inputs used to resolve the model for one isolated cron run. */
 export type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
@@ -30,6 +31,7 @@ export type ResolveCronModelSelectionParams = {
   agentId?: string;
 };
 
+/** Resolved provider/model pair plus the precedence source that selected it. */
 export type ResolveCronModelSelectionResult =
   | {
       ok: true;

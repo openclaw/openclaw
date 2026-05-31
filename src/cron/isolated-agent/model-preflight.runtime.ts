@@ -10,6 +10,7 @@ const PREFLIGHT_TIMEOUT_MS = 2_500;
 
 type PreflightApi = "ollama" | "openai-completions";
 
+/** Local provider reachability result used to skip cron runs before runner startup. */
 export type CronModelProviderPreflightResult =
   | { status: "available" }
   | {
