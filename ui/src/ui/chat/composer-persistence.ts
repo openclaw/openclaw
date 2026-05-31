@@ -1,4 +1,5 @@
 import { getSafeSessionStorage } from "../../local-storage.ts";
+import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 
@@ -8,6 +9,16 @@ const MAX_STORED_QUEUE_ITEMS = 50;
 
 type ChatComposerPersistenceState = {
   settings?: { gatewayUrl?: string | null };
+  assistantAgentId?: string | null;
+  agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
+  hello?: {
+    snapshot?: {
+      sessionDefaults?: {
+        defaultAgentId?: string | null;
+        mainKey?: string | null;
+      } | null;
+    } | null;
+  } | null;
   sessionKey: string;
   chatMessage: string;
   chatQueue: ChatQueueItem[];
@@ -32,6 +43,34 @@ type RestoreOptions = {
 function storageKeyForGateway(gatewayUrl: string | null | undefined): string {
   const scope = gatewayUrl?.trim() || "default";
   return `${STORAGE_KEY_PREFIX}${encodeURIComponent(scope).slice(0, 240)}`;
+}
+
+function readHelloDefaultAgentId(state: Pick<ChatComposerPersistenceState, "hello">) {
+  return state.hello?.snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
+}
+
+function resolveComposerAgentScope(
+  state: Pick<ChatComposerPersistenceState, "assistantAgentId" | "agentsList" | "hello">,
+  sessionKey: string,
+): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const defaultAgentId =
+    state.assistantAgentId?.trim() ||
+    state.agentsList?.defaultId?.trim() ||
+    readHelloDefaultAgentId(state) ||
+    DEFAULT_AGENT_ID;
+  return normalizeAgentId(defaultAgentId);
+}
+
+function storageSessionKeyForState(
+  state: Pick<ChatComposerPersistenceState, "assistantAgentId" | "agentsList" | "hello">,
+  sessionKey: string,
+): string {
+  const agentId = resolveComposerAgentScope(state, sessionKey);
+  return `${sessionKey}\u0000agent:${agentId}`;
 }
 
 function readStore(storage: Storage, key: string): StoredComposerState {
@@ -150,6 +189,8 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     ...(item.localCommandArgs ? { localCommandArgs: item.localCommandArgs } : {}),
     ...(item.localCommandName ? { localCommandName: item.localCommandName } : {}),
     ...(item.pendingRunId ? { pendingRunId: item.pendingRunId } : {}),
+    ...(item.sessionKey ? { sessionKey: item.sessionKey } : {}),
+    ...(item.agentId ? { agentId: item.agentId } : {}),
     ...(sendState ? { sendState } : {}),
     ...(item.sendError ? { sendError: item.sendError } : {}),
     ...(item.sendRunId ? { sendRunId: item.sendRunId } : {}),
@@ -215,6 +256,14 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   if (pendingRunId) {
     item.pendingRunId = pendingRunId;
   }
+  const sessionKey = normalizeOptionalString(entry.sessionKey);
+  if (sessionKey) {
+    item.sessionKey = sessionKey;
+  }
+  const agentId = normalizeOptionalString(entry.agentId);
+  if (agentId) {
+    item.agentId = normalizeAgentId(agentId);
+  }
   return item;
 }
 
@@ -244,7 +293,10 @@ function normalizeStoredSession(value: unknown): StoredComposerSession | null {
 }
 
 export function loadChatComposerSnapshot(
-  state: Pick<ChatComposerPersistenceState, "settings">,
+  state: Pick<
+    ChatComposerPersistenceState,
+    "settings" | "assistantAgentId" | "agentsList" | "hello"
+  >,
   sessionKey: string,
 ): { draft: string; queue: ChatQueueItem[] } | null {
   const storage = getSafeSessionStorage();
@@ -253,7 +305,8 @@ export function loadChatComposerSnapshot(
   }
   try {
     const key = storageKeyForGateway(state.settings?.gatewayUrl);
-    const session = normalizeStoredSession(readStore(storage, key).sessions[sessionKey]);
+    const storeSessionKey = storageSessionKeyForState(state, sessionKey);
+    const session = normalizeStoredSession(readStore(storage, key).sessions[storeSessionKey]);
     if (!session) {
       return null;
     }
@@ -277,15 +330,16 @@ export function persistChatComposerState(
   try {
     const key = storageKeyForGateway(state.settings?.gatewayUrl);
     const store = readStore(storage, key);
+    const storeSessionKey = storageSessionKeyForState(state, sessionKey);
     const draft = state.chatMessage;
     const queue = state.chatQueue
       .slice(0, MAX_STORED_QUEUE_ITEMS)
       .map(serializeQueueItem)
       .filter((item): item is ChatQueueItem => item !== null);
     if (!draft && queue.length === 0) {
-      delete store.sessions[sessionKey];
+      delete store.sessions[storeSessionKey];
     } else {
-      store.sessions[sessionKey] = {
+      store.sessions[storeSessionKey] = {
         ...(draft ? { draft } : {}),
         ...(queue.length > 0 ? { queue } : {}),
         updatedAt: Date.now(),

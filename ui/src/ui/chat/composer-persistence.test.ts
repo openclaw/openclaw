@@ -74,6 +74,36 @@ describe("chat composer persistence", () => {
     ).toBeNull();
   });
 
+  it("scopes global-session composers by selected agent", () => {
+    const queued: ChatQueueItem = {
+      id: "queued-global",
+      text: "agent-specific prompt",
+      createdAt: 1,
+      sessionKey: "global",
+      agentId: "agent-a",
+    };
+    persistChatComposerState(
+      createState({
+        assistantAgentId: "agent-a",
+        sessionKey: "global",
+        chatMessage: "agent A draft",
+        chatQueue: [queued],
+      }),
+    );
+
+    expect(
+      loadChatComposerSnapshot(
+        { settings: { gatewayUrl: "ws://gateway.test/control" }, assistantAgentId: "agent-b" },
+        "global",
+      ),
+    ).toBeNull();
+
+    const restored = createState({ assistantAgentId: "agent-a", sessionKey: "global" });
+    expect(restoreChatComposerState(restored)).toBe(true);
+    expect(restored.chatMessage).toBe("agent A draft");
+    expect(restored.chatQueue).toEqual([queued]);
+  });
+
   it("clears the stored session when both draft and queue are empty", () => {
     persistChatComposerState(createState({ chatMessage: "clear me" }));
     persistChatComposerState(createState());
