@@ -1159,7 +1159,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
     }
 
-    const result = await deliverWithFinalizableLivePreviewAdapter({
+    await deliverWithFinalizableLivePreviewAdapter({
       kind: info.kind,
       payload,
       adapter: defineFinalizableLivePreviewAdapter({
