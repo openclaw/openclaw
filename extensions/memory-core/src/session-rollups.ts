@@ -191,6 +191,16 @@ function resolveRollupOutputPath(params: {
   return path.join(outputRoot, safeAgent, `${stem || "session"}.md`);
 }
 
+function resolveRollupAgentOutputDir(params: {
+  workspaceDir: string;
+  outputDir: string;
+  agentId: string;
+}): string {
+  const outputRoot = resolveRollupOutputDir(params.workspaceDir, params.outputDir);
+  const safeAgent = sanitizePathSegment(params.agentId || "default");
+  return path.join(outputRoot, safeAgent);
+}
+
 function parseRollupFrontmatter(markdown: string): Record<string, string> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   if (!match) {
@@ -565,7 +575,11 @@ export async function inspectSessionRollupPlan(params: {
       ? params.forceSessionFiles.map((entry) => path.resolve(entry))
       : (await listSessionFilesForAgent(params.agentId)).map((entry) => path.resolve(entry));
 
-  const outputDir = resolveRollupOutputDir(params.workspaceDir, params.config.outputDir);
+  const outputDir = resolveRollupAgentOutputDir({
+    workspaceDir: params.workspaceDir,
+    outputDir: params.config.outputDir,
+    agentId: params.agentId,
+  });
   const discoveredRollups = await listMarkdownFiles(outputDir);
 
   const parsedRollupBySource = new Map<string, { path: string; inputHash?: string }>();

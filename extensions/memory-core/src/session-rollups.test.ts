@@ -343,4 +343,71 @@ describe("session-rollups", () => {
       restore();
     }
   });
+
+  it("ignores rollups owned by another agent sharing the same workspace", async () => {
+    const { sessionsDir, restore } = withStateDir("plan-shared-workspace");
+    try {
+      const otherAgentSessionsDir = sessionsDir.replace(
+        `${path.sep}main${path.sep}`,
+        `${path.sep}other-agent${path.sep}`,
+      );
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.mkdir(otherAgentSessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "main.jsonl"),
+        [
+          buildMessage(
+            "user",
+            "Keep the main agent rollup separate from sibling agents.",
+            "2026-05-31T04:00:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(otherAgentSessionsDir, "other.jsonl"),
+        [
+          buildMessage(
+            "user",
+            "This sibling agent uses the same workspace but should not look orphaned.",
+            "2026-05-31T04:01:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const { workspaceDir } = await createWorkspace("plan-shared-workspace");
+      const config = buildRollupConfig();
+
+      const other = await writeSessionRollups({
+        workspaceDir,
+        agentId: "other-agent",
+        config,
+        apply: true,
+      });
+      expect(other.wrote).toBe(1);
+
+      const main = await writeSessionRollups({
+        workspaceDir,
+        agentId: "main",
+        config,
+        apply: true,
+      });
+      expect(main.wrote).toBe(1);
+      expect(main.orphaned).toBe(0);
+
+      const mainPlan = await inspectSessionRollupPlan({
+        workspaceDir,
+        agentId: "main",
+        config,
+      });
+      expect(mainPlan.orphaned).toBe(0);
+      expect(mainPlan.actions).toHaveLength(1);
+      expect(mainPlan.actions[0]?.outputPath).toContain(
+        `${path.sep}memory${path.sep}session-rollups${path.sep}main${path.sep}`,
+      );
+    } finally {
+      restore();
+    }
+  });
 });
