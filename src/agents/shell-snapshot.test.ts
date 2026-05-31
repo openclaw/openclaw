@@ -449,4 +449,50 @@ describe("exec shell snapshots", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("zsh-fn-ok zsh-alias-ok");
   });
+
+  it("captures zsh startup state from ZDOTDIR", async () => {
+    const zsh = resolveZshForTest();
+    if (!zsh) {
+      return;
+    }
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-home-"));
+    const zdotdir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-dir-"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-state-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-cwd-"));
+    tempDirs.push(home, zdotdir, stateDir, cwd);
+    enableSnapshotForTest(stateDir);
+    fs.writeFileSync(path.join(home, ".zshrc"), "alias oc_snap_zdot_alias='printf wrong-home'\n");
+    fs.writeFileSync(
+      path.join(zdotdir, ".zshrc"),
+      "alias oc_snap_zdot_alias='printf zdotdir-ok'\n",
+    );
+
+    const env = {
+      ...process.env,
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      ZDOTDIR: zdotdir,
+      [EXEC_SHELL_SNAPSHOT_ENV]: "1",
+    };
+    const shellArgs = getPosixShellArgs(zsh);
+    const wrapped = await maybeWrapCommandWithShellSnapshot({
+      command: "oc_snap_zdot_alias",
+      shell: zsh,
+      shellArgs,
+      cwd,
+      env,
+      enabled: true,
+    });
+
+    const result = spawnSync(zsh, [...shellArgs, wrapped], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("zdotdir-ok");
+  });
 });

@@ -43,6 +43,7 @@ const CAPTURE_ENV_NAMES = new Set([
   "OPENCLAW_SHELL",
   "SHELL",
   "USERPROFILE",
+  "ZDOTDIR",
 ]);
 const SECRET_ENV_PATTERN = /(secret|token|password|passwd|credential|cookie|session|auth|key)/i;
 const SECRET_SHELL_STATE_PATTERNS = [
@@ -154,9 +155,10 @@ function buildStartupSignature(
 ): Array<[string, number, number] | [string, null]> {
   const shellName = path.basename(opts.shell);
   const home = opts.env.HOME ?? opts.env.USERPROFILE ?? os.homedir();
+  const zdotdir = opts.env.ZDOTDIR?.trim() || home;
   const candidates =
     shellName === "zsh"
-      ? [path.join(home, ".zshrc")]
+      ? [path.join(zdotdir, ".zshrc")]
       : shellName === "bash"
         ? [path.join(home, ".bashrc")]
         : opts.env.ENV
@@ -295,7 +297,7 @@ function buildSnapshotCaptureEnv(
 
 function buildStartupSourceScript(shellName: string): string {
   if (shellName === "zsh") {
-    return `if [ -r "$HOME/.zshrc" ]; then . "$HOME/.zshrc"; fi`;
+    return `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`;
   }
   if (shellName === "bash") {
     return ":";
