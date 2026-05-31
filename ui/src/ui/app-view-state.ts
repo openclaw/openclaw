@@ -427,6 +427,7 @@ export type AppViewState = {
     skillCardErrors: Record<string, string>;
     skillWorkshopSelectedKey: string | null;
     skillWorkshopStatusFilter: "all" | "pending" | "applied" | "rejected" | "quarantined" | "stale";
+    skillWorkshopMode: "board" | "today";
     skillWorkshopQuery: string;
     skillWorkshopFilePreviewKey: string | null;
     skillWorkshopFilePreviewQuery: string;

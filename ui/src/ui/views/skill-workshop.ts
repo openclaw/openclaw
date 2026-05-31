@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../components/file-preview-modal.ts";
 
@@ -33,6 +34,7 @@ export type SkillWorkshopProposal = {
 
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
 export type SkillWorkshopAction = "apply" | "revise" | "reject";
+export type SkillWorkshopMode = "board" | "today";
 
 export type SkillWorkshopActionBusy = {
   key: string;
@@ -54,6 +56,7 @@ export type SkillWorkshopProps = {
   filePreviewKey: string | null;
   filePreviewQuery: string;
   queueWidth: number;
+  mode: SkillWorkshopMode;
   actionBusy: SkillWorkshopActionBusy | null;
   actionNotice: SkillWorkshopActionNotice | null;
   counts: Record<SkillWorkshopStatusFilter, number>;
@@ -62,6 +65,7 @@ export type SkillWorkshopProps = {
   onFilePreviewQueryChange: (query: string) => void;
   onQueueWidthChange: (width: number) => void;
   onQueueWidthCommit: (width: number) => void;
+  onModeChange: (mode: SkillWorkshopMode) => void;
   onSelect: (key: string) => void;
   onPrev: () => void;
   onNext: () => void;
@@ -104,13 +108,18 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
     selected && props.filePreviewKey
       ? selected.supportFiles.find((f) => f.path === props.filePreviewKey)
       : null;
+  const allPending = props.proposals.filter((p) => p.status === "pending");
+  const todayHero = selected ?? allPending[0] ?? props.proposals[0];
+
+  const body =
+    props.mode === "today"
+      ? renderToday(props, todayHero, allPending)
+      : renderBoard(props, filtered, groups, selected);
 
   return html`
-    <section class="skill-workshop">
-      ${renderLifecycleTabs(props)}
-      <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
-        ${renderQueue(props, groups, selected)} ${renderQueueResizer(props)}
-        ${selected ? renderDetail(props, selected) : renderEmpty()}
+    <section class="skill-workshop sw-mode-${props.mode}">
+      <div class="sw-view" data-mode=${props.mode}>
+        ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
       </div>
     </section>
     ${preview && selected
@@ -128,6 +137,22 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
           ></openclaw-file-preview-modal>
         `
       : nothing}
+  `;
+}
+
+function renderBoard(
+  props: SkillWorkshopProps,
+  filtered: SkillWorkshopProposal[],
+  groups: Array<{ label: string; items: SkillWorkshopProposal[] }>,
+  selected: SkillWorkshopProposal | undefined,
+) {
+  void filtered;
+  return html`
+    ${renderLifecycleTabs(props)}
+    <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
+      ${renderQueue(props, groups, selected)} ${renderQueueResizer(props)}
+      ${selected ? renderDetail(props, selected) : renderEmpty()}
+    </div>
   `;
 }
 
@@ -382,6 +407,224 @@ function renderEmpty() {
       </p>
     </div>
   `;
+}
+
+function renderToday(
+  props: SkillWorkshopProps,
+  hero: SkillWorkshopProposal | undefined,
+  pending: SkillWorkshopProposal[],
+) {
+  if (!hero) {
+    return html`
+      <div class="sw-today sw-today--empty">
+        <p class="sw-empty__title">Nothing waiting today</p>
+        <p class="sw-empty__sub">
+          Your agent hasn't drafted anything new. Switch to Board to browse history.
+        </p>
+      </div>
+    `;
+  }
+
+  const heroIndex = Math.max(
+    0,
+    pending.findIndex((p) => p.key === hero.key),
+  );
+  const total = Math.max(pending.length, 1);
+  const upNext = pending.filter((p) => p.key !== hero.key).slice(0, 3);
+  const applied = props.proposals.filter((p) => p.status === "applied").slice(0, 3);
+  const heroLabel = hero.isNew ? "NEW" : hero.status === "pending" ? "WAITING" : "REVIEWED";
+  const ageLabel = hero.ageLabel;
+  const dateLine = formatTodayDate(Date.now());
+  const isPending = hero.status === "pending";
+  const busy = props.actionBusy?.key === hero.key ? props.actionBusy.action : null;
+  const disabled = Boolean(props.actionBusy);
+
+  return html`
+    <div class="sw-today">
+      <div class="sw-today__head">
+        <div class="sw-today__date">${dateLine}</div>
+        <h1 class="sw-today__h1">${pending.length} proposals waiting</h1>
+        ${pending.length === 0
+          ? html`<div class="sw-today__sub">Browse what's already applied.</div>`
+          : nothing}
+        ${pending.length > 0
+          ? html`
+              <div class="sw-today__progress">
+                <span>${heroIndex + 1} of ${total}</span>
+                <div class="sw-today__dots">
+                  ${pending.map(
+                    (_, i) => html`
+                      <span
+                        class="sw-today__dot ${i < heroIndex
+                          ? "is-done"
+                          : i === heroIndex
+                            ? "is-now"
+                            : ""}"
+                      ></span>
+                    `,
+                  )}
+                </div>
+              </div>
+            `
+          : nothing}
+      </div>
+
+      <article class="sw-today__hero">
+        <div class="sw-today__label">
+          <span class="sw-today__ping"></span>
+          ${heroLabel} · ${ageLabel}
+        </div>
+        <h2 class="sw-today__name">${hero.slug}</h2>
+        <p class="sw-today__one-liner">${hero.oneLine}</p>
+
+        ${renderTodayDoesBlock(hero)}
+
+        <div class="sw-today__author">
+          <span class="sw-today__avatar">v${hero.version}</span>
+          <span>
+            Drafted by your <strong>agent</strong> · ${ageLabel}.
+            ${hero.supportFiles.length > 0
+              ? html`
+                  <button
+                    class="sw-today__files-link"
+                    @click=${() => props.onPreviewFile(hero.key, hero.supportFiles[0].path)}
+                  >
+                    ${hero.supportFiles.length}
+                    ${hero.supportFiles.length === 1 ? "support file" : "support files"}
+                  </button>
+                  come with it.
+                `
+              : nothing}
+          </span>
+        </div>
+
+        ${isPending
+          ? html`
+              <div class="sw-today__actions" aria-busy=${busy ? "true" : "false"}>
+                <button
+                  class="sw-today__big sw-today__big--primary ${busy === "apply" ? "is-busy" : ""}"
+                  ?disabled=${disabled}
+                  @click=${() => props.onApply(hero.key)}
+                >
+                  ${busy === "apply" ? "Applying…" : "Use it"}
+                  <span class="sw-today__big-sub">Add to your skills</span>
+                </button>
+                <button
+                  class="sw-today__big sw-today__big--tweak ${busy === "revise" ? "is-busy" : ""}"
+                  ?disabled=${disabled}
+                  @click=${() => props.onRevise(hero.key)}
+                >
+                  ${busy === "revise" ? "Opening…" : "Tweak it"}
+                  <span class="sw-today__big-sub">Ask the agent to change something</span>
+                </button>
+                <button
+                  class="sw-today__big sw-today__big--skip ${busy === "reject" ? "is-busy" : ""}"
+                  ?disabled=${disabled}
+                  @click=${() => props.onReject(hero.key)}
+                >
+                  ${busy === "reject" ? "Skipping…" : "Skip"}
+                  <span class="sw-today__big-sub">Not for me</span>
+                </button>
+              </div>
+            `
+          : nothing}
+        ${props.actionNotice?.key === hero.key ? renderActionNotice(props.actionNotice) : nothing}
+      </article>
+
+      ${upNext.length > 0
+        ? html`
+            <section class="sw-today__section">
+              <header class="sw-today__section-head">
+                <h3>Up next · ${pending.length - 1} more waiting</h3>
+                <button class="sw-today__link" @click=${() => props.onModeChange("board")}>
+                  See all proposals →
+                </button>
+              </header>
+              <div class="sw-today__upnext">
+                ${upNext.map(
+                  (p) => html`
+                    <button class="sw-today__mini" @click=${() => props.onSelect(p.key)}>
+                      <div class="sw-today__mini-name">${p.slug}</div>
+                      <div class="sw-today__mini-desc">${p.oneLine}</div>
+                      <div class="sw-today__mini-meta">${p.ageLabel}</div>
+                    </button>
+                  `,
+                )}
+              </div>
+            </section>
+          `
+        : nothing}
+      ${applied.length > 0
+        ? html`
+            <section class="sw-today__section">
+              <header class="sw-today__section-head">
+                <h3>Your collection · ${props.counts.applied} in use</h3>
+                <button
+                  class="sw-today__link sw-today__link--muted"
+                  @click=${() => props.onModeChange("board")}
+                >
+                  Manage →
+                </button>
+              </header>
+              <div class="sw-today__applied">
+                ${applied.map(
+                  (p) => html`
+                    <button
+                      class="sw-today__applied-row"
+                      @click=${() => {
+                        props.onSelect(p.key);
+                        props.onModeChange("board");
+                      }}
+                    >
+                      <span class="sw-today__check">✓</span>
+                      <span class="sw-today__applied-name">
+                        <strong>${p.slug}</strong> — ${p.oneLine}
+                      </span>
+                      <span class="sw-today__applied-when">${p.ageLabel}</span>
+                    </button>
+                  `,
+                )}
+              </div>
+            </section>
+          `
+        : nothing}
+    </div>
+  `;
+}
+
+function renderTodayDoesBlock(hero: SkillWorkshopProposal) {
+  const bullets = extractDoesBullets(hero.body);
+  if (bullets.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="sw-today__does">
+      <div class="sw-today__does-h">What it'll do when you trigger it</div>
+      <ul>
+        ${bullets.slice(0, 5).map((b) => html`<li>${renderInline(b)}</li>`)}
+      </ul>
+    </div>
+  `;
+}
+
+function extractDoesBullets(body: string): string[] {
+  const lines = body.split("\n");
+  const out: string[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    const m = /^(?:[-*]|\d+\.)\s+(.+)/.exec(line);
+    if (m) {
+      out.push(m[1].replace(/^\*\*[^*]+\*\*\s*/, ""));
+    }
+  }
+  return out;
+}
+
+function formatTodayDate(ms: number): string {
+  const d = new Date(ms);
+  const day = d.toLocaleDateString(undefined, { weekday: "long" });
+  const month = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${day} · ${month}`;
 }
 
 function renderProposalBody(body: string) {

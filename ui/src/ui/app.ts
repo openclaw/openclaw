@@ -44,6 +44,7 @@ import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
 import {
   loadSkillWorkshopQueueWidth,
+  loadSkillWorkshopMode,
   loadSkillWorkshopReviewedKeys,
   renderApp,
 } from "./app-render.ts";
@@ -639,6 +640,7 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopFilePreviewQuery = "";
   @state() skillWorkshopReviewedKeys = loadSkillWorkshopReviewedKeys();
   @state() skillWorkshopQueueWidth = loadSkillWorkshopQueueWidth();
+  @state() skillWorkshopMode: "board" | "today" = loadSkillWorkshopMode();
   @state() skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null =
     null;
   @state() skillWorkshopActionNotice: { key: string; label: string; slug: string } | null = null;

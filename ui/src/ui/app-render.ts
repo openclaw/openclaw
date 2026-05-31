@@ -488,6 +488,7 @@ let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 const SKILL_WORKSHOP_REVIEWED_KEY = "openclaw:control-ui:skill-workshop-reviewed:v1";
 const SKILL_WORKSHOP_QUEUE_WIDTH_KEY = "openclaw:control-ui:skill-workshop-queue-width:v1";
+const SKILL_WORKSHOP_MODE_KEY = "openclaw:control-ui:skill-workshop-mode:v1";
 const MAX_SKILL_WORKSHOP_REVIEWED_KEYS = 500;
 const DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH = 360;
 const MIN_SKILL_WORKSHOP_QUEUE_WIDTH = 280;
@@ -609,6 +610,65 @@ function setSkillWorkshopQueueWidth(
       // Width persistence is a convenience; the current drag state still applies.
     }
   }
+}
+
+export function loadSkillWorkshopMode(): "board" | "today" {
+  const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_MODE_KEY);
+  return raw === "today" ? "today" : "board";
+}
+
+function setSkillWorkshopMode(state: AppViewState, mode: "board" | "today"): void {
+  if (state.skillWorkshopMode === mode) {
+    return;
+  }
+  state.skillWorkshopMode = mode;
+  try {
+    getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_MODE_KEY, mode);
+  } catch {
+    // Mode persistence is a convenience; the in-memory toggle still works.
+  }
+}
+
+function renderSkillWorkshopModeSwitch(state: AppViewState) {
+  return html`
+    <div
+      class="sw-mode-switch"
+      role="tablist"
+      aria-label="Workshop view"
+      data-mode=${state.skillWorkshopMode}
+    >
+      <button
+        class="sw-mode-switch__opt ${state.skillWorkshopMode === "board" ? "is-active" : ""}"
+        role="tab"
+        aria-selected=${state.skillWorkshopMode === "board"}
+        title="Board view"
+        @click=${() => setSkillWorkshopMode(state, "board")}
+      >
+        <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
+          <rect x="3" y="4" width="7" height="16" rx="1.5" />
+          <rect x="14" y="4" width="7" height="9" rx="1.5" />
+          <rect x="14" y="15" width="7" height="5" rx="1.5" />
+        </svg>
+        <span>Board</span>
+      </button>
+      <button
+        class="sw-mode-switch__opt ${state.skillWorkshopMode === "today" ? "is-active" : ""}"
+        role="tab"
+        aria-selected=${state.skillWorkshopMode === "today"}
+        title="Today view"
+        @click=${() => setSkillWorkshopMode(state, "today")}
+      >
+        <svg viewBox="0 0 24 24" class="sw-mode-switch__icon" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" />
+          <path
+            d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"
+          />
+        </svg>
+        <span>Today</span>
+      </button>
+      <span class="sw-mode-switch__indicator" aria-hidden="true"></span>
+    </div>
+  `;
 }
 
 function skillWorkshopReviewKey(proposal: SkillWorkshopReviewableProposal): string {
@@ -2144,7 +2204,7 @@ export function renderApp(state: AppViewState) {
           ? "content--logs"
           : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab ===
         "skillWorkshop"
-          ? "content--skill-workshop"
+          ? `content--skill-workshop ${state.skillWorkshopMode === "today" ? "content--skill-workshop-today" : ""}`
           : ""}"
       >
         ${state.updateStatusBanner
@@ -2195,6 +2255,7 @@ export function renderApp(state: AppViewState) {
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
               </div>
               <div class="page-meta">
+                ${state.tab === "skillWorkshop" ? renderSkillWorkshopModeSwitch(state) : nothing}
                 ${state.tab === "dreams"
                   ? html`
                       <div class="dreaming-header-controls">
@@ -3061,6 +3122,7 @@ export function renderApp(state: AppViewState) {
                 filePreviewKey: state.skillWorkshopFilePreviewKey,
                 filePreviewQuery: state.skillWorkshopFilePreviewQuery,
                 queueWidth: state.skillWorkshopQueueWidth,
+                mode: state.skillWorkshopMode,
                 actionBusy: state.skillWorkshopActionBusy,
                 actionNotice: state.skillWorkshopActionNotice,
                 counts,
@@ -3070,6 +3132,7 @@ export function renderApp(state: AppViewState) {
                 onQueueWidthChange: (width) => setSkillWorkshopQueueWidth(state, width),
                 onQueueWidthCommit: (width) =>
                   setSkillWorkshopQueueWidth(state, width, { persist: true }),
+                onModeChange: (mode) => setSkillWorkshopMode(state, mode),
                 onSelect: (key) => {
                   const proposal = proposals.find((p) => p.key === key);
                   state.skillWorkshopSelectedKey = key;
