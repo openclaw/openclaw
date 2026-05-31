@@ -2052,7 +2052,9 @@ export const registerTelegramHandlers = ({
       const chatId = callbackMessage.chat.id;
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
-      const approvalCallback = parseExecApprovalCommandText(data);
+      const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
+      const callbackCommandText = nativeCallbackCommand ?? data;
+      const approvalCallback = parseExecApprovalCommandText(callbackCommandText);
       const isApprovalCallback = approvalCallback !== null;
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
@@ -2620,11 +2622,10 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
-        text: nativeCallbackCommand ?? data,
+        text: callbackCommandText,
       });
       const syntheticCtx = buildSyntheticContext(ctx, syntheticMessage);
       await processMessageWithReplyChain({
