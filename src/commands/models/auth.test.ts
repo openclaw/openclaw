@@ -521,6 +521,27 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
+  it("creates store order for relogin when configured order would shadow the new profile", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      auth: {
+        order: {
+          openai: ["openai:old-login"],
+        },
+      },
+    };
+
+    await modelsAuthLoginCommand({ provider: "openai" }, runtime);
+
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      provider: "openai",
+      profileId: "openai:user@example.com",
+      createIfMissing: true,
+    });
+  });
+
   it("defaults OpenAI login to ChatGPT OAuth when API key is also available", async () => {
     const runtime = createRuntime();
     const initialConfig = currentConfig;

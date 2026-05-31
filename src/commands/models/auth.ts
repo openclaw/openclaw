@@ -436,7 +436,10 @@ async function persistProviderAuthResult(params: {
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
-      createIfMissing: hasConfiguredProfileForProvider(params.config, profile.credential.provider),
+      createIfMissing: hasConfiguredAuthSelectionForProvider(
+        params.config,
+        profile.credential.provider,
+      ),
     });
   }
 
@@ -502,10 +505,19 @@ async function persistProviderAuthResult(params: {
   }
 }
 
-function hasConfiguredProfileForProvider(cfg: OpenClawConfig, provider: string): boolean {
+function hasConfiguredAuthSelectionForProvider(cfg: OpenClawConfig, provider: string): boolean {
   const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
-  return Object.values(cfg.auth?.profiles ?? {}).some(
-    (profile) => resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+  if (
+    Object.values(cfg.auth?.profiles ?? {}).some(
+      (profile) => resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+    )
+  ) {
+    return true;
+  }
+  return Object.entries(cfg.auth?.order ?? {}).some(
+    ([orderProvider, profileIds]) =>
+      profileIds.length > 0 &&
+      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey,
   );
 }
 
