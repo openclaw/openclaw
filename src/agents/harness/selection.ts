@@ -1,4 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createChildDiagnosticTraceContext,
+  createDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -262,6 +269,10 @@ function selectAgentHarnessDecision(params: {
 export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const activeTrace = getActiveDiagnosticTraceContext();
+  const harnessTrace = freezeDiagnosticTraceContext(
+    activeTrace ? createChildDiagnosticTraceContext(activeTrace) : createDiagnosticTraceContext(),
+  );
   const selection = selectAgentHarnessDecision({
     provider: params.provider,
     modelId: params.modelId,
@@ -281,12 +292,13 @@ export async function runAgentHarnessAttempt(
     agentId: params.agentId,
   });
   const v2Harness = adaptAgentHarnessToV2(harness);
+  const runAttempt = () => runAgentHarnessV2LifecycleAttempt(v2Harness, attemptParams);
   if (harness.id === "openclaw") {
-    return await runAgentHarnessV2LifecycleAttempt(v2Harness, attemptParams);
+    return await runWithDiagnosticTraceContext(harnessTrace, runAttempt);
   }
 
   try {
-    return await runAgentHarnessV2LifecycleAttempt(v2Harness, attemptParams);
+    return await runWithDiagnosticTraceContext(harnessTrace, runAttempt);
   } catch (error) {
     log.warn(`${harness.label} failed; not falling back to embedded OpenClaw backend`, {
       harnessId: harness.id,

@@ -8,7 +8,11 @@ import {
   type DiagnosticHarnessRunErrorEvent,
   type DiagnosticHarnessRunOutcome,
 } from "../../infra/diagnostic-events.js";
-import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import {
+  freezeDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
@@ -134,6 +138,7 @@ function agentHarnessDiagnosticBase(
   params: AgentHarnessAttemptParams,
   trace?: DiagnosticTraceContext,
 ) {
+  const diagnosticTrace = trace ?? getActiveDiagnosticTraceContext();
   return {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -144,7 +149,7 @@ function agentHarnessDiagnosticBase(
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
     ...(params.messageChannel ? { channel: params.messageChannel } : {}),
-    ...(trace ? { trace } : {}),
+    ...(diagnosticTrace ? { trace: freezeDiagnosticTraceContext(diagnosticTrace) } : {}),
   };
 }
 

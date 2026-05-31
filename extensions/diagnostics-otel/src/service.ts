@@ -1679,6 +1679,29 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
       ) => (metadata.trusted ? normalizeTraceContext(evt.trace) : undefined);
+      const internalOrTrustedTraceContext = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => (metadata.trusted || metadata.internal ? normalizeTraceContext(evt.trace) : undefined);
+      const internalOrTrustedParentContext = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        // OTel JS generates a new trace id for root spans. For root channel
+        // message diagnostics, use the diagnostic span id as a non-recording
+        // remote parent so exported spans keep the same trace id as file logs
+        // and diagnostic events; child spans are later parented to the actual
+        // exported message span through activeTrustedSpans.
+        const parentSpanId = traceContext?.parentSpanId ?? traceContext?.spanId;
+        if (!traceContext || !parentSpanId) {
+          return undefined;
+        }
+        return contextForTraceContext({
+          ...traceContext,
+          spanId: parentSpanId,
+        });
+      };
       const activeTrustedParentContext = (
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
@@ -1705,6 +1728,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         return span;
       };
+      const trackInternalOrTrustedSpan = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        span: ReturnType<typeof tracer.startSpan>,
+      ) => {
+        const spanId = internalOrTrustedTraceContext(evt, metadata)?.spanId;
+        if (spanId) {
+          activeTrustedSpans.set(spanId, span);
+        }
+        return span;
+      };
       const takeTrackedTrustedSpan = (
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
@@ -1718,6 +1752,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           activeTrustedSpans.delete(spanId);
         }
         return span;
+      };
+      const getTrackedInternalOrTrustedSpan = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        const spanId = internalOrTrustedTraceContext(evt, metadata)?.spanId;
+        if (!spanId) {
+          return undefined;
+        }
+        return activeTrustedSpans.get(spanId);
       };
       const setSpanAttrs = (
         span: ReturnType<typeof tracer.startSpan>,
@@ -1962,11 +2006,28 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordMessageDispatchStarted = (
         evt: Extract<DiagnosticEventPayload, { type: "message.dispatch.started" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
-        messageDispatchStartedCounter.add(1, {
+        const attrs = {
           "openclaw.channel": lowCardinalityAttr(evt.channel),
           "openclaw.source": lowCardinalityAttr(evt.source),
-        });
+        };
+        messageDispatchStartedCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        if (!traceContext?.spanId || activeTrustedSpans.has(traceContext.spanId)) {
+          return;
+        }
+        trackInternalOrTrustedSpan(
+          evt,
+          metadata,
+          spanWithDuration("openclaw.message.processed", attrs, undefined, {
+            parentContext: internalOrTrustedParentContext(evt, metadata),
+            startTimeMs: evt.ts,
+          }),
+        );
       };
 
       const recordMessageDispatchCompleted = (
@@ -1984,6 +2045,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordMessageProcessed = (
         evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
           "openclaw.channel": lowCardinalityAttr(evt.channel),
@@ -2000,11 +2062,32 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.reason) {
           spanAttrs["openclaw.reason"] = lowCardinalityAttr(evt.reason, "unknown");
         }
-        const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
+        const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
+        const span =
+          trackedSpan ??
+          trackInternalOrTrustedSpan(
+            evt,
+            metadata,
+            spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs, {
+              parentContext: internalOrTrustedParentContext(evt, metadata),
+              endTimeMs: evt.ts,
+            }),
+          );
+        setSpanAttrs(span, spanAttrs);
         if (evt.outcome === "error" && evt.error) {
           span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
         }
-        span.end();
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        if (trackedSpan && traceContext?.spanId) {
+          scheduleTrackedRunSpanFinalize(
+            traceContext.spanId,
+            traceContext.parentSpanId,
+            trackedSpan,
+            evt.ts,
+          );
+          return;
+        }
+        span.end(evt.ts);
       };
 
       const messageDeliveryAttrs = (
@@ -3076,13 +3159,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordMessageReceived(evt);
               return;
             case "message.dispatch.started":
-              recordMessageDispatchStarted(evt);
+              recordMessageDispatchStarted(evt, metadata);
               return;
             case "message.dispatch.completed":
               recordMessageDispatchCompleted(evt);
               return;
             case "message.processed":
-              recordMessageProcessed(evt);
+              recordMessageProcessed(evt, metadata);
               return;
             case "message.delivery.started":
               recordMessageDeliveryStarted(evt);

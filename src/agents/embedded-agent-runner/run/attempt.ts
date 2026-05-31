@@ -27,7 +27,8 @@ import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js"
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
-  createDiagnosticTraceContextFromActiveScope,
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -1058,7 +1059,7 @@ export async function runEmbeddedAttempt(
       resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
-      createDiagnosticTraceContextFromActiveScope(),
+      getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
     );
     const runTrace = freezeDiagnosticTraceContext(
       createChildDiagnosticTraceContext(diagnosticTrace),
