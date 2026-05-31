@@ -575,7 +575,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
     const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
       await closeStreaming(options);
-      await typingCallbacks?.onIdle?.();
+      typingCallbacks?.onIdle?.();
     });
     idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
     return nextIdleSideEffects;

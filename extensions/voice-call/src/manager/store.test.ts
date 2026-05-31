@@ -29,6 +29,9 @@ function installStateRuntime(): void {
       }) as never,
       openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
         createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error("openChannelIngressQueue is not used by voice-call tests");
+      }) as never,
     },
   });
 }
@@ -87,6 +90,9 @@ describe("voice-call call record store", () => {
         }) as never,
         openSyncKeyedStore: (() => {
           throw new Error("sqlite unavailable");
+        }) as never,
+        openChannelIngressQueue: (() => {
+          throw new Error("openChannelIngressQueue is not used by voice-call store tests");
         }) as never,
       },
     });

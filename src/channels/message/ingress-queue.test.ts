@@ -51,6 +51,9 @@ describe("channel ingress queue", () => {
 
       expect(accepted.kind).toBe("accepted");
       expect(pending.kind).toBe("pending");
+      if (pending.kind !== "pending") {
+        throw new Error("Expected duplicate enqueue to return the pending record");
+      }
       expect(pending.record.payload).toEqual({ text: "first" });
       expect(completed).toEqual({
         kind: "completed",

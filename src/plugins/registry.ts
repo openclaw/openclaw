@@ -2636,7 +2636,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               assertPluginStateAllowed();
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-                ...(options ?? {}),
+                ...options,
                 channelId: pluginId,
                 stateDir,
               });
