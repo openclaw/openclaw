@@ -6,6 +6,10 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function readCriticalQualityWorkflow() {
+  return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
+}
+
 describe("ci workflow guards", () => {
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
@@ -207,5 +211,19 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain(
       "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source",
     );
+  });
+
+  it("keeps network CodeQL off unrelated source-only refactors", () => {
+    const workflow = readCriticalQualityWorkflow();
+    const networkSelector = workflow.slice(
+      workflow.indexOf("src/**/*.test.ts|src/**/*.test.tsx"),
+      workflow.indexOf("network-runtime-boundary:"),
+    );
+
+    expect(networkSelector).not.toContain("src/*.ts|src/**/*.ts");
+    expect(networkSelector).not.toContain("extensions/*.ts|extensions/**/*.ts");
+    expect(networkSelector).toContain("src/infra/net/*");
+    expect(networkSelector).toContain("src/infra/ssh-tunnel.ts");
+    expect(networkSelector).toContain("packages/net-policy/src/*");
   });
 });

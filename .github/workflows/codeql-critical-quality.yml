@@ -304,7 +304,7 @@ jobs:
               case "${file}" in
                 src/**/*.test.ts|src/**/*.test.tsx|extensions/**/*.test.ts|extensions/**/*.test.tsx)
                   ;;
-                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts|packages/net-policy/src/*|packages/net-policy/src/**/*)
+                packages/net-policy/src/*|packages/net-policy/src/**/*|src/cli/gateway-cli/run-loop.ts|src/infra/net/*|src/infra/net/**/*|src/infra/ssh-tunnel.ts|src/infra/gateway-lock.ts|src/infra/jsonl-socket.ts|src/infra/push-apns-http2.ts|src/proxy-capture/*|src/proxy-capture/**/*|extensions/codex-supervisor/src/json-rpc-client.ts|extensions/irc/src/*|extensions/qa-lab/src/*)
                   network_runtime=true
                   ;;
               esac
