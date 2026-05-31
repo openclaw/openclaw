@@ -339,16 +339,16 @@ async function runDispatch(params: {
 
 type MockRunTurnInput = {
   onEvent?: (event: unknown) => Promise<void> | void;
-  onBeforeTurnEndHook?: (context: {
+  onBeforeTurnSavedHook?: (context: {
     sessionKey: string;
     success: boolean;
     durationMs: number;
     errorCode?: string;
-  }) => Promise<void> | void;
+  }) => Promise<boolean | void> | boolean | void;
 };
 
 async function completeMockAcpTurn(input: MockRunTurnInput, errorCode?: string): Promise<void> {
-  await input.onBeforeTurnEndHook?.({
+  await input.onBeforeTurnSavedHook?.({
     sessionKey,
     success: !errorCode,
     durationMs: 1,
@@ -520,7 +520,7 @@ describe("tryDispatchAcpReply", () => {
     expect(routeCall().mirror).toBe(false);
   });
 
-  it("persists the ACP transcript before the manager emits agent:turn:end", async () => {
+  it("persists the ACP transcript before the manager emits agent:turn:saved", async () => {
     setReadyAcpResolution();
     const order: string[] = [];
     transcriptMocks.persistAcpDispatchTranscript.mockImplementationOnce(async () => {
@@ -529,8 +529,14 @@ describe("tryDispatchAcpReply", () => {
     managerMocks.runTurn.mockImplementationOnce(async (input: MockRunTurnInput) => {
       await input.onEvent?.({ type: "text_delta", text: "memory", tag: "agent_message_chunk" });
       await input.onEvent?.({ type: "done" });
-      await input.onBeforeTurnEndHook?.({ sessionKey, success: true, durationMs: 1 });
-      order.push("hook");
+      const shouldEmitSaved = await input.onBeforeTurnSavedHook?.({
+        sessionKey,
+        success: true,
+        durationMs: 1,
+      });
+      if (shouldEmitSaved !== false) {
+        order.push("saved");
+      }
     });
 
     await runDispatch({
@@ -538,7 +544,7 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    expect(order).toEqual(["transcript", "hook"]);
+    expect(order).toEqual(["transcript", "saved"]);
     expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,
@@ -548,7 +554,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("surfaces ACP transcript persistence failures to the manager before agent:turn:end", async () => {
+  it("surfaces ACP transcript persistence failures before agent:turn:saved", async () => {
     setReadyAcpResolution();
     const order: string[] = [];
     transcriptMocks.persistAcpDispatchTranscript.mockRejectedValueOnce(new Error("disk full"));
@@ -556,9 +562,9 @@ describe("tryDispatchAcpReply", () => {
       await input.onEvent?.({ type: "text_delta", text: "memory", tag: "agent_message_chunk" });
       await input.onEvent?.({ type: "done" });
       await expect(
-        input.onBeforeTurnEndHook?.({ sessionKey, success: true, durationMs: 1 }),
+        input.onBeforeTurnSavedHook?.({ sessionKey, success: true, durationMs: 1 }),
       ).rejects.toThrow("disk full");
-      order.push("pre-hook failed");
+      order.push("save failed");
     });
 
     await runDispatch({
@@ -566,7 +572,7 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    expect(order).toEqual(["pre-hook failed"]);
+    expect(order).toEqual(["save failed"]);
     expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,

@@ -587,10 +587,10 @@ export async function tryDispatchAcpReply(params: {
       requestId: resolveAcpRequestId(params.ctx),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onEvent: async (event) => await projector.onEvent(event),
-      onBeforeTurnEndHook: async (completion) => {
+      onBeforeTurnSavedHook: async (completion) => {
         await projector.flush(true);
         if (!completion.success || params.abortSignal?.aborted) {
-          return;
+          return false;
         }
         try {
           const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
@@ -602,6 +602,7 @@ export async function tryDispatchAcpReply(params: {
             meta: acpResolution.meta,
             threadId: params.ctx.MessageThreadId,
           });
+          return true;
         } catch (error) {
           logVerbose(
             `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(

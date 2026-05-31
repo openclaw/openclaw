@@ -164,11 +164,8 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   context: MessagePreprocessedHookContext;
 };
 
-/**
- * Context provided to `agent:turn:end` hook handlers.
- * Fired after each completed agent turn cycle, for both successful and failed turns.
- */
-export type AgentTurnEndHookContext = {
+/** Shared context for agent turn lifecycle hook handlers. */
+export type AgentTurnLifecycleHookContext = {
   /** Session key identifying the agent session that completed the turn. */
   sessionKey: string;
   /** Whether the turn completed successfully (`true`) or failed (`false`). */
@@ -179,11 +176,30 @@ export type AgentTurnEndHookContext = {
   errorCode?: string;
 };
 
+/**
+ * Context provided to `agent:turn:end` hook handlers.
+ * Fired after each completed agent turn cycle, for both successful and failed turns.
+ */
+export type AgentTurnEndHookContext = AgentTurnLifecycleHookContext;
+
 /** Internal hook event emitted after each agent turn cycle completes. */
 export type AgentTurnEndHookEvent = InternalHookEvent & {
   type: "agent";
   action: "turn:end";
   context: AgentTurnEndHookContext;
+};
+
+/**
+ * Context provided to `agent:turn:saved` hook handlers.
+ * Fired after a completed agent turn has been saved to durable session state.
+ */
+export type AgentTurnSavedHookContext = AgentTurnLifecycleHookContext;
+
+/** Internal hook event emitted after each agent turn is saved. */
+export type AgentTurnSavedHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "turn:saved";
+  context: AgentTurnSavedHookContext;
 };
 
 export type SessionPatchHookContext = {
@@ -477,6 +493,22 @@ export function isAgentTurnEndEvent(event: InternalHookEvent): event is AgentTur
     return false;
   }
   const context = getHookContext<AgentTurnEndHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "sessionKey") &&
+    hasBooleanContextField(context, "success") &&
+    hasNumberContextField(context, "durationMs") &&
+    (context.errorCode === undefined || typeof context.errorCode === "string")
+  );
+}
+
+export function isAgentTurnSavedEvent(event: InternalHookEvent): event is AgentTurnSavedHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "turn:saved")) {
+    return false;
+  }
+  const context = getHookContext<AgentTurnSavedHookContext>(event);
   if (!context) {
     return false;
   }

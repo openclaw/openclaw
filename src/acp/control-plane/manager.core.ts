@@ -9,6 +9,7 @@ import { logVerbose } from "../../globals.js";
 import { fireAndForgetBoundedHook } from "../../hooks/fire-and-forget.js";
 import {
   type AgentTurnEndHookContext,
+  type AgentTurnSavedHookContext,
   createInternalHookEvent,
   triggerInternalHook,
 } from "../../hooks/internal-hooks.js";
@@ -43,7 +44,8 @@ import {
   type AcpManagerObservabilitySnapshot,
   type AcpRunTurnInput,
   type AcpSessionManagerDeps,
-  type AcpTurnEndHookContext,
+  type AcpTurnCompletionHookContext,
+  type AcpTurnSavedHookContext,
   type AcpSessionResolution,
   type AcpSessionRuntimeOptions,
   type AcpSessionStatus,
@@ -319,7 +321,7 @@ export class AcpSessionManager {
               sessionKey,
               startedAt: completionParams.startedAt,
               errorCode: completionParams.errorCode,
-              beforeHook: input.onBeforeTurnEndHook,
+              beforeSavedHook: input.onBeforeTurnSavedHook,
             }),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
@@ -421,7 +423,9 @@ export class AcpSessionManager {
     sessionKey: string;
     startedAt: number;
     errorCode?: AcpRuntimeError["code"];
-    beforeHook?: (context: AcpTurnEndHookContext) => Promise<void> | void;
+    beforeSavedHook?: (
+      context: AcpTurnSavedHookContext,
+    ) => Promise<boolean | void> | boolean | void;
   }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
     this.turnLatencyStats.totalMs += durationMs;
@@ -437,21 +441,30 @@ export class AcpSessionManager {
       success: !params.errorCode,
       durationMs,
       ...(params.errorCode ? { errorCode: params.errorCode } : {}),
-    } satisfies AcpTurnEndHookContext;
+    } satisfies AcpTurnCompletionHookContext;
+    this.emitTurnEndHook(context);
+    if (!params.beforeSavedHook) {
+      return;
+    }
+    let shouldEmitSaved = true;
     try {
-      await params.beforeHook?.(context);
+      const beforeSavedResult = await params.beforeSavedHook(context);
+      shouldEmitSaved = beforeSavedResult !== false;
     } catch (error) {
       logVerbose(
-        `acp-manager: before agent:turn:end hook callback failed for ${params.sessionKey}; skipping turn:end hook: ${formatErrorMessage(
+        `acp-manager: before agent:turn:saved hook callback failed for ${params.sessionKey}; skipping turn:saved hook: ${formatErrorMessage(
           error,
         )}`,
       );
       return;
     }
-    this.emitTurnEndHook(context);
+    if (!shouldEmitSaved) {
+      return;
+    }
+    this.emitTurnSavedHook(context);
   }
 
-  private emitTurnEndHook(context: AcpTurnEndHookContext): void {
+  private emitTurnEndHook(context: AcpTurnCompletionHookContext): void {
     fireAndForgetBoundedHook(
       () =>
         triggerInternalHook(
@@ -463,6 +476,21 @@ export class AcpSessionManager {
           ),
         ),
       "agent:turn:end internal hook failed",
+    );
+  }
+
+  private emitTurnSavedHook(context: AcpTurnCompletionHookContext): void {
+    fireAndForgetBoundedHook(
+      () =>
+        triggerInternalHook(
+          createInternalHookEvent(
+            "agent",
+            "turn:saved",
+            context.sessionKey,
+            context satisfies AgentTurnSavedHookContext,
+          ),
+        ),
+      "agent:turn:saved internal hook failed",
     );
   }
 

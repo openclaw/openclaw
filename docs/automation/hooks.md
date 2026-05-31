@@ -56,6 +56,7 @@ openclaw hooks info session-memory
 | `session:patch`          | When session properties are modified                       |
 | `agent:bootstrap`        | Before workspace bootstrap files are injected              |
 | `agent:turn:end`         | After an ACP agent turn completes or fails                 |
+| `agent:turn:saved`       | After an ACP agent turn is saved to durable session state  |
 | `gateway:startup`        | After channels start and hooks are loaded                  |
 | `gateway:shutdown`       | When gateway shutdown begins                               |
 | `gateway:pre-restart`    | Before an expected gateway restart                         |
@@ -136,7 +137,7 @@ reply channel and ignore pushed messages.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`.
 
-**Agent events** (`agent:turn:end`): `context.sessionKey`, `context.success`, `context.durationMs`, and `context.errorCode` when the turn failed. For ACP turns, this is scheduled after the runtime emits the terminal turn event and the manager has awaited event delivery callbacks. When OpenClaw dispatch mirrors an ACP turn into the session transcript, that transcript write is flushed before the hook is scheduled, so memory hooks can use `context.sessionKey` to load the completed turn from persisted state. If the pre-hook completion step fails, such as ACP dispatch transcript persistence failing, `agent:turn:end` is not emitted for that turn. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. The event does not embed transcript text.
+**Agent events** (`agent:turn:end`, `agent:turn:saved`): `context.sessionKey`, `context.success`, `context.durationMs`, and `context.errorCode` when the turn failed. For ACP turns, `agent:turn:end` is scheduled after the runtime emits the terminal turn event and the manager has awaited event delivery callbacks; it marks the turn lifecycle boundary and does not guarantee the completed turn has been written to durable session state. `agent:turn:saved` is scheduled only after OpenClaw dispatch has flushed and saved the mirrored ACP turn into durable session state, so memory, indexing, and audit hooks that read completed turn state should use `agent:turn:saved`. If that save step fails, `agent:turn:end` still fires and `agent:turn:saved` is skipped. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. These events do not embed transcript text.
 
 **Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
 

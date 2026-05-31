@@ -280,7 +280,7 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
-  it("emits agent:turn:end after a successful ACP turn", async () => {
+  it("emits agent:turn:end and agent:turn:saved after a successful saved ACP turn", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -292,8 +292,10 @@ describe("AcpSessionManager", () => {
       acp: readySessionMeta(),
     });
 
-    const handler = vi.fn();
-    registerInternalHook("agent:turn:end", handler);
+    const endHandler = vi.fn();
+    const savedHandler = vi.fn();
+    registerInternalHook("agent:turn:end", endHandler);
+    registerInternalHook("agent:turn:saved", savedHandler);
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
@@ -302,16 +304,30 @@ describe("AcpSessionManager", () => {
       text: "hello",
       mode: "prompt",
       requestId: "turn-end-success",
+      onBeforeTurnSavedHook: vi.fn(),
     });
 
     await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledTimes(1);
+      expect(endHandler).toHaveBeenCalledTimes(1);
+      expect(savedHandler).toHaveBeenCalledTimes(1);
     });
 
-    expect(handler).toHaveBeenCalledWith(
+    expect(endHandler).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "agent",
         action: "turn:end",
+        sessionKey: "agent:codex:acp:session-1",
+        context: expect.objectContaining({
+          sessionKey: "agent:codex:acp:session-1",
+          success: true,
+          durationMs: expect.any(Number),
+        }),
+      }),
+    );
+    expect(savedHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent",
+        action: "turn:saved",
         sessionKey: "agent:codex:acp:session-1",
         context: expect.objectContaining({
           sessionKey: "agent:codex:acp:session-1",
@@ -363,7 +379,7 @@ describe("AcpSessionManager", () => {
     expect(order).toEqual(["event:text_delta", "event:done", "hook"]);
   });
 
-  it("does not emit agent:turn:end when the pre-hook completion step fails", async () => {
+  it("emits agent:turn:end but not agent:turn:saved when the save step fails", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -375,8 +391,10 @@ describe("AcpSessionManager", () => {
       acp: readySessionMeta(),
     });
 
-    const handler = vi.fn();
-    registerInternalHook("agent:turn:end", handler);
+    const endHandler = vi.fn();
+    const savedHandler = vi.fn();
+    registerInternalHook("agent:turn:end", endHandler);
+    registerInternalHook("agent:turn:saved", savedHandler);
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
@@ -385,14 +403,52 @@ describe("AcpSessionManager", () => {
       text: "hello",
       mode: "prompt",
       requestId: "turn-end-pre-hook-failure",
-      onBeforeTurnEndHook: async () => {
+      onBeforeTurnSavedHook: async () => {
         throw new Error("transcript write failed");
       },
     });
 
+    await vi.waitFor(() => {
+      expect(endHandler).toHaveBeenCalledTimes(1);
+    });
     await flushMicrotasks();
 
-    expect(handler).not.toHaveBeenCalled();
+    expect(savedHandler).not.toHaveBeenCalled();
+  });
+
+  it("does not emit agent:turn:saved when the save step returns false", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const endHandler = vi.fn();
+    const savedHandler = vi.fn();
+    registerInternalHook("agent:turn:end", endHandler);
+    registerInternalHook("agent:turn:saved", savedHandler);
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "hello",
+      mode: "prompt",
+      requestId: "turn-saved-skipped",
+      onBeforeTurnSavedHook: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(endHandler).toHaveBeenCalledTimes(1);
+    });
+    await flushMicrotasks();
+
+    expect(savedHandler).not.toHaveBeenCalled();
   });
 
   it("emits agent:turn:end after a failed ACP turn", async () => {
@@ -411,7 +467,9 @@ describe("AcpSessionManager", () => {
     });
 
     const handler = vi.fn();
+    const savedHandler = vi.fn();
     registerInternalHook("agent:turn:end", handler);
+    registerInternalHook("agent:turn:saved", savedHandler);
 
     const manager = new AcpSessionManager();
     await expect(
@@ -443,6 +501,8 @@ describe("AcpSessionManager", () => {
         }),
       }),
     );
+    await flushMicrotasks();
+    expect(savedHandler).not.toHaveBeenCalled();
   });
 
   it("serializes concurrent turns for the same ACP session", async () => {
