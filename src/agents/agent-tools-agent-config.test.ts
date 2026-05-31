@@ -164,7 +164,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("exec");
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
+    expect(toolNames).toContain("apply_patch");
   });
 
   it("uses the configured default agent for lean local-model filtering on legacy session keys", () => {
@@ -241,7 +241,7 @@ describe("Agent-specific tool filtering", () => {
 
     const toolNames = tools.map((t) => t.name);
     expect(toolNames).toContain("exec");
-    expect(toolNames).not.toContain("apply_patch");
+    expect(toolNames).toContain("apply_patch");
   });
 
   it("defaults apply_patch to workspace-only (blocks traversal)", async () => {
