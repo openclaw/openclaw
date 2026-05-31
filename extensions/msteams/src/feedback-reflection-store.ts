@@ -18,10 +18,6 @@ type FeedbackLearningEntry = {
   updatedAt: number;
 };
 
-function encodeSessionKey(sessionKey: string): string {
-  return Buffer.from(sessionKey, "utf8").toString("base64url");
-}
-
 function learningStoreKey(storePath: string, sessionKey: string): string {
   return crypto.createHash("sha256").update(`${storePath}\0${sessionKey}`, "utf8").digest("hex");
 }

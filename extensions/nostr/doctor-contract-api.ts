@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
@@ -96,10 +97,10 @@ async function readJsonFile(filePath: string): Promise<unknown> {
 async function listLegacyFiles(params: {
   stateDir: string;
   prefix: string;
-  parse: (value: unknown) => unknown | null;
+  parse: (value: unknown) => unknown;
 }): Promise<Array<{ accountId: string; filePath: string; value: unknown }>> {
   const dir = path.join(params.stateDir, "nostr");
-  let entries: fs.Dirent[] = [];
+  let entries: Dirent[] = [];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
@@ -147,9 +148,9 @@ async function archiveLegacySource(params: {
   }
 }
 
-async function ensureStoreCapacity<T>(params: {
+async function ensureStoreCapacity(params: {
   files: Array<{ accountId: string }>;
-  store: { entries: () => Promise<Array<{ key: string; value: T }>> };
+  store: { entries: () => Promise<Array<{ key: string; value: unknown }>> };
   maxEntries: number;
   label: string;
   warnings: string[];
