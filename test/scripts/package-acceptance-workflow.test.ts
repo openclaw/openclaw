@@ -932,10 +932,14 @@ describe("package artifact reuse", () => {
   });
 
   it("fails Testbox changed-check delegation when the remote command fails", () => {
+    const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
     const runTestboxStep = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check").steps?.find(
       (step) => step.name === "Run Testbox",
     );
 
+    expect(workflow).toContain('PNPM_CONFIG_MODULES_DIR: "/tmp/openclaw-pnpm-node-modules"');
+    expect(workflow).toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
+    expect(workflow).toContain('PNPM_CONFIG_VIRTUAL_STORE_DIR: "/tmp/openclaw-pnpm-virtual-store"');
     expect(runTestboxStep?.uses).toContain("useblacksmith/run-testbox@");
     expect(runTestboxStep?.["continue-on-error"]).toBeUndefined();
   });

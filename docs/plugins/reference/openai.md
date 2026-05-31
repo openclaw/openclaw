@@ -1,5 +1,5 @@
 ---
-summary: "Adds OpenAI, OpenAI Codex model provider support to OpenClaw."
+summary: "Adds OpenAI model provider support to OpenClaw, including ChatGPT/Codex OAuth."
 read_when:
   - You are installing, configuring, or auditing the openai plugin
 title: "OpenAI plugin"
@@ -7,7 +7,7 @@ title: "OpenAI plugin"
 
 # OpenAI plugin
 
-Adds OpenAI, OpenAI Codex model provider support to OpenClaw.
+Adds OpenAI model provider support to OpenClaw, including ChatGPT/Codex OAuth.
 
 ## Distribution
 

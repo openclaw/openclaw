@@ -1455,6 +1455,16 @@ importers:
         specifier: 2026.5.28
         version: 2026.5.28
 
+  extensions/sms:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/stepfun:
     devDependencies:
       '@openclaw/plugin-sdk':

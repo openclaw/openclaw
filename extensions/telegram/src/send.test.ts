@@ -3133,6 +3133,51 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
   });
 
+  it("uses editMessageCaption when requested for media captions", async () => {
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "Media **caption**", {
+      token: "tok",
+      cfg: {},
+      editMode: "caption",
+      buttons: [[{ text: "Open", url: "https://example.com" }]],
+    });
+
+    expect(botApi.editMessageText).not.toHaveBeenCalled();
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const captionParams = requireRecord(
+      firstMockCall(botApi.editMessageCaption, "editMessageCaption call")[2],
+      "caption edit params",
+    );
+    expect(captionParams.caption).toBe("Media <b>caption</b>");
+    expect(captionParams.parse_mode).toBe("HTML");
+    expect(captionParams.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+    });
+  });
+
+  it("falls back to editMessageCaption when Telegram reports a media message has no text", async () => {
+    botApi.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: there is no text in the message to edit"),
+    );
+    botApi.editMessageCaption.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "New caption", {
+      token: "tok",
+      cfg: {},
+      editMode: "auto",
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageCaption).toHaveBeenCalledTimes(1);
+    const captionParams = requireRecord(
+      firstMockCall(botApi.editMessageCaption, "fallback editMessageCaption call")[2],
+      "fallback caption edit params",
+    );
+    expect(captionParams.caption).toBe("New caption");
+    expect(captionParams.parse_mode).toBe("HTML");
+  });
+
   it("derives readable plain text when Telegram rejects edited HTML", async () => {
     botApi.editMessageText
       .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))

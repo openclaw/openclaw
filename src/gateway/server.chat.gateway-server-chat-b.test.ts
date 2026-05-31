@@ -1614,6 +1614,43 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history backfills visible messages when raw tail is mostly silent", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const silentTail = Array.from({ length: 24 }, (_, index) =>
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            timestamp: Date.now() + index + 2,
+          },
+        }),
+      );
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "visible question" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "visible answer" }],
+            timestamp: Date.now() + 1,
+          },
+        }),
+        ...silentTail,
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 2, maxChars: 100 });
+      expect(JSON.stringify(messages)).toContain("visible question");
+      expect(JSON.stringify(messages)).toContain("visible answer");
+      expect(JSON.stringify(messages)).not.toContain("NO_REPLY");
+    });
+  });
+
   test("smoke: supports abort and idempotent completion", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
