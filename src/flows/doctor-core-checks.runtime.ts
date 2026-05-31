@@ -80,6 +80,10 @@ function isReadableRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
+function isTrimmedNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() === value && value.length > 0;
+}
+
 function hasProviderCatalogKey(params: {
   value: Record<string, unknown>;
   key: string;
@@ -192,13 +196,13 @@ function collectProviderCatalogModelFindings(params: {
       findings.push(modelId.finding);
       continue;
     }
-    if (typeof modelId.value !== "string" || !modelId.value) {
+    if (!isTrimmedNonEmptyString(modelId.value)) {
       findings.push(
         providerCatalogProjectionFinding({
           providerId: params.providerId,
           pluginId: params.pluginId,
           message: `Provider catalog ${params.providerId} model row ${index} has an invalid model id.`,
-          error: new Error("model id must be a non-empty string"),
+          error: new Error("model id must be a non-empty trimmed string"),
         }),
       );
     }
@@ -318,6 +322,17 @@ function collectProviderCatalogResultFindings(params: {
   }
   const findings: HealthFinding[] = [];
   for (const providerId of providerIds) {
+    if (!isTrimmedNonEmptyString(providerId)) {
+      findings.push(
+        providerCatalogProjectionFinding({
+          providerId: params.providerId,
+          pluginId: params.pluginId,
+          message: `Provider catalog ${params.providerId} provider key is invalid during doctor validation.`,
+          error: new Error("provider key must be a non-empty trimmed string"),
+        }),
+      );
+      continue;
+    }
     const providerConfig = readProviderCatalogValue({
       value: providers.value,
       key: providerId,

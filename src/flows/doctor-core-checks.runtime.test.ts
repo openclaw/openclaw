@@ -588,7 +588,41 @@ describe("doctor provider catalog projection checks", () => {
         path: "plugins.entries.mockplugin",
         target: "mockplugin",
         message: "Provider catalog mockplugin model row 0 has an invalid model id.",
-        requirement: "model id must be a non-empty string",
+        requirement: "model id must be a non-empty trimmed string",
+      }),
+    );
+  });
+
+  it("reports whitespace-only provider catalog model ids", async () => {
+    mocks.resolvePluginProviders.mockReturnValueOnce([
+      {
+        id: "mockplugin",
+        pluginId: "mockplugin",
+        label: "Mock",
+        auth: [],
+        staticCatalog: {
+          order: "simple",
+          run: async () => ({
+            providers: {
+              mockplugin: {
+                api: "openai-completions" as const,
+                baseUrl: "https://mockplugin.test/v1",
+                models: [{ id: "   " }],
+              },
+            },
+          }),
+        },
+      },
+    ]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message: "Provider catalog mockplugin model row 0 has an invalid model id.",
+        requirement: "model id must be a non-empty trimmed string",
       }),
     );
   });
@@ -679,6 +713,40 @@ describe("doctor provider catalog projection checks", () => {
         target: "mockplugin",
         message: "Provider catalog mockplugin result is invalid during doctor validation.",
         requirement: "result must include provider or providers object",
+      }),
+    );
+  });
+
+  it("reports invalid multi-provider catalog keys", async () => {
+    mocks.resolvePluginProviders.mockReturnValueOnce([
+      {
+        id: "mockplugin",
+        pluginId: "mockplugin",
+        label: "Mock",
+        auth: [],
+        staticCatalog: {
+          order: "simple",
+          run: async () => ({
+            providers: {
+              " ": {
+                api: "openai-completions" as const,
+                baseUrl: "https://mockplugin.test/v1",
+                models: [{ id: "mock-model" }],
+              },
+            },
+          }),
+        },
+      },
+    ]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message: "Provider catalog mockplugin provider key is invalid during doctor validation.",
+        requirement: "provider key must be a non-empty trimmed string",
       }),
     );
   });
