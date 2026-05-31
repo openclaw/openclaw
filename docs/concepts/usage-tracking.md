@@ -9,9 +9,12 @@ title: "Usage tracking"
 ## What it is
 
 - Pulls provider usage/quota directly from their usage endpoints.
-- No estimated costs; only the provider-reported windows.
-- Human-readable status output is normalized to `X% left`, even when an
-  upstream API reports consumed quota, remaining quota, or only raw counts.
+- No estimated costs; only provider-reported quota windows or account-state
+  summaries.
+- Human-readable quota-window status output is normalized to `X% left`, even
+  when an upstream API reports consumed quota, remaining quota, or only raw
+  counts. Providers without resettable quota windows can show provider summary
+  text instead, such as a balance.
 - Session-level `/status` and `session_status` can fall back to the latest
   transcript usage entry when the live session snapshot is sparse. That
   fallback fills missing token/cache counters, can recover the active runtime
@@ -20,7 +23,7 @@ title: "Usage tracking"
 
 ## Where it shows up
 
-- `/status` in chats: emoji-rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available as a normalized `X% left` window.
+- `/status` in chats: emoji-rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available as a normalized `X% left` window or provider summary text.
 - `/usage off|tokens|full` in chats: per-response usage footer (OAuth shows tokens only).
 - `/usage cost` in chats: local cost summary aggregated from OpenClaw session logs.
 - CLI: `openclaw status --usage` prints a full per-provider breakdown.
