@@ -249,6 +249,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingCloseErroredForReply = false;
   let visibleReplySent = false;
   let skippedFinalReason: string | null = null;
+  let idleSideEffectsPromise: Promise<void> = Promise.resolve();
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const markVisibleReplySent = () => {
@@ -544,6 +545,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const ensureNoVisibleReplyFallback = async (reason: string): Promise<boolean> => {
+    await idleSideEffectsPromise;
     if (visibleReplySent) {
       return false;
     }
@@ -567,6 +569,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       `feishu[${account.accountId}]: sent no-visible-reply fallback (${reason})`,
     );
     return true;
+  };
+
+  const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
+    const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
+      await closeStreaming(options);
+      await typingCallbacks?.onIdle?.();
+    });
+    idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
+    return nextIdleSideEffects;
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -739,13 +750,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
-        await closeStreaming({ markClosedForReply: false });
-        typingCallbacks?.onIdle?.();
+        await queueIdleSideEffects({ markClosedForReply: false });
       },
-      onIdle: async () => {
-        await closeStreaming();
-        typingCallbacks?.onIdle?.();
-      },
+      onIdle: () => queueIdleSideEffects(),
       onCleanup: () => {
         typingCallbacks?.onCleanup?.();
       },

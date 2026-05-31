@@ -1624,6 +1624,45 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("waits for pending streaming close before no-visible-reply fallback", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+
+    await options.deliver({ text: "```md\nvisible answer\n```" }, { kind: "final" });
+
+    const streamingSession = streamingInstances[0];
+    let releaseClose: () => void = () => {};
+    const closeMock = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        releaseClose = resolve;
+      });
+      streamingSession.active = false;
+    });
+    streamingSession.close = closeMock;
+
+    const idlePromise = options.onIdle?.();
+    const fallbackPromise = result.ensureNoVisibleReplyFallback("zero-final-count");
+
+    for (let attempt = 0; attempt < 20 && closeMock.mock.calls.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(closeMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+
+    releaseClose();
+    await idlePromise;
+    await expect(fallbackPromise).resolves.toBe(false);
+
+    expect(closeMock).toHaveBeenCalledWith("```md\nvisible answer\n```", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
   it("does not send no-visible-reply fallback after media-only output", async () => {
     const runtime = createRuntimeLogger();
     const { result, options } = createDispatcherHarness({ runtime });
