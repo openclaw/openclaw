@@ -10,6 +10,7 @@ import java.net.URI
 import java.util.Base64
 import java.util.Locale
 
+/** Parsed endpoint fields after URL validation and cleartext-safety checks. */
 internal data class GatewayEndpointConfig(
   val host: String,
   val port: Int,
@@ -17,6 +18,7 @@ internal data class GatewayEndpointConfig(
   val displayUrl: String,
 )
 
+/** Decoded setup-code payload; only one credential family is expected to be populated. */
 internal data class GatewaySetupCode(
   val url: String,
   val bootstrapToken: String?,
@@ -24,6 +26,7 @@ internal data class GatewaySetupCode(
   val password: String?,
 )
 
+/** Final gateway connection fields selected from setup-code or manual UI input. */
 internal data class GatewayConnectConfig(
   val host: String,
   val port: Int,
@@ -33,22 +36,26 @@ internal data class GatewayConnectConfig(
   val password: String,
 )
 
+/** Validation reason used by setup, QR, and manual endpoint copy. */
 internal enum class GatewayEndpointValidationError {
   INVALID_URL,
   INSECURE_REMOTE_URL,
 }
 
+/** User input source used to choose endpoint-validation wording. */
 internal enum class GatewayEndpointInputSource {
   SETUP_CODE,
   MANUAL,
   QR_SCAN,
 }
 
+/** Endpoint parse result that preserves the reason when no usable config exists. */
 internal data class GatewayEndpointParseResult(
   val config: GatewayEndpointConfig? = null,
   val error: GatewayEndpointValidationError? = null,
 )
 
+/** QR scan result that separates a usable setup code from validation copy. */
 internal data class GatewayScannedSetupCodeResult(
   val setupCode: String? = null,
   val error: GatewayEndpointValidationError? = null,
