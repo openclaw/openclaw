@@ -608,6 +608,54 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(second).toEqual({ kind: "drop", reason: "self-chat echo" });
   });
 
+  it("drops is_from_me=false self-chat reflection with sub-second created_at skew", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T05:34:00Z"));
+
+    const selfChatCache = createSelfChatCache();
+
+    const first = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 85160,
+          guid: "p:0/from-me-guid",
+          sender: "+16043519505",
+          chat_identifier: "+16043519505",
+          destination_caller_id: "+16043519505",
+          text: "Aha, neat!",
+          created_at: "2026-05-10T05:34:00.000Z",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Aha, neat!",
+        bodyText: "Aha, neat!",
+        selfChatCache,
+      }),
+    );
+    expect(first.kind).toBe("dispatch");
+
+    const reflection = await resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 85161,
+          guid: "p:0/reflected-guid",
+          sender: "+16043519505",
+          chat_identifier: "+16043519505",
+          destination_caller_id: null,
+          text: "Aha, neat!",
+          created_at: "2026-05-10T05:34:00.239Z",
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "Aha, neat!",
+        bodyText: "Aha, neat!",
+        selfChatCache,
+      }),
+    );
+
+    expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
+  });
+
   it("drops outbound DM when sender matches chat_identifier but destination_caller_id is absent (#63980)", async () => {
     const selfChatCache = createSelfChatCache();
 

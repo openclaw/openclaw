@@ -32,6 +32,46 @@ describe("createSelfChatCache", () => {
     ).toBe(true);
   });
 
+  it("matches reflected rows whose created_at differs by less than one second", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
+
+    const cache = createSelfChatCache();
+    cache.remember({
+      ...directLookup,
+      text: "hello",
+      createdAt: 1_774_136_400_000,
+    });
+
+    expect(
+      cache.has({
+        ...directLookup,
+        text: "hello",
+        createdAt: 1_774_136_400_736,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match reflected rows whose created_at differs by one second", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
+
+    const cache = createSelfChatCache();
+    cache.remember({
+      ...directLookup,
+      text: "hello",
+      createdAt: 1_774_136_400_000,
+    });
+
+    expect(
+      cache.has({
+        ...directLookup,
+        text: "hello",
+        createdAt: 1_774_136_401_000,
+      }),
+    ).toBe(false);
+  });
+
   it("expires entries after the ttl window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
@@ -60,6 +100,27 @@ describe("createSelfChatCache", () => {
 
     expect(cache.has({ ...directLookup, text: "message-0", createdAt: 0 })).toBe(false);
     expect(cache.has({ ...directLookup, text: "message-512", createdAt: 512 })).toBe(true);
+  });
+
+  it("trims bursty inserts without requiring per-entry cleanup", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
+
+    const cache = createSelfChatCache();
+    for (let i = 0; i < 2_000; i += 1) {
+      cache.remember({
+        ...directLookup,
+        text: `burst-${i}`,
+        createdAt: i,
+      });
+    }
+
+    vi.advanceTimersByTime(1_001);
+
+    expect(cache.has({ ...directLookup, text: "burst-0", createdAt: 0 })).toBe(false);
+    expect(cache.has({ ...directLookup, text: "burst-1487", createdAt: 1_487 })).toBe(false);
+    expect(cache.has({ ...directLookup, text: "burst-1488", createdAt: 1_488 })).toBe(true);
+    expect(cache.has({ ...directLookup, text: "burst-1999", createdAt: 1_999 })).toBe(true);
   });
 
   it("does not collide long texts that differ only in the middle", () => {
