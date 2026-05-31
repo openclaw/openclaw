@@ -2122,6 +2122,24 @@ describe("message tool boot-echo guard", () => {
     expect(call?.params?.media_url).toBe("file:///tmp/status.png");
   });
 
+  it("sanitizes boot echo text and still sends when snake_case media arrays remain", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: echoedText,
+        media_urls: ["file:///tmp/one.png", "file:///tmp/two.png"],
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+    expect(call?.params?.text).toBe("");
+    expect(call?.params?.media_urls).toEqual(["file:///tmp/one.png", "file:///tmp/two.png"]);
+  });
+
   it("sanitizes boot echo text and still sends when structured attachments remain", async () => {
     setBootEchoContextForSession("agent:main", longBootPrompt);
     mockSendResult({ channel: "telegram", to: "telegram:123" });

@@ -58,7 +58,7 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
 
@@ -223,14 +223,6 @@ function readFirstStringParam(params: Record<string, unknown>, keys: readonly st
   return "";
 }
 
-function readStringArrayParamRaw(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = value.filter((entry): entry is string => typeof entry === "string");
-  return values.length > 0 ? values : undefined;
-}
-
 function readStructuredAttachmentMediaParams(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -257,7 +249,7 @@ function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolea
     .filter((value) => value.trim())
     .join("\n");
   const mediaUrls = [
-    ...(readStringArrayParamRaw(params.mediaUrls) ?? []),
+    ...(readStringArrayParam(params, "mediaUrls") ?? []),
     ...readStructuredAttachmentMediaParams(params.attachments),
   ];
   return hasReplyPayloadContent(
