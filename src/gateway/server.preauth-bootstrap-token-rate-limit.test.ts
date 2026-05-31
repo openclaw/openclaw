@@ -42,7 +42,7 @@ async function attemptForgedBootstrap(port: number, identityPath: string) {
 }
 
 describe("pre-auth bootstrap-token rate limit", () => {
-  test("locks out forged bootstrap-token attempts after maxAttempts", async () => {
+  test("locks out concurrent forged bootstrap-token attempts after maxAttempts", async () => {
     // exemptLoopback:false ensures the limiter applies to loopback test
     // clients. In production the same gate applies to remote clients via
     // the per-IP bucket.
@@ -57,30 +57,21 @@ describe("pre-auth bootstrap-token rate limit", () => {
       },
     };
     await withGatewayServer(async ({ port }) => {
-      const identityPath = path.join(
-        os.tmpdir(),
-        `openclaw-preauth-bootstrap-${randomUUID()}.json`,
-      );
+      const identityPrefix = path.join(os.tmpdir(), `openclaw-preauth-bootstrap-${randomUUID()}`);
 
-      // The first maxAttempts forged tokens reach verifyDeviceBootstrapToken
-      // and fail with bootstrap_token_invalid (the verify path ran).
-      const reasons: Array<string | undefined> = [];
-      for (let i = 0; i < 3; i++) {
-        const res = await attemptForgedBootstrap(port, identityPath);
+      const responses = await Promise.all(
+        Array.from(
+          { length: 8 },
+          async (_, index) => await attemptForgedBootstrap(port, `${identityPrefix}-${index}.json`),
+        ),
+      );
+      const reasons = responses.map((res) => {
         expect(res.ok).toBe(false);
         const detail = res.error?.details as { authReason?: string } | undefined;
-        reasons.push(detail?.authReason);
-      }
-      expect(reasons.every((r) => r === "bootstrap_token_invalid")).toBe(true);
-
-      // The next attempt is the one that proves the gate fires: the gateway
-      // rejects without invoking the mutex-locked verify path.
-      const lockedOut = await attemptForgedBootstrap(port, identityPath);
-      expect(lockedOut.ok).toBe(false);
-      const detail = lockedOut.error?.details as
-        | { authReason?: string; retryAfterMs?: number }
-        | undefined;
-      expect(detail?.authReason).toBe("rate_limited");
+        return detail?.authReason;
+      });
+      expect(reasons.filter((reason) => reason === "bootstrap_token_invalid")).toHaveLength(3);
+      expect(reasons.filter((reason) => reason === "rate_limited")).toHaveLength(5);
     });
   });
 

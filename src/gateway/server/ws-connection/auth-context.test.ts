@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import { createAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import { resolveConnectAuthDecision, type ConnectAuthState } from "./auth-context.js";
 
 type VerifyDeviceTokenFn = Parameters<typeof resolveConnectAuthDecision>[0]["verifyDeviceToken"];
@@ -335,7 +335,31 @@ describe("resolveConnectAuthDecision", () => {
     expect(verifyBootstrapToken).not.toHaveBeenCalled();
   });
 
-  it("records a bootstrap-token failure when the verify rejects", async () => {
+  it("still verifies the device token when only the bootstrap-token path is rate-limited", async () => {
+    const rateLimiter = createPerScopeRateLimiter({
+      "bootstrap-token": { allowed: false, retryAfterMs: 30_000 },
+      "device-token": { allowed: true },
+      "shared-secret": { allowed: true },
+    });
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({ ok: true }));
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
+    const decision = await resolveDeviceTokenDecision({
+      verifyBootstrapToken,
+      verifyDeviceToken,
+      rateLimiter: rateLimiter.limiter,
+      clientIp: "203.0.113.20",
+      stateOverrides: {
+        bootstrapTokenCandidate: "bootstrap-token",
+        deviceTokenCandidate: "device-token",
+      },
+    });
+    expect(decision.authOk).toBe(true);
+    expect(decision.authMethod).toBe("device-token");
+    expect(verifyBootstrapToken).not.toHaveBeenCalled();
+    expect(verifyDeviceToken).toHaveBeenCalledOnce();
+  });
+
+  it("records a bootstrap-token failure when final auth rejects", async () => {
     const rateLimiter = createPerScopeRateLimiter({
       "bootstrap-token": { allowed: true },
       "device-token": { allowed: true },
@@ -359,6 +383,79 @@ describe("resolveConnectAuthDecision", () => {
     });
     expect(rateLimiter.recordFailure).toHaveBeenCalledWith("203.0.113.20", "bootstrap-token");
     expect(rateLimiter.reset).not.toHaveBeenCalledWith("203.0.113.20", "bootstrap-token");
+  });
+
+  it("does not record a bootstrap-token failure when device-token fallback succeeds", async () => {
+    const rateLimiter = createPerScopeRateLimiter({
+      "bootstrap-token": { allowed: true },
+      "device-token": { allowed: true },
+      "shared-secret": { allowed: true },
+    });
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({
+      ok: false,
+      reason: "bootstrap_token_invalid",
+    }));
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
+    const decision = await resolveDeviceTokenDecision({
+      verifyBootstrapToken,
+      verifyDeviceToken,
+      rateLimiter: rateLimiter.limiter,
+      clientIp: "203.0.113.20",
+      stateOverrides: {
+        bootstrapTokenCandidate: "bootstrap-token",
+        deviceTokenCandidate: "device-token",
+      },
+    });
+    expect(decision.authOk).toBe(true);
+    expect(decision.authMethod).toBe("device-token");
+    expect(rateLimiter.recordFailure).not.toHaveBeenCalledWith("203.0.113.20", "bootstrap-token");
+  });
+
+  it("serializes concurrent bootstrap-token failures before checking the next attempt", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 3,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      exemptLoopback: false,
+      pruneIntervalMs: 0,
+    });
+    let activeBootstrapChecks = 0;
+    let maxActiveBootstrapChecks = 0;
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => {
+      activeBootstrapChecks += 1;
+      maxActiveBootstrapChecks = Math.max(maxActiveBootstrapChecks, activeBootstrapChecks);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeBootstrapChecks -= 1;
+      return { ok: false, reason: "bootstrap_token_invalid" };
+    });
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
+    try {
+      const decisions = await Promise.all(
+        Array.from(
+          { length: 8 },
+          async () =>
+            await resolveDeviceTokenDecision({
+              verifyBootstrapToken,
+              verifyDeviceToken,
+              rateLimiter,
+              clientIp: "203.0.113.20",
+              stateOverrides: {
+                bootstrapTokenCandidate: "bootstrap-token",
+                deviceTokenCandidate: undefined,
+                deviceTokenCandidateSource: undefined,
+              },
+            }),
+        ),
+      );
+      const reasons = decisions.map((decision) => decision.authResult.reason);
+      expect(reasons.filter((reason) => reason === "bootstrap_token_invalid")).toHaveLength(3);
+      expect(reasons.filter((reason) => reason === "rate_limited")).toHaveLength(5);
+      expect(verifyBootstrapToken).toHaveBeenCalledTimes(3);
+      expect(maxActiveBootstrapChecks).toBe(1);
+      expect(verifyDeviceToken).not.toHaveBeenCalled();
+    } finally {
+      rateLimiter.dispose();
+    }
   });
 
   it("resets the bootstrap-token bucket when the verify succeeds", async () => {
