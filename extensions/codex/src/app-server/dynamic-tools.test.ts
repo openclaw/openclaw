@@ -303,7 +303,7 @@ describe("createCodexDynamicToolBridge", () => {
         tools: [
           createTool({ name: "message" }),
           createTool({
-            name: "dofbot_move_angles",
+            name: "fuzzplugin_move_angles",
             parameters: { type: "array", items: { type: "number" } },
             execute: badExecute,
           }),
@@ -324,17 +324,17 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
     expect(bridge.telemetry.quarantinedTools).toEqual([
       {
-        tool: "dofbot_move_angles",
-        violations: ['dofbot_move_angles.inputSchema.type must be "object"'],
+        tool: "fuzzplugin_move_angles",
+        violations: ['fuzzplugin_move_angles.inputSchema.type must be "object"'],
       },
     ]);
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("dofbot_move_angles"),
+      expect.stringContaining("fuzzplugin_move_angles"),
       expect.objectContaining({
         tools: [
           {
-            tool: "dofbot_move_angles",
-            violations: ['dofbot_move_angles.inputSchema.type must be "object"'],
+            tool: "fuzzplugin_move_angles",
+            violations: ['fuzzplugin_move_angles.inputSchema.type must be "object"'],
           },
         ],
       }),
@@ -349,9 +349,9 @@ describe("createCodexDynamicToolBridge", () => {
         runId: "run-1",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        toolName: "dofbot_move_angles",
+        toolName: "fuzzplugin_move_angles",
         deniedReason: "unsupported_tool_schema",
-        reason: 'dofbot_move_angles.inputSchema.type must be "object"',
+        reason: 'fuzzplugin_move_angles.inputSchema.type must be "object"',
       }),
     );
 
@@ -360,13 +360,13 @@ describe("createCodexDynamicToolBridge", () => {
       turnId: "turn-1",
       callId: "call-1",
       namespace: null,
-      tool: "dofbot_move_angles",
+      tool: "fuzzplugin_move_angles",
       arguments: {},
     });
 
     expect(result).toEqual({
       success: false,
-      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: dofbot_move_angles" }],
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: fuzzplugin_move_angles" }],
     });
     expect(badExecute).not.toHaveBeenCalled();
   });
