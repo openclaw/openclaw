@@ -654,14 +654,26 @@ function resolveRemainingAcquireTimeoutMs(
   return Math.max(0, timeoutMs - elapsedMs);
 }
 
-function shouldRetryStaleAcquireFailure(params: {
+async function shouldRetryStaleAcquireFailure(params: {
+  lockPath: string;
   lockMissingAtDiagnostics: boolean;
   inspected: LockInspectionDetails;
-}): boolean {
+  heldByThisProcess: boolean;
+  staleMs: number;
+  nowMs: number;
+  orphanPayloadGraceMs: number;
+}): Promise<boolean> {
   if (params.lockMissingAtDiagnostics) {
     return true;
   }
-  return !params.inspected.stale;
+  return !(await shouldReportContendedLockStale({
+    lockPath: params.lockPath,
+    details: params.inspected,
+    heldByThisProcess: params.heldByThisProcess,
+    staleMs: params.staleMs,
+    nowMs: params.nowMs,
+    orphanPayloadGraceMs: params.orphanPayloadGraceMs,
+  }));
 }
 
 async function shouldRemoveLockDuringCleanup(
@@ -987,10 +999,15 @@ export async function acquireSessionWriteLock(params: {
       if (isFileLockError(err, "file_lock_stale")) {
         if (
           resolveRemainingAcquireTimeoutMs(timeoutMs, startedAtMs, Date.now()) > 0 &&
-          shouldRetryStaleAcquireFailure({
+          (await shouldRetryStaleAcquireFailure({
+            lockPath: errorLockPath,
             lockMissingAtDiagnostics,
             inspected,
-          })
+            heldByThisProcess,
+            staleMs,
+            nowMs,
+            orphanPayloadGraceMs,
+          }))
         ) {
           continue;
         }
