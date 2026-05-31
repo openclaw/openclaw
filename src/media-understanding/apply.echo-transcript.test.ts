@@ -175,7 +175,6 @@ describe("applyMediaUnderstanding – echo transcript", () => {
         (err as { code?: string; provider?: string }).provider = provider;
         throw err;
       },
-      isProviderAuthError: vi.fn(() => false),
       resolveAwsSdkEnvVarName: vi.fn(() => undefined),
       resolveEnvApiKey: vi.fn(() => null),
       resolveModelAuthMode: vi.fn(() => "api-key"),

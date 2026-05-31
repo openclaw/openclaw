@@ -286,7 +286,6 @@ describe("applyMediaUnderstanding", () => {
         (err as { code?: string; provider?: string }).provider = provider;
         throw err;
       },
-      isProviderAuthError: vi.fn(() => false),
     }));
     vi.doMock("../media/fetch.js", () => ({
       readRemoteMediaBuffer: readRemoteMediaBufferMock,
