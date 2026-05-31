@@ -1064,7 +1064,6 @@ function readBunRegistryEnv(env: NodeJS.ProcessEnv): string | null {
 
 function resolvePackageManagerRegistryConfigArgs(params: {
   manager?: GlobalInstallManager | null;
-  prefix?: string | null;
 }): string[] | null {
   const manager = params.manager ?? "npm";
   if (manager === "pnpm") {
@@ -1073,39 +1072,11 @@ function resolvePackageManagerRegistryConfigArgs(params: {
   if (manager !== "npm") {
     return null;
   }
-  return [
-    "npm",
-    "config",
-    "get",
-    "registry",
-    "--global",
-    ...(params.prefix ? ["--prefix", params.prefix] : []),
-  ];
-}
-
-function resolveNpmConfigPrefixFromPackageRoot(root: string | undefined | null): string | null {
-  const normalized = normalizeOptionalString(root);
-  if (!normalized) {
-    return null;
-  }
-  const packageRoot = path.resolve(normalized);
-  const nodeModulesRoot = path.dirname(packageRoot);
-  if (path.basename(nodeModulesRoot) !== "node_modules") {
-    return null;
-  }
-  const parent = path.dirname(nodeModulesRoot);
-  if (path.basename(parent) === "lib") {
-    return path.dirname(parent);
-  }
-  if (process.platform === "win32" && path.basename(parent).toLowerCase() === "npm") {
-    return parent;
-  }
-  return null;
+  return ["npm", "config", "get", "registry", "--global"];
 }
 
 async function resolveEffectiveNpmRegistry(params: {
   env: NodeJS.ProcessEnv;
-  root?: string | null;
   invocationCwd?: string;
   timeoutMs?: number;
   manager?: GlobalInstallManager | null;
@@ -1113,8 +1084,7 @@ async function resolveEffectiveNpmRegistry(params: {
   if (params.manager === "bun") {
     return readBunRegistryEnv(params.env);
   }
-  const prefix = resolveNpmConfigPrefixFromPackageRoot(params.root);
-  const argv = resolvePackageManagerRegistryConfigArgs({ manager: params.manager, prefix });
+  const argv = resolvePackageManagerRegistryConfigArgs({ manager: params.manager });
   if (!argv) {
     return readNpmRegistryEnv(params.env);
   }
@@ -1137,7 +1107,6 @@ async function resolveEffectiveNpmRegistry(params: {
 
 async function hasCustomNpmRegistryOverride(params: {
   env?: NodeJS.ProcessEnv;
-  root?: string | null;
   invocationCwd?: string;
   timeoutMs?: number;
   manager?: GlobalInstallManager | null;
@@ -1145,7 +1114,6 @@ async function hasCustomNpmRegistryOverride(params: {
   const env = params.env ?? process.env;
   const registry = await resolveEffectiveNpmRegistry({
     env,
-    root: params.root,
     invocationCwd: params.invocationCwd,
     timeoutMs: params.timeoutMs,
     manager: params.manager,
@@ -1237,7 +1205,6 @@ async function resolvePackageTargetAvailabilityPreflightError(params: {
   installSpec: string | null;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
-  root?: string | null;
   invocationCwd?: string;
   manager?: GlobalInstallManager | null;
 }): Promise<string | null> {
@@ -1248,7 +1215,6 @@ async function resolvePackageTargetAvailabilityPreflightError(params: {
   if (
     await hasCustomNpmRegistryOverride({
       env: params.env,
-      root: params.root,
       invocationCwd: params.invocationCwd,
       timeoutMs: params.timeoutMs,
       manager: params.manager,
@@ -3482,7 +3448,6 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       installSpec: availabilityInstallSpec,
       timeoutMs,
       env: process.env,
-      root,
       invocationCwd,
       manager: resolvePackageRegistryTargetFromInstallSpec(availabilityInstallSpec)
         ? await resolvePackageUpdateManager()

@@ -2409,7 +2409,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("skips npm availability preflight when npm resolves a custom global registry", async () => {
+  it("does not skip npm availability when the custom registry only exists in the target prefix", async () => {
     const prefix = await createTrackedTempDir("openclaw-update-custom-registry-");
     const root = path.join(prefix, "lib", "node_modules", "openclaw");
     mockPackageInstallStatus(root);
@@ -2422,17 +2422,9 @@ describe("update-cli", () => {
     });
     vi.mocked(defaultRuntime.writeJson).mockClear();
     vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv) => {
-      expect(argv).toEqual([
-        "npm",
-        "config",
-        "get",
-        "registry",
-        "--global",
-        "--prefix",
-        prefix,
-      ]);
+      expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
       return {
-        stdout: "https://npm.internal.example/\n",
+        stdout: "https://registry.npmjs.org/\n",
         stderr: "",
         code: 0,
         signal: null,
@@ -2443,11 +2435,17 @@ describe("update-cli", () => {
 
     await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
 
-    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
-    expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
-    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(
+      "openclaw@2026.5.26 is not available on the npm registry yet.",
+    );
   });
 
   it.each(["^2026.5.0", "2026.5.x"])(
