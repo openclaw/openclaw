@@ -322,7 +322,6 @@ describe("refreshChat", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:work:dashboard",
       limit: 100,
-      maxChars: 4000,
     });
     expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
   });
