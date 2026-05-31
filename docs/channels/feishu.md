@@ -262,7 +262,10 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 `accounts.<id>.tts` uses the same shape as `messages.tts` and deep-merges over
 global TTS config, so multi-bot Feishu setups can keep shared provider
 credentials globally while overriding only voice, model, persona, or auto mode
-per account.
+per account. The `tts.preserveText` option (default: `false`) keeps the text
+message alongside the voice media when set to `true`, rather than suppressing
+text in favor of voice-only delivery. This is useful when you want both readable
+text and voice in the same reply.
 
 ### Message limits
 
@@ -567,6 +570,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                       | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                      | `feishu`                             |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                         | `messages.tts`                       |
+| `channels.feishu.accounts.<id>.tts.preserveText`         | Keep text alongside voice media (default: `false`)                               | `false`                              |
 | `channels.feishu.dmPolicy`                               | DM policy                                                                        | `allowlist`                          |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | [BotOwnerId]                         |
 | `channels.feishu.groupPolicy`                            | Group policy                                                                     | `allowlist`                          |
