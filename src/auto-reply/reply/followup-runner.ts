@@ -663,6 +663,7 @@ export function createFollowupRunner(params: {
           ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
           runId,
+          sessionId: run.sessionId,
           abortSignal: runAbortSignal,
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({

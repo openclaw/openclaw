@@ -701,6 +701,7 @@ beforeAll(async () => {
 type FallbackRunnerParams = {
   provider: string;
   model: string;
+  sessionId?: string;
   run: (provider: string, model: string) => Promise<unknown>;
   onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
   classifyResult?: (params: {
@@ -966,6 +967,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const secondCall = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
     expect(secondCall.provider).toBe("openai");
     expect(secondCall.model).toBe("gpt-5.4");
+    expect(secondCall.sessionId).toBe("session-1");
 
     const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };

@@ -445,6 +445,7 @@ export async function compactEmbeddedAgentSessionDirect(
       runId: params.runId ?? params.sessionId,
       agentDir: params.agentDir,
       agentId: fallbackAgentId,
+      sessionId: params.sessionId,
       sessionKey: fallbackSessionKey,
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({

@@ -69,6 +69,7 @@ type ModelFallbackParams = {
   model?: string;
   abortSignal?: AbortSignal;
   agentId?: string;
+  sessionId?: string;
   sessionKey?: string;
   fallbacksOverride?: unknown[];
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
@@ -540,6 +541,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(fallbackCall.provider).toBe("ollama");
     expect(fallbackCall.model).toBe("qwen3:8b");
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
+    expect(fallbackCall.sessionId).toBe("session");
     expect(fallbackCall.fallbacksOverride).toEqual([]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const agentCall = requireEmbeddedAgentCall();

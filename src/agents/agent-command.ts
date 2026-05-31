@@ -1513,6 +1513,7 @@ async function agentCommandInternal(
           runId,
           agentDir,
           agentId: sessionAgentId,
+          sessionId,
           sessionKey: sessionKey ?? sessionId,
           prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
             await ensureSelectedAgentHarnessPlugin({
