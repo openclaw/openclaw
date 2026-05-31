@@ -410,6 +410,7 @@ function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
     const order = readProviderCatalogOrder(provider);
     if (!order.ok) {
       findings.push(order.finding);
+      byOrder.late.push(provider);
       continue;
     }
     byOrder[order.order].push(provider);

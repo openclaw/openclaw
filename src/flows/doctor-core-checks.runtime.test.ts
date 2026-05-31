@@ -581,7 +581,8 @@ describe("doctor provider catalog projection checks", () => {
       },
     ]);
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+    const findings = await collectProviderCatalogProjectionFindings({});
+    expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
@@ -615,7 +616,8 @@ describe("doctor provider catalog projection checks", () => {
       },
     ]);
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+    const findings = await collectProviderCatalogProjectionFindings({});
+    expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
@@ -647,7 +649,8 @@ describe("doctor provider catalog projection checks", () => {
       },
     ]);
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+    const findings = await collectProviderCatalogProjectionFindings({});
+    expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
@@ -679,7 +682,8 @@ describe("doctor provider catalog projection checks", () => {
       },
     ]);
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+    const findings = await collectProviderCatalogProjectionFindings({});
+    expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
@@ -717,7 +721,8 @@ describe("doctor provider catalog projection checks", () => {
       },
     ]);
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+    const findings = await collectProviderCatalogProjectionFindings({});
+    expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
@@ -830,7 +835,7 @@ describe("doctor provider catalog projection checks", () => {
               mockplugin: {
                 api: "openai-completions" as const,
                 baseUrl: "https://mockplugin.test/v1",
-                models: [{ id: "mock-model" }],
+                models: [{ id: " " }],
               },
             },
           }),
@@ -838,7 +843,8 @@ describe("doctor provider catalog projection checks", () => {
       },
     ]);
 
-    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+    const findings = await collectProviderCatalogProjectionFindings({});
+    expect(findings).toContainEqual(
       expect.objectContaining({
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
@@ -846,6 +852,16 @@ describe("doctor provider catalog projection checks", () => {
         target: "mockplugin",
         message: "Provider catalog mockplugin order is invalid during doctor validation.",
         requirement: "order must be simple, profile, paired, or late",
+      }),
+    );
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message: "Provider catalog mockplugin model row 0 has an invalid model id.",
+        requirement: "model id must be a non-empty trimmed string",
       }),
     );
   });
