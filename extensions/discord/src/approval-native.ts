@@ -37,9 +37,9 @@ function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "gro
     return null;
   }
   // DM session keys use the `direct` peer kind in the normalized form
-  // (`agent:<id>:discord:direct:<userId>`); legacy keys may still use `dm`.
-  // Treat both as the same logical kind for downstream comparisons.
-  const match = sessionKey.match(/discord:(channel|group|dm|direct):/);
+  // (`agent:<id>:discord[:account]:direct:<userId>`); legacy keys may still use
+  // `dm`. Treat both as the same logical kind for downstream comparisons.
+  const match = sessionKey.match(/discord:(?:[^:]+:)?(channel|group|dm|direct):/);
   if (!match) {
     return null;
   }
