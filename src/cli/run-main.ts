@@ -752,10 +752,13 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     const { createCliProgress } = await loadProgressModule();
+    // Suppress startup spinner for machine-readable output (--json) so
+    // progress glyphs (│, ◇) never leak into structured stdout output.
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
+      enabled: !hasJsonOutputFlag(normalizedArgv),
     });
     let startupProgressStopped = false;
     const stopStartupProgress = () => {

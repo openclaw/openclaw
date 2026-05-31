@@ -69,6 +69,42 @@ describe("cli progress", () => {
     ).toBe(false);
   });
 
+  it("suppresses the interactive spinner when stdout is not a TTY (piped output)", () => {
+    // The clack spinner writes to process.stdout; when stdout is piped,
+    // progress should not emit glyphs even if the progress stream is TTY.
+    const writes: string[] = [];
+    const stream = {
+      isTTY: true,
+      write: vi.fn((chunk: string) => {
+        writes.push(chunk);
+      }),
+    } as unknown as NodeJS.WriteStream;
+
+    const originalStdoutTty = Object.getOwnPropertyDescriptor(
+      process.stdout,
+      "isTTY",
+    );
+    Object.defineProperty(process.stdout, "isTTY", {
+      configurable: true,
+      value: false,
+    });
+    try {
+      const progress = createCliProgress({
+        label: "Piped",
+        stream,
+      });
+      progress.setLabel("Still going");
+      progress.done();
+      expect(writes).toStrictEqual([]);
+    } finally {
+      if (originalStdoutTty) {
+        Object.defineProperty(process.stdout, "isTTY", originalStdoutTty);
+      } else {
+        Reflect.deleteProperty(process.stdout, "isTTY");
+      }
+    }
+  });
+
   it("keeps the normal interactive spinner for regular tty commands", () => {
     expect(
       shouldUseInteractiveProgressSpinner({
