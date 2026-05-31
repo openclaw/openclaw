@@ -1245,6 +1245,87 @@ export async function updateNpmInstalledPlugins(params: {
             metadata: metadataResult.metadata,
           })
         ) {
+          let maintenanceResult: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+          try {
+            maintenanceResult = await installNpmSpecForUpdate({
+              spec: effectiveSpec!,
+              mode: "update",
+              extensionsDir,
+              timeoutMs: params.timeoutMs,
+              dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+              trustedSourceLinkedOfficialInstall,
+              expectedPluginId: pluginId,
+              expectedIntegrity,
+              onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
+                pluginId,
+                dryRun: false,
+                logger,
+                onIntegrityDrift: params.onIntegrityDrift,
+              }),
+              logger,
+            });
+          } catch (err) {
+            recordFailure(pluginId, `Failed to update ${pluginId}: ${String(err)}`);
+            continue;
+          }
+          if (!maintenanceResult.ok) {
+            recordFailure(
+              pluginId,
+              formatNpmInstallFailure({
+                pluginId,
+                spec: effectiveSpec!,
+                phase: "update",
+                result: maintenanceResult,
+              }),
+            );
+            continue;
+          }
+          const maintenanceResolution = maintenanceResult.npmResolution;
+          const maintenanceVersion =
+            maintenanceResult.version ??
+            resolveNpmResultVersion(maintenanceResult) ??
+            (await readInstalledPackageVersion(maintenanceResult.targetDir));
+          const maintenanceMatchesProbe =
+            maintenanceResult.pluginId === pluginId &&
+            pathsEqual(maintenanceResult.targetDir, installPath) &&
+            maintenanceVersion === currentVersion &&
+            maintenanceResolution?.version === metadataResult.metadata.version &&
+            maintenanceResolution?.resolvedSpec === metadataResult.metadata.resolvedSpec &&
+            (!maintenanceResolution?.integrity ||
+              !metadataResult.metadata.integrity ||
+              maintenanceResolution.integrity === metadataResult.metadata.integrity) &&
+            (!maintenanceResolution?.shasum ||
+              !metadataResult.metadata.shasum ||
+              maintenanceResolution.shasum === metadataResult.metadata.shasum);
+          if (!maintenanceMatchesProbe) {
+            const resolvedPluginId = maintenanceResult.pluginId;
+            if (resolvedPluginId !== pluginId) {
+              next = migratePluginConfigId(next, pluginId, resolvedPluginId);
+            }
+            next = recordPluginInstall(next, {
+              pluginId: resolvedPluginId,
+              source: "npm",
+              spec: recordSpec,
+              installPath: maintenanceResult.targetDir,
+              version: maintenanceVersion,
+              ...buildNpmResolutionInstallFields(maintenanceResolution),
+            });
+            changed = true;
+            outcomes.push({
+              pluginId,
+              status:
+                currentVersion && maintenanceVersion && currentVersion === maintenanceVersion
+                  ? "unchanged"
+                  : "updated",
+              currentVersion,
+              nextVersion: maintenanceVersion,
+              message:
+                currentVersion && maintenanceVersion && currentVersion === maintenanceVersion
+                  ? `${pluginId} already at ${currentVersion}.`
+                  : `Updated ${pluginId}: ${currentVersion} -> ${maintenanceVersion}.`,
+            });
+            continue;
+          }
           outcomes.push({
             pluginId,
             status: "unchanged",
