@@ -38,8 +38,10 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     groupIndex: number;
     groups: number;
     byCustomId: Map<string, number[]>;
+    wait: EmbeddingBatchExecutionParams["wait"];
     pollIntervalMs: number;
     timeoutMs: number;
+    debug?: EmbeddingBatchExecutionParams["debug"];
   }) => Promise<void>;
 }): Promise<Map<string, number[]>> {
   if (params.requests.length === 0) {
@@ -47,15 +49,19 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   }
   const groups = splitBatchRequests(params.requests, params.maxRequests);
   const byCustomId = new Map<string, number[]>();
+  const concurrency = Math.max(1, Math.floor(params.concurrency));
   const pollIntervalMs = resolveEmbeddingBatchPollIntervalMs(params);
+  const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
   const tasks = groups.map((group, groupIndex) => async () => {
     await params.runGroup({
       group,
       groupIndex,
       groups: groups.length,
       byCustomId,
+      wait: params.wait,
       pollIntervalMs,
-      timeoutMs: params.timeoutMs,
+      timeoutMs,
+      debug: params.debug,
     });
   });
 
@@ -63,12 +69,12 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     requests: params.requests.length,
     groups: groups.length,
     wait: params.wait,
-    concurrency: params.concurrency,
+    concurrency,
     pollIntervalMs,
-    timeoutMs: params.timeoutMs,
+    timeoutMs,
   });
 
-  await runWithConcurrency(tasks, params.concurrency);
+  await runWithConcurrency(tasks, concurrency);
   return byCustomId;
 }
 

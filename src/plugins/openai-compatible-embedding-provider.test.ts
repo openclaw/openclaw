@@ -54,13 +54,20 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return JSON.parse(await readRawBody(req)) as Record<string, unknown>;
 }
 
-async function startBatchServer(): Promise<{
+async function startBatchServer(params?: {
+  createStatus?: Record<string, unknown>;
+  statusResponses?: Array<Record<string, unknown>>;
+}): Promise<{
   baseUrl: string;
   uploads: string[];
   batches: Array<Record<string, unknown>>;
+  statusPolls: string[];
 }> {
   const uploads: string[] = [];
   const batches: Array<Record<string, unknown>> = [];
+  const statusPolls: string[] = [];
+  const statusResponses = [...(params?.statusResponses ?? [])];
+  const completedStatus = { id: "batch-1", status: "completed", output_file_id: "file-output" };
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
       if (req.method === "POST" && req.url === "/v1/files") {
@@ -72,9 +79,13 @@ async function startBatchServer(): Promise<{
       if (req.method === "POST" && req.url === "/v1/batches") {
         batches.push(await readJsonBody(req));
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({ id: "batch-1", status: "completed", output_file_id: "file-output" }),
-        );
+        res.end(JSON.stringify(params?.createStatus ?? completedStatus));
+        return;
+      }
+      if (req.method === "GET" && req.url === "/v1/batches/batch-1") {
+        statusPolls.push(req.url);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(statusResponses.shift() ?? completedStatus));
         return;
       }
       if (req.method === "GET" && req.url === "/v1/files/file-output/content") {
@@ -121,6 +132,7 @@ async function startBatchServer(): Promise<{
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     uploads,
     batches,
+    statusPolls,
   };
 }
 
@@ -292,6 +304,38 @@ describe("openai-compatible generic embedding provider", () => {
         metadata: { source: "openclaw-memory", agent: "main" },
       },
     ]);
+  });
+
+  it("normalizes zero poll intervals while waiting for pending OpenAI-compatible batches", async () => {
+    const server = await startBatchServer({
+      createStatus: { id: "batch-1", status: "in_progress" },
+      statusResponses: [{ id: "batch-1", status: "completed", output_file_id: "file-output" }],
+    });
+    const debugMessages: string[] = [];
+    const result = await openAICompatibleEmbeddingProviderAdapter.create(
+      createOptions({
+        model: "mistral/mistral-embed",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(
+      result.runtime?.batchEmbed?.({
+        agentId: "main",
+        chunks: [{ text: "alpha" }, { text: "beta" }],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 0,
+        timeoutMs: 1000,
+        debug: (message) => debugMessages.push(message),
+      }),
+    ).resolves.toEqual([
+      [1, 0],
+      [2, 1],
+    ]);
+
+    expect(server.statusPolls).toEqual(["/v1/batches/batch-1"]);
+    expect(debugMessages).toContain("openai-compatible batch batch-1 in_progress; waiting 1ms");
   });
 
   it("posts OpenAI-compatible embedding requests without warming up during create", async () => {

@@ -1,24 +1,32 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
-  applyEmbeddingBatchOutputLine,
-  buildBatchHeaders,
-  buildEmbeddingBatchGroupOptions,
-  EMBEDDING_BATCH_ENDPOINT,
   extractBatchErrorMessage,
   formatUnavailableBatchError,
-  mapBatchEmbeddingsByIndex,
-  normalizeBatchBaseUrl,
-  postJsonWithRetry,
-  resolveBatchCompletionFromStatus,
-  resolveCompletedBatchResult,
-  runEmbeddingBatchGroups,
-  throwIfBatchTerminalFailure,
-  uploadBatchJsonlFile,
-  withRemoteHttpResponse,
-  type BatchCompletionResult,
+} from "../../packages/memory-host-sdk/src/host/batch-error-utils.js";
+import { postJsonWithRetry } from "../../packages/memory-host-sdk/src/host/batch-http.js";
+import { applyEmbeddingBatchOutputLine } from "../../packages/memory-host-sdk/src/host/batch-output.js";
+import {
+  EMBEDDING_BATCH_ENDPOINT,
   type EmbeddingBatchStatus,
   type ProviderBatchOutputLine,
-} from "../../packages/memory-host-sdk/src/engine-embeddings.js";
+} from "../../packages/memory-host-sdk/src/host/batch-provider-common.js";
+import {
+  buildEmbeddingBatchGroupOptions,
+  runEmbeddingBatchGroups,
+} from "../../packages/memory-host-sdk/src/host/batch-runner.js";
+import {
+  resolveBatchCompletionFromStatus,
+  resolveCompletedBatchResult,
+  throwIfBatchTerminalFailure,
+  type BatchCompletionResult,
+} from "../../packages/memory-host-sdk/src/host/batch-status.js";
+import { uploadBatchJsonlFile } from "../../packages/memory-host-sdk/src/host/batch-upload.js";
+import {
+  buildBatchHeaders,
+  normalizeBatchBaseUrl,
+} from "../../packages/memory-host-sdk/src/host/batch-utils.js";
+import { mapBatchEmbeddingsByIndex } from "../../packages/memory-host-sdk/src/host/embedding-provider-adapter-utils.js";
+import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -500,7 +508,16 @@ async function runOpenAICompatibleEmbeddingBatches(
       maxRequests: OPENAI_COMPATIBLE_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: openai-compatible batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+    runGroup: async ({
+      group,
+      groupIndex,
+      groups,
+      byCustomId,
+      wait,
+      pollIntervalMs,
+      timeoutMs,
+      debug,
+    }) => {
       const batchInfo = await submitOpenAICompatibleBatch({
         client: params.client,
         requests: group,
@@ -522,15 +539,15 @@ async function runOpenAICompatibleEmbeddingBatches(
       const completed = await resolveCompletedBatchResult({
         provider: "openai-compatible",
         status: batchInfo,
-        wait: params.wait,
+        wait,
         waitForBatch: async () =>
           await waitForOpenAICompatibleBatch({
             client: params.client,
             batchId,
-            wait: params.wait,
-            pollIntervalMs: params.pollIntervalMs,
-            timeoutMs: params.timeoutMs,
-            debug: params.debug,
+            wait,
+            pollIntervalMs,
+            timeoutMs,
+            debug,
             initial: batchInfo,
           }),
       });
