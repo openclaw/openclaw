@@ -161,6 +161,30 @@ describe("discordOutbound", () => {
     expect(options.chunkMode).toBe("newline");
   });
 
+  it("rewrites configured mention aliases for final text sends", async () => {
+    await discordOutbound.sendText?.({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              default: {
+                mentionAliases: {
+                  Sentinel: "1485891428809707651",
+                },
+              },
+            },
+          },
+        },
+      },
+      to: "channel:123456",
+      text: "Done. @Sentinel please review.",
+      accountId: "default",
+    });
+
+    const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(call[1]).toBe("Done. <@1485891428809707651> please review.");
+  });
+
   it.each([500, 429])("retries transient Discord text send status %i", async (status) => {
     hoisted.sendMessageDiscordMock
       .mockRejectedValueOnce(Object.assign(new Error(`discord ${status}`), { status }))

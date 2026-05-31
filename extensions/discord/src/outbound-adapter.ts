@@ -13,6 +13,7 @@ import { chunkDiscordTextWithMode } from "./chunk.js";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
+import { rewriteDiscordKnownMentions } from "./mentions.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
@@ -39,6 +40,22 @@ function stripDiscordInternalRuntimeScaffolding(text: string): string {
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
+}
+
+function sanitizeDiscordOutboundText(params: {
+  text: string;
+  accountId?: string | null;
+  cfg?: OpenClawConfig;
+}): string {
+  const sanitized = stripDiscordInternalRuntimeScaffolding(params.text);
+  const accountConfig =
+    params.accountId && params.cfg?.channels?.discord?.accounts
+      ? params.cfg.channels.discord.accounts[params.accountId]
+      : undefined;
+  return rewriteDiscordKnownMentions(sanitized, {
+    accountId: params.accountId,
+    mentionAliases: accountConfig?.mentionAliases,
+  });
 }
 
 type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
@@ -111,7 +128,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       maxLines: ctx?.formatting?.maxLinesPerMessage,
     }),
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
-  sanitizeText: ({ text }) => stripDiscordInternalRuntimeScaffolding(text),
+  sanitizeText: ({ text }) => sanitizeDiscordOutboundText({ text }),
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
   presentationCapabilities: {
@@ -181,7 +198,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       if (!silent) {
         const webhookResult = await maybeSendDiscordWebhookText({
           cfg,
-          text,
+          text: sanitizeDiscordOutboundText({ text, accountId, cfg }),
           threadId,
           accountId,
           identity,
@@ -198,14 +215,18 @@ export const discordOutbound: ChannelOutboundAdapter = {
         cfg,
         accountId,
         fn: async () =>
-          await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
-            verbose: false,
-            replyTo: replyToId ?? undefined,
-            accountId: accountId ?? undefined,
-            silent: silent ?? undefined,
-            cfg,
-            ...resolveDiscordFormattingOptions({ formatting }),
-          }),
+          await send(
+            resolveDiscordOutboundTarget({ to, threadId }),
+            sanitizeDiscordOutboundText({ text, accountId, cfg }),
+            {
+              verbose: false,
+              replyTo: replyToId ?? undefined,
+              accountId: accountId ?? undefined,
+              silent: silent ?? undefined,
+              cfg,
+              ...resolveDiscordFormattingOptions({ formatting }),
+            },
+          ),
       });
     },
     sendMedia: async ({
@@ -250,7 +271,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
           cfg,
           accountId,
           fn: async () =>
-            await send(target, text, {
+            await send(target, sanitizeDiscordOutboundText({ text, accountId, cfg }), {
               verbose: false,
               replyTo: replyToId ?? undefined,
               accountId: accountId ?? undefined,
@@ -280,7 +301,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         cfg,
         accountId,
         fn: async () =>
-          await send(target, text, {
+          await send(target, sanitizeDiscordOutboundText({ text, accountId, cfg }), {
             verbose: false,
             mediaUrl,
             mediaAccess,
