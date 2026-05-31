@@ -47,4 +47,28 @@ describe("buildTelegramPresentationButtons", () => {
       ],
     ]);
   });
+
+  it("drops presentation buttons whose callback payload exceeds Telegram limits", () => {
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Keep", value: "/codex plugins menu" },
+              { label: "Drop", value: `/codex plugins enable ${"x".repeat(80)}` },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Keep",
+          callback_data: "/codex plugins menu",
+          style: undefined,
+        },
+      ],
+    ]);
+  });
 });
