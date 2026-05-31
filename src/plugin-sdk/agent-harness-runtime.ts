@@ -223,9 +223,11 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
 }): Promise<import("../infra/exec-auto-review.js").ExecAutoReviewInput | undefined> {
   const [
     { commandRequiresSecurityAuditSuppressionApproval, evaluateShellAllowlist },
+    { detectUnsafeExecControlShellCommand },
     { detectPolicyInlineEval },
   ] = await Promise.all([
     import("../infra/exec-approvals.js"),
+    import("../infra/exec-control-command-guard.js"),
     import("../infra/command-analysis/policy.js"),
   ]);
   const command = params.command.trim();
@@ -255,6 +257,9 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
       segments: allowlistEval.segments,
     })
   ) {
+    return undefined;
+  }
+  if (detectUnsafeExecControlShellCommand(command) !== null) {
     return undefined;
   }
   const inlineEval = detectPolicyInlineEval(allowlistEval.segments) !== null;
