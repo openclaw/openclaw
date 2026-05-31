@@ -41,7 +41,7 @@ describe("buildTelegramPresentationButtons", () => {
       [
         {
           text: "Approve",
-          callback_data: "/approve req-1 allow-once",
+          callback_data: "tgcmd:/approve req-1 allow-once",
           style: "success",
         },
       ],
@@ -65,7 +65,7 @@ describe("buildTelegramPresentationButtons", () => {
       [
         {
           text: "Keep",
-          callback_data: "/codex plugins menu",
+          callback_data: "tgcmd:/codex plugins menu",
           style: undefined,
         },
       ],

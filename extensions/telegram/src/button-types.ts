@@ -8,6 +8,7 @@ import {
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { sanitizeTelegramCallbackData } from "./approval-callback-data.js";
+import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
@@ -40,7 +41,9 @@ function toTelegramInlineButton(
       style,
     };
   }
-  const callbackData = button.value ? sanitizeTelegramCallbackData(button.value) : undefined;
+  const callbackData = button.value
+    ? sanitizeTelegramCallbackData(toTelegramCallbackData(button.value))
+    : undefined;
   if (callbackData) {
     return {
       text: button.label,
@@ -56,6 +59,11 @@ function toTelegramInlineButton(
     };
   }
   return undefined;
+}
+
+function toTelegramCallbackData(value: string): string {
+  const commandText = value.trim();
+  return commandText.startsWith("/") ? buildTelegramNativeCommandCallbackData(commandText) : value;
 }
 
 function chunkInteractiveButtons(
