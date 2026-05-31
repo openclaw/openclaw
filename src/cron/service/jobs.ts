@@ -38,6 +38,8 @@ import type { CronServiceState } from "./state.js";
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
+
+/** Default retry delays applied after consecutive cron execution errors. */
 export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
   30_000,
   60_000,
@@ -50,6 +52,7 @@ function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+/** Returns whether a stored next-run timestamp is finite and schedulable. */
 export function hasScheduledNextRunAtMs(value: unknown): value is number {
   return isFiniteTimestamp(value) && value > 0;
 }
@@ -933,6 +936,8 @@ function mergeCronDelivery(
     const previousMode = next.mode;
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
     if (previousMode !== next.mode && (previousMode === "webhook" || next.mode === "webhook")) {
+      // `to` has different meaning for channel targets and webhook URLs; clear
+      // it when crossing that boundary so stale destinations do not leak.
       next.to = undefined;
     }
     if (next.mode === "webhook") {
