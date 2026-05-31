@@ -94,6 +94,8 @@ function hasToolErrorStatus(value: unknown): boolean {
   return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
 }
 
+const TOOL_ERROR_LABEL = "Tool error";
+
 export function isToolErrorOutput(outputText: string | undefined): boolean {
   if (!outputText) {
     return false;
@@ -578,7 +580,7 @@ function resolveCollapsedToolSummaryParts(params: {
   isError: boolean;
 }): { label: string; name?: string } {
   if (params.isError) {
-    return { label: "Tool error", name: params.displayLabel };
+    return { label: TOOL_ERROR_LABEL, name: params.displayLabel };
   }
 
   const displayDetail = params.displayDetail?.trim();
@@ -723,7 +725,7 @@ export function renderExpandedToolCardContent(
         ? card.preview
           ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
           : renderToolDataBlock({
-              label: isError ? "Tool error" : "Tool output",
+              label: isError ? TOOL_ERROR_LABEL : "Tool output",
               text: card.outputText!,
               expanded: true,
             })
