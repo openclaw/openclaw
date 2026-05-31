@@ -480,7 +480,7 @@ export function applyJobResult(
     job.state.lastFailureAlertAtMs = undefined;
   }
 
-  const shouldDelete =
+  let shouldDelete =
     job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
 
   if (!shouldDelete) {
@@ -511,23 +511,49 @@ export function applyJobResult(
             "cron: scheduling one-shot retry after transient error",
           );
         } else {
-          // Permanent error or max retries exhausted: disable.
-          // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
-          // so exhausted-retry jobs are disabled but intentionally kept in the store
-          // to preserve the error state for inspection.
-          job.enabled = false;
-          job.state.nextRunAtMs = undefined;
-          state.deps.log.warn(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveErrors: retryDecision.consecutiveErrors,
-              error: result.error,
-              reason: retryDecision.reason,
-              retryCategory: retryDecision.retryCategory,
-            },
-            "cron: disabling one-shot job after error",
-          );
+          // Permanent error or max retries exhausted.
+          //
+          // A `deleteAfterRun` one-shot is supposed to be removed once it is
+          // done running — "run once, then delete" — regardless of whether the
+          // run succeeded. Previously this branch only disabled the job and kept
+          // it in the store, so transiently-failing/timing-out one-shots (e.g.
+          // listener-spawn isolated turns that hit "isolated agent setup timed
+          // out before runner start") accumulated forever as enabled=false
+          // orphans (#88197). Delete the job here too once retries are exhausted.
+          //
+          // Retryable errors still fall through the branch above and wait for
+          // their backoff retry, so a deleteAfterRun job is only removed after a
+          // permanent/exhausted failure, never while a retry is still pending.
+          if (job.deleteAfterRun === true) {
+            shouldDelete = true;
+            state.deps.log.warn(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveErrors: retryDecision.consecutiveErrors,
+                error: result.error,
+                reason: retryDecision.reason,
+                retryCategory: retryDecision.retryCategory,
+              },
+              "cron: deleting one-shot deleteAfterRun job after permanent error",
+            );
+          } else {
+            // Without deleteAfterRun, keep the disabled job in the store to
+            // preserve the error state for inspection.
+            job.enabled = false;
+            job.state.nextRunAtMs = undefined;
+            state.deps.log.warn(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveErrors: retryDecision.consecutiveErrors,
+                error: result.error,
+                reason: retryDecision.reason,
+                retryCategory: retryDecision.retryCategory,
+              },
+              "cron: disabling one-shot job after error",
+            );
+          }
         }
       }
     } else if (result.status === "error" && isJobEnabled(job)) {
