@@ -22,11 +22,7 @@ const XIAOMI_TTS_VOICE_DESIGN_MODEL = "mimo-v2.5-tts-voicedesign";
 const DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE =
   "Warm, natural, and friendly voice with clear pronunciation and conversational pacing.";
 
-const XIAOMI_TTS_MODELS = [
-  "mimo-v2.5-tts",
-  "mimo-v2-tts",
-  XIAOMI_TTS_VOICE_DESIGN_MODEL,
-] as const;
+const XIAOMI_TTS_MODELS = ["mimo-v2.5-tts", "mimo-v2-tts", XIAOMI_TTS_VOICE_DESIGN_MODEL] as const;
 
 const XIAOMI_TTS_VOICES = [
   "mimo_default",
@@ -90,9 +86,12 @@ function normalizeXiaomiTtsProviderConfig(
     ),
     model:
       trimToUndefined(raw?.model) ??
+      trimToUndefined(raw?.modelId) ??
       trimToUndefined(process.env.XIAOMI_TTS_MODEL) ??
       DEFAULT_XIAOMI_TTS_MODEL,
     voice:
+      trimToUndefined(raw?.speakerVoice) ??
+      trimToUndefined(raw?.speakerVoiceId) ??
       trimToUndefined(raw?.voice) ??
       trimToUndefined(raw?.voiceId) ??
       trimToUndefined(process.env.XIAOMI_TTS_VOICE) ??
@@ -114,8 +113,13 @@ function readXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsPro
         path: "messages.tts.providers.xiaomi.apiKey",
       }) ?? normalized.apiKey,
     baseUrl: normalizeXiaomiTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
-    model: trimToUndefined(config.model) ?? normalized.model,
-    voice: trimToUndefined(config.voice) ?? trimToUndefined(config.voiceId) ?? normalized.voice,
+    model: trimToUndefined(config.model) ?? trimToUndefined(config.modelId) ?? normalized.model,
+    voice:
+      trimToUndefined(config.speakerVoice) ??
+      trimToUndefined(config.speakerVoiceId) ??
+      trimToUndefined(config.voice) ??
+      trimToUndefined(config.voiceId) ??
+      normalized.voice,
     format: normalizeXiaomiTtsFormat(config.format) ?? normalized.format,
     style: trimToUndefined(config.style) ?? normalized.style,
   };
@@ -128,8 +132,12 @@ function readXiaomiTtsOverrides(
     return {};
   }
   return {
-    model: trimToUndefined(overrides.model),
-    voice: trimToUndefined(overrides.voice) ?? trimToUndefined(overrides.voiceId),
+    model: trimToUndefined(overrides.model) ?? trimToUndefined(overrides.modelId),
+    voice:
+      trimToUndefined(overrides.speakerVoice) ??
+      trimToUndefined(overrides.speakerVoiceId) ??
+      trimToUndefined(overrides.voice) ??
+      trimToUndefined(overrides.voiceId),
     format: normalizeXiaomiTtsFormat(overrides.format),
     style: trimToUndefined(overrides.style),
   };
@@ -197,11 +205,10 @@ function resolveXiaomiVoiceDesignStyle(style: string | undefined): string {
   return trimToUndefined(style) ?? DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE;
 }
 
-function buildXiaomiTtsAudio(params: {
-  model: string;
-  voice: string;
+function buildXiaomiTtsAudio(params: { model: string; voice: string; format: XiaomiTtsFormat }): {
   format: XiaomiTtsFormat;
-}): { format: XiaomiTtsFormat; voice?: string } {
+  voice?: string;
+} {
   if (isXiaomiVoiceDesignModel(params.model)) {
     return { format: params.format };
   }

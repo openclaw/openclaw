@@ -82,6 +82,24 @@ describe("buildXiaomiSpeechProvider", () => {
       });
       expect(config.voice).toBe("default_zh");
     });
+
+    it("accepts generic model and speaker voice aliases", () => {
+      const config = provider.resolveConfig!({
+        rawConfig: {
+          providers: {
+            xiaomi: {
+              modelId: "mimo-v2.5-tts-voicedesign",
+              speakerVoice: "Chloe",
+            },
+          },
+        },
+        cfg: {} as never,
+        timeoutMs: 30000,
+      });
+
+      expect(config.model).toBe("mimo-v2.5-tts-voicedesign");
+      expect(config.voice).toBe("Chloe");
+    });
   });
 
   describe("parseDirectiveToken", () => {
@@ -195,8 +213,8 @@ describe("buildXiaomiSpeechProvider", () => {
         cfg: {} as never,
         providerConfig: {
           apiKey: "sk-test",
-          model: "mimo-v2.5-tts-voicedesign",
-          voice: "Chloe",
+          modelId: "mimo-v2.5-tts-voicedesign",
+          speakerVoice: "Chloe",
           format: "wav",
           style: "Warm, bright, natural voice.",
         },
