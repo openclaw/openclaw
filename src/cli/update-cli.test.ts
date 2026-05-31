@@ -2642,7 +2642,7 @@ describe("update-cli", () => {
     );
   });
 
-  it.each(["^2026.5.0", "2026.5.x"])(
+  it.each(["^2026.5.0", "2026.5.x", "2026.05", "01", "1.02.x"])(
     "skips npm availability preflight for semver range package specs (%s)",
     async (tag) => {
       mockPackageInstallStatus(createCaseDir("openclaw-update"));
