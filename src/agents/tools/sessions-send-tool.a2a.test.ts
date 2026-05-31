@@ -131,6 +131,38 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.message).toBe("Substantive channel reply");
   });
 
+  it("bypasses the announce decider for delayed same-session channel replies", async () => {
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
+      text: "Delayed channel reply",
+      fingerprint: "delayed-channel-reply",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:channel:target-room",
+      displayKey: "agent:main:discord:channel:target-room",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:channel:target-room",
+      requesterChannel: "discord",
+      waitRunId: "run-delayed-channel",
+    });
+
+    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe(
+      "run-delayed-channel",
+    );
+    expect(
+      firstMockArg(vi.mocked(readLatestAssistantReplySnapshot), "assistant reply snapshot")
+        .sessionKey,
+    ).toBe("agent:main:discord:channel:target-room");
+    expect(runAgentStep).not.toHaveBeenCalled();
+    const sendCall = requireGatewayCall("send");
+    const sendParams = sendCall.params as Record<string, unknown>;
+    expect(sendParams.channel).toBe("discord");
+    expect(sendParams.to).toBe("channel:target-room");
+    expect(sendParams.message).toBe("Delayed channel reply");
+  });
+
   it("keeps the announce decider for same-session sends from a different channel", async () => {
     vi.mocked(runAgentStep).mockResolvedValueOnce("ANNOUNCE_SKIP");
 
