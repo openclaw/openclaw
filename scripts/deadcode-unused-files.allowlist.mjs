@@ -48,6 +48,7 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/plugins/contracts/tts-contract-suites.ts",
   "src/plugins/runtime-sidecar-paths-baseline.ts",
   "src/tasks/task-registry-control.runtime.ts",
+  "ui/src/ui/browser-redact.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",
 ];
