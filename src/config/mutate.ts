@@ -301,6 +301,10 @@ async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<vo
     dirMode: 0o700,
     mode: 0o600,
     tempPrefix: path.basename(filePath),
+    // fsync the temp file and parent directory so a crash mid write or a
+    // power loss on a network volume cannot leave a partial config file.
+    syncTempFile: true,
+    syncParentDir: true,
     beforeRename: async () => {
       await fs.access(filePath).then(
         async () => await maintainConfigBackups(filePath, fs),

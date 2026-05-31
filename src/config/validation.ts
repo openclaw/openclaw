@@ -40,6 +40,7 @@ import {
 import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
+import { getKnownKeysAtSchemaPath, suggestClosestKey } from "./did-you-mean.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
@@ -725,10 +726,56 @@ export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigVal
   return collectUnsupportedMutableSecretRefIssues(raw);
 }
 
+let cachedSchemaRootForDidYouMean: Record<string, unknown> | null = null;
+function getSchemaRootForDidYouMean(): Record<string, unknown> {
+  if (!cachedSchemaRootForDidYouMean) {
+    cachedSchemaRootForDidYouMean = OpenClawSchema.toJSONSchema({
+      target: "draft-07",
+      unrepresentable: "any",
+    }) as Record<string, unknown>;
+  }
+  return cachedSchemaRootForDidYouMean;
+}
+
+function appendDidYouMeanHint(issue: unknown, message: string): string {
+  const record = toIssueRecord(issue);
+  if (!record || record.code !== "unrecognized_keys") {
+    return message;
+  }
+  const offendingKeys = [...message.matchAll(/"([^"]+)"/g)]
+    .map((match) => match[1])
+    .filter((key): key is string => Boolean(key));
+  if (offendingKeys.length === 0) {
+    return message;
+  }
+  const segments = toConfigPathSegments(record.path);
+  let candidates: readonly string[];
+  try {
+    candidates = getKnownKeysAtSchemaPath(getSchemaRootForDidYouMean(), segments);
+  } catch {
+    return message;
+  }
+  if (candidates.length === 0) {
+    return message;
+  }
+  const suggestions: string[] = [];
+  for (const offending of offendingKeys) {
+    const closest = suggestClosestKey(offending, candidates);
+    if (closest) {
+      suggestions.push(`"${offending}" -> "${closest}"`);
+    }
+  }
+  if (suggestions.length === 0) {
+    return message;
+  }
+  return `${message} (did you mean: ${suggestions.join(", ")})`;
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
-  const message = typeof record?.message === "string" ? record.message : "Invalid input";
+  const rawMessage = typeof record?.message === "string" ? record.message : "Invalid input";
+  const message = appendDidYouMeanHint(issue, rawMessage);
 
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
   // Append a parenthesized bound alongside Zod's native message,
