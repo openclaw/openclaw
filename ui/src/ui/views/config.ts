@@ -1218,11 +1218,15 @@ export function renderConfig(props: ConfigProps) {
   const schemaProps = analysis.schema?.properties ?? {};
 
   const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
+  const isVisibleVirtualSection = (key: string) =>
+    includeVirtualSections &&
+    VIRTUAL_SECTIONS.has(key) &&
+    (key === "__appearance__" || include?.has(key) === true);
   const visibleCategories = SECTION_CATEGORIES.map((cat) =>
     Object.assign({}, cat, {
       sections: cat.sections.filter(
         (s) =>
-          ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
+          (isVisibleVirtualSection(s.key) || s.key in schemaProps) &&
           (!include || include.has(s.key)) &&
           (!exclude || !exclude.has(s.key)),
       ),
