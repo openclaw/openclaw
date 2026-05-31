@@ -218,10 +218,20 @@ function isUnknownDiscordVoiceStateError(err: unknown): boolean {
   return status === 404 || /unknown voice state/i.test(formatErrorMessage(err));
 }
 
+const AUTOJOIN_READY_DELAY_MS = 6000;
+
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
-  void manager
-    .autoJoin()
-    .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
+  // .unref() so this safety-net timer does not prevent process exit if the
+  // voice manager is torn down before the delay fires.
+  setTimeout(() => {
+    void manager
+      .autoJoin()
+      .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
+  }, AUTOJOIN_READY_DELAY_MS).unref();
+}
+
+function resolveVoiceConnectionGroup(accountId: string): string {
+  return `openclaw:${accountId}`;
 }
 
 function resolveDiscordVoiceAgentRoute(params: {
@@ -566,7 +576,8 @@ export class DiscordVoiceManager {
       existingEntry.stop();
       this.sessions.delete(guildId);
     }
-    const staleConnection = voiceSdk.getVoiceConnection(guildId);
+    const voiceConnectionGroup = resolveVoiceConnectionGroup(this.params.accountId);
+    const staleConnection = voiceSdk.getVoiceConnection(guildId, voiceConnectionGroup);
     if (staleConnection) {
       destroyVoiceConnectionSafely({
         connection: staleConnection,
@@ -580,6 +591,7 @@ export class DiscordVoiceManager {
       const joinedConnection = voiceSdk.joinVoiceChannel({
         channelId,
         guildId,
+        group: voiceConnectionGroup,
         adapterCreator,
         selfDeaf: false,
         selfMute: false,
@@ -1011,7 +1023,10 @@ export class DiscordVoiceManager {
       await this.leave({ guildId });
     } else {
       const voiceSdk = loadDiscordVoiceSdk();
-      const connection = voiceSdk.getVoiceConnection(guildId);
+      const connection = voiceSdk.getVoiceConnection(
+        guildId,
+        resolveVoiceConnectionGroup(this.params.accountId),
+      );
       if (connection) {
         destroyVoiceConnectionSafely({
           connection,
