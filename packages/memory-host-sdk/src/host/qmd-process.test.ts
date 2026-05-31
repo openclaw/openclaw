@@ -162,6 +162,42 @@ describe("checkQmdBinaryAvailability", () => {
     expect(child.kill).toHaveBeenCalledWith();
   });
 
+  it("resolves availability probes through the scoped qmd package shim on Windows", async () => {
+    const binDir = path.join(tempDir, "node_modules", ".bin");
+    const packageDir = path.join(tempDir, "node_modules", "@tobilu", "qmd");
+    const scriptPath = path.join(packageDir, "dist", "cli.js");
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, "qmd.cmd"), "@echo off\r\n", "utf8");
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@tobilu/qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
+      "utf8",
+    );
+    await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+    process.env.PATH = `${binDir};${originalPath ?? ""}`;
+    process.env.PATHEXT = ".CMD;.EXE";
+
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    });
+
+    await expect(
+      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
+    ).resolves.toEqual({ available: true });
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      [scriptPath],
+      expect.objectContaining({
+        cwd: tempDir,
+        shell: undefined,
+        windowsHide: true,
+      }),
+    );
+  });
+
   it("returns unavailable when the qmd process cannot be spawned", async () => {
     const child = createMockChild();
     const err = Object.assign(new Error("spawn qmd ENOENT"), { code: "ENOENT" });
