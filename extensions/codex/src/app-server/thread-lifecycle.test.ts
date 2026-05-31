@@ -14,8 +14,10 @@ import {
 function createAttemptParams(params: {
   provider: string;
   authProfileId?: string;
+  authProfileType?: "oauth" | "api_key";
   authProfileProvider?: string;
   authProfileProviders?: Record<string, string>;
+  runtimeExternalProfileIds?: string[];
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   images?: EmbeddedRunAttemptParams["images"];
@@ -25,6 +27,7 @@ function createAttemptParams(params: {
     (params.authProfileId
       ? { [params.authProfileId]: params.authProfileProvider ?? "openai" }
       : {});
+  const authProfileType = params.authProfileType ?? "oauth";
   return {
     provider: params.provider,
     modelId: "gpt-5.4",
@@ -40,15 +43,24 @@ function createAttemptParams(params: {
       profiles: Object.fromEntries(
         Object.entries(authProfileProviders).map(([profileId, provider]) => [
           profileId,
-          {
-            type: "oauth" as const,
-            provider,
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
+          authProfileType === "api_key"
+            ? {
+                type: "api_key" as const,
+                provider,
+                key: "sk-test",
+              }
+            : {
+                type: "oauth" as const,
+                provider,
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60_000,
+              },
         ]),
       ),
+      ...(params.runtimeExternalProfileIds
+        ? { runtimeExternalProfileIds: params.runtimeExternalProfileIds }
+        : {}),
     },
   } as EmbeddedRunAttemptParams;
 }
@@ -578,7 +590,11 @@ describe("Codex app-server model provider selection", () => {
     "omits public %s modelProvider when forwarding native Codex auth on thread/start",
     (provider) => {
       const request = buildThreadStartParams(
-        createAttemptParams({ provider, authProfileId: "work" }),
+        createAttemptParams({
+          provider,
+          authProfileId: "work",
+          runtimeExternalProfileIds: ["work"],
+        }),
         {
           cwd: "/repo",
           dynamicTools: [],
@@ -596,6 +612,7 @@ describe("Codex app-server model provider selection", () => {
       createAttemptParams({
         provider: "openai",
         authProfileProviders: { bound: "openai" },
+        runtimeExternalProfileIds: ["bound"],
       }),
       {
         threadId: "thread-1",
@@ -613,6 +630,7 @@ describe("Codex app-server model provider selection", () => {
       createAttemptParams({
         provider: "openai",
         authProfileId: "openai:work",
+        authProfileType: "api_key",
         authProfileProvider: "openai",
       }),
       {
@@ -624,6 +642,24 @@ describe("Codex app-server model provider selection", () => {
     );
 
     expect(request.modelProvider).toBe("openai");
+  });
+
+  it("omits public OpenAI modelProvider for persisted Codex OAuth profiles", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({
+        provider: "openai",
+        authProfileId: "openai:work",
+        authProfileProvider: "openai",
+      }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request).not.toHaveProperty("modelProvider");
   });
 
   it("keeps public OpenAI modelProvider when no native Codex auth profile is selected", () => {
