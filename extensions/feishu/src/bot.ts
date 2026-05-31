@@ -90,17 +90,23 @@ type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group
 
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
+  failedCounts?: { final?: number };
   noVisibleReplyFallbackEligible?: boolean;
   queuedFinal?: boolean;
   sendPolicyDenied?: boolean;
   sourceReplyDeliveryMode?: string;
 }): boolean {
-  return (
+  const finalCount = dispatchResult.counts.final ?? 0;
+  const failedFinalCount = dispatchResult.failedCounts?.final ?? 0;
+  const emptyEligibleDispatch =
     dispatchResult.noVisibleReplyFallbackEligible === true &&
     dispatchResult.queuedFinal !== true &&
-    (dispatchResult.counts.final ?? 0) === 0 &&
+    finalCount === 0;
+  const queuedFinalFailed = dispatchResult.queuedFinal === true && failedFinalCount > 0;
+  return (
     dispatchResult.sendPolicyDenied !== true &&
-    dispatchResult.sourceReplyDeliveryMode !== "message_tool_only"
+    dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" &&
+    (emptyEligibleDispatch || queuedFinalFailed)
   );
 }
 
@@ -1567,9 +1573,12 @@ export async function handleFeishuMessage(params: {
           });
           if (
             turnResult.dispatched &&
-            shouldSendNoVisibleReplyFallback(turnResult.dispatchResult)
+            shouldSendNoVisibleReplyFallback({
+              ...turnResult.dispatchResult,
+              failedCounts: dispatcher.getFailedCounts(),
+            })
           ) {
-            await ensureNoVisibleReplyFallback("broadcast-dispatch-complete-zero-final");
+            await ensureNoVisibleReplyFallback("broadcast-dispatch-complete-no-visible-reply");
           }
         } else {
           // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply).
@@ -1759,8 +1768,13 @@ export async function handleFeishuMessage(params: {
       }
       const { dispatchResult } = turnResult;
       const { queuedFinal, counts } = dispatchResult;
-      if (shouldSendNoVisibleReplyFallback(dispatchResult)) {
-        await ensureNoVisibleReplyFallback("dispatch-complete-zero-final");
+      if (
+        shouldSendNoVisibleReplyFallback({
+          ...dispatchResult,
+          failedCounts: dispatcher.getFailedCounts(),
+        })
+      ) {
+        await ensureNoVisibleReplyFallback("dispatch-complete-no-visible-reply");
       }
 
       log(
