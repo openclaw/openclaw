@@ -1726,7 +1726,8 @@ describe("exec approval handlers", () => {
       ...defaultExecApprovalRequestParams,
       ...params.params,
     } as unknown as ExecApprovalRequestArgs["params"];
-    const hasExplicitPlan = !!params.params && Object.hasOwn(params.params, "systemRunPlan");
+    const hasExplicitPlan =
+      params.params !== undefined && Object.hasOwn(params.params, "systemRunPlan");
     if (
       !hasExplicitPlan &&
       (requestParams as { host?: string }).host === "node" &&

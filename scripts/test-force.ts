@@ -27,6 +27,11 @@ function parseArgs(argv: readonly string[]): { help: boolean } {
   return { help: false };
 }
 
+export const testForceTesting = {
+  parseArgs,
+  usage,
+};
+
 function killGatewayListeners(port: number): PortProcess[] {
   try {
     const killed = forceFreePort(port);

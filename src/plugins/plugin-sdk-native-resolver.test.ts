@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   installOpenClawPluginSdkNativeResolver,
   resetOpenClawPluginSdkNativeResolverForTest,
@@ -13,6 +13,13 @@ import {
 afterEach(() => {
   resetOpenClawPluginSdkNativeResolverForTest();
 });
+
+type NativeEsmLazyImportProbe = {
+  status: number | null;
+  stderr: string;
+  stdout: string;
+};
+let nativeEsmLazyImportProbe: NativeEsmLazyImportProbe;
 
 function writeJsonFile(targetPath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -259,7 +266,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     }
   });
 
-  it("keeps SDK aliases available for native ESM lazy imports", () => {
+  beforeAll(() => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-esm-resolver-"));
     const probePath = path.join(root, "probe.mjs");
     const resolverModuleUrl = pathToFileURL(
@@ -327,10 +334,17 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       encoding: "utf8",
     });
     fs.rmSync(root, { recursive: true, force: true });
+    nativeEsmLazyImportProbe = {
+      status: result.status,
+      stderr: result.stderr,
+      stdout: result.stdout,
+    };
+  });
 
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("adapter:adapter");
+  it("keeps SDK aliases available for native ESM lazy imports", () => {
+    expect(nativeEsmLazyImportProbe.stderr).toBe("");
+    expect(nativeEsmLazyImportProbe.status).toBe(0);
+    expect(nativeEsmLazyImportProbe.stdout.trim()).toBe("adapter:adapter");
   });
 
   it("does not resolve SDK aliases for parents outside registered plugin roots", () => {

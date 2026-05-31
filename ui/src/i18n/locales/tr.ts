@@ -417,6 +417,7 @@ export const tr: TranslationMap = {
     communications: "İletişim",
     appearance: "Görünüm",
     automation: "Otomasyon",
+    mcp: "MCP",
     infrastructure: "Altyapı",
     aiAgents: "AI ve Aracılar",
     debug: "Hata Ayıklama",
@@ -440,6 +441,7 @@ export const tr: TranslationMap = {
     communications: "Kanallar, mesajlar ve ses ayarları.",
     appearance: "Tema, UI ve kurulum sihirbazı ayarları.",
     automation: "Komutlar, kancalar, cron ve eklentiler.",
+    mcp: "MCP sunucuları, kimlik doğrulama, araçlar ve tanılama.",
     infrastructure: "Gateway, web, tarayıcı ve medya ayarları.",
     aiAgents: "Aracılar, modeller, Skills, araçlar, bellek, oturum.",
     debug: "Anlık görüntüler, olaylar, RPC.",
@@ -1293,6 +1295,9 @@ export const tr: TranslationMap = {
       loadMoreSessions: "Daha fazla oturum yükle",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Araç hatası",
     },
   },
   languages: {

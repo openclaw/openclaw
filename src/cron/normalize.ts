@@ -91,18 +91,16 @@ function coerceSchedule(schedule: UnknownRecord) {
 
   if (kind) {
     next.kind = kind;
-  } else {
-    if (
-      typeof schedule.atMs === "number" ||
-      typeof schedule.at === "string" ||
-      typeof schedule.atMs === "string"
-    ) {
-      next.kind = "at";
-    } else if (everyMs !== undefined) {
-      next.kind = "every";
-    } else if (normalizedExpr) {
-      next.kind = "cron";
-    }
+  } else if (
+    typeof schedule.atMs === "number" ||
+    typeof schedule.at === "string" ||
+    typeof schedule.atMs === "string"
+  ) {
+    next.kind = "at";
+  } else if (everyMs !== undefined) {
+    next.kind = "every";
+  } else if (normalizedExpr) {
+    next.kind = "cron";
   }
 
   const parsedAtIso = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;

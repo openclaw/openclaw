@@ -70,7 +70,7 @@ export async function removeChannelConfigWizard(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<OpenClawConfig> {
-  let next = { ...cfg };
+  const next = { ...cfg };
 
   while (true) {
     const configured = listConfiguredChannelRemovalChoices(next);

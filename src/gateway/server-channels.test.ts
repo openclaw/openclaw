@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  type ChannelGatewayContext,
-  type ChannelId,
-  type ChannelPlugin,
-} from "../channels/plugins/types.js";
+import type { ChannelGatewayContext, ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,

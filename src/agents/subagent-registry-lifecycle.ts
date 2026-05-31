@@ -53,6 +53,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type CaptureSubagentCompletionReply =
@@ -73,27 +74,6 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
 > {
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
-}
-
-function resolveSubagentRunDeadlineMs(
-  entry: SubagentRunRecord,
-  observedStartedAt?: number,
-): number | undefined {
-  const timeoutSeconds = entry.runTimeoutSeconds;
-  if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds <= 0
-  ) {
-    return undefined;
-  }
-  const startedAt =
-    typeof observedStartedAt === "number" && Number.isFinite(observedStartedAt)
-      ? observedStartedAt
-      : typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
-        ? entry.startedAt
-        : entry.createdAt;
-  return Number.isFinite(startedAt) ? startedAt + Math.floor(timeoutSeconds * 1000) : undefined;
 }
 
 function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {

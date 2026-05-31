@@ -507,6 +507,7 @@ export function createFollowupRunner(params: {
         sessionKey: replySessionKey ?? "",
         kind: "queued_followup",
         resetTriggered: false,
+        routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: queued.abortSignal,
       });
       if (admission.status === "skipped") {

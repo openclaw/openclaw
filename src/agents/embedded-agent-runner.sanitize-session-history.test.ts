@@ -171,9 +171,7 @@ describe("sanitizeSessionHistory", () => {
   const getAssistantContentTypes = (messages: AgentMessage[]) =>
     getAssistantMessage(messages).content.map((block: { type: string }) => block.type);
 
-  const makeThinkingAndTextAssistantMessages = (
-    thinkingSignature: string = "some_sig",
-  ): AgentMessage[] => {
+  const makeThinkingAndTextAssistantMessages = (thinkingSignature = "some_sig"): AgentMessage[] => {
     const user: UserMessage = {
       role: "user",
       content: "hello",

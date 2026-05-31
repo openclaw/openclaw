@@ -414,6 +414,7 @@ export const ko: TranslationMap = {
     communications: "커뮤니케이션",
     appearance: "모양",
     automation: "자동화",
+    mcp: "MCP",
     infrastructure: "인프라",
     aiAgents: "AI 및 에이전트",
     debug: "디버그",
@@ -437,6 +438,7 @@ export const ko: TranslationMap = {
     communications: "채널, 메시지, 오디오 설정.",
     appearance: "테마, UI, 설정 마법사 설정.",
     automation: "명령, hooks, cron, plugins.",
+    mcp: "MCP 서버, 인증, 도구 및 진단.",
     infrastructure: "Gateway, 웹, 브라우저, 미디어 설정.",
     aiAgents: "에이전트, 모델, Skills, 도구, 메모리, 세션.",
     debug: "스냅샷, 이벤트, RPC.",
@@ -1280,6 +1282,9 @@ export const ko: TranslationMap = {
       loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "도구 오류",
     },
   },
   languages: {

@@ -269,7 +269,7 @@ async function runBrowserLiveProbe(req: BrowserRequest, ctx: BrowserRouteContext
 }
 
 function hasQueryKey(query: BrowserRequest["query"], key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(query ?? {}, key);
+  return Object.hasOwn(query ?? {}, key);
 }
 
 function parseHeadlessStartOverride(params: {

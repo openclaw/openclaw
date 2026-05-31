@@ -5,7 +5,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
+import { MAX_DATE_TIMESTAMP_MS, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawConfig,
   OpenClawPluginApi,
@@ -458,6 +458,55 @@ describe("github-copilot plugin", () => {
     }
     expect(showCode).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized GitHub device polling intervals before waiting", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      let accessTokenPolls = 0;
+      setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
+        if (params.url === "https://github.com/login/device/code") {
+          return {
+            response: new Response(
+              '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":3000010,"interval":3000000}',
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+            finalUrl: params.url,
+            release,
+          };
+        }
+        accessTokenPolls += 1;
+        return {
+          response: new Response(
+            JSON.stringify(
+              accessTokenPolls === 1
+                ? { error: "authorization_pending" }
+                : { access_token: "refreshed-token", token_type: "bearer" },
+            ),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+          finalUrl: params.url,
+          release,
+        };
+      });
+
+      const flow = runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) });
+      await vi.waitFor(() =>
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS),
+      );
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      expect(accessTokenPolls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(3_000_000_000 - MAX_TIMER_TIMEOUT_MS);
+      await expect(flow).resolves.toEqual({
+        status: "authorized",
+        accessToken: "refreshed-token",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stores GitHub Copilot token from non-interactive onboarding", async () => {

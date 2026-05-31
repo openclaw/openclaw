@@ -2031,11 +2031,9 @@ describe("chat session controls", () => {
       includeUnknown: true,
       limit: 50,
     });
-    expect(
-      request.mock.calls.some(([, params]) =>
-        Object.prototype.hasOwnProperty.call(params ?? {}, "agentId"),
-      ),
-    ).toBe(false);
+    expect(request.mock.calls.some(([, params]) => Object.hasOwn(params ?? {}, "agentId"))).toBe(
+      false,
+    );
   });
 
   it("reloads the picker after switching agents", async () => {

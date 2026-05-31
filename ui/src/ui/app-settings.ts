@@ -392,11 +392,9 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
       return;
     case "cron":
       void loadCron(host);
-      return;
     case "overview":
     case "tools":
     case undefined:
-      return;
   }
 }
 
@@ -422,6 +420,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "communications":
       case "appearance":
       case "automation":
+      case "mcp":
       case "infrastructure":
       case "aiAgents":
         {

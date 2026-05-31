@@ -530,7 +530,7 @@ function isTtsAudioMirrorOnly(params: {
   mediaUrl: string;
 }): boolean {
   return (
-    (params.payload.audioAsVoice === true || !!params.payload.hookContent) &&
+    (params.payload.audioAsVoice === true || Boolean(params.payload.hookContent)) &&
     isAudioFileName(params.mediaUrl)
   );
 }
@@ -995,7 +995,9 @@ export async function dispatchCronDelivery(
           })
         : undefined;
       const deliveryWillReachAwarenessMainSession =
-        mirrorTargetsAwarenessMainSession && shouldQueueAwarenessForDelivery && !!awarenessText;
+        mirrorTargetsAwarenessMainSession &&
+        shouldQueueAwarenessForDelivery &&
+        Boolean(awarenessText);
       // Implicit/default isolated delivery must not create main-session awareness.
       const mirrorWouldBypassIsolatedAwarenessPolicy =
         mirrorTargetsAwarenessMainSession &&

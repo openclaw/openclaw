@@ -57,6 +57,15 @@ function isLegacyWhatsAppAuthFile(name: string): boolean {
   return name.endsWith(".json") && /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
 }
 
+function isLegacyTelegramStateFile(name: string): boolean {
+  return (
+    (name.startsWith("bot-info-") && name.endsWith(".json")) ||
+    (name.startsWith("update-offset-") && name.endsWith(".json")) ||
+    name === "sticker-cache.json" ||
+    (name.startsWith("thread-bindings-") && name.endsWith(".json"))
+  );
+}
+
 function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
   if (fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json"))) {
     return true;
@@ -66,10 +75,7 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   }
   if (
     fileOrDirExists(path.join(oauthDir, "telegram-allowFrom.json")) ||
-    dirHasFile(
-      path.join(stateDir, "telegram"),
-      (name) => name.startsWith("bot-info-") && name.endsWith(".json"),
-    )
+    dirHasFile(path.join(stateDir, "telegram"), isLegacyTelegramStateFile)
   ) {
     return true;
   }

@@ -157,7 +157,26 @@ function withTinyGitRepo(files: Record<string, string>, test: (cwd: string) => v
   }
 }
 
+function withTinyFileTree(files: Record<string, string>, test: (cwd: string) => void): void {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-"));
+  try {
+    for (const [file, source] of Object.entries(files)) {
+      const absolute = path.join(cwd, file);
+      fs.mkdirSync(path.dirname(absolute), { recursive: true });
+      fs.writeFileSync(absolute, source);
+    }
+    test(cwd);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
 describe("scripts/test-projects changed-target routing", () => {
+  beforeAll(() => {
+    buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"]);
+    findUnmatchedExplicitTestTargets(["test/vitest/vitest.shared.config.ts"], process.cwd());
+  });
+
   it("maps changed source files into scoped lane targets", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
@@ -676,7 +695,7 @@ describe("scripts/test-projects changed-target routing", () => {
     }
     files["src/runtime.consumer.test.ts"] = `${imports.join("\n")}\nvoid [${refs.join(", ")}];\n`;
 
-    withTinyGitRepo(files, (cwd) => {
+    withTinyFileTree(files, (cwd) => {
       plans = buildVitestRunPlans(
         Array.from({ length: 13 }, (_, index) => `src/runtime-${index}.ts`),
         cwd,

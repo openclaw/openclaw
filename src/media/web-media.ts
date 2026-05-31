@@ -262,7 +262,7 @@ function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
   }
   const relative = path.relative(path.resolve(root), path.resolve(filePath));
   return (
-    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 
@@ -806,9 +806,10 @@ export async function optimizeImageBufferForWebMedia(params: {
 }
 
 async function loadWebMediaInternal(
-  mediaUrl: string,
+  mediaUrlInput: string,
   options: WebMediaOptions = {},
 ): Promise<WebMediaResult> {
+  let mediaUrl = mediaUrlInput;
   const {
     maxBytes,
     optimizeImages = true,

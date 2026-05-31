@@ -482,7 +482,7 @@ export async function handleOpenResponsesHttpRequest(
 
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
-  let fileContexts: string[] = [];
+  const fileContexts: string[] = [];
   let urlParts = 0;
   const markUrlPart = () => {
     urlParts += 1;

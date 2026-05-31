@@ -606,7 +606,6 @@ function dispatchClaudeCliStreamingToolEvent(params: {
         params.onToolResult,
       );
     }
-    return;
   }
 }
 

@@ -418,6 +418,7 @@ export const de: TranslationMap = {
     communications: "Kommunikation",
     appearance: "Darstellung",
     automation: "Automatisierung",
+    mcp: "MCP",
     infrastructure: "Infrastruktur",
     aiAgents: "KI & Agenten",
     debug: "Debug",
@@ -441,6 +442,7 @@ export const de: TranslationMap = {
     communications: "Kanäle, Nachrichten und Audioeinstellungen.",
     appearance: "Design-, UI- und Einrichtungsassistent-Einstellungen.",
     automation: "Befehle, Hooks, Cron und Plugins.",
+    mcp: "MCP-Server, Authentifizierung, Tools und Diagnosen.",
     infrastructure: "Gateway-, Web-, Browser- und Medieneinstellungen.",
     aiAgents: "Agenten, Modelle, Skills, Tools, Speicher, Sitzung.",
     debug: "Gateway-Snapshots, Ereignisse und manuelle RPC-Aufrufe.",
@@ -1296,6 +1298,9 @@ export const de: TranslationMap = {
       loadMoreSessions: "Weitere Sitzungen laden",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "Tool-Fehler",
     },
   },
   languages: {

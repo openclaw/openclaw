@@ -63,7 +63,7 @@ function schemaHasDefaults(schema: unknown): boolean {
     return schema.some((item) => schemaHasDefaults(item));
   }
   const record = schema as Record<string, unknown>;
-  if (Object.prototype.hasOwnProperty.call(record, "default")) {
+  if (Object.hasOwn(record, "default")) {
     return true;
   }
   return Object.values(record).some((value) => schemaHasDefaults(value));
@@ -222,7 +222,7 @@ function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
 
   if (error.keyword === "const") {
     const params = error.params;
-    if (!params || !Object.prototype.hasOwnProperty.call(params, "allowedValue")) {
+    if (!params || !Object.hasOwn(params, "allowedValue")) {
       return null;
     }
     return [params.allowedValue];

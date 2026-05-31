@@ -22,6 +22,11 @@ import { makeZeroUsageSnapshot } from "../usage.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 const publicSurfaceLoaderMocks = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(
     ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
@@ -1685,7 +1690,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("keeps an Anthropic-safe image schema snapshot", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
-      expect(JSON.parse(JSON.stringify(tool.parameters))).toEqual({
+      expect(jsonRoundTrip(tool.parameters)).toEqual({
         type: "object",
         properties: {
           prompt: { type: "string" },

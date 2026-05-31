@@ -88,7 +88,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
   const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair });
-  let snapshot = preflight.snapshot;
+  const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);

@@ -20,7 +20,7 @@ export function isSafeManifestChannelId(channelId: string): boolean {
 }
 
 export function readOwnRecordValue(record: Record<string, unknown>, key: string): unknown {
-  if (isBlockedObjectKey(key) || !Object.prototype.hasOwnProperty.call(record, key)) {
+  if (isBlockedObjectKey(key) || !Object.hasOwn(record, key)) {
     return undefined;
   }
   return record[key];

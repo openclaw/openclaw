@@ -172,7 +172,8 @@ function listImplicitDefaultDirectFallbackKeys(params: {
   if (parts.length < 4 || parts[1] !== "default" || parts[2] !== "direct") {
     return [];
   }
-  const [channel, , , ...peerParts] = parts;
+  const channel = parts[0];
+  const peerParts = parts.slice(3);
   if (!channel || peerParts.length === 0) {
     return [];
   }

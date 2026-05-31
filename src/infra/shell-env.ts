@@ -221,7 +221,7 @@ type ShellEnvFallbackOptions = {
 };
 
 function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(env, key);
+  return Object.hasOwn(env, key);
 }
 
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {

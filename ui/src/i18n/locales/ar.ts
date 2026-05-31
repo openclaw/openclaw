@@ -414,6 +414,7 @@ export const ar: TranslationMap = {
     communications: "الاتصالات",
     appearance: "المظهر",
     automation: "الأتمتة",
+    mcp: "MCP",
     infrastructure: "البنية التحتية",
     aiAgents: "الذكاء الاصطناعي والوكلاء",
     debug: "تصحيح الأخطاء",
@@ -437,6 +438,7 @@ export const ar: TranslationMap = {
     communications: "القنوات، والرسائل، وإعدادات الصوت.",
     appearance: "السمة، وواجهة المستخدم، وإعدادات معالج الإعداد.",
     automation: "الأوامر، والخطافات، وcron، والمكونات الإضافية.",
+    mcp: "خوادم MCP، والمصادقة، والأدوات، والتشخيصات.",
     infrastructure: "إعدادات Gateway، والويب، والمتصفح، والوسائط.",
     aiAgents: "الوكلاء، والنماذج، والمهارات، والأدوات، والذاكرة، والجلسة.",
     debug: "اللقطات، والأحداث، وRPC.",
@@ -1272,6 +1274,9 @@ export const ar: TranslationMap = {
       loadMoreSessions: "تحميل المزيد من الجلسات",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
+    },
+    toolCards: {
+      toolError: "خطأ في الأداة",
     },
   },
   languages: {

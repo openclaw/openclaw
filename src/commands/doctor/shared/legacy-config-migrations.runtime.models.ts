@@ -121,7 +121,7 @@ function getLegacyVllmQwenThinkingFormat(params: Record<string, unknown>):
     }
   | undefined {
   for (const key of LEGACY_VLLM_QWEN_THINKING_FORMAT_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(params, key)) {
+    if (Object.hasOwn(params, key)) {
       return {
         key,
         value: params[key],

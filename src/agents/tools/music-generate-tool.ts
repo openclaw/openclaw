@@ -238,9 +238,6 @@ function validateMusicGenerationCapabilities(params: {
       );
     }
   }
-  if (!caps) {
-    return;
-  }
 }
 
 type MusicGenerateSandboxConfig = {

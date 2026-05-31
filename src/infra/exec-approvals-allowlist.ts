@@ -590,7 +590,7 @@ function evaluateShellWrapperInlineCommand(params: {
 function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,
-  inlineDepth: number = 0,
+  inlineDepth = 0,
 ): {
   satisfied: boolean;
   matches: ExecAllowlistEntry[];

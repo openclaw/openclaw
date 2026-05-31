@@ -181,7 +181,7 @@ async function createDirectCronState(params?: {
       deps: {} as never,
       broadcast: params?.broadcast ?? vi.fn(),
     }),
-    getRuntimeConfig: getRuntimeConfig,
+    getRuntimeConfig,
   };
 }
 

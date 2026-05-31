@@ -571,9 +571,17 @@ describe("runCodexAppServerAttempt turn watches", () => {
   it("keeps the turn attempt timeout armed while non-turn requests are pending", async () => {
     const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    vi.spyOn(authBridge, "refreshCodexAppServerAuthTokens").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
-    );
+    let resolveRefresh: (() => void) | undefined;
+    vi.spyOn(authBridge, "refreshCodexAppServerAuthTokens").mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        resolveRefresh = resolve;
+      });
+      return {
+        accessToken: "access-token",
+        chatgptAccountId: "account-id",
+        chatgptPlanType: null,
+      };
+    });
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -596,6 +604,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await vi.waitFor(() =>
       expect(authBridge.refreshCodexAppServerAuthTokens).toHaveBeenCalledTimes(1),
     );
+    await vi.waitFor(
+      () =>
+        expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(
+          true,
+        ),
+      fastWait,
+    );
+    resolveRefresh?.();
 
     const result = await run;
     expect(result.aborted).toBe(true);

@@ -403,12 +403,17 @@ function readInteger(value: unknown, fallback: number): number {
 }
 
 let toolSearchCodeModeSupportedForTest: boolean | undefined;
+let toolSearchMinCodeTimeoutMsForTest: number | undefined;
 
 function isToolSearchCodeModeSupported(): boolean {
   if (toolSearchCodeModeSupportedForTest !== undefined) {
     return toolSearchCodeModeSupportedForTest;
   }
   return process.allowedNodeEnvironmentFlags.has("--permission");
+}
+
+function resolveMinCodeTimeoutMs(): number {
+  return toolSearchMinCodeTimeoutMsForTest ?? 1000;
 }
 
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
@@ -427,7 +432,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     enabled: readBoolean(raw.enabled, configured),
     mode,
     codeTimeoutMs: Math.max(
-      1000,
+      resolveMinCodeTimeoutMs(),
       Math.min(60_000, readInteger(raw.codeTimeoutMs, DEFAULT_CODE_TIMEOUT_MS)),
     ),
     searchDefaultLimit: Math.max(
@@ -1339,7 +1344,8 @@ function toJsonSafe(value: unknown): unknown {
     return null;
   }
   try {
-    return JSON.parse(JSON.stringify(value)) as unknown;
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
   } catch {
     if (value instanceof Error) {
       return value.message;
@@ -1458,10 +1464,8 @@ function runCodeModeChild(params: {
     const stderr: string[] = [];
     let settled = false;
     let timedOut = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let exitRejectionTimer: ReturnType<typeof setTimeout> | undefined;
     const bridgeAbortController = new AbortController();
-    let abortFromParent: () => void;
     const settle = (callback: () => void) => {
       if (settled) {
         return;
@@ -1477,22 +1481,22 @@ function runCodeModeChild(params: {
       child.kill();
       callback();
     };
-    abortFromParent = () => {
+    const abortFromParent: () => void = () => {
       bridgeAbortController.abort(params.signal?.reason);
       child.kill("SIGKILL");
       settle(() => reject(new Error("tool_search_code aborted")));
     };
-    if (params.signal?.aborted) {
-      abortFromParent();
-      return;
-    }
-    params.signal?.addEventListener("abort", abortFromParent, { once: true });
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       timedOut = true;
       bridgeAbortController.abort(new Error("tool_search_code timed out"));
       child.kill("SIGKILL");
       settle(() => reject(new Error("tool_search_code timed out")));
     }, params.config.codeTimeoutMs);
+    params.signal?.addEventListener("abort", abortFromParent, { once: true });
+    if (params.signal?.aborted) {
+      abortFromParent();
+      return;
+    }
 
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
@@ -1687,6 +1691,12 @@ export const testing = {
   isToolSearchCodeModeSupported,
   setToolSearchCodeModeSupportedForTest: (value: boolean | undefined) => {
     toolSearchCodeModeSupportedForTest = value;
+  },
+  setToolSearchMinCodeTimeoutMsForTest: (value: number | undefined) => {
+    toolSearchMinCodeTimeoutMsForTest =
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : undefined;
   },
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,

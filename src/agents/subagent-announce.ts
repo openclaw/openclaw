@@ -568,7 +568,7 @@ export async function runSubagentAnnounceFlow(params: {
       sourceTool: "subagent_announce",
       targetRequesterSessionKey,
       requesterIsSubagent,
-      expectsCompletionMessage: expectsCompletionMessage,
+      expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
       signal: params.signal,

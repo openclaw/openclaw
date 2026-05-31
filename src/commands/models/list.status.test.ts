@@ -229,7 +229,7 @@ vi.mock("../../agents/provider-auth-aliases.js", () => ({
 vi.mock("../../agents/model-selection-cli.js", () => ({
   isCliProvider: vi.fn(
     (provider: string, cfg?: { agents?: { defaults?: { cliBackends?: object } } }) =>
-      Object.prototype.hasOwnProperty.call(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
+      Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
   ),
 }));
 vi.mock("../../infra/shell-env.js", () => ({

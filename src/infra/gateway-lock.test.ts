@@ -293,6 +293,33 @@ describe("gateway lock", () => {
     }
   });
 
+  it("bounds oversized lock polling intervals by the acquire timeout", async () => {
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+    const sleepDelays: number[] = [];
+    let now = 0;
+
+    await expect(
+      acquireGatewayLock({
+        env,
+        allowInTests: true,
+        timeoutMs: 5,
+        pollIntervalMs: Number.MAX_SAFE_INTEGER,
+        staleMs: 10_000,
+        platform: "darwin",
+        now: () => now,
+        sleep: async (ms) => {
+          sleepDelays.push(ms);
+          now = 10;
+        },
+        lockDir: resolveTestLockDir(),
+        readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
+
+    expect(sleepDelays).toEqual([5]);
+  });
+
   it("returns null when multi-gateway override is enabled", async () => {
     const env = await makeEnv();
     const lock = await acquireGatewayLock({

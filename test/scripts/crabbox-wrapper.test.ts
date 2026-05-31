@@ -38,7 +38,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     const script = [
       "#!/bin/sh",
       'if [ "$1" = "--version" ]; then',
-      '  printf "%s\\n" "crabbox 0.15.0"',
+      '  printf "%s\\n" "${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.22.1}"',
       "  exit 0",
       "fi",
       'if [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -118,7 +118,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "#!/usr/bin/env node",
     "const args = process.argv.slice(2);",
     'if (args[0] === "--version") {',
-    '  console.log("crabbox 0.15.0");',
+    "  console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || 'crabbox 0.22.1');",
     "  process.exit(0);",
     "}",
     'if (args[0] === "run" && args[1] === "--help") {',
@@ -336,6 +336,52 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toContain("local-container");
+  });
+
+  it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.22.0");
+    expect(result.stderr).toContain("selected binary reported version=crabbox 0.21.9");
+  });
+
+  it("applies the Blacksmith version gate to provider aliases", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.22.0");
+  });
+
+  it("rejects prerelease Crabbox builds at the Blacksmith minimum boundary", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.0-rc.1" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("selected binary reported version=crabbox 0.22.0-rc.1");
+  });
+
+  it("accepts post-release Crabbox describe builds at the Blacksmith minimum boundary", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.0-3-gabc1234" } },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("blacksmith-testbox");
   });
 
   it("only forces the short local-container Docker work root on Linux", () => {

@@ -167,7 +167,7 @@ function isBundledSessionConversationFallbackDisabled(channel: string): boolean 
     return true;
   }
   const entry = snapshot.plugins.entries?.[normalizeResolvedChannel(channel)];
-  return !!entry && typeof entry === "object" && entry.enabled === false;
+  return Boolean(entry) && typeof entry === "object" && entry.enabled === false;
 }
 
 function shouldProbeBundledSessionConversationFallback(rawId: string): boolean {

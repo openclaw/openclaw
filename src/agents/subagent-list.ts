@@ -283,7 +283,7 @@ export function buildSubagentList(params: {
     .filter(
       (entry) =>
         !isActiveSubagentRun(entry, pendingDescendantCount) &&
-        !!entry.endedAt &&
+        Boolean(entry.endedAt) &&
         (entry.endedAt ?? 0) >= recentCutoff,
     )
     .map((entry) =>

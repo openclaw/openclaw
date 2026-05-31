@@ -147,7 +147,7 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
           ) {
             payloadObj.tools = payloadObj.tools
               .map((tool) => normalizeOpenAiFunctionAnthropicToolDefinition(tool))
-              .filter((tool): tool is Record<string, unknown> => !!tool);
+              .filter((tool): tool is Record<string, unknown> => Boolean(tool));
           }
           if (usesOpenAiStringModeAnthropicToolChoiceForModel(model, options)) {
             payloadObj.tool_choice = normalizeOpenAiStringModeAnthropicToolChoice(

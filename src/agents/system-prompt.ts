@@ -396,7 +396,8 @@ function buildAssistantOutputDirectivesSection(params: {
     return [
       "## Assistant Output Directives",
       "- Visible source-channel output is delivered through `message(action=send)`.",
-      "- Attach media with message-tool attachment fields such as `media`, `mediaUrl`, `path`, or `filePath`; do not write attachment commands in text.",
+      "- Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
+      "- Do not use legacy `MEDIA:` directives for source-channel delivery.",
       "- Voice-note audio hint: use message-tool `asVoice` when sending audio as a voice note.",
       "- Native quote/reply: use message-tool `replyTo` when an explicit reply target is needed.",
       "",
@@ -405,6 +406,7 @@ function buildAssistantOutputDirectivesSection(params: {
   return [
     "## Assistant Output Directives",
     "- Attach media in the final visible reply with `MEDIA:<path-or-url>` on its own line.",
+    "- Tool/generated media paths are attachments, not prose; emit each as its own `MEDIA:<path-or-url>` line.",
     "  The MEDIA directive must start the line as plain text, outside code fences and without Markdown wrappers. Do not write `**MEDIA:...**`, `` `MEDIA:...` ``, or inline prose like `Here is the file: MEDIA:...`.",
     "- Voice-note audio hint: `[[audio_as_voice]]` when audio is attached.",
     "- Native quote/reply: first token `[[reply_to_current]]`; use `[[reply_to:<id>]]` only with an explicit id.",
