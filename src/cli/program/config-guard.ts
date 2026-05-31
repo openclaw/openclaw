@@ -117,10 +117,11 @@ function hasLegacyStateMigrationInputs(): boolean {
   );
 }
 
-function isReadOnlyStateMigrationCommand(commandPath: string[]): boolean {
+function shouldRunStateMigrationOnlyWithLegacyInputs(commandPath: string[]): boolean {
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   return (
+    commandName === "agent" ||
     commandName === "status" ||
     (commandName === "tasks" &&
       (subcommandName === undefined || ALLOWED_INVALID_TASK_SUBCOMMANDS.has(subcommandName)))
@@ -161,7 +162,7 @@ export async function ensureConfigReady(params: {
   const commandPath = params.commandPath ?? [];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
-  const isReadOnlyMigrationCommand = isReadOnlyStateMigrationCommand(commandPath);
+  const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
   const runStateMigrationPreflight = async () => {
     didRunDoctorConfigFlow = true;
     const runDoctorConfigPreflight = async () =>
@@ -177,7 +178,7 @@ export async function ensureConfigReady(params: {
   if (
     !didRunDoctorConfigFlow &&
     shouldConsiderStateMigration &&
-    (!isReadOnlyMigrationCommand || hasLegacyStateMigrationInputs())
+    (!requiresLegacyStateInput || hasLegacyStateMigrationInputs())
   ) {
     preflightSnapshot = await runStateMigrationPreflight();
   }
@@ -187,7 +188,7 @@ export async function ensureConfigReady(params: {
     !preflightSnapshot &&
     !didRunDoctorConfigFlow &&
     shouldConsiderStateMigration &&
-    isReadOnlyMigrationCommand &&
+    requiresLegacyStateInput &&
     snapshot.valid &&
     snapshotHasConfiguredSessionStore(snapshot)
   ) {

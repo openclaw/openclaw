@@ -592,7 +592,7 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "models", "list"], expected: true },
     { argv: ["node", "openclaw", "models", "status"], expected: true },
     { argv: ["node", "openclaw", "update", "status", "--json"], expected: false },
-    { argv: ["node", "openclaw", "agent", "--message", "hi"], expected: false },
+    { argv: ["node", "openclaw", "agent", "--message", "hi"], expected: true },
     { argv: ["node", "openclaw", "agents", "list"], expected: true },
     { argv: ["node", "openclaw", "message", "send"], expected: true },
   ] as const)("decides when to migrate state: $argv", ({ argv, expected }) => {
@@ -603,6 +603,7 @@ describe("argv helpers", () => {
     { path: ["status"], expected: true },
     { path: ["update", "status"], expected: false },
     { path: ["config", "get"], expected: false },
+    { path: ["agent"], expected: true },
     { path: ["models", "status"], expected: true },
     { path: ["agents", "list"], expected: true },
   ])("reuses command path for migrate state decisions: $path", ({ path, expected }) => {
