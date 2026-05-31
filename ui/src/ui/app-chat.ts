@@ -40,7 +40,12 @@ import {
 } from "./controllers/sessions.ts";
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
@@ -74,6 +79,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  sessionsError?: string | null;
   sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
@@ -952,6 +958,44 @@ async function flushChatQueue(host: ChatHost) {
   }
 }
 
+function isSelectedSessionKnownIdle(
+  sessionsResult: SessionsListResult,
+  sessionKey: string,
+): boolean {
+  const row = sessionsResult.sessions.find((session) =>
+    areUiSessionKeysEquivalent(session.key, sessionKey),
+  );
+  return Boolean(row && !isSessionRunActive(row));
+}
+
+function flushChatQueueAfterIdleSessionReconciliation(
+  host: ChatHost,
+  sessionKey: string,
+  historyRefresh: Promise<unknown>,
+  sessionsRefresh: Promise<unknown>,
+  previousSessionsResult: SessionsListResult | null | undefined,
+) {
+  if (host.chatQueue.length === 0) {
+    return;
+  }
+  void Promise.allSettled([historyRefresh, sessionsRefresh]).then((results) => {
+    const sessionsRefreshSettled = results[1];
+    const freshSessionsResult = host.sessionsResult;
+    if (
+      sessionsRefreshSettled.status !== "fulfilled" ||
+      host.chatQueue.length === 0 ||
+      !areUiSessionKeysEquivalent(host.sessionKey, sessionKey) ||
+      !freshSessionsResult ||
+      freshSessionsResult === previousSessionsResult ||
+      host.sessionsError ||
+      !isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
+    ) {
+      return;
+    }
+    void flushChatQueue(host);
+  });
+}
+
 export function removeQueuedMessage(host: ChatHost, id: string) {
   const removed = host.chatQueue.filter((item) => item.id === id);
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
@@ -1326,18 +1370,28 @@ export async function refreshChat(
   host: ChatHost,
   opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
 ) {
+  const refreshedSessionKey = host.sessionKey;
   const requestUpdate = () => host.requestUpdate?.();
+  const previousSessionsResult = host.sessionsResult;
   const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     }
     requestUpdate();
   });
+  const sessionsRefresh = loadSessions(host as unknown as SessionsState, {
+    ...createChatSessionsLoadOverrides(host),
+    ...scopedAgentListParamsForSession(host, refreshedSessionKey),
+  });
+  flushChatQueueAfterIdleSessionReconciliation(
+    host,
+    refreshedSessionKey,
+    historyRefresh,
+    sessionsRefresh,
+    previousSessionsResult,
+  );
   const secondaryRefresh = Promise.allSettled([
-    loadSessions(host as unknown as SessionsState, {
-      ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentListParamsForSession(host, host.sessionKey),
-    }),
+    sessionsRefresh,
     refreshChatAvatar(host),
     refreshChatModels(host),
     refreshChatCommands(host),

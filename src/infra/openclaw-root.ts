@@ -8,10 +8,8 @@ const packageRootCache = new Map<string, string | null>();
 const argv1CandidateCache = new Map<string, string[]>();
 
 function parsePackageName(raw: string): string | null {
-  const parsed: unknown = JSON.parse(raw);
-  return parsed && typeof parsed === "object" && "name" in parsed && typeof parsed.name === "string"
-    ? parsed.name
-    : null;
+  const parsed = JSON.parse(raw) as { name?: unknown };
+  return typeof parsed.name === "string" ? parsed.name : null;
 }
 
 async function readPackageName(dir: string): Promise<string | null> {

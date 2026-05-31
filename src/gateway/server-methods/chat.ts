@@ -129,6 +129,7 @@ import {
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
@@ -2438,16 +2439,21 @@ export const chatHandlers: GatewayRequestHandlers = {
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const localReadMax = max > 0 ? max + 1 : 0;
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
+    const rawHistoryWindow = resolveSessionHistoryTailReadOptions(max);
+    const localHistoryReadOptions = {
+      maxMessages: rawHistoryWindow.maxMessages + 1,
+      maxLines: rawHistoryWindow.maxLines + 1,
+    };
     const localMessages =
       sessionId && storePath
         ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            maxMessages: localReadMax,
+            ...localHistoryReadOptions,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })
         : [];
-    const overreadContextMessage = localMessages.length > max ? localMessages[0] : undefined;
+    const overreadContextMessage =
+      localMessages.length > rawHistoryWindow.maxMessages ? localMessages[0] : undefined;
     const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
       dropPreSessionStartAnnouncePairs(
         localMessages,

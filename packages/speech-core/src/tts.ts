@@ -900,14 +900,12 @@ export function resolveExplicitTtsOverrides(params: {
       `TTS provider "${selectedProvider}" ignored the requested model or voice overrides.`,
     );
   }
-  if (!providerOverrides) {
-    throw new Error(`TTS provider "${selectedProvider}" did not return talk overrides.`);
-  }
 
+  const overridesRecord = providerOverrides as SpeechProviderOverrides;
   return {
     provider: selectedProvider,
     providerOverrides: {
-      [provider.id]: providerOverrides,
+      [provider.id]: overridesRecord,
     },
   };
 }
@@ -1817,10 +1815,9 @@ export async function textToSpeechTelephony(params: {
         config,
         provider: resolvedProvider.provider,
       });
-      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony;
-      if (!synthesizeTelephony) {
-        throw new Error(`TTS provider "${resolvedProvider.provider.id}" lost telephony support`);
-      }
+      const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
+        typeof resolvedProvider.provider.synthesizeTelephony
+      >;
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: params.text,

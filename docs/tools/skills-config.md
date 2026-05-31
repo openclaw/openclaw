@@ -8,7 +8,9 @@ title: "Skills config"
 
 Most skills loader/install configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific skill visibility lives under
-`agents.defaults.skills` and `agents.list[].skills`.
+`agents.defaults.skills` and `agents.list[].skills`. Skill Workshop behavior is
+configured under `skills.workshop`; see
+[Skill Workshop](/tools/skill-workshop) for the full creation and review flow.
 
 ```json5
 {
@@ -118,10 +120,10 @@ Rules:
   clients to install private zip archives staged through `skills.upload.*`
   (default: false). This only enables the uploaded-archive path; normal ClawHub
   installs do not require it.
-- `workshop.autonomous.enabled`: allow agents to create pending Skill Workshop
-  proposals from durable conversation signals after successful turns (default:
-  false). User-prompted skill creation still goes through Skill Workshop.
-- `workshop.approvalPolicy`: proposal lifecycle policy. `pending` requires
+- `workshop.autonomous.enabled`: allow agents to create pending proposals from
+  durable conversation signals after successful turns (default: false).
+  User-prompted skill creation still goes through Skill Workshop.
+- `workshop.approvalPolicy`: Skill Workshop review policy. `pending` requires
   approval before agent-initiated apply/reject/quarantine actions; `auto`
   allows those actions without approval.
 - `workshop.maxPending`: maximum pending/quarantined proposals retained per

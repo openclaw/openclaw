@@ -1255,6 +1255,7 @@
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/skill-workshop",
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",

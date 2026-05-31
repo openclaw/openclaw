@@ -61,11 +61,6 @@ const pluginModuleLoaderStats = {
   sourceTransformTargets: new Map<string, number>(),
 };
 
-function isJitiLoaderModule(value: unknown): value is { createJiti: PluginModuleLoaderFactory } {
-  const canHaveProperties = (value && typeof value === "object") || typeof value === "function";
-  return canHaveProperties && "createJiti" in value && typeof value.createJiti === "function";
-}
-
 function recordSourceTransformTarget(target: string): void {
   const current = pluginModuleLoaderStats.sourceTransformTargets.get(target) ?? 0;
   pluginModuleLoaderStats.sourceTransformTargets.set(target, current + 1);
@@ -112,8 +107,8 @@ function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {
   if (createJitiLoaderFactory) {
     return createJitiLoaderFactory;
   }
-  const loaded: unknown = requireForJiti("jiti");
-  if (!isJitiLoaderModule(loaded)) {
+  const loaded = requireForJiti("jiti") as { createJiti?: PluginModuleLoaderFactory };
+  if (typeof loaded.createJiti !== "function") {
     throw new Error("jiti module did not export createJiti");
   }
   createJitiLoaderFactory = loaded.createJiti;

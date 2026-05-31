@@ -452,8 +452,8 @@ describe("scoped vitest configs", () => {
     expect(testConfig.exclude).not.toContain("chat/slash-command-executor.node.test.ts");
   });
 
-  it("defaults channel tests to isolated threads", () => {
-    expectThreadedIsolatedRunner(defaultChannelsConfig);
+  it("defaults channel tests to threads with the non-isolated runner", () => {
+    expectThreadedNonIsolatedRunner(defaultChannelsConfig);
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
