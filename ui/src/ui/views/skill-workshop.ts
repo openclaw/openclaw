@@ -49,7 +49,6 @@ export type SkillWorkshopProps = {
   onNext: () => void;
   onApply: (key: string) => void;
   onRevise: (key: string) => void;
-  onSetAside: (key: string) => void;
   onReject: (key: string) => void;
   onPreviewFile: (key: string, path: string) => void;
   onClosePreview: () => void;
@@ -215,8 +214,8 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
           </div>
         </div>
         <div class="sw-detail__nav">
-          <button title="Previous (k)" @click=${props.onPrev}>↑</button>
-          <button title="Next (j)" @click=${props.onNext}>↓</button>
+          <button title="Previous" @click=${props.onPrev}>↑</button>
+          <button title="Next" @click=${props.onNext}>↓</button>
         </div>
       </div>
 
@@ -263,9 +262,6 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
         Apply
       </button>
       <button class="sw-btn" @click=${() => props.onRevise(proposal.key)}>Revise</button>
-      <button class="sw-btn sw-btn--ghost" @click=${() => props.onSetAside(proposal.key)}>
-        Set aside
-      </button>
       <button
         class="sw-btn sw-btn--ghost sw-btn--danger"
         @click=${() => props.onReject(proposal.key)}

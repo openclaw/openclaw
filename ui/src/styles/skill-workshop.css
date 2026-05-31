@@ -3,11 +3,27 @@
 .skill-workshop {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  min-height: 0;
 }
 
 .content > .skill-workshop {
   margin-top: 8px;
+}
+
+.content--skill-workshop {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 16px;
+}
+
+.content--skill-workshop .content-header {
+  flex-shrink: 0;
+}
+
+.content--skill-workshop > .skill-workshop {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* ── Lifecycle tabs (underline style) ───────────────────────────────── */
@@ -61,11 +77,14 @@
   display: grid;
   grid-template-columns: 360px 1fr;
   gap: 0;
+  flex: 1;
+  min-height: 0;
   border: 1px solid var(--border);
   border-top: none;
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   background: var(--card);
-  align-items: start;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 /* ── Queue (left) ───────────────────────────────────────────────────── */
@@ -74,9 +93,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  position: sticky;
-  top: 0;
-  max-height: 100vh;
+  min-height: 0;
   align-self: stretch;
 }
 
@@ -226,7 +243,8 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sw-detail--empty {
@@ -258,6 +276,7 @@
   gap: 14px;
   align-items: flex-start;
   background: var(--card);
+  flex-shrink: 0;
 }
 
 .sw-detail__head-left {
@@ -307,6 +326,8 @@
 .sw-detail__body {
   padding: 18px 24px 24px;
   flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .sw-section {
@@ -446,9 +467,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  position: sticky;
-  bottom: 0;
-  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
 }
 
 .sw-btn {
@@ -487,21 +506,6 @@
 
 .sw-btn--danger {
   color: var(--danger);
-}
-
-.sw-kbd {
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--muted);
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-family: var(--mono);
-  font-weight: 500;
-}
-
-.sw-btn--primary .sw-kbd {
-  background: rgba(0, 0, 0, 0.25);
-  color: rgba(255, 255, 255, 0.85);
 }
 
 .sw-detail__meta-link {
