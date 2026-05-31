@@ -13,12 +13,14 @@ export async function startGatewayTailscaleExposure(params: {
   resetOnExit?: boolean;
   port: number;
   preserveFunnel?: boolean;
+  serviceName?: string;
   controlUiBasePath?: string;
   logTailscale: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<(() => Promise<void>) | null> {
   if (params.tailscaleMode === "off") {
     return null;
   }
+  const serviceName = params.serviceName?.trim() || undefined;
 
   try {
     if (params.tailscaleMode === "serve") {
@@ -37,15 +39,20 @@ export async function startGatewayTailscaleExposure(params: {
           return null;
         }
       }
-      await enableTailscaleServe(params.port);
+      if (serviceName) {
+        await enableTailscaleServe(params.port, undefined, serviceName);
+      } else {
+        await enableTailscaleServe(params.port);
+      }
     } else {
       await enableTailscaleFunnel(params.port);
     }
     const host = await getTailnetHostname().catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
+      const serviceLabel = serviceName ? ` for ${serviceName}` : "";
       params.logTailscale.info(
-        `${params.tailscaleMode} enabled: https://${host}${uiPath} (WS via wss://${host})`,
+        `${params.tailscaleMode} enabled${serviceLabel}: https://${host}${uiPath} (WS via wss://${host})`,
       );
     } else {
       params.logTailscale.info(`${params.tailscaleMode} enabled`);
@@ -61,7 +68,11 @@ export async function startGatewayTailscaleExposure(params: {
   return async () => {
     try {
       if (params.tailscaleMode === "serve") {
-        await disableTailscaleServe();
+        if (serviceName) {
+          await disableTailscaleServe(undefined, serviceName);
+        } else {
+          await disableTailscaleServe();
+        }
       } else {
         await disableTailscaleFunnel();
       }

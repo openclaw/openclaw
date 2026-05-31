@@ -1042,6 +1042,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            serviceName: z.string().min(1).optional(),
             preserveFunnel: z.boolean().optional(),
           })
           .strict()

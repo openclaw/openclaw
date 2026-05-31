@@ -580,6 +580,10 @@ See [Inferred commitments](/concepts/commitments).
   value, so repeated failures from one localhost origin do not automatically
   lock out a different origin.
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
+- `tailscale.serviceName`: optional Tailscale Service name for Serve mode, such
+  as `svc:openclaw`. When set, OpenClaw passes it to `tailscale serve
+--service` so the Control UI can be exposed through a named Service instead
+  of the device hostname.
 - `tailscale.preserveFunnel`: when `true` and `tailscale.mode = "serve"`, OpenClaw
   checks `tailscale funnel status` before re-applying Serve at startup and skips
   it if an externally configured Funnel route already covers the gateway port.
