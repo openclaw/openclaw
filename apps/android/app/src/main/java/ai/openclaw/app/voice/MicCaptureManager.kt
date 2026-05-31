@@ -152,6 +152,7 @@ class MicCaptureManager(
       messageQueue.size
     }
 
+  /** Toggles manual microphone capture, draining partial transcripts when capture turns off. */
   fun setMicEnabled(enabled: Boolean) {
     if (_micEnabled.value == enabled) return
     _micEnabled.value = enabled
@@ -192,6 +193,7 @@ class MicCaptureManager(
     }
   }
 
+  /** Immediately stops capture and drops any unsent partial transcript. */
   fun cancelMicCapture() {
     transcriptionDrainJob?.cancel()
     transcriptionDrainJob = null
@@ -201,6 +203,7 @@ class MicCaptureManager(
     stop()
   }
 
+  /** Pauses capture while local TTS plays so speaker output is not transcribed as user speech. */
   suspend fun pauseForTts() {
     val shouldPause =
       synchronized(ttsPauseLock) {
@@ -222,6 +225,7 @@ class MicCaptureManager(
     stopTranscription(preserveStatus = true)
   }
 
+  /** Resumes capture after all nested TTS playback pauses have completed. */
   suspend fun resumeAfterTts() {
     val shouldResume =
       synchronized(ttsPauseLock) {
@@ -247,6 +251,7 @@ class MicCaptureManager(
     sendQueuedIfIdle()
   }
 
+  /** Starts or stops gateway-dependent capture/send work when the operator session changes state. */
   fun onGatewayConnectionChanged(connected: Boolean) {
     gatewayConnected = connected
     if (connected) {
@@ -273,6 +278,7 @@ class MicCaptureManager(
     sendQueuedIfIdle()
   }
 
+  /** Handles transcription and chat events that update live voice transcript/reply state. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
