@@ -975,8 +975,10 @@ async function getSession(
     }
 
     let pendingLease: PendingChromeMcpSessionLease | undefined;
+    let leasedPending: PendingChromeMcpSession | undefined;
     const pending = pendingSessions.get(cacheKey);
     if (pending) {
+      leasedPending = pending;
       pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
       session = pendingLease.session;
       if (session.transport.pid === null) {
@@ -989,6 +991,7 @@ async function getSession(
     if (!session) {
       const createdPending = createSharedPendingChromeMcpSession(cacheKey, profileName, options);
       pendingSessions.set(cacheKey, createdPending);
+      leasedPending = createdPending;
       pendingLease = await waitForSharedPendingChromeMcpSession(createdPending, signal);
       session = pendingLease.session;
     }
@@ -1002,6 +1005,9 @@ async function getSession(
         pendingLease = undefined;
       } else {
         forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
+        if (leasedPending) {
+          forgetPendingChromeMcpSessionIfCurrent(cacheKey, leasedPending);
+        }
       }
       throw err;
     } finally {
@@ -1041,6 +1047,7 @@ async function getExistingSession(
         pendingLease = undefined;
       } else {
         forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
+        forgetPendingChromeMcpSessionIfCurrent(cacheKey, pending);
       }
       throw err;
     } finally {
