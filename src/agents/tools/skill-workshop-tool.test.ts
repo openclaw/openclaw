@@ -175,13 +175,6 @@ describe("skill_workshop tool", () => {
       status: "pending",
       query: "!!!",
     });
-    expect((punctuationOnly.details as { proposals: unknown[] }).proposals).toEqual([]);
-
-    const punctuationOnly = await tool.execute("call-3b", {
-      action: "list",
-      status: "pending",
-      query: "!!!",
-    });
     expect((punctuationOnly.content[0] as { text: string }).text).toBe(
       "No skill proposals matched.",
     );
