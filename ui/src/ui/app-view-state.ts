@@ -51,7 +51,6 @@ import type {
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
-import type { SkillWorkshopProposal } from "./views/skill-workshop.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {
@@ -129,7 +128,7 @@ export type AppViewState = {
   sessionSwitchNotice: { id: number; text: string } | null;
   sessionSwitchFlashKey: string | null;
   chatSessionPickerOpen: boolean;
-  chatSessionPickerSurface: "desktop" | "mobile" | null;
+  chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null;
   chatSessionPickerQuery: string;
   chatSessionPickerAppliedQuery: string;
   chatSessionPickerLoading: boolean;
@@ -426,34 +425,6 @@ export type AppViewState = {
     skillCardContentKeys: Record<string, string>;
     skillCardLoadingKey: string | null;
     skillCardErrors: Record<string, string>;
-    skillWorkshopSelectedKey: string | null;
-    skillWorkshopStatusFilter: "all" | "pending" | "applied" | "rejected" | "quarantined" | "stale";
-    skillWorkshopMode: "board" | "today";
-    skillWorkshopQuery: string;
-    skillWorkshopFilePreviewKey: string | null;
-    skillWorkshopFilePreviewQuery: string;
-    skillWorkshopLoading: boolean;
-    skillWorkshopLoaded: boolean;
-    skillWorkshopError: string | null;
-    skillWorkshopInspectingKey: string | null;
-    skillWorkshopProposals: SkillWorkshopProposal[];
-    skillWorkshopReviewedKeys: string[];
-    skillWorkshopQueueWidth: number;
-    skillWorkshopUseCurrentChatForRevisions: boolean;
-    skillWorkshopRevisionSessions: Record<string, { sessionKey: string; updatedAt: number }>;
-    skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null;
-    skillWorkshopActionNotice: { key: string; label: string; slug: string } | null;
-    skillWorkshopRevisionKey: string | null;
-    skillWorkshopRevisionDraft: string;
-    skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
-    skillWorkshopChatHandoffActive?: boolean;
-    skillWorkshopChatHandoffTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
-    skillWorkshopHandoff: {
-      key: string;
-      slug: string;
-      phase: "prepare" | "landing" | "error";
-    } | null;
-    skillWorkshopHandoffDismissTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

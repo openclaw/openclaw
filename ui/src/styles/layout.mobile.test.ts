@@ -27,11 +27,12 @@ describe("chat header responsive mobile styles", () => {
 
     expect(css).toContain("@media (max-width: 1320px)");
     expect(css).toContain(".content--chat .content-header");
+    expect(layoutCss).toContain(".content--chat {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  overflow: hidden;\n  padding-top: 0;");
     expect(css).toContain("max-height: 44px;");
     expect(layoutCss).toContain(".content--chat .content-header .chat-controls__session-notice");
     expect(layoutCss).toContain("position: absolute;");
     expect(css).toContain(".chat-controls__session-row");
-    expect(css).toContain(".chat-controls__thinking-select");
+    expect(css).toContain('grid-template-areas: "agent session model";');
   });
 
   it("lays out mobile chat header action icons as an even full-width grid", () => {
@@ -40,7 +41,7 @@ describe("chat header responsive mobile styles", () => {
     expect(css).toContain(
       ".chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking",
     );
-    expect(css).toContain("grid-template-columns: repeat(5, minmax(0, 1fr));");
+    expect(css).toContain("grid-template-columns: repeat(4, minmax(0, 1fr));");
     expect(css).toContain(
       ".chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {\n    width: 100%;",
     );
@@ -56,51 +57,22 @@ describe("chat header responsive mobile styles", () => {
     expect(css).toContain("min-width: 44px;");
   });
 
-  it("keeps focused chat from reserving hidden page-header height", () => {
-    const layoutCss = readLayoutCss();
-    const mobileCss = readMobileCss();
-    const focusedShell = selectorBlocks(layoutCss, ".shell--chat-focus").join("\n");
-    const focusedMobileShell = selectorBlocks(mobileCss, ".shell--chat-focus").join("\n");
-    const focusedTopbar = selectorBlocks(layoutCss, ".shell--chat-focus .topbar").join("\n");
-    const focusedHeaderSelector = ".shell--chat-focus .content--chat .content-header";
-    const expectedDeclarations = [
-      "min-height: 0;",
-      "max-height: 0;",
-      "padding-top: 0;",
-      "padding-bottom: 0;",
-      "overflow: hidden;",
-    ];
-
-    expect(focusedShell).toContain("grid-template-rows: 0 minmax(0, 1fr);");
-    expect(focusedMobileShell).toContain("grid-template-rows: 0 minmax(0, 1fr);");
-    expect(focusedTopbar).toContain("min-height: 0;");
-    expect(focusedTopbar).toContain("height: 0;");
-    expect(focusedTopbar).toContain("padding-top: 0;");
-    expect(focusedTopbar).toContain("padding-bottom: 0;");
-    expect(focusedTopbar).toContain("overflow: hidden;");
-
-    for (const css of [layoutCss, mobileCss]) {
-      const block = selectorBlocks(css, focusedHeaderSelector).join("\n");
-      expect(block).toBeTruthy();
-      for (const declaration of expectedDeclarations) {
-        expect(block).toContain(declaration);
-      }
-    }
-  });
-
   it("restores single-page logs scrolling on mobile", () => {
     const mobileCss = readMobileCss();
+    const logsBlock = selectorBlocks(mobileCss, ".content.content--logs").join("\n");
+    const workspaceBlock = selectorBlocks(
+      mobileCss,
+      ".content.content--logs .settings-workspace",
+    ).join("\n");
+    const logStreamBlock = selectorBlocks(
+      mobileCss,
+      ".card--fill-height.card--fill-height .log-stream",
+    ).join("\n");
 
-    expect(mobileCss).toContain(".content.content--logs {");
-    expect(mobileCss).toMatch(
-      /\.content\.content--logs \{[\s\S]*display: block;[\s\S]*overflow-y: auto;/,
-    );
-    expect(mobileCss).toMatch(
-      /\.content\.content--logs \.settings-workspace \{[\s\S]*display: block;/,
-    );
-    expect(mobileCss).toMatch(
-      /\.card--fill-height\.card--fill-height \.log-stream \{[\s\S]*max-height: 380px;/,
-    );
+    expect(logsBlock).toContain("display: block;");
+    expect(logsBlock).toContain("overflow-y: auto;");
+    expect(workspaceBlock).toContain("display: block;");
+    expect(logStreamBlock).toContain("max-height: 380px;");
   });
 });
 
@@ -121,30 +93,42 @@ describe("sidebar menu trigger styles", () => {
 
   it("keeps the sidebar new-session button inset and its icon visible", () => {
     const css = readLayoutCss();
+    const sessionsBlock = selectorBlocks(css, ".sidebar-sessions").join("\n");
+    const newSessionBlock = selectorBlocks(css, ".sidebar-new-session").join("\n");
+    const newSessionIconBlock = selectorBlocks(css, ".sidebar-new-session__icon svg").join("\n");
+    const collapsedSessionsBlock = selectorBlocks(
+      css,
+      ".sidebar--collapsed .sidebar-sessions",
+    ).join("\n");
 
-    expect(css).toMatch(/\.sidebar-sessions \{[\s\S]*padding: 0 8px;/);
-    expect(css).toMatch(/\.sidebar-new-session \{[\s\S]*min-height: 38px;/);
-    expect(css).toMatch(/\.sidebar-new-session \{[\s\S]*box-sizing: border-box;/);
-    expect(css).toMatch(
-      /\.sidebar-new-session__icon svg \{[\s\S]*stroke: currentColor;[\s\S]*fill: none;/,
-    );
-    expect(css).toMatch(/\.sidebar--collapsed \.sidebar-sessions \{[\s\S]*padding: 0;/);
+    expect(sessionsBlock).toContain("padding: 0 8px;");
+    expect(newSessionBlock).toContain("min-height: 38px;");
+    expect(newSessionBlock).toContain("box-sizing: border-box;");
+    expect(newSessionIconBlock).toContain("stroke: currentColor;");
+    expect(newSessionIconBlock).toContain("fill: none;");
+    expect(collapsedSessionsBlock).toContain("padding: 0;");
   });
 });
 
 describe("topbar theme mode tooltip styles", () => {
   it("clamps the rightmost color mode tooltip inside the viewport edge", () => {
     const css = readLayoutCss();
+    const lastChildAfterBlock = selectorBlocks(
+      css,
+      ".topbar-theme-mode__btn:last-child[data-tooltip]::after",
+    ).join("\n");
+    const lastChildHoverAfterBlock = selectorBlocks(
+      css,
+      ".topbar-theme-mode__btn:last-child[data-tooltip]:hover::after",
+    ).join("\n");
+    const lastChildFocusAfterBlock = selectorBlocks(
+      css,
+      ".topbar-theme-mode__btn:last-child[data-tooltip]:focus-visible::after",
+    ).join("\n");
 
-    expect(css).toMatch(
-      /\.topbar-theme-mode__btn:last-child\[data-tooltip\]::after \{[\s\S]*right: 0;/,
-    );
-    expect(css).toMatch(
-      /\.topbar-theme-mode__btn:last-child\[data-tooltip\]:hover::after \{[\s\S]*transform: translateY\(0\);/,
-    );
-    expect(css).toMatch(
-      /\.topbar-theme-mode__btn:last-child\[data-tooltip\]:focus-visible::after \{[\s\S]*transform: translateY\(0\);/,
-    );
+    expect(lastChildAfterBlock).toContain("right: 0;");
+    expect(lastChildHoverAfterBlock).toContain("transform: translateY(0);");
+    expect(lastChildFocusAfterBlock).toContain("transform: translateY(0);");
     const tooltipBlock =
       selectorBlocks(css, ".topbar-theme-mode__btn[data-tooltip]::after").find((block) =>
         block.includes("content: attr(data-tooltip);"),

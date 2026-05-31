@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import { switchChatSession } from "../app-render.helpers.ts";
@@ -378,7 +378,6 @@ function createChatHeaderState(
       navCollapsed: false,
       navGroupsCollapsed: {},
       borderRadius: 50,
-      chatFocusMode: false,
       chatShowThinking: false,
     },
     chatMessage: "",
@@ -420,15 +419,50 @@ async function flushTasks() {
   await vi.dynamicImportSettled();
 }
 
-function getChatModelSelect(container: Element): HTMLSelectElement {
-  const select = container.querySelector<HTMLSelectElement>(
-    'select[data-chat-model-select="true"]',
-  );
-  expect(select).toBeInstanceOf(HTMLSelectElement);
-  if (!(select instanceof HTMLSelectElement)) {
-    throw new Error("Expected chat model select");
+function getChatModelSelect(container: Element): HTMLElement {
+  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
+  expect(select).toBeInstanceOf(HTMLElement);
+  if (!(select instanceof HTMLElement)) {
+    throw new Error("Expected chat model control");
   }
   return select;
+}
+
+function getChatSelectValue(control: HTMLElement): string {
+  return control.dataset.chatSelectValue ?? "";
+}
+
+function getChatThinkingValue(control: HTMLElement): string {
+  return control.dataset.chatThinkingValue ?? "";
+}
+
+function clickChatModelOption(container: Element, value: string) {
+  const option = Array.from(
+    container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+  ).find((button) => button.dataset.chatModelOption === value);
+  expect(option).toBeInstanceOf(HTMLButtonElement);
+  option?.click();
+}
+
+function clickChatSpeedOption(container: Element, value: string) {
+  const option = Array.from(
+    container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
+  ).find((button) => button.dataset.chatSpeedOption === value);
+  expect(option).toBeInstanceOf(HTMLButtonElement);
+  option?.click();
+}
+
+function getThinkingSelect(container: Element): HTMLElement {
+  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
+  expect(select).toBeInstanceOf(HTMLElement);
+  if (!(select instanceof HTMLElement)) {
+    throw new Error("Expected chat thinking control");
+  }
+  return select;
+}
+
+function getThinkingOptions(container: Element): HTMLButtonElement[] {
+  return Array.from(container.querySelectorAll<HTMLButtonElement>("[data-chat-thinking-option]"));
 }
 
 function requireElement(container: Element, selector: string, label: string): Element {
@@ -470,7 +504,6 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       disabledReason: null,
       error: null,
       sessions: null,
-      focusMode: false,
       sidebarOpen: false,
       sidebarContent: null,
       sidebarError: null,
@@ -490,7 +523,6 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       showNewMessages: false,
       onScrollToBottom: () => undefined,
       onRefresh: () => undefined,
-      onToggleFocusMode: () => undefined,
       getDraft: () => "",
       onDraftChange: () => undefined,
       onRequestUpdate: () => undefined,
@@ -545,7 +577,7 @@ describe("chat compaction divider", () => {
 });
 
 describe("chat goal status", () => {
-  it("renders the active session goal above the composer", () => {
+  it("renders the active session goal inside the composer", () => {
     const container = renderChatView({
       sessions: createSessionsResultFromRows([
         {
@@ -573,6 +605,51 @@ describe("chat goal status", () => {
       "Pursuing goal (12k/50k) Land the web goal UI",
     );
     expect(goal?.getAttribute("aria-label")).toBe("Pursuing goal (12k/50k): Land the web goal UI");
+    expect(goal?.closest(".agent-chat__composer-status-stack")).not.toBeNull();
+  });
+});
+
+describe("chat composer workbench", () => {
+  it("renders session controls in the composer and workspace files in the rail", () => {
+    const onRefresh = vi.fn();
+    const onOpenFile = vi.fn();
+    const container = renderChatView({
+      composerControls: html`<button class="test-composer-control">Model</button>`,
+      workspaceFiles: {
+        agentId: "main",
+        list: {
+          agentId: "main",
+          workspace: "/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              missing: false,
+              size: 2048,
+            },
+          ],
+        },
+        loading: false,
+        error: null,
+        activeName: "AGENTS.md",
+        onRefresh,
+        onOpenFile,
+      },
+    });
+
+    expect(
+      container.querySelector(".agent-chat__composer-controls .test-composer-control"),
+    ).not.toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
+      "/workspace",
+    );
+    const file = container.querySelector<HTMLButtonElement>(".chat-workspace-rail__file");
+    expect(file?.textContent).toContain("AGENTS.md");
+    expect(file?.textContent).toContain("2 KB");
+
+    file?.click();
+
+    expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
   });
 });
 
@@ -745,7 +822,6 @@ describe("chat voice controls", () => {
     const container = renderChatView();
 
     requireElement(container, '[aria-label="Start Talk"]', "Start Talk button");
-    requireElement(container, '[aria-label="Talk options"]', "Talk options button");
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
   });
 
@@ -1495,9 +1571,11 @@ describe("chat session controls", () => {
         .querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')
         ?.getAttribute("aria-label"),
     ).toBe(t("chat.selectors.session"));
-    expect(
-      [...container.querySelectorAll("select")].map((select) => select.getAttribute("aria-label")),
-    ).toEqual([t("chat.selectors.model"), t("chat.selectors.thinkingLevel")]);
+    const combinedLabel = container
+      .querySelector('[data-chat-model-select="true"]')
+      ?.getAttribute("aria-label");
+    expect(combinedLabel).toContain(t("chat.selectors.model"));
+    expect(combinedLabel).toContain(t("chat.selectors.thinkingLevel"));
   });
 
   it("searches chat sessions inside the picker without replacing recent sessions", async () => {
@@ -2091,7 +2169,7 @@ describe("chat session controls", () => {
       ]),
     );
 
-    void switchChatSession(state, "agent:ops:main");
+    switchChatSession(state, "agent:ops:main");
     expect(state.chatSessionPickerResult).toBeNull();
     expect(state.chatSessionPickerAppliedQuery).toBe("");
 
@@ -2380,10 +2458,9 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.value).toBe("");
+    expect(getChatSelectValue(modelSelect)).toBe("");
 
-    modelSelect.value = "openai/gpt-5-mini";
-    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    clickChatModelOption(container, "openai/gpt-5-mini");
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
@@ -2407,10 +2484,9 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.value).toBe("openai/gpt-5-mini");
+    expect(getChatSelectValue(modelSelect)).toBe("openai/gpt-5-mini");
 
-    modelSelect.value = "";
-    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    clickChatModelOption(container, "");
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
@@ -2421,6 +2497,70 @@ describe("chat session controls", () => {
     expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
   });
 
+  it("keeps Default available when an explicit model override matches the default", async () => {
+    const { state, request } = createChatHeaderState({ model: "gpt-5" });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    clickChatModelOption(container, "");
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: null,
+    });
+  });
+
+  it("scopes composer speed changes for a selected global-session agent", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionKey = "global";
+    state.settings.sessionKey = "global";
+    state.assistantAgentId = "beta";
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "global",
+        kind: "global",
+        modelProvider: "openai",
+        model: "gpt-5",
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    clickChatSpeedOption(container, "on");
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "beta",
+      fastMode: true,
+    });
+  });
+
+  it("shows existing speed overrides for providers outside the fast-mode allowlist", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        modelProvider: "custom",
+        model: "local-model",
+        fastMode: true,
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(3);
+
+    clickChatSpeedOption(container, "");
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      fastMode: null,
+    });
+  });
+
   it("disables the chat header model picker while a run is active", () => {
     const { state } = createChatHeaderState();
     state.chatRunId = "run-123";
@@ -2429,7 +2569,7 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.disabled).toBe(true);
+    expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
@@ -2437,15 +2577,12 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const modelSelect = getChatModelSelect(container);
-
-    modelSelect.value = "openai/gpt-5-mini";
-    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    clickChatModelOption(container, "openai/gpt-5-mini");
     await flushTasks();
     render(renderChatSessionSelect(state), container);
 
     const rerendered = getChatModelSelect(container);
-    expect(rerendered.value).toBe("openai/gpt-5-mini");
+    expect(getChatSelectValue(rerendered)).toBe("openai/gpt-5-mini");
   });
 
   it("keeps the selected model visible after switching away and back to a session", async () => {
@@ -2505,22 +2642,21 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const modelSelect = getChatModelSelect(container);
-    expect(modelSelect.value).toBe("");
+    expect(getChatSelectValue(modelSelect)).toBe("");
 
-    modelSelect.value = "bedrock/claude-opus-4.5";
-    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    clickChatModelOption(container, "bedrock/claude-opus-4.5");
     await flushTasks();
 
     state.sessionKey = sessionB;
     state.settings.sessionKey = sessionB;
     render(renderChatSessionSelect(state), container);
-    expect(getChatModelSelect(container).value).toBe("");
+    expect(getChatSelectValue(getChatModelSelect(container))).toBe("");
 
     state.sessionKey = sessionA;
     state.settings.sessionKey = sessionA;
     render(renderChatSessionSelect(state), container);
 
-    expect(getChatModelSelect(container).value).toBe("bedrock/claude-opus-4.5");
+    expect(getChatSelectValue(getChatModelSelect(container))).toBe("bedrock/claude-opus-4.5");
   });
 
   it("uses default thinking options when the active session is absent", () => {
@@ -2539,20 +2675,22 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
+    const thinkingOptions = getThinkingOptions(container);
 
-    expect([...(thinkingSelect?.options ?? [])].map((option) => option.value)).toEqual([
+    expect(thinkingOptions.map((option) => option.dataset.chatThinkingOption)).toEqual([
       "",
       "off",
       "adaptive",
       "xhigh",
       "max",
     ]);
-    expect(
-      [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
-    ).toEqual(["Inherited: Off", "Off", "Adaptive", "Extra high", "Maximum"]);
+    expect(thinkingOptions.map((option) => option.textContent?.trim())).toEqual([
+      "Default",
+      "Off",
+      "Adaptive",
+      "Extra high",
+      "Maximum",
+    ]);
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -2564,13 +2702,12 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
+    const thinkingSelect = getThinkingSelect(container);
+    const thinkingOptions = getThinkingOptions(container);
 
-    expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
-    expect(thinkingSelect?.title).toBe("Inherited: Adaptive");
+    expect(getChatThinkingValue(thinkingSelect)).toBe("");
+    expect(thinkingOptions[0]?.textContent?.trim()).toBe("Default");
+    expect(thinkingSelect.title).toContain("Adaptive");
   });
 
   it("disables thinking for known non-reasoning models without duplicate off options", () => {
@@ -2604,15 +2741,12 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
+    const thinkingSelect = getThinkingSelect(container);
+    const thinkingOptions = getThinkingOptions(container);
 
-    expect(thinkingSelect?.disabled).toBe(true);
-    expect([...(thinkingSelect?.options ?? [])].map((option) => option.value)).toEqual([""]);
-    expect(
-      [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
-    ).toEqual(["Inherited: Off"]);
+    expect(thinkingSelect.dataset.chatThinkingDisabled).toBe("true");
+    expect(thinkingOptions.map((option) => option.dataset.chatThinkingOption)).toEqual([""]);
+    expect(thinkingOptions.map((option) => option.textContent?.trim())).toEqual(["Default"]);
   });
 
   it("does not label a non-default chat model from global thinking defaults", () => {
@@ -2639,11 +2773,9 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
+    const thinkingOptions = getThinkingOptions(container);
 
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Low");
+    expect(thinkingOptions[0]?.textContent?.trim()).toBe("Default");
   });
 
   it("always renders full thinking labels", () => {
@@ -2667,15 +2799,14 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
+    const thinkingSelect = getThinkingSelect(container);
+    const thinkingOptions = getThinkingOptions(container);
 
-    expect(container.querySelector('select[data-chat-thinking-select-compact="true"]')).toBeNull();
-    expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.title).toBe("Inherited: High");
-    expect([...thinkingSelect!.options].map((option) => option.textContent?.trim())).toEqual([
-      "Inherited: High",
+    expect(container.querySelector('[data-chat-thinking-select-compact="true"]')).toBeNull();
+    expect(getChatThinkingValue(thinkingSelect)).toBe("");
+    expect(thinkingSelect.title).toContain("High");
+    expect(thinkingOptions.map((option) => option.textContent?.trim())).toEqual([
+      "Default",
       "Off",
       "Low",
       "Medium",
@@ -2692,12 +2823,11 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
+    const thinkingSelect = getThinkingSelect(container);
+    const thinkingOptions = getThinkingOptions(container);
 
-    expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
-    expect(thinkingSelect?.title).toBe("Inherited: Adaptive");
+    expect(getChatThinkingValue(thinkingSelect)).toBe("");
+    expect(thinkingOptions[0]?.textContent?.trim()).toBe("Default");
+    expect(thinkingSelect.title).toContain("Adaptive");
   });
 });

@@ -32,7 +32,7 @@ import {
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
-  resolveCollapsedToolSummaryParts,
+  resolveCollapsedToolDetail,
 } from "./tool-cards.ts";
 
 type AssistantAttachmentAvailability =
@@ -387,8 +387,8 @@ export function renderMessageGroup(
     showReasoning: boolean;
     showToolCalls?: boolean;
     autoExpandToolCalls?: boolean;
-    isToolMessageExpanded?: (messageId: string) => boolean;
-    onToggleToolMessageExpanded?: (messageId: string) => void;
+    isToolMessageExpanded?: (messageId: string) => boolean | undefined;
+    onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
@@ -433,6 +433,119 @@ export function renderMessageGroup(
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
+  if (normalizedRole === "tool" && opts.showToolCalls === false) {
+    return nothing;
+  }
+
+  if (normalizedRole === "tool" && group.messages.length > 1) {
+    const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
+    const toolCount = cards.length || group.messages.length;
+    const toolLabels = [
+      ...new Set(
+        cards.map(
+          (card) =>
+            resolveToolDisplay({
+              name: card.name,
+              args: card.args,
+              detailMode: "explain",
+            }).label,
+        ),
+      ),
+    ];
+    const preview =
+      toolLabels.length === 0
+        ? "Tool output"
+        : toolLabels.length <= 3
+          ? toolLabels.join(", ")
+          : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
+    const hasError = cards.some(isToolCardError);
+    const activityDisclosureId = `activity:${group.key}`;
+    const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
+
+    return html`
+      <div class="chat-group tool chat-group--activity">
+        ${renderChatAvatar(
+          group.role,
+          {
+            name: assistantName,
+            avatar: opts.assistantAvatar ?? null,
+          },
+          {
+            name: opts.userName ?? null,
+            avatar: opts.userAvatar ?? null,
+          },
+          opts.basePath,
+          opts.assistantAttachmentAuthToken,
+        )}
+        <div class="chat-group-messages">
+          <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
+            <button
+              class="chat-activity-group__summary ${hasError
+                ? "chat-activity-group__summary--error"
+                : ""}"
+              type="button"
+              aria-expanded=${String(activityExpanded)}
+              @click=${() =>
+                opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded)}
+            >
+              <span class="chat-activity-group__icon">${icons.activity}</span>
+              <span class="chat-activity-group__label"
+                >Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}</span
+              >
+              <span class="chat-activity-group__preview">${preview}</span>
+              ${hasError
+                ? html`<span class="chat-activity-group__badge">${icons.x}<span>Error</span></span>`
+                : nothing}
+              <span
+                class="collapse-chevron ${activityExpanded ? "" : "collapse-chevron--collapsed"}"
+                aria-hidden="true"
+                >${icons.chevronDown}</span
+              >
+            </button>
+            ${activityExpanded
+              ? html`
+                  <div class="chat-activity-group__body">
+                    ${group.messages.map((item, index) =>
+                      renderGroupedMessage(
+                        item.message,
+                        item.key,
+                        {
+                          isStreaming: group.isStreaming && index === group.messages.length - 1,
+                          sessionKey: opts.sessionKey,
+                          agentId: opts.agentId,
+                          duplicateCount: item.duplicateCount ?? 1,
+                          showReasoning: opts.showReasoning,
+                          showToolCalls: opts.showToolCalls ?? true,
+                          autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
+                          isToolMessageExpanded: opts.isToolMessageExpanded,
+                          onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
+                          isToolExpanded: opts.isToolExpanded,
+                          onToggleToolExpanded: opts.onToggleToolExpanded,
+                          onRequestUpdate: opts.onRequestUpdate,
+                          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
+                          basePath: opts.basePath,
+                          localMediaPreviewRoots: opts.localMediaPreviewRoots,
+                          assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+                          embedSandboxMode: opts.embedSandboxMode,
+                          allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+                        },
+                        opts.onOpenSidebar,
+                      ),
+                    )}
+                  </div>
+                `
+              : nothing}
+          </div>
+          <div class="chat-group-footer">
+            <span class="chat-sender-name">Activity</span>
+            ${renderChatTimestamp(group.timestamp)}
+            ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   return html`
     <div class="chat-group ${roleClass}">
       ${renderChatAvatar(
@@ -471,6 +584,7 @@ export function renderMessageGroup(
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               embedSandboxMode: opts.embedSandboxMode,
+              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
             },
             opts.onOpenSidebar,
           ),
@@ -1475,8 +1589,8 @@ function renderGroupedMessage(
     showReasoning: boolean;
     showToolCalls?: boolean;
     autoExpandToolCalls?: boolean;
-    isToolMessageExpanded?: (messageId: string) => boolean;
-    onToggleToolMessageExpanded?: (messageId: string) => void;
+    isToolMessageExpanded?: (messageId: string) => boolean | undefined;
+    onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
@@ -1591,25 +1705,20 @@ function renderGroupedMessage(
         detailMode: "explain",
       })
     : null;
-  const singleToolSummary =
-    singleToolCard &&
-    singleToolDisplay &&
-    (singleToolCard.args !== undefined || singleToolCard.inputText?.trim())
-      ? resolveCollapsedToolSummaryParts({
-          card: singleToolCard,
-          displayLabel: singleToolDisplay.label,
-          displayDetail: singleToolDisplay.detail,
-          isError: toolMessageHasError,
-        })
-      : null;
+  const singleToolDisplayDetail =
+    !toolMessageHasError && singleToolCard && singleToolDisplay
+      ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
+      : undefined;
   const toolSummaryLabelRaw = toolMessageHasError
     ? singleToolDisplay
       ? singleToolDisplay.label
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
-    : singleToolSummary
-      ? singleToolSummary.name
+    : singleToolDisplayDetail
+      ? singleToolCard?.outputText?.trim()
+        ? "output"
+        : undefined
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
@@ -1618,8 +1727,8 @@ function renderGroupedMessage(
     markdown && !toolSummaryLabel ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
     ? "Tool error"
-    : singleToolSummary && !markdown && !hasImages
-      ? singleToolSummary.label
+    : singleToolDisplayDetail && !markdown && !hasImages
+      ? singleToolDisplayDetail
       : singleToolDisplay && !markdown && !hasImages
         ? singleToolDisplay.label
         : "Tool output";

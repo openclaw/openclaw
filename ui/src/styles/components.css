@@ -4350,13 +4350,6 @@ td.data-table-key-col {
   background: linear-gradient(180deg, transparent 0%, var(--bg) 40%);
 }
 
-.shell--chat-focus .chat-compose {
-  bottom: calc(var(--shell-pad) + 8px);
-  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-  border-bottom-left-radius: var(--radius-lg);
-  border-bottom-right-radius: var(--radius-lg);
-}
-
 .chat-compose__field {
   gap: 4px;
 }

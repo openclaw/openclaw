@@ -60,7 +60,6 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
       navGroupsCollapsed: {},
       borderRadius: 50,
       textScale: 100,
-      chatFocusMode: false,
       chatShowThinking: false,
       chatShowToolCalls: true,
     },

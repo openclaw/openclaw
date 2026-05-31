@@ -295,40 +295,51 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
 
       const main = page.getByRole("main");
-      const modelSelect = main.locator('select[data-chat-model-select="true"]');
-      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await modelSelect.inputValue()).toBe("");
+      const openModelSelect = async () => {
+        const trigger = main.locator('[data-chat-model-select="true"]').first();
+        await trigger.waitFor({ state: "visible", timeout: 10_000 });
+        return trigger;
+      };
+      const selectModel = async (value: string) => {
+        await main.locator('[data-chat-model-select="true"]').click();
+        const option = main.locator(`[data-chat-model-option="${value}"]`);
+        await option.waitFor({ state: "visible", timeout: 10_000 });
+        await option.click();
+      };
 
-      await modelSelect.selectOption("bedrock/claude-opus-4.5");
+      let modelSelect = await openModelSelect();
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+
+      await selectModel("bedrock/claude-opus-4.5");
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({
         key: "agent:main:session-a",
         model: "bedrock/claude-opus-4.5",
       });
-      expect(await modelSelect.inputValue()).toBe("bedrock/claude-opus-4.5");
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
+        "bedrock/claude-opus-4.5",
+      );
 
-      await main.getByRole("button", { name: "Chat session" }).click();
       await page
-        .locator(
-          'button[data-chat-session-picker-option="true"][data-session-key="agent:main:session-b"]',
-        )
+        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-b"]')
         .click();
-      await main.getByRole("button", { name: "Chat session" }).getByText("Session B").waitFor({
+      await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
       });
-      expect(await modelSelect.inputValue()).toBe("");
+      modelSelect = await openModelSelect();
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
-      await main.getByRole("button", { name: "Chat session" }).click();
       await page
-        .locator(
-          'button[data-chat-session-picker-option="true"][data-session-key="agent:main:session-a"]',
-        )
+        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-a"]')
         .click();
-      await main.getByRole("button", { name: "Chat session" }).getByText("Session A").waitFor({
+      await page.locator(".sidebar-recent-session--active").getByText("Session A").waitFor({
         timeout: 10_000,
       });
 
-      expect(await modelSelect.inputValue()).toBe("bedrock/claude-opus-4.5");
+      modelSelect = await openModelSelect();
+      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
+        "bedrock/claude-opus-4.5",
+      );
     } finally {
       await context.close();
     }

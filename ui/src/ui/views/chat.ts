@@ -54,7 +54,12 @@ import { icons } from "../icons.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { SessionGoal, SessionsListResult } from "../types.ts";
+import type {
+  AgentFileEntry,
+  AgentsFilesListResult,
+  SessionGoal,
+  SessionsListResult,
+} from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -119,7 +124,6 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
-  focusMode: boolean;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
@@ -139,7 +143,6 @@ export type ChatProps = {
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
   onRefresh: () => void;
-  onToggleFocusMode: () => void;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
@@ -174,6 +177,16 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  composerControls?: TemplateResult | typeof nothing;
+  workspaceFiles?: {
+    agentId: string;
+    list: AgentsFilesListResult | null;
+    loading: boolean;
+    error: string | null;
+    activeName: string | null;
+    onRefresh: () => void;
+    onOpenFile: (name: string) => void;
+  };
 };
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
@@ -650,6 +663,92 @@ function renderChatGoal(goal: SessionGoal | undefined): TemplateResult | typeof 
       <span class="agent-chat__goal-label">${formatGoalSummary(goal)}</span>
       <span class="agent-chat__goal-objective">${goal.objective}</span>
     </div>
+  `;
+}
+
+function formatWorkspaceFileSize(file: AgentFileEntry): string {
+  const size = file.size;
+  if (typeof size !== "number" || !Number.isFinite(size) || size < 0) {
+    return "";
+  }
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
+  }
+  if (size >= 1024) {
+    return `${(size / 1024).toFixed(1).replace(/\.0$/, "")} KB`;
+  }
+  return `${size} B`;
+}
+
+function renderWorkspaceFileRail(
+  workspaceFiles: NonNullable<ChatProps["workspaceFiles"]> | undefined,
+): TemplateResult | typeof nothing {
+  if (!workspaceFiles) {
+    return nothing;
+  }
+  const files = workspaceFiles.list?.files ?? [];
+  return html`
+    <aside class="chat-workspace-rail" aria-label="Workspace files">
+      <div class="chat-workspace-rail__header">
+        <div class="chat-workspace-rail__title">
+          <span class="chat-workspace-rail__eyebrow">Workspace</span>
+          <strong>Files</strong>
+        </div>
+        <button
+          class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+          type="button"
+          title="Refresh files"
+          aria-label="Refresh files"
+          ?disabled=${workspaceFiles.loading}
+          @click=${workspaceFiles.onRefresh}
+        >
+          ${icons.refresh}
+        </button>
+      </div>
+      ${workspaceFiles.list?.workspace
+        ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
+            ${workspaceFiles.list.workspace}
+          </div>`
+        : nothing}
+      ${workspaceFiles.error
+        ? html`<div class="chat-workspace-rail__state chat-workspace-rail__state--error">
+            ${workspaceFiles.error}
+          </div>`
+        : workspaceFiles.loading && files.length === 0
+          ? html`<div class="chat-workspace-rail__state">Loading files...</div>`
+          : files.length === 0
+            ? html`<div class="chat-workspace-rail__state">No workspace files</div>`
+            : html`
+                <div class="chat-workspace-rail__list" role="list">
+                  ${files.map((file) => {
+                    const size = formatWorkspaceFileSize(file);
+                    const isActive = file.name === workspaceFiles.activeName;
+                    return html`
+                      <button
+                        class="chat-workspace-rail__file ${isActive
+                          ? "chat-workspace-rail__file--active"
+                          : ""}"
+                        type="button"
+                        role="listitem"
+                        title=${file.path || file.name}
+                        @click=${() => workspaceFiles.onOpenFile(file.name)}
+                      >
+                        <span class="chat-workspace-rail__file-icon">${icons.fileText}</span>
+                        <span class="chat-workspace-rail__file-main">
+                          <span class="chat-workspace-rail__file-name">${file.name}</span>
+                          ${size
+                            ? html`<span class="chat-workspace-rail__file-meta">${size}</span>`
+                            : nothing}
+                        </span>
+                        ${file.missing
+                          ? html`<span class="chat-workspace-rail__file-badge">Missing</span>`
+                          : nothing}
+                      </button>
+                    `;
+                  })}
+                </div>
+              `}
+    </aside>
   `;
 }
 
@@ -1267,10 +1366,12 @@ export function renderChat(props: ChatProps) {
                 showReasoning,
                 showToolCalls: props.showToolCalls,
                 autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
-                isToolMessageExpanded: (messageId: string) =>
-                  expandedToolCards.get(messageId) ?? false,
-                onToggleToolMessageExpanded: (messageId: string) => {
-                  expandedToolCards.set(messageId, !expandedToolCards.get(messageId));
+                isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
+                onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
+                  expandedToolCards.set(
+                    messageId,
+                    !(expanded ?? expandedToolCards.get(messageId) ?? false),
+                  );
                   requestUpdate();
                 },
                 isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
@@ -1459,57 +1560,47 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
-      ${props.focusMode
-        ? html`
-            <button
-              class="chat-focus-exit"
-              type="button"
-              @click=${props.onToggleFocusMode}
-              aria-label="Exit focus mode"
-              title="Exit focus mode"
-            >
-              ${icons.x}
-            </button>
-          `
-        : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
-        <div
-          class="chat-main"
-          style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
-        >
-          ${thread}
-        </div>
+      <div class="chat-workbench">
+        <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
+          <div
+            class="chat-main"
+            style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
+          >
+            ${thread}
+          </div>
 
-        ${sidebarOpen
-          ? html`
-              <resizable-divider
-                .splitRatio=${splitRatio}
-                .label=${t("nav.resize")}
-                @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
-              ></resizable-divider>
-              <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
-                ${renderMarkdownSidebar({
-                  content: props.sidebarContent ?? null,
-                  error: props.sidebarError ?? null,
-                  canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                  embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                  allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                  onClose: props.onCloseSidebar!,
-                  onViewRawText: () => {
-                    if (!props.onOpenSidebar) {
-                      return;
-                    }
-                    const rawContent = buildRawSidebarContent(props.sidebarContent);
-                    if (rawContent) {
-                      props.onOpenSidebar(rawContent);
-                    }
-                  },
-                })}
-              </div>
-            `
-          : nothing}
+          ${sidebarOpen
+            ? html`
+                <resizable-divider
+                  .splitRatio=${splitRatio}
+                  .label=${t("nav.resize")}
+                  @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
+                ></resizable-divider>
+                <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
+                  ${renderMarkdownSidebar({
+                    content: props.sidebarContent ?? null,
+                    error: props.sidebarError ?? null,
+                    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+                    embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                    onClose: props.onCloseSidebar!,
+                    onViewRawText: () => {
+                      if (!props.onOpenSidebar) {
+                        return;
+                      }
+                      const rawContent = buildRawSidebarContent(props.sidebarContent);
+                      if (rawContent) {
+                        props.onOpenSidebar(rawContent);
+                      }
+                    },
+                  })}
+                </div>
+              `
+            : nothing}
+        </div>
+        ${renderWorkspaceFileRail(props.workspaceFiles)}
       </div>
 
       ${renderChatQueue({
@@ -1520,14 +1611,6 @@ export function renderChat(props: ChatProps) {
         onQueueRemove: props.onQueueRemove,
       })}
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
-      ${renderFallbackIndicator(props.fallbackStatus)}
-      ${renderCompactionIndicator(props.compactionStatus)}
-      ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
-        compactBusy,
-        compactDisabled: !props.connected || isBusy || showAbortableUi,
-        onCompact: props.onCompact,
-      })}
-      ${renderChatGoal(activeSession?.goal)}
       ${props.showNewMessages
         ? html`
             <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>
@@ -1542,6 +1625,16 @@ export function renderChat(props: ChatProps) {
         @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
       >
         ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
+        <div class="agent-chat__composer-status-stack">
+          ${renderFallbackIndicator(props.fallbackStatus)}
+          ${renderCompactionIndicator(props.compactionStatus)}
+          ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+            compactBusy,
+            compactDisabled: !props.connected || isBusy || showAbortableUi,
+            onCompact: props.onCompact,
+          })}
+          ${renderChatGoal(activeSession?.goal)}
+        </div>
 
         <input
           type="file"
@@ -1623,25 +1716,34 @@ export function renderChat(props: ChatProps) {
                       : t("chat.composer.startTalk")}
                     ?disabled=${!props.connected}
                   >
-                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.mic}
                     <span class="agent-chat__control-label"
                       >${props.realtimeTalkActive
                         ? t("chat.composer.stopTalk")
                         : t("chat.composer.startTalk")}</span
                     >
                   </button>
+                `
+              : nothing}
+            ${props.onToggleRealtimeTalkOptions
+              ? html`
                   <button
                     class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
-                      ? "agent-chat__input-btn--active"
+                      ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalkOptions}
-                    title="Talk options"
-                    aria-label="Talk options"
+                    title="Talk settings"
+                    aria-label="Talk settings"
+                    aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
                     ?disabled=${!props.connected || props.realtimeTalkActive}
                   >
                     ${icons.settings}
+                    <span class="agent-chat__control-label">Talk settings</span>
                   </button>
                 `
+              : nothing}
+            ${props.composerControls
+              ? html`<div class="agent-chat__composer-controls">${props.composerControls}</div>`
               : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
             ${renderChatRunStatusIndicator(composerRunStatus)}
@@ -1659,6 +1761,7 @@ export function renderChat(props: ChatProps) {
             onNewSession: props.onNewSession,
             onSend: props.onSend,
             onStoreDraft: () => {},
+            showSecondary: false,
           })}
         </div>
       </div>

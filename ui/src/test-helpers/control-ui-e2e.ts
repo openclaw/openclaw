@@ -389,6 +389,17 @@ function installControlUiMockGateway(input: {
           mainKey: "main",
           scope: "agent",
         };
+      case "agents.files.list":
+        return {
+          agentId:
+            isRecord(params) && typeof params.agentId === "string"
+              ? params.agentId
+              : scenario.defaultAgentId,
+          files: [],
+          workspace: "",
+        };
+      case "agents.files.get":
+        return null;
       case "chat.history":
         return {
           messages: scenario.historyMessages,

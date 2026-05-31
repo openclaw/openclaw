@@ -1237,7 +1237,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export-session", "steer", "redirect", "new"].includes(name);
+  return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -1268,9 +1268,6 @@ async function dispatchSlashCommand(
       return;
     case "clear":
       await clearChatHistory(host);
-      return;
-    case "focus":
-      await host.onSlashAction?.("toggle-focus");
       return;
     case "export-session":
       await host.onSlashAction?.("export");

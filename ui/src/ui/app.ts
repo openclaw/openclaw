@@ -42,14 +42,7 @@ import {
 } from "./app-lifecycle.ts";
 import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
-import {
-  loadSkillWorkshopQueueWidth,
-  loadSkillWorkshopMode,
-  loadSkillWorkshopReviewedKeys,
-  loadSkillWorkshopRevisionSessions,
-  loadSkillWorkshopUseCurrentChatForRevisions,
-  renderApp,
-} from "./app-render.ts";
+import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
   handleActivityScroll as handleActivityScrollInternal,
@@ -151,7 +144,6 @@ import type {
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
-import type { SkillWorkshopProposal } from "./views/skill-workshop.ts";
 
 declare global {
   interface Window {
@@ -287,7 +279,7 @@ export class OpenClawApp extends LitElement {
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
   @state() chatSessionPickerOpen = false;
-  @state() chatSessionPickerSurface: "desktop" | "mobile" | null = null;
+  @state() chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null = null;
   @state() chatSessionPickerQuery = "";
   @state() chatSessionPickerAppliedQuery = "";
   @state() chatSessionPickerLoading = false;
@@ -630,42 +622,6 @@ export class OpenClawApp extends LitElement {
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
 
-  @state() skillWorkshopSelectedKey: string | null = null;
-  @state() skillWorkshopStatusFilter:
-    | "all"
-    | "pending"
-    | "applied"
-    | "rejected"
-    | "quarantined"
-    | "stale" = "all";
-  @state() skillWorkshopQuery = "";
-  @state() skillWorkshopFilePreviewKey: string | null = null;
-  @state() skillWorkshopFilePreviewQuery = "";
-  @state() skillWorkshopLoading = false;
-  @state() skillWorkshopLoaded = false;
-  @state() skillWorkshopError: string | null = null;
-  @state() skillWorkshopInspectingKey: string | null = null;
-  @state() skillWorkshopProposals: SkillWorkshopProposal[] = [];
-  @state() skillWorkshopReviewedKeys = loadSkillWorkshopReviewedKeys();
-  @state() skillWorkshopQueueWidth = loadSkillWorkshopQueueWidth();
-  @state() skillWorkshopMode: "board" | "today" = loadSkillWorkshopMode();
-  @state() skillWorkshopUseCurrentChatForRevisions = loadSkillWorkshopUseCurrentChatForRevisions();
-  @state() skillWorkshopRevisionSessions = loadSkillWorkshopRevisionSessions();
-  @state() skillWorkshopActionBusy: { key: string; action: "apply" | "revise" | "reject" } | null =
-    null;
-  @state() skillWorkshopActionNotice: { key: string; label: string; slug: string } | null = null;
-  @state() skillWorkshopRevisionKey: string | null = null;
-  @state() skillWorkshopRevisionDraft = "";
-  skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
-  @state() skillWorkshopChatHandoffActive = false;
-  skillWorkshopChatHandoffTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
-  @state() skillWorkshopHandoff: {
-    key: string;
-    slug: string;
-    phase: "prepare" | "landing" | "error";
-  } | null = null;
-  skillWorkshopHandoffDismissTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
-
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
@@ -769,7 +725,9 @@ export class OpenClawApp extends LitElement {
     if (!this.chatMobileControlsOpen) {
       return;
     }
-    const wrapper = this.querySelector(".chat-mobile-controls-wrapper");
+    const wrapper =
+      this.querySelector(".chat-settings-popover-wrapper") ??
+      this.querySelector(".chat-mobile-controls-wrapper");
     if (wrapper && path.includes(wrapper)) {
       return;
     }
@@ -786,12 +744,6 @@ export class OpenClawApp extends LitElement {
       switch (action) {
         case "new-session":
           await createChatSessionInternal(this as unknown as AppViewState);
-          break;
-        case "toggle-focus":
-          this.applySettings({
-            ...this.settings,
-            chatFocusMode: !this.settings.chatFocusMode,
-          });
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);
@@ -827,18 +779,6 @@ export class OpenClawApp extends LitElement {
     if (this.sessionSwitchFlashTimer !== null) {
       window.clearTimeout(this.sessionSwitchFlashTimer);
       this.sessionSwitchFlashTimer = null;
-    }
-    if (this.skillWorkshopActionNoticeTimer !== null) {
-      window.clearTimeout(this.skillWorkshopActionNoticeTimer);
-      this.skillWorkshopActionNoticeTimer = null;
-    }
-    if (this.skillWorkshopChatHandoffTimer !== null) {
-      window.clearTimeout(this.skillWorkshopChatHandoffTimer);
-      this.skillWorkshopChatHandoffTimer = null;
-    }
-    if (this.skillWorkshopHandoffDismissTimer !== null) {
-      window.clearTimeout(this.skillWorkshopHandoffDismissTimer);
-      this.skillWorkshopHandoffDismissTimer = null;
     }
     this.chatMobileControlsTrigger = null;
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);

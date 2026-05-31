@@ -7,6 +7,10 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../ui/vite.config.ts";
 
 type CliOptions = {
   host: string;
@@ -190,6 +194,64 @@ function searchPrefixes(term: string): string[] {
 
 function createChatPickerScenario(): ControlUiMockGatewayScenario {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const workspaceFiles = [
+    {
+      missing: false,
+      name: "AGENTS.md",
+      path: "/mock/workspace/AGENTS.md",
+      size: 2148,
+      updatedAtMs: baseTime - 120_000,
+    },
+    {
+      missing: false,
+      name: "plan.md",
+      path: "/mock/workspace/plan.md",
+      size: 912,
+      updatedAtMs: baseTime - 90_000,
+    },
+    {
+      missing: false,
+      name: "notes/context.md",
+      path: "/mock/workspace/notes/context.md",
+      size: 1620,
+      updatedAtMs: baseTime - 30_000,
+    },
+  ];
+  const workspaceListCases = ["main", "alpha", "openclaw-mock"].map((agentId) => ({
+    match: { agentId },
+    response: {
+      agentId,
+      files: workspaceFiles,
+      workspace: "/mock/workspace",
+    },
+  }));
+  const workspaceFileContentByName = new Map([
+    [
+      "AGENTS.md",
+      "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
+    ],
+    [
+      "plan.md",
+      "# Plan\n\n- Simplify composer controls.\n- Keep session switching available in collapsed navigation.\n- Verify the workspace rail can open every listed mock file.\n",
+    ],
+    [
+      "notes/context.md",
+      "# Context\n\nThe mock workspace keeps enough files to exercise right-rail selection, preview loading, and stale request guards without a real gateway.\n",
+    ],
+  ]);
+  const workspaceFileCases = ["main", "alpha", "openclaw-mock"].flatMap((agentId) =>
+    workspaceFiles.map((file) => ({
+      match: { agentId, name: file.name },
+      response: {
+        agentId,
+        file: {
+          ...file,
+          content: workspaceFileContentByName.get(file.name) ?? "",
+        },
+        workspace: "/mock/workspace",
+      },
+    })),
+  );
   const sessions = [
     sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
     ...buildSessionRows({
@@ -219,6 +281,12 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
     defaultAgentId: "openclaw-mock",
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      "agents.files.get": {
+        cases: workspaceFileCases,
+      },
+      "agents.files.list": {
+        cases: workspaceListCases,
+      },
       "sessions.list": {
         cases: [
           ...buildSearchSessionListCases(telegramSessions, searchPrefixes("telegram")),
@@ -301,6 +369,9 @@ const server = await createServer({
   },
   plugins: [createMockGatewayPlugin(scenario)],
   publicDir: path.join(uiRoot, "public"),
+  resolve: {
+    alias: [...resolveSourcePackageAliasesForVite(), ...resolveTsconfigPathAliasesForVite()],
+  },
   root: uiRoot,
   server: {
     host: options.host,
