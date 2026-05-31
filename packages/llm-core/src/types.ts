@@ -6,7 +6,7 @@ export type KnownApi =
   | "mistral-conversations"
   | "openai-responses"
   | "azure-openai-responses"
-  | "openai-codex-responses"
+  | "openai-chatgpt-responses"
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"

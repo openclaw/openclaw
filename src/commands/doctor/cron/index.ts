@@ -15,7 +15,7 @@ import type { CronJob } from "../../../cron/types.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
+} from "../../../../packages/normalization-core/src/string-coerce.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import {

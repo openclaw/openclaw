@@ -14,15 +14,9 @@ export function createOpenAIProvider(): ProviderPlugin {
   return {
     id: "openai",
     label: "OpenAI",
-    hookAliases: ["openai-codex", "azure-openai", "azure-openai-responses"],
+    hookAliases: ["azure-openai", "azure-openai-responses"],
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],
-    oauthProfileIdRepairs: [
-      {
-        legacyProfileId: "openai-codex:default",
-        promptLabel: "OpenAI",
-      },
-    ],
     auth: [
       {
         id: "oauth",

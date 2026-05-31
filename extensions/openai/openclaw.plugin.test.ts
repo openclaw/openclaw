@@ -29,7 +29,9 @@ const manifest = JSON.parse(
   setup?: {
     providers?: Array<{ id: string }>;
   };
+  providerEndpoints?: Array<{ endpointClass?: string; hosts?: string[] }>;
   providerAuthAliases?: Record<string, string>;
+  legacyPluginIds?: string[];
 };
 
 const packageJson = JSON.parse(
@@ -95,17 +97,25 @@ describe("OpenAI plugin manifest", () => {
     expect(packageJson.dependencies?.ws).toBe("8.21.0");
   });
 
-  it("keeps removed Codex CLI import auth choice as a deprecated OpenAI login alias", () => {
+  it("exposes only current OpenAI login choices", () => {
     const openAiLogin = manifest.providerAuthChoices?.find(
       (choice) => choice.choiceId === "openai",
     );
 
-    expect(openAiLogin?.deprecatedChoiceIds).toContain("openai-codex-import");
+    expect(openAiLogin?.deprecatedChoiceIds).toBeUndefined();
   });
 
-  it("keeps legacy OpenAI Codex setup lookup routed to the OpenAI setup runtime", () => {
+  it("routes setup through the OpenAI setup runtime", () => {
+    expect(manifest.legacyPluginIds).toEqual(["openai-codex"]);
     expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
-    expect(manifest.providerAuthAliases?.["openai-codex"]).toBe("openai");
+    expect(manifest.providerAuthAliases).toBeUndefined();
+  });
+
+  it("classifies ChatGPT backend traffic with the supported OpenAI endpoint class", () => {
+    const chatGptEndpoint = manifest.providerEndpoints?.find((endpoint) =>
+      endpoint.hosts?.includes("chatgpt.com"),
+    );
+    expect(chatGptEndpoint?.endpointClass).toBe("openai");
   });
 
   it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {

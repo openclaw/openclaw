@@ -49,7 +49,7 @@ function addExternalCliRuntimeScope(out: Set<string>, value: string | undefined)
     normalized === "codex" ||
     normalized === "codex-cli" ||
     normalized === "codex-app-server" ||
-    normalized === "openai-codex" ||
+    normalized === "openai" ||
     normalized === "minimax" ||
     normalized === "minimax-cli" ||
     normalized === "minimax-portal"

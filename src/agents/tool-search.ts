@@ -1,14 +1,14 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
-import { Type } from "typebox";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
   uniqueValues,
-} from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,

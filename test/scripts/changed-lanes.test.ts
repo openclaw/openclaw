@@ -277,7 +277,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes core production changes to core prod and core test lanes", () => {
-    const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
+    const result = detectChangedLanes(["packages/normalization-core/src/string-normalization.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
 
     expectLanes(result.lanes, {
@@ -300,7 +300,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/run-oxlint.mjs",
         "--tsconfig",
         "config/tsconfig/oxlint.core.json",
-        "src/shared/string-normalization.ts",
+        "packages/normalization-core/src/string-normalization.ts",
       ],
       env: {
         PATH: "/usr/bin",
@@ -333,7 +333,10 @@ describe("scripts/changed-lanes", () => {
   it("falls back to full core lint for mixed core lint configuration diffs", () => {
     expect(
       createTargetedCoreLintCommand(
-        ["config/tsconfig/oxlint.core.json", "src/shared/string-normalization.ts"],
+        [
+          "config/tsconfig/oxlint.core.json",
+          "packages/normalization-core/src/string-normalization.ts",
+        ],
         { PATH: "/usr/bin" },
         { fileExists: () => true },
       ),
@@ -368,7 +371,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("reenables local-check policy for changed typecheck commands", () => {
-    const result = detectChangedLanes(["src/shared/string-normalization.ts"]);
+    const result = detectChangedLanes(["packages/normalization-core/src/string-normalization.ts"]);
     const plan = createChangedCheckPlan(result, {
       env: { OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" },
     });
@@ -473,7 +476,9 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("routes core test-only changes to core test lanes only", () => {
-    const result = detectChangedLanes(["src/shared/string-normalization.test.ts"]);
+    const result = detectChangedLanes([
+      "packages/normalization-core/src/string-normalization.test.ts",
+    ]);
 
     expectLanes(result.lanes, {
       coreTests: true,

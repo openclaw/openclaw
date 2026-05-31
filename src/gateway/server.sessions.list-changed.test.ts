@@ -407,7 +407,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         id: "msg-usage-zero",
         message: {
           role: "assistant",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.3-codex-spark",
           usage: {
             input: 5_107,
@@ -425,7 +425,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.3-codex-spark",
         contextTokens: 123_456,
         totalTokens: 0,
@@ -464,7 +464,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     totalTokensFresh: true,
     contextTokens: 123_456,
     estimatedCostUsd: 0,
-    modelProvider: "openai-codex",
+    modelProvider: "openai",
     model: "gpt-5.3-codex-spark",
   });
 });

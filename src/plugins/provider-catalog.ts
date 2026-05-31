@@ -1,9 +1,9 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelProviderConfig } from "../config/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { ModelProviderConfig } from "../config/types.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
 export function findCatalogTemplate(params: {

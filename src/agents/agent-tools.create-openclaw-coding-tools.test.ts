@@ -698,7 +698,7 @@ describe("createOpenClawCodingTools", () => {
 
     const codexTools = createOpenClawCodingTools({
       config: testConfig,
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       modelId: "gpt-5.4",
     });
     expect(toolNameList(codexTools)).toContain("apply_patch");

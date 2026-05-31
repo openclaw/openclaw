@@ -7,8 +7,8 @@ import type {
   QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
 import type { CronStoreFile } from "../../../cron/types.js";
-import { isRecord } from "../../../shared/record-coerce.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { isRecord } from "../../../../packages/normalization-core/src/record-coerce.js";
+import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 const LEGACY_CRON_ARCHIVE_SUFFIX = ".migrated";

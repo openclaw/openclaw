@@ -4,7 +4,7 @@ import {
   isFutureDateTimestampMs,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
 
 const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
 export type NodePendingWorkType = (typeof NODE_PENDING_WORK_TYPES)[number];

@@ -1,4 +1,4 @@
-import { parseFiniteNumber } from "../shared/number-coercion.js";
+import { parseFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 import { createTypingStartGuard } from "./typing-start-guard.js";
 

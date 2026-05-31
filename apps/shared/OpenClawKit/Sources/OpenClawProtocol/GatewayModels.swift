@@ -6880,6 +6880,54 @@ public struct ChatHistoryParams: Codable, Sendable {
     }
 }
 
+public struct ChatMessageGetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let messageid: String
+    public let maxchars: Int?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        messageid: String,
+        maxchars: Int?)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.messageid = messageid
+        self.maxchars = maxchars
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case messageid = "messageId"
+        case maxchars = "maxChars"
+    }
+}
+
+public struct ChatMessageGetResult: Codable, Sendable {
+    public let ok: Bool
+    public let message: AnyCodable?
+    public let unavailablereason: AnyCodable?
+
+    public init(
+        ok: Bool,
+        message: AnyCodable?,
+        unavailablereason: AnyCodable?)
+    {
+        self.ok = ok
+        self.message = message
+        self.unavailablereason = unavailablereason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case message
+        case unavailablereason = "unavailableReason"
+    }
+}
+
 public struct ChatSendParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?

@@ -1253,7 +1253,7 @@ describe("provider-runtime", () => {
 
   it("keeps OpenAI plugin personality fallback for OpenAI-family GPT-5 providers", () => {
     const contribution = resolveProviderSystemPromptContribution({
-      provider: "openai-codex",
+      provider: "openai",
       config: {
         plugins: {
           entries: {
@@ -1262,7 +1262,7 @@ describe("provider-runtime", () => {
         },
       },
       context: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
         promptMode: "full",
       } as never,
@@ -1823,7 +1823,7 @@ describe("provider-runtime", () => {
           shouldDeferSyntheticProfileAuth,
           normalizeResolvedModel: ({ model }) => ({
             ...model,
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
           }),
           formatApiKey: (cred) =>
             cred.type === "oauth" ? JSON.stringify({ token: cred.access }) : "",
@@ -2119,7 +2119,7 @@ describe("provider-runtime", () => {
       }),
     ).toEqual({
       ...MODEL,
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
     });
 
     expect(
@@ -2411,7 +2411,7 @@ describe("provider-runtime", () => {
             { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.2 Pro" },
             { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5 mini" },
             { provider: "openai", id: "gpt-5.4-nano", name: "GPT-5 nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+            { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
           ],
         },
       }),

@@ -11,7 +11,7 @@ import {
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
 type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Promise<boolean>;
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
   "gpt-5.5",
   "gpt-5.5-pro",

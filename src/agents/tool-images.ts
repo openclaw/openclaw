@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { canonicalizeBase64 } from "../media/base64.js";
@@ -8,7 +9,6 @@ import {
   isImageProcessorUnavailableError,
   resizeToJpeg,
 } from "../media/media-services.js";
-import { resolveIntegerOption } from "../shared/number-coercion.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
   DEFAULT_IMAGE_MAX_DIMENSION_PX,

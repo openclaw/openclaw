@@ -26,7 +26,7 @@ type CodexNativeSearchPayloadPatchResult = {
   status: "payload_not_object" | "native_tool_already_present" | "injected";
 };
 
-const OPENAI_AUTH_PROVIDER_IDS = ["openai", "openai-codex"] as const;
+const OPENAI_AUTH_PROVIDER_IDS = ["openai"] as const;
 
 function isOpenAIAuthProviderId(provider: string | undefined): boolean {
   return OPENAI_AUTH_PROVIDER_IDS.some((candidate) => candidate === provider);
@@ -36,7 +36,7 @@ export function isCodexNativeSearchEligibleModel(params: {
   modelProvider?: string;
   modelApi?: string;
 }): boolean {
-  return params.modelApi === "openai-codex-responses";
+  return params.modelApi === "openai-chatgpt-responses";
 }
 
 function hasCodexNativeWebSearchTool(tools: unknown): boolean {
@@ -95,7 +95,7 @@ export function resolveCodexNativeSearchActivation(params: {
   const codexConfig = resolveCodexNativeWebSearchConfig(params.config);
   const nativeEligible = isCodexNativeSearchEligibleModel(params);
   const hasRequiredAuth =
-    params.modelApi !== "openai-codex-responses" ||
+    params.modelApi !== "openai-chatgpt-responses" ||
     !isOpenAIAuthProviderId(params.modelProvider) ||
     hasAvailableCodexAuth(params);
 
