@@ -215,8 +215,8 @@ function sanitizePresentationTextFieldsResult(
 
 function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
   for (const key of keys) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) {
+    const value = readStringParam(params, key);
+    if (value) {
       return value;
     }
   }
@@ -242,8 +242,8 @@ function readStructuredAttachmentMediaParams(value: unknown): string[] {
     }
     const record = attachment as Record<string, unknown>;
     for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
-      const candidate = record[key];
-      if (typeof candidate === "string" && candidate.trim()) {
+      const candidate = readStringParam(record, key);
+      if (candidate) {
         values.push(candidate);
       }
     }
