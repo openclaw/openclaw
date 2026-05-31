@@ -28,6 +28,9 @@ describe("npm registry spec validation", () => {
     "@openclaw/voice-call@latest",
     "@openclaw/voice-call@beta",
     "@openclaw/voice-call@2026q2",
+    "@openclaw/voice-call@2026.05",
+    "@openclaw/voice-call@01",
+    "@openclaw/voice-call@1.02.x",
     "@openclaw/voice-call@1.x-beta",
     "@openclaw/voice-call@x-beta",
   ])("accepts %s", (spec) => {
