@@ -917,9 +917,13 @@ async function sendSkillWorkshopRevisionRequest(
   if (!sessionKey) {
     throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
   }
-  switchChatSession(state, sessionKey);
   if (state.tab !== "chat") {
     state.setTab("chat" as Tab);
+  }
+  if (state.sessionKey === sessionKey) {
+    await loadChatHistory(state);
+  } else {
+    await switchChatSession(state, sessionKey, { awaitInitialLoad: true });
   }
   await state.handleSendChat(message);
 }

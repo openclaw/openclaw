@@ -965,6 +965,44 @@ describe("createChatSession", () => {
 });
 
 describe("switchChatSession", () => {
+  it("can wait for the initial history and message subscription before callers send", async () => {
+    let resolveHistory!: () => void;
+    let resolveSubscription!: () => void;
+    const historyLoaded = new Promise<void>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const subscriptionSynced = new Promise<void>((resolve) => {
+      resolveSubscription = resolve;
+    });
+    const state = createChatSessionState({
+      sessionKey: "agent:main:main",
+      chatQueueBySession: {},
+      announceSessionSwitch: vi.fn(),
+    });
+
+    loadChatHistoryMock.mockReturnValue(historyLoaded);
+    syncSelectedSessionMessageSubscriptionMock.mockReturnValue(subscriptionSynced);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    const switched = switchChatSession(state, "agent:main:review", {
+      awaitInitialLoad: true,
+    });
+    let settled = false;
+    void switched?.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    resolveHistory();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolveSubscription();
+    await switched;
+
+    expect(settled).toBe(true);
+  });
+
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
     const settings = createSettings();
     const state = {
