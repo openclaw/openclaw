@@ -22,6 +22,7 @@ import {
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
+import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import {
   applyManagerRuntimeControls,
@@ -29,11 +30,6 @@ import {
 } from "./manager.runtime-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
-import {
-  discardPersistedManagerRuntimeState,
-  isRecoverableManagerAcpxExitError,
-  tryPrepareFreshManagerRuntimeSession,
-} from "./manager.runtime-resume-state.js";
 import { runManagerTurn } from "./manager.turn-runner.js";
 import {
   type AcpCloseSessionInput,
@@ -58,7 +54,6 @@ import {
   normalizeAcpErrorCode,
   normalizeActorKey,
   requireReadySessionMeta,
-  resolveAcpSessionResolutionError,
   resolveMissingMetaError,
 } from "./manager.utils.js";
 import {
@@ -738,125 +733,19 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     await this.evictIdleRuntimeHandles(input.cfg);
-    return await this.withSessionActor(sessionKey, async () => {
-      const resolution = this.resolveSession({
-        cfg: input.cfg,
-        sessionKey,
-      });
-      const resolutionError = resolveAcpSessionResolutionError(resolution);
-      if (resolutionError) {
-        if (input.requireAcpSession ?? true) {
-          throw resolutionError;
-        }
-        return {
-          runtimeClosed: false,
-          metaCleared: false,
-        };
-      }
-      const meta = requireReadySessionMeta(resolution);
-      const currentIdentity = resolveSessionIdentityFromMeta(meta);
-      const shouldSkipRuntimeClose =
-        input.discardPersistentState &&
-        currentIdentity != null &&
-        !identityHasStableSessionId(currentIdentity);
-
-      let runtimeClosed = false;
-      let runtimeNotice: string | undefined;
-      if (shouldSkipRuntimeClose) {
-        if (input.discardPersistentState) {
-          await tryPrepareFreshManagerRuntimeSession({
-            deps: this.deps,
-            cfg: input.cfg,
-            meta,
-            sessionKey,
-            logPrefix: "acp close fast-reset",
-          });
-        }
-        this.runtimeHandles.clear(sessionKey);
-      } else {
-        try {
-          const { runtime: ensuredRuntime, handle } = await this.ensureRuntimeHandle({
-            cfg: input.cfg,
-            sessionKey,
-            meta,
-          });
-          await withAcpRuntimeErrorBoundary({
-            run: async () =>
-              await ensuredRuntime.close({
-                handle,
-                reason: input.reason,
-                discardPersistentState: input.discardPersistentState,
-              }),
-            fallbackCode: "ACP_TURN_FAILED",
-            fallbackMessage: "ACP close failed before completion.",
-          });
-          runtimeClosed = true;
-          this.runtimeHandles.clear(sessionKey);
-        } catch (error) {
-          const acpError = toAcpRuntimeError({
-            error,
-            fallbackCode: "ACP_TURN_FAILED",
-            fallbackMessage: "ACP close failed before completion.",
-          });
-          if (
-            input.allowBackendUnavailable &&
-            (acpError.code === "ACP_BACKEND_MISSING" ||
-              acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
-              (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
-              (input.discardPersistentState &&
-                acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
-              isRecoverableManagerAcpxExitError(acpError.message))
-          ) {
-            if (input.discardPersistentState) {
-              await tryPrepareFreshManagerRuntimeSession({
-                deps: this.deps,
-                cfg: input.cfg,
-                meta,
-                sessionKey,
-                logPrefix: "acp close recovery",
-                missingBackendError: acpError,
-              });
-            }
-            // Treat unavailable backends as terminal for this cached handle so it
-            // cannot continue counting against maxConcurrentSessions.
-            this.runtimeHandles.clear(sessionKey);
-            runtimeNotice = acpError.message;
-          } else {
-            throw acpError;
-          }
-        }
-      }
-
-      let metaCleared = false;
-      if (input.discardPersistentState && !input.clearMeta) {
-        await discardPersistedManagerRuntimeState({
-          cfg: input.cfg,
+    return await this.withSessionActor(
+      sessionKey,
+      async () =>
+        await runManagerCloseSession({
+          input,
           sessionKey,
-          writeSessionMeta: async (writeParams) => await this.writeSessionMeta(writeParams),
-        });
-      }
-
-      if (input.clearMeta) {
-        await this.writeSessionMeta({
-          cfg: input.cfg,
-          sessionKey,
-          mutate: (_current, entry) => {
-            if (!entry) {
-              return null;
-            }
-            return null;
-          },
-          failOnError: true,
-        });
-        metaCleared = true;
-      }
-
-      return {
-        runtimeClosed,
-        runtimeNotice,
-        metaCleared,
-      };
-    });
+          deps: this.deps,
+          runtimeHandles: this.runtimeHandles,
+          resolveSession: this.resolveSession.bind(this),
+          ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
+          writeSessionMeta: this.writeSessionMeta.bind(this),
+        }),
+    );
   }
 
   private async ensureRuntimeHandle(params: {
