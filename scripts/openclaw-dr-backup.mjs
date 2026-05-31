@@ -17,7 +17,8 @@ function usage() {
   return [
     "Usage:",
     "  node scripts/openclaw-dr-backup.mjs init-key --key-file <path>",
-    "  node scripts/openclaw-dr-backup.mjs run --output-dir <dir> --key-file <path> [--repo-root <dir>] [--include-workspace] [--json]",
+    "  node scripts/openclaw-dr-backup.mjs run --output-dir <dir> --key-file <path> [--repo-root <dir>] [--replica-dir <dir>...] [--retention-count <n>] [--retention-days <n>] [--include-workspace] [--json]",
+    "  node scripts/openclaw-dr-backup.mjs prune --output-dir <dir> [--replica-dir <dir>...] [--retention-count <n>] [--retention-days <n>] [--json]",
     "  node scripts/openclaw-dr-backup.mjs decrypt --input <file> --output <file> --key-file <path> [--json]",
   ].join("\n");
 }
@@ -28,6 +29,7 @@ function parseOptions(argv) {
     return { command: "help", options: {} };
   }
   const options = {};
+  const repeatableOptions = new Set(["replica-dir"]);
   for (let index = 1; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg?.startsWith("--")) {
@@ -45,10 +47,41 @@ function parseOptions(argv) {
     if (!value || value.startsWith("--")) {
       throw new Error(`Missing value for --${key}`);
     }
-    options[key] = value;
+    if (repeatableOptions.has(key)) {
+      const current = options[key];
+      options[key] = Array.isArray(current) ? [...current, value] : [value];
+    } else {
+      options[key] = value;
+    }
     index += 1;
   }
   return { command, options };
+}
+
+function readStringListOption(options, key) {
+  const value = options[key];
+  if (value === undefined) {
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.filter((entry) => typeof entry === "string" && entry.trim());
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [value];
+  }
+  return [];
+}
+
+function readPositiveIntegerOption(options, key) {
+  const value = options[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`--${key} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 function requireStringOption(options, key) {
@@ -140,9 +173,137 @@ async function publishTempFile(tempPath, outputPath) {
   await fsp.rename(tempPath, outputPath);
 }
 
+async function copyFileExclusive(sourcePath, outputPath, tmpDir = path.dirname(outputPath)) {
+  if (await pathExists(outputPath)) {
+    throw new Error(`Refusing to overwrite existing file: ${outputPath}`);
+  }
+  await fsp.mkdir(path.dirname(outputPath), { recursive: true });
+  await fsp.mkdir(tmpDir, { recursive: true });
+  const tempPath = path.join(tmpDir, `${path.basename(outputPath)}.${randomUUID()}.tmp`);
+  try {
+    await fsp.copyFile(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
+    await publishTempFile(tempPath, outputPath);
+  } finally {
+    await fsp.rm(tempPath, { force: true }).catch(() => undefined);
+  }
+}
+
 export function buildEncryptedBackupPath(outputDir, plainArchivePath, nonce = randomBytes(6)) {
   const suffix = toBase64Url(Buffer.isBuffer(nonce) ? nonce : Buffer.from(String(nonce)));
   return path.join(outputDir, `${path.basename(plainArchivePath)}.${suffix}.ocbackup.enc`);
+}
+
+function isEncryptedBackupFileName(fileName) {
+  return fileName.endsWith(".ocbackup.enc");
+}
+
+async function readEncryptedBackupEntries(outputDir) {
+  let entries;
+  try {
+    entries = await fsp.readdir(outputDir, { withFileTypes: true });
+  } catch (err) {
+    if (err?.code === "ENOENT" || err?.code === "ENOTDIR") {
+      return [];
+    }
+    throw err;
+  }
+  const backups = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !isEncryptedBackupFileName(entry.name)) {
+      continue;
+    }
+    const filePath = path.join(outputDir, entry.name);
+    const sidecarPath = `${filePath}.json`;
+    const stat = await fsp.stat(filePath);
+    let createdAtMs = stat.mtimeMs;
+    try {
+      const rawSidecar = JSON.parse(await fsp.readFile(sidecarPath, "utf8"));
+      const sidecarCreatedAtMs = Date.parse(rawSidecar.createdAt);
+      if (Number.isFinite(sidecarCreatedAtMs)) {
+        createdAtMs = sidecarCreatedAtMs;
+      }
+    } catch {
+      // Keep mtime fallback. The encrypted archive itself remains canonical.
+    }
+    backups.push({
+      filePath,
+      sidecarPath,
+      fileName: entry.name,
+      createdAtMs,
+    });
+  }
+  return backups.toSorted((left, right) => {
+    const createdDelta = right.createdAtMs - left.createdAtMs;
+    if (createdDelta !== 0) {
+      return createdDelta;
+    }
+    return right.fileName.localeCompare(left.fileName);
+  });
+}
+
+export async function pruneEncryptedBackups(params) {
+  const outputDirs = [...new Set(params.outputDirs.map((entry) => path.resolve(entry)))];
+  const retentionCount = params.retentionCount;
+  const retentionDays = params.retentionDays;
+  const nowMs = params.nowMs ?? Date.now();
+  const results = [];
+
+  for (const outputDir of outputDirs) {
+    const backups = await readEncryptedBackupEntries(outputDir);
+    const keep = new Set();
+    if (retentionCount !== undefined) {
+      for (const backup of backups.slice(0, retentionCount)) {
+        keep.add(backup.filePath);
+      }
+    }
+    const maxAgeMs = retentionDays === undefined ? undefined : retentionDays * 24 * 60 * 60 * 1000;
+    const deleted = [];
+    for (const backup of backups) {
+      const beyondCount = retentionCount !== undefined && !keep.has(backup.filePath);
+      const beyondAge = maxAgeMs !== undefined && nowMs - backup.createdAtMs > maxAgeMs;
+      const shouldDelete =
+        retentionCount === undefined && maxAgeMs === undefined
+          ? false
+          : retentionCount !== undefined && maxAgeMs !== undefined
+            ? beyondCount && beyondAge
+            : beyondCount || beyondAge;
+      if (!shouldDelete) {
+        continue;
+      }
+      await fsp.rm(backup.filePath, { force: true });
+      await fsp.rm(backup.sidecarPath, { force: true });
+      deleted.push(path.basename(backup.filePath));
+    }
+    results.push({
+      outputDir,
+      scanned: backups.length,
+      retained: backups.length - deleted.length,
+      deleted,
+    });
+  }
+  return results;
+}
+
+export async function replicateEncryptedBackup(params) {
+  const replicaDirs = [...new Set(params.replicaDirs.map((entry) => path.resolve(entry)))];
+  const replicas = [];
+  for (const replicaDir of replicaDirs) {
+    const encryptedReplicaPath = path.join(replicaDir, path.basename(params.encryptedPath));
+    const sidecarReplicaPath = `${encryptedReplicaPath}.json`;
+    await copyFileExclusive(params.encryptedPath, encryptedReplicaPath, params.tmpDir);
+    await copyFileExclusive(params.sidecarPath, sidecarReplicaPath, params.tmpDir);
+    const encryptedSha256 = await hashFile(encryptedReplicaPath);
+    if (encryptedSha256 !== params.encryptedSha256) {
+      throw new Error(`Encrypted backup replica hash mismatch: ${encryptedReplicaPath}`);
+    }
+    replicas.push({
+      outputDir: replicaDir,
+      encryptedArchivePath: encryptedReplicaPath,
+      sidecarPath: sidecarReplicaPath,
+      encryptedSha256,
+    });
+  }
+  return replicas;
 }
 
 export async function encryptFile(params) {
@@ -347,6 +508,7 @@ async function runOpenClawJson(repoRoot, args, label) {
 export async function runDrBackup(params) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir = path.resolve(params.outputDir);
+  const replicaDirs = (params.replicaDirs ?? []).map((entry) => path.resolve(entry));
   const key = await readKeyFile(path.resolve(params.keyFile));
   await fsp.mkdir(outputDir, { recursive: true });
   const tmpRoot = await fsp.mkdtemp(
@@ -429,10 +591,27 @@ export async function runDrBackup(params) {
       flag: "wx",
       mode: 0o600,
     });
+    const replicas = await replicateEncryptedBackup({
+      encryptedPath,
+      sidecarPath,
+      encryptedSha256: encryptedResult.encryptedSha256,
+      replicaDirs,
+      tmpDir: tmpRoot,
+    });
+    const retention =
+      params.retentionCount !== undefined || params.retentionDays !== undefined
+        ? await pruneEncryptedBackups({
+            outputDirs: [outputDir, ...replicaDirs],
+            retentionCount: params.retentionCount,
+            retentionDays: params.retentionDays,
+          })
+        : [];
     return {
       ok: true,
       encryptedArchivePath: encryptedPath,
       sidecarPath,
+      replicas,
+      retention,
       ...summary,
     };
   } finally {
@@ -484,8 +663,13 @@ async function main(argv = process.argv.slice(2)) {
     const result = await runDrBackup({
       repoRoot: resolvePathOption(options["repo-root"] ?? process.cwd()),
       outputDir: resolvePathOption(requireStringOption(options, "output-dir")),
+      replicaDirs: readStringListOption(options, "replica-dir").map((entry) =>
+        resolvePathOption(entry),
+      ),
       keyFile: resolvePathOption(requireStringOption(options, "key-file")),
       includeWorkspace: Boolean(options["include-workspace"]),
+      retentionCount: readPositiveIntegerOption(options, "retention-count"),
+      retentionDays: readPositiveIntegerOption(options, "retention-days"),
       tmpDir:
         typeof options["tmp-dir"] === "string" ? resolvePathOption(options["tmp-dir"]) : undefined,
     });
@@ -496,6 +680,30 @@ async function main(argv = process.argv.slice(2)) {
       console.log(
         `Restore drill verified ${result.restoreDrill.sessionTranscriptSnapshotCount} session transcript snapshots.`,
       );
+    }
+    return;
+  }
+  if (command === "prune") {
+    const outputDirs = [
+      resolvePathOption(requireStringOption(options, "output-dir")),
+      ...readStringListOption(options, "replica-dir").map((entry) => resolvePathOption(entry)),
+    ];
+    const retention = await pruneEncryptedBackups({
+      outputDirs,
+      retentionCount: readPositiveIntegerOption(options, "retention-count"),
+      retentionDays: readPositiveIntegerOption(options, "retention-days"),
+    });
+    const result = { ok: true, retention };
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      for (const entry of retention) {
+        console.log(
+          `Pruned ${entry.deleted.length} encrypted OpenClaw DR backup${
+            entry.deleted.length === 1 ? "" : "s"
+          } from ${entry.outputDir}.`,
+        );
+      }
     }
     return;
   }

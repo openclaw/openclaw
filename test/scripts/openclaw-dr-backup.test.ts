@@ -6,8 +6,11 @@ import {
   createKeyFile,
   decryptFile,
   encryptFile,
+  hashFile,
+  pruneEncryptedBackups,
   readEncryptedBackupHeader,
   readKeyFile,
+  replicateEncryptedBackup,
 } from "../../scripts/openclaw-dr-backup.mjs";
 
 const tempDirs: string[] = [];
@@ -83,5 +86,73 @@ describe("openclaw-dr-backup encryption", () => {
         key: await readKeyFile(wrongKeyPath),
       }),
     ).rejects.toThrow();
+  });
+
+  it("copies encrypted backup artifacts to replica destinations with hash verification", async () => {
+    const root = await makeTempDir("openclaw-dr-backup-replica-");
+    const sourceDir = path.join(root, "primary");
+    const replicaDir = path.join(root, "replica");
+    const tmpDir = path.join(root, "tmp");
+    const encryptedPath = path.join(sourceDir, "backup.tar.gz.abc.ocbackup.enc");
+    const sidecarPath = `${encryptedPath}.json`;
+
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(encryptedPath, "encrypted bytes\n", "utf8");
+    await fs.writeFile(sidecarPath, '{"ok":true}\n', "utf8");
+
+    const replicas = await replicateEncryptedBackup({
+      encryptedPath,
+      sidecarPath,
+      encryptedSha256: await hashFile(encryptedPath),
+      replicaDirs: [replicaDir],
+      tmpDir,
+    });
+
+    expect(replicas).toHaveLength(1);
+    await expect(
+      fs.readFile(path.join(replicaDir, path.basename(encryptedPath)), "utf8"),
+    ).resolves.toBe("encrypted bytes\n");
+    await expect(
+      fs.readFile(path.join(replicaDir, `${path.basename(encryptedPath)}.json`), "utf8"),
+    ).resolves.toBe('{"ok":true}\n');
+  });
+
+  it("prunes encrypted backups and matching sidecars by retention count", async () => {
+    const root = await makeTempDir("openclaw-dr-backup-prune-");
+    const names = ["oldest", "middle", "newest"];
+    const createdAts = [
+      "2026-05-01T00:00:00.000Z",
+      "2026-05-02T00:00:00.000Z",
+      "2026-05-03T00:00:00.000Z",
+    ];
+
+    for (let index = 0; index < names.length; index += 1) {
+      const filePath = path.join(root, `${names[index]}.ocbackup.enc`);
+      await fs.writeFile(filePath, `${names[index]}\n`, "utf8");
+      await fs.writeFile(
+        `${filePath}.json`,
+        `${JSON.stringify({ createdAt: createdAts[index] })}\n`,
+        "utf8",
+      );
+    }
+
+    const result = await pruneEncryptedBackups({
+      outputDirs: [root],
+      retentionCount: 2,
+      nowMs: Date.parse("2026-05-04T00:00:00.000Z"),
+    });
+
+    expect(result).toEqual([
+      {
+        outputDir: root,
+        scanned: 3,
+        retained: 2,
+        deleted: ["oldest.ocbackup.enc"],
+      },
+    ]);
+    await expect(fs.access(path.join(root, "oldest.ocbackup.enc"))).rejects.toThrow();
+    await expect(fs.access(path.join(root, "oldest.ocbackup.enc.json"))).rejects.toThrow();
+    await expect(fs.access(path.join(root, "middle.ocbackup.enc"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(root, "newest.ocbackup.enc"))).resolves.toBeUndefined();
   });
 });
