@@ -40,7 +40,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots as replaceRuntimeAuthProfileStoreSnapshotsImpl,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
-import { savePersistedAuthProfileState } from "./state.js";
+import { loadPersistedAuthProfileState, savePersistedAuthProfileState } from "./state.js";
 import {
   clearLoadedAuthStoreCache,
   readCachedAuthProfileStore,
@@ -60,6 +60,7 @@ type LoadAuthProfileStoreOptions = {
 
 type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
+  preserveOrderProfileIds?: Iterable<string>;
   pruneOrderProfileIds?: Iterable<string>;
   syncExternalCli?: boolean;
 };
@@ -475,18 +476,18 @@ function shouldKeepProfileInLocalStore(params: {
 function pruneAuthProfileStoreReferences(
   store: AuthProfileStore,
   keptProfileIds: Set<string>,
-  prunedOrderProfileIds = new Set<string>(),
+  keptOrderProfileIds = keptProfileIds,
 ): void {
-  if (prunedOrderProfileIds.size > 0 && store.order) {
-    store.order = Object.fromEntries(
-      Object.entries(store.order)
-        .map(([provider, profileIds]) => [
-          provider,
-          profileIds.filter((profileId) => !prunedOrderProfileIds.has(profileId)),
-        ])
-        .filter(([, profileIds]) => profileIds.length > 0),
-    );
-  }
+  store.order = store.order
+    ? Object.fromEntries(
+        Object.entries(store.order)
+          .map(([provider, profileIds]) => [
+            provider,
+            profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
+          ])
+          .filter(([, profileIds]) => profileIds.length > 0),
+      )
+    : undefined;
   store.lastGood = store.lastGood
     ? Object.fromEntries(
         Object.entries(store.lastGood).filter(([, profileId]) => keptProfileIds.has(profileId)),
@@ -536,6 +537,20 @@ function buildLocalAuthProfileStoreForSave(params: {
     ),
   );
   const keptProfileIds = new Set(Object.keys(localStore.profiles));
+  const keptOrderProfileIds = new Set(keptProfileIds);
+  for (const profileIds of Object.values(
+    loadPersistedAuthProfileState(params.agentDir).order ?? {},
+  )) {
+    for (const profileId of profileIds) {
+      keptOrderProfileIds.add(profileId);
+    }
+  }
+  for (const profileId of params.options?.preserveOrderProfileIds ?? []) {
+    const normalizedProfileId = profileId.trim();
+    if (normalizedProfileId) {
+      keptOrderProfileIds.add(normalizedProfileId);
+    }
+  }
   const prunedOrderProfileIds = new Set<string>();
   for (const profileId of params.options?.pruneOrderProfileIds ?? []) {
     const normalizedProfileId = profileId.trim();
@@ -543,7 +558,10 @@ function buildLocalAuthProfileStoreForSave(params: {
       prunedOrderProfileIds.add(normalizedProfileId);
     }
   }
-  pruneAuthProfileStoreReferences(localStore, keptProfileIds, prunedOrderProfileIds);
+  for (const profileId of prunedOrderProfileIds) {
+    keptOrderProfileIds.delete(profileId);
+  }
+  pruneAuthProfileStoreReferences(localStore, keptProfileIds, keptOrderProfileIds);
   if (params.options?.filterExternalAuthProfiles !== false) {
     localStore.runtimeExternalProfileIds = undefined;
     localStore.runtimeExternalProfileIdsAuthoritative = undefined;
