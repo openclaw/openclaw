@@ -9,6 +9,7 @@ type CronStoreDatabase = Pick<OpenClawStateKyselyDatabase, "cron_jobs">;
 export type CronJobRow = Selectable<CronJobsTable>;
 export type CronJobInsert = Insertable<CronJobsTable>;
 
+/** Creates the Kysely facade scoped to cron_jobs for synchronous SQLite access. */
 export function getCronStoreKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<CronStoreDatabase>(db);
 }
