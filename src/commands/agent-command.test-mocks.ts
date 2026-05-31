@@ -58,7 +58,7 @@ vi.mock("../agents/model-selection.js", () => {
     agents?: {
       defaults?: {
         model?: string | { primary?: string; fallbacks?: string[] };
-        models?: Record<string, { params?: { thinking?: string } } | undefined>;
+        models?: Record<string, { alias?: string; params?: { thinking?: string } } | undefined>;
         thinkingDefault?: string;
       };
     };
@@ -87,6 +87,37 @@ vi.mock("../agents/model-selection.js", () => {
   });
   const modelKey = (provider: string, model: string) =>
     `${provider.trim().toLowerCase()}/${model.trim().toLowerCase()}`;
+  const buildModelAliasIndex = ({ cfg }: { cfg?: ConfigWithModels }) => {
+    const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
+    const modelConfig = cfg?.agents?.defaults?.models ?? {};
+    for (const [raw, entry] of Object.entries(modelConfig)) {
+      const alias = entry?.alias?.trim();
+      if (!alias) {
+        continue;
+      }
+      const parsed = parseModelRefImpl(raw, "openai");
+      if (parsed) {
+        byAlias.set(alias.toLowerCase(), { alias, ref: parsed });
+      }
+    }
+    return { byAlias, byKey: new Map<string, { alias: string; ref: ModelRef }>() };
+  };
+  const resolveModelRefFromString = ({
+    raw,
+    defaultProvider,
+    aliasIndex,
+  }: {
+    raw: string;
+    defaultProvider: string;
+    aliasIndex?: ReturnType<typeof buildModelAliasIndex>;
+  }) => {
+    const aliasMatch = aliasIndex?.byAlias.get(raw.trim().toLowerCase());
+    if (aliasMatch) {
+      return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+    }
+    const parsed = parseModelRefImpl(raw, defaultProvider);
+    return parsed ? { ref: parsed } : null;
+  };
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
     if (allowedKeys.has(key)) {
       return true;
@@ -180,11 +211,13 @@ vi.mock("../agents/model-selection.js", () => {
       },
     ),
     buildConfiguredModelCatalog: vi.fn(() => []),
+    buildModelAliasIndex: vi.fn(buildModelAliasIndex),
     isModelKeyAllowedBySet,
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
     parseModelRef,
+    resolveModelRefFromString: vi.fn(resolveModelRefFromString),
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>
         resolveDefaultRef(cfg),
