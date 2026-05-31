@@ -16,6 +16,7 @@ import {
   resolveAgentSkillsFilter,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
+  resolveQuotaExhaustionFallbacks,
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
   resolveRunModelFallbacksOverride,
@@ -974,6 +975,61 @@ describe("resolveAgentConfig", () => {
         modelOverrideSource: "auto",
       }),
     ).toEqual(["zai/glm-5"]);
+  });
+
+  it("resolves the quota exhaustion fallback chain for user-pinned sessions", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+          subagents: {
+            model: {
+              primary: "kimi/kimi-code",
+              fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+            },
+          },
+        },
+        list: [
+          {
+            id: "research",
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+            },
+          },
+        ],
+      },
+    };
+
+    // Non-subagent: returns the configured fallback chain (not []).
+    expect(
+      resolveQuotaExhaustionFallbacks({
+        cfg,
+        agentId: "research",
+        sessionKey: "agent:research:main",
+      }),
+    ).toEqual(["openai-codex/gpt-5.4", "zai/glm-5"]);
+
+    // Subagent: returns the subagent spawn fallback chain.
+    expect(
+      resolveQuotaExhaustionFallbacks({
+        cfg,
+        agentId: "research",
+        sessionKey: "agent:research:subagent:child",
+      }),
+    ).toEqual(["openai-codex/gpt-5.4", "zai/glm-5"]);
+
+    // No agent-specific override falls through to defaults.
+    expect(
+      resolveQuotaExhaustionFallbacks({
+        cfg,
+        agentId: "unknown",
+        sessionKey: "agent:unknown:main",
+      }),
+    ).toEqual(["openai/gpt-5.4"]);
   });
 
   it("resolves the subagent model config selected for isolated runs", () => {

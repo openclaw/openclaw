@@ -3,14 +3,22 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveEffectiveModelFallbacksMock = vi.fn();
+  const resolveQuotaExhaustionFallbacksMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return {
+    resolveEffectiveModelFallbacksMock,
+    resolveQuotaExhaustionFallbacksMock,
+    getChannelPluginMock,
+    isReasoningTagProviderMock,
+  };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveEffectiveModelFallbacks: (...args: unknown[]) =>
     hoisted.resolveEffectiveModelFallbacksMock(...args),
+  resolveQuotaExhaustionFallbacks: (...args: unknown[]) =>
+    hoisted.resolveQuotaExhaustionFallbacksMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -57,6 +65,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveQuotaExhaustionFallbacksMock.mockClear();
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
@@ -122,6 +131,33 @@ describe("agent-runner-utils", () => {
       hasAutoFallbackProvenance: false,
     });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("populates quotaExhaustionFallbacksOverride for user-pinned sessions with empty fallback list", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue([]);
+    hoisted.resolveQuotaExhaustionFallbacksMock.mockReturnValue(["quota-fallback"]);
+    const run = makeRun({ hasSessionModelOverride: true, modelOverrideSource: "user" });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveQuotaExhaustionFallbacksMock).toHaveBeenCalledWith({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+    });
+    expect(resolved.fallbacksOverride).toStrictEqual([]);
+    expect(resolved.quotaExhaustionFallbacksOverride).toEqual(["quota-fallback"]);
+  });
+
+  it("does not populate quotaExhaustionFallbacksOverride when fallbacksOverride is non-empty", () => {
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveQuotaExhaustionFallbacksMock.mockReturnValue(["quota-fallback"]);
+    const run = makeRun({ hasSessionModelOverride: true, modelOverrideSource: "auto" });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveQuotaExhaustionFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.quotaExhaustionFallbacksOverride).toBeUndefined();
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {

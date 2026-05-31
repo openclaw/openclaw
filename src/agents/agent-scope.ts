@@ -551,6 +551,28 @@ export function resolveEffectiveModelFallbacks(params: {
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
+/**
+ * Returns the fallback chain to activate when a user-pinned primary hits
+ * permanent quota exhaustion (weekly/monthly limits). This is separate from
+ * resolveEffectiveModelFallbacks, which returns [] for user-pinned sessions to
+ * keep the pin strict for transient errors.
+ */
+export function resolveQuotaExhaustionFallbacks(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string | null;
+}): string[] | undefined {
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
+    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
+    : undefined;
+  if (subagentFallbacksOverride !== undefined) {
+    return subagentFallbacksOverride;
+  }
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  return agentFallbacksOverride ?? defaultFallbacks;
+}
+
 function normalizePathForComparison(input: string): string {
   const resolved = path.resolve(stripNullBytes(resolveUserPath(input)));
   let normalized = resolved;

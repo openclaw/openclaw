@@ -1,4 +1,7 @@
-import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
+import {
+  resolveEffectiveModelFallbacks,
+  resolveQuotaExhaustionFallbacks,
+} from "../../agents/agent-scope.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -39,6 +42,14 @@ export function resolveModelFallbackOptions(
     modelOverrideSource: run.modelOverrideSource,
     hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
   });
+  const quotaExhaustionFallbacksOverride =
+    fallbacksOverride?.length === 0
+      ? resolveQuotaExhaustionFallbacks({
+          cfg: config,
+          agentId: run.agentId,
+          sessionKey: run.sessionKey,
+        })
+      : undefined;
   return {
     cfg: config,
     provider: run.provider,
@@ -47,6 +58,7 @@ export function resolveModelFallbackOptions(
     agentId: run.agentId,
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     fallbacksOverride,
+    quotaExhaustionFallbacksOverride,
   };
 }
 

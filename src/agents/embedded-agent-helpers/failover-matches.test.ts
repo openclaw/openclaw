@@ -3,9 +3,45 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
 } from "./failover-matches.js";
+
+describe("isPeriodicUsageLimitErrorMessage", () => {
+  it("matches English weekly/monthly limit messages", () => {
+    expect(isPeriodicUsageLimitErrorMessage("weekly usage limit exceeded")).toBe(true);
+    expect(isPeriodicUsageLimitErrorMessage("monthly limit reached")).toBe(true);
+    expect(isPeriodicUsageLimitErrorMessage("daily/weekly/monthly limits exhausted")).toBe(true);
+  });
+
+  it("matches Z.ai Chinese weekly/monthly quota message (error 1310)", () => {
+    // Real message from gateway logs: "429 您已达到每周/每月使用上限，您的限额将在 2026-05-31 10:00:31 重置。"
+    expect(
+      isPeriodicUsageLimitErrorMessage(
+        "429 您已达到每周/每月使用上限，您的限额将在 2026-05-31 10:00:31 重置。",
+      ),
+    ).toBe(true);
+    expect(isPeriodicUsageLimitErrorMessage("每月使用上限已达到")).toBe(true);
+    expect(isPeriodicUsageLimitErrorMessage("每周使用上限")).toBe(true);
+  });
+
+  it("matches Codex subscription usage limit message", () => {
+    // From openai-codex-responses.ts: "You have hit your ChatGPT usage limit (free plan)."
+    expect(
+      isPeriodicUsageLimitErrorMessage("You have hit your ChatGPT usage limit (free plan)."),
+    ).toBe(true);
+    expect(
+      isPeriodicUsageLimitErrorMessage("You have hit your usage limit. Try again in ~30 min."),
+    ).toBe(true);
+  });
+
+  it("does not match transient rate limit or billing errors", () => {
+    expect(isPeriodicUsageLimitErrorMessage("Rate limit exceeded, please retry")).toBe(false);
+    expect(isPeriodicUsageLimitErrorMessage("Your payment method was declined")).toBe(false);
+    expect(isPeriodicUsageLimitErrorMessage("API key is invalid")).toBe(false);
+  });
+});
 
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
