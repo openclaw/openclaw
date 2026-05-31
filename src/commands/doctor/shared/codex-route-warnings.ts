@@ -2660,6 +2660,13 @@ function formatDisabledCodexPluginWarning(params: {
   ].join("\n");
 }
 
+function formatPreservedLegacyCodexRouteWarning(): string {
+  return [
+    "- Preserved legacy `openai-codex/*` model refs during non-interactive doctor repair.",
+    "- Run `openclaw doctor --fix` interactively after confirming the Codex runtime supports the migrated OpenAI provider refs, or update the routes manually.",
+  ].join("\n");
+}
+
 function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
   const plugins = asMutableRecord(cfg.plugins);
   const entries = asMutableRecord(plugins?.entries);
@@ -2788,6 +2795,7 @@ export function maybeRepairCodexRoutes(params: {
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
+  preserveLegacyCodexModelRefs?: boolean;
 }): { cfg: OpenClawConfig; warnings: string[]; changes: string[] } {
   const hits = collectConfigModelRefs(params.cfg);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg);
@@ -2812,6 +2820,16 @@ export function maybeRepairCodexRoutes(params: {
     return {
       cfg: params.cfg,
       warnings: collectCodexRouteWarnings({ cfg: params.cfg, env: params.env }),
+      changes: [],
+    };
+  }
+  if (params.preserveLegacyCodexModelRefs === true && hits.length > 0) {
+    return {
+      cfg: params.cfg,
+      warnings: [
+        ...collectCodexRouteWarnings({ cfg: params.cfg, env: params.env }),
+        formatPreservedLegacyCodexRouteWarning(),
+      ],
       changes: [],
     };
   }

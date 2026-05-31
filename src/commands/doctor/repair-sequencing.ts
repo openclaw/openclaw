@@ -40,6 +40,7 @@ export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  nonInteractive?: boolean;
 }): Promise<{
   state: DoctorConfigMutationState;
   changeNotes: string[];
@@ -91,6 +92,7 @@ export async function runDoctorRepairSequence(params: {
     cfg: state.candidate,
     env,
     shouldRepair: true,
+    preserveLegacyCodexModelRefs: params.nonInteractive === true,
   });
   applyMutation({
     config: codexRouteRepair.cfg,

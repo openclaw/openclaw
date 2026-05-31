@@ -41,6 +41,8 @@ export type ModelFallbackStepFields = {
   fallbackStepFromFailureDetail?: string;
   fallbackStepChainPosition?: number;
   fallbackStepFinalOutcome: FallbackStepOutcome;
+  fallbackCrossProvider?: boolean;
+  fallbackAuthRouteChanged?: boolean;
 };
 
 export type ModelFallbackDecisionParams = {
@@ -74,6 +76,19 @@ function formatModelRef(candidate: ModelCandidate): string {
   return `${candidate.provider}/${candidate.model}`;
 }
 
+function buildFallbackRouteChangeFields(params: {
+  fromProvider: string;
+  toProvider?: string;
+}): Pick<ModelFallbackStepFields, "fallbackCrossProvider" | "fallbackAuthRouteChanged"> {
+  if (!params.toProvider || params.fromProvider === params.toProvider) {
+    return {};
+  }
+  return {
+    fallbackCrossProvider: true,
+    fallbackAuthRouteChanged: true,
+  };
+}
+
 function buildFallbackStepFields(params: {
   decision: "skip_candidate" | "candidate_failed" | "candidate_succeeded";
   candidate: ModelCandidate;
@@ -100,6 +115,10 @@ function buildFallbackStepFields(params: {
         : {}),
       ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
       fallbackStepFinalOutcome: "succeeded",
+      ...buildFallbackRouteChangeFields({
+        fromProvider: lastPreviousAttempt.provider,
+        toProvider: params.candidate.provider,
+      }),
     };
   }
 
@@ -108,6 +127,10 @@ function buildFallbackStepFields(params: {
     fallbackStepType: "fallback_step",
     fallbackStepFromModel: formatModelRef(params.candidate),
     ...(params.nextCandidate ? { fallbackStepToModel: formatModelRef(params.nextCandidate) } : {}),
+    ...buildFallbackRouteChangeFields({
+      fromProvider: params.candidate.provider,
+      toProvider: params.nextCandidate?.provider,
+    }),
     ...(params.reason ? { fallbackStepFromFailureReason: params.reason } : {}),
     ...((observed.providerErrorMessagePreview ?? observed.errorPreview)
       ? {

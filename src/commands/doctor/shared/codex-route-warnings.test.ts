@@ -1970,6 +1970,50 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4-mini");
   });
 
+  it("preserves legacy Codex model refs when non-interactive repair is protected", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          agentRuntime: { id: "codex" },
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["openai-codex/gpt-5.4"],
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            model: "openai-codex/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = maybeRepairCodexRoutes({
+      cfg,
+      shouldRepair: true,
+      preserveLegacyCodexModelRefs: true,
+      codexRuntimeReady: true,
+    });
+
+    expect(result.cfg).toBe(cfg);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toContain(
+      [
+        "- Preserved legacy `openai-codex/*` model refs during non-interactive doctor repair.",
+        "- Run `openclaw doctor --fix` interactively after confirming the Codex runtime supports the migrated OpenAI provider refs, or update the routes manually.",
+      ].join("\n"),
+    );
+    expect(result.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.5",
+      fallbacks: ["openai-codex/gpt-5.4"],
+    });
+    expect(result.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
+    expect(result.cfg.agents?.list?.[0]?.model).toBe("openai-codex/gpt-5.4");
+    expect(result.cfg.agents?.list?.[0]?.agentRuntime).toEqual({ id: "codex" });
+  });
+
   it("keeps whole-agent runtime pins while repairing compaction-only model refs and overrides", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {

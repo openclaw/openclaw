@@ -125,6 +125,8 @@ type ResolvedFallbackTransition = {
   fallbackActive: boolean;
   fallbackTransitioned: boolean;
   fallbackCleared: boolean;
+  fallbackCrossProvider: boolean;
+  fallbackAuthRouteChanged: boolean;
   reasonSummary: string;
   attemptSummaries: string[];
   previousState: {
@@ -162,6 +164,10 @@ export function resolveFallbackTransition(params: {
     activeModelRef,
     comparisonOptions,
   );
+  const fallbackCrossProvider =
+    fallbackActive &&
+    params.selectedProvider.trim().toLowerCase() !== params.activeProvider.trim().toLowerCase();
+  const fallbackAuthRouteChanged = fallbackCrossProvider;
   const fallbackTransitioned =
     fallbackActive &&
     (previousState.selectedModel !== selectedModelRef ||
@@ -204,6 +210,8 @@ export function resolveFallbackTransition(params: {
     fallbackActive,
     fallbackTransitioned,
     fallbackCleared,
+    fallbackCrossProvider,
+    fallbackAuthRouteChanged,
     reasonSummary,
     attemptSummaries,
     previousState,

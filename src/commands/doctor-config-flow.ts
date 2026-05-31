@@ -242,6 +242,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       state: { cfg, candidate, pendingChanges, fixHints },
       doctorFixCommand,
       env: process.env,
+      nonInteractive: params.options.nonInteractive === true,
     });
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
     emitDoctorNotes({

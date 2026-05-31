@@ -24,6 +24,7 @@ import {
   mutateConfigFileWithRetry,
   parseConfigJson5,
   readConfigFileSnapshot,
+  replaceConfigFile,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { resolveConfigEnvVars } from "../../config/env-substitution.js";
@@ -212,6 +213,17 @@ type PreUpdateConfigRestoreInput = {
   authoredConfig: OpenClawConfig;
 };
 
+type ProtectedRouteEntry = {
+  path: string;
+  value: string;
+};
+
+type ProtectedRouteDrift = {
+  path: string;
+  before: string;
+  after: string | undefined;
+};
+
 type MissingPluginInstallPayload = {
   pluginId: string;
   installPath?: string;
@@ -265,6 +277,82 @@ function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string,
     return null;
   }
   return channels;
+}
+
+function normalizeProtectedRouteString(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() || undefined : undefined;
+}
+
+function isProtectedRouteValue(pathLabel: string, value: string): boolean {
+  const normalized = value.toLowerCase();
+  if (normalized.startsWith("openai-codex/") || normalized.startsWith("codex/")) {
+    return true;
+  }
+  return pathLabel.endsWith(".agentRuntime.id") && ["codex", "openai-codex"].includes(normalized);
+}
+
+function collectProtectedRouteEntries(value: unknown): ProtectedRouteEntry[] {
+  const entries: ProtectedRouteEntry[] = [];
+  const visit = (candidate: unknown, pathLabel: string) => {
+    const normalized = normalizeProtectedRouteString(candidate);
+    if (normalized && isProtectedRouteValue(pathLabel, normalized)) {
+      entries.push({ path: pathLabel, value: normalized });
+      return;
+    }
+    if (Array.isArray(candidate)) {
+      candidate.forEach((entry, index) => visit(entry, `${pathLabel}.${index}`));
+      return;
+    }
+    if (!isRecord(candidate)) {
+      return;
+    }
+    for (const [key, entry] of Object.entries(candidate).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    )) {
+      visit(entry, pathLabel ? `${pathLabel}.${key}` : key);
+    }
+  };
+  visit(value, "");
+  return entries;
+}
+
+function readPathValue(value: unknown, pathLabel: string): unknown {
+  if (!pathLabel) {
+    return value;
+  }
+  let cursor = value;
+  for (const part of pathLabel.split(".")) {
+    if (Array.isArray(cursor)) {
+      const index = Number.parseInt(part, 10);
+      cursor = Number.isInteger(index) ? cursor[index] : undefined;
+      continue;
+    }
+    if (!isRecord(cursor)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function diffProtectedRouteEntries(params: {
+  before: OpenClawConfig;
+  after: OpenClawConfig;
+}): ProtectedRouteDrift[] {
+  return collectProtectedRouteEntries(params.before)
+    .map((entry) => {
+      const after = normalizeProtectedRouteString(readPathValue(params.after, entry.path));
+      if (after === undefined) {
+        return null;
+      }
+      const drift: ProtectedRouteDrift = { path: entry.path, before: entry.value, after };
+      return after === entry.value ? null : drift;
+    })
+    .filter((entry): entry is ProtectedRouteDrift => entry !== null);
+}
+
+function formatProtectedRouteDrift(drift: ProtectedRouteDrift): string {
+  return `${drift.path}: ${drift.before} -> ${drift.after ?? "<missing>"}`;
 }
 
 function restorePreUpdateChannelModelOverrides(params: {
@@ -2240,6 +2328,7 @@ type UpdateFinalizeResult = {
   mode: "finalize";
   root: string;
   channel: "stable" | "beta" | "dev";
+  reason?: string;
   restart: false;
   postUpdate: {
     doctor: {
@@ -2330,6 +2419,14 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     }
     const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
     configSnapshot = restoredConfig.snapshot;
+    const protectedRouteDrift = await restorePreUpdateConfigAfterProtectedRouteDrift({
+      preUpdateConfig: preFinalizeConfig,
+      postUpdateConfigSnapshot: configSnapshot,
+      jsonMode: Boolean(opts.json),
+    });
+    if (protectedRouteDrift) {
+      return buildProtectedRouteDriftPostCoreResult(protectedRouteDrift.drifts);
+    }
     const postDoctorStoredChannel = configSnapshot.valid
       ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
       : null;
@@ -2362,6 +2459,9 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
           : "ok",
     mode: "finalize",
     root,
+    ...(pluginUpdate.status === "error" && pluginUpdate.reason === "protected-route-drift"
+      ? { reason: "protected-route-drift" }
+      : {}),
     channel:
       requestedChannel ??
       (configSnapshot.valid
@@ -2431,6 +2531,43 @@ function createUpdatedConfigSnapshot(
   };
 }
 
+async function restorePreUpdateConfigAfterProtectedRouteDrift(params: {
+  preUpdateConfig: PreUpdateConfigRestoreInput | undefined;
+  postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  jsonMode: boolean;
+}): Promise<{
+  restoredSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  drifts: ProtectedRouteDrift[];
+} | null> {
+  if (!params.preUpdateConfig || !params.postUpdateConfigSnapshot.valid) {
+    return null;
+  }
+  const drifts = diffProtectedRouteEntries({
+    before: params.preUpdateConfig.sourceConfig,
+    after: params.postUpdateConfigSnapshot.sourceConfig,
+  });
+  if (drifts.length === 0) {
+    return null;
+  }
+  const restoredConfig = structuredClone(params.preUpdateConfig.sourceConfig);
+  const replaceResult = await replaceConfigFile({
+    nextConfig: restoredConfig,
+    snapshot: params.postUpdateConfigSnapshot,
+    ...(params.postUpdateConfigSnapshot.hash
+      ? { baseHash: params.postUpdateConfigSnapshot.hash }
+      : {}),
+    writeOptions: {
+      skipPluginValidation: true,
+      skipOutputLogs: params.jsonMode,
+    },
+  });
+  const restoredSnapshot = createUpdatedConfigSnapshot(
+    params.postUpdateConfigSnapshot,
+    (replaceResult as { nextConfig?: OpenClawConfig } | undefined)?.nextConfig ?? restoredConfig,
+  );
+  return { restoredSnapshot, drifts };
+}
+
 async function maybeRepairLegacyConfigForUpdateChannel(params: {
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   jsonMode: boolean;
@@ -2456,6 +2593,37 @@ async function writePostCorePluginUpdateResultFile(
     return;
   }
   await writeJson(filePath, result, { trailingNewline: true });
+}
+
+function buildProtectedRouteDriftPostCoreResult(
+  drifts: readonly ProtectedRouteDrift[],
+): PostCorePluginUpdateResult {
+  const message =
+    "Protected model/runtime routes changed during update finalization; restored the pre-update config and stopped the update.";
+  return {
+    status: "error",
+    reason: "protected-route-drift",
+    changed: false,
+    warnings: [
+      {
+        reason: "protected-route-drift",
+        message: `${message} ${drifts.map(formatProtectedRouteDrift).join("; ")}`,
+        guidance: ["Review the config change source, then rerun openclaw update."],
+      },
+    ],
+    sync: {
+      changed: false,
+      switchedToBundled: [],
+      switchedToNpm: [],
+      warnings: [],
+      errors: drifts.map(formatProtectedRouteDrift),
+    },
+    npm: {
+      changed: false,
+      outcomes: [],
+    },
+    integrityDrifts: [],
+  };
 }
 
 async function writePostCorePluginInstallRecordsFile(
@@ -2992,6 +3160,38 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       postCoreConfigSnapshot,
       preUpdateSourceConfig,
     );
+    const protectedRouteDrift = await restorePreUpdateConfigAfterProtectedRouteDrift({
+      preUpdateConfig: preUpdateSourceConfig,
+      postUpdateConfigSnapshot: restoredPostCoreConfig.snapshot,
+      jsonMode: Boolean(opts.json),
+    });
+    if (protectedRouteDrift) {
+      const result: UpdateRunResult = {
+        status: "error",
+        mode: "unknown",
+        root,
+        reason: "protected-route-drift",
+        steps: [],
+        durationMs: 0,
+      };
+      if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
+        await writePostCorePluginUpdateResultFile(
+          process.env[POST_CORE_UPDATE_RESULT_PATH_ENV],
+          buildProtectedRouteDriftPostCoreResult(protectedRouteDrift.drifts),
+        );
+      }
+      if (opts.json) {
+        defaultRuntime.writeJson(result);
+      } else {
+        defaultRuntime.error(
+          theme.error(
+            "Update failed because protected model/runtime routes changed during post-update finalization; restored the pre-update config.",
+          ),
+        );
+      }
+      defaultRuntime.exit(1);
+      return;
+    }
     const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
       postCoreInstallRecordsPath,
     );
@@ -3060,6 +3260,14 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   const storedChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;
+  const preUpdateConfig = configSnapshot.valid
+    ? {
+        sourceConfig: configSnapshot.sourceConfig,
+        authoredConfig: isRecord(configSnapshot.parsed)
+          ? (configSnapshot.parsed as OpenClawConfig)
+          : configSnapshot.sourceConfig,
+      }
+    : undefined;
 
   if (opts.channel && !configSnapshot.valid) {
     const issues = formatConfigIssueLines(configSnapshot.issues, "-");
@@ -3475,6 +3683,46 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
 
   const postUpdateRoot = result.root ?? root;
 
+  const protectedRouteDrift = await restorePreUpdateConfigAfterProtectedRouteDrift({
+    preUpdateConfig,
+    postUpdateConfigSnapshot,
+    jsonMode: Boolean(opts.json),
+  });
+  if (protectedRouteDrift) {
+    const failedResult: UpdateRunResult = {
+      ...result,
+      status: "error",
+      reason: "protected-route-drift",
+    };
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      result: failedResult,
+      jsonMode: Boolean(opts.json),
+    });
+    if (opts.json) {
+      defaultRuntime.writeJson(failedResult);
+    } else {
+      defaultRuntime.error(
+        theme.error(
+          "Update failed because protected model/runtime routes changed during the update; restored the pre-update config.",
+        ),
+      );
+      defaultRuntime.log(
+        theme.warn(
+          protectedRouteDrift.drifts
+            .map((drift) => `- ${formatProtectedRouteDrift(drift)}`)
+            .join("\n"),
+        ),
+      );
+    }
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
+    defaultRuntime.exit(1);
+    return;
+  }
+
   let postCorePluginUpdate: PostCorePluginUpdateResult | undefined;
   let pluginsUpdatedInFreshProcess = false;
   if (shouldResumePostCoreInFreshProcess) {
@@ -3486,14 +3734,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       pluginInstallRecords: preUpdatePluginInstallRecords,
       updateStartedAtMs: startedAt,
       nodeRunner: managedServiceNodeRunner,
-      preUpdateConfig: configSnapshot.valid
-        ? {
-            sourceConfig: configSnapshot.sourceConfig,
-            authoredConfig: isRecord(configSnapshot.parsed)
-              ? (configSnapshot.parsed as OpenClawConfig)
-              : configSnapshot.sourceConfig,
-          }
-        : undefined,
+      preUpdateConfig,
     });
     pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
     postCorePluginUpdate = freshProcessResult.pluginUpdate;
@@ -3508,14 +3749,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     }
     const restoredConfig = restoreDroppedPreUpdateChannels(
       postUpdateConfigSnapshot,
-      configSnapshot.valid
-        ? {
-            sourceConfig: configSnapshot.sourceConfig,
-            authoredConfig: isRecord(configSnapshot.parsed)
-              ? (configSnapshot.parsed as OpenClawConfig)
-              : configSnapshot.sourceConfig,
-          }
-        : undefined,
+      preUpdateConfig,
     );
     postUpdateConfigSnapshot = restoredConfig.snapshot;
     postCorePluginUpdate = await runPostCorePluginUpdate({
@@ -3534,7 +3768,14 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     ? {
         ...result,
         status: postCorePluginUpdate.status === "error" ? "error" : result.status,
-        ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
+        ...(postCorePluginUpdate.status === "error"
+          ? {
+              reason:
+                postCorePluginUpdate.reason === "protected-route-drift"
+                  ? "protected-route-drift"
+                  : "post-update-plugins",
+            }
+          : {}),
         postUpdate: {
           ...result.postUpdate,
           plugins: postCorePluginUpdate,

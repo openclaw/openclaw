@@ -83,6 +83,8 @@ describe("fallback-state", () => {
 
     expect(resolved.fallbackActive).toBe(true);
     expect(resolved.fallbackTransitioned).toBe(true);
+    expect(resolved.fallbackCrossProvider).toBe(true);
+    expect(resolved.fallbackAuthRouteChanged).toBe(true);
     expect(resolved.fallbackCleared).toBe(false);
     expect(resolved.stateChanged).toBe(true);
     expect(resolved.reasonSummary).toBe("rate limit");
@@ -245,5 +247,29 @@ describe("fallback-state", () => {
         attempts: [],
       }),
     ).toContain("selected openai/gpt-5.5");
+  });
+
+  it("keeps route-changing fallback noticeable even when verbose mode is off upstream", () => {
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "openai",
+      selectedModel: "gpt-5.5",
+      activeProvider: "xai",
+      activeModel: "grok-4.3",
+      attempts: [{ ...baseAttempt, provider: "openai", model: "gpt-5.5" }],
+      state: {},
+    });
+
+    expect(resolved.fallbackTransitioned).toBe(true);
+    expect(resolved.fallbackCrossProvider).toBe(true);
+    expect(resolved.fallbackAuthRouteChanged).toBe(true);
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "openai",
+        selectedModel: "gpt-5.5",
+        activeProvider: "xai",
+        activeModel: "grok-4.3",
+        attempts: [{ ...baseAttempt, provider: "openai", model: "gpt-5.5" }],
+      }),
+    ).toContain("↪️ Model Fallback: xai/grok-4.3");
   });
 });

@@ -551,6 +551,53 @@ describe("doctor repair sequencing", () => {
     ]);
   });
 
+  it("preserves legacy Codex routes during non-interactive repair sequencing", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
+      async (params: { cfg: OpenClawConfig }) => {
+        expect(params.cfg.agents?.defaults?.model).toBe("openai-codex/gpt-5.5");
+        expect(params.cfg.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
+        return {
+          changes: [],
+          warnings: [],
+        };
+      },
+    );
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+              model: "openai-codex/gpt-5.5",
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+              model: "openai-codex/gpt-5.5",
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+      env: {},
+      nonInteractive: true,
+    });
+
+    expect(result.state.pendingChanges).toBe(false);
+    expect(result.state.candidate.agents?.defaults?.model).toBe("openai-codex/gpt-5.5");
+    expect(result.state.candidate.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
+    expect(result.changeNotes).toStrictEqual([]);
+    expect(result.warningNotes.join("\n")).toContain(
+      "Preserved legacy `openai-codex/*` model refs during non-interactive doctor repair.",
+    );
+  });
+
   it("runs group allowFrom fallback migration after open-policy allowFrom repair", async () => {
     const events: string[] = [];
     mocks.maybeRepairOpenPolicyAllowFrom.mockImplementationOnce((cfg: OpenClawConfig) => {

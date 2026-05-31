@@ -635,6 +635,20 @@ describe("update-cli", () => {
       ...overrides,
     }) as UpdateRunResult;
 
+  const makeConfigSnapshot = (
+    config: OpenClawConfig,
+    overrides: Partial<ConfigFileSnapshot> = {},
+  ): ConfigFileSnapshot => ({
+    ...baseSnapshot,
+    parsed: config,
+    resolved: config,
+    sourceConfig: config,
+    valid: true,
+    config,
+    runtimeConfig: config,
+    ...overrides,
+  });
+
   const runUpdateCliScenario = async (testCase: UpdateCliScenario) => {
     vi.clearAllMocks();
     await testCase.run();
@@ -1609,6 +1623,44 @@ describe("update-cli", () => {
     expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]?.message).toContain(
       "Run openclaw plugins inspect demo --runtime --json for details.",
     );
+  });
+
+  it("fails closed and restores config when protected routes drift during update", async () => {
+    const beforeConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "codex/gpt-5.5", fallbacks: ["codex/gpt-5.4"] },
+          agentRuntime: { id: "codex" },
+        },
+      },
+    } as OpenClawConfig;
+    const afterConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] },
+          agentRuntime: { id: "codex" },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce(makeConfigSnapshot(beforeConfig, { hash: "before" }))
+      .mockResolvedValueOnce(makeConfigSnapshot(afterConfig, { hash: "after" }));
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+
+    await updateCommand({ json: true, restart: false });
+
+    const output = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(output?.status).toBe("error");
+    expect(output?.reason).toBe("protected-route-drift");
+    expect(replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: beforeConfig,
+        baseHash: "after",
+        writeOptions: expect.objectContaining({ skipPluginValidation: true }),
+      }),
+    );
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("detects missing plugin payloads from persisted records before npm updates", async () => {
