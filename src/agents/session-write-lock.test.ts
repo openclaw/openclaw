@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { SessionWriteLockStaleError } from "./session-write-lock-error.js";
@@ -85,6 +86,19 @@ async function writeCurrentProcessLock(lockPath: string, extra?: Record<string, 
     }),
     "utf8",
   );
+}
+
+function readFilePathToString(filePath: Parameters<typeof fs.readFile>[0]): string | undefined {
+  if (typeof filePath === "string") {
+    return filePath;
+  }
+  if (Buffer.isBuffer(filePath)) {
+    return filePath.toString("utf8");
+  }
+  if (filePath instanceof URL) {
+    return fileURLToPath(filePath);
+  }
+  return undefined;
 }
 
 async function withSymlinkedSessionPaths(
@@ -453,6 +467,157 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("retries when a stale lock report disappears before diagnostics", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const originalReadFile = fs.readFile.bind(fs);
+      let lockReads = 0;
+      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+        filePath,
+        options,
+      ) => {
+        const lockFilePath = readFilePathToString(filePath);
+        if (lockFilePath && path.basename(lockFilePath) === path.basename(lockPath)) {
+          lockReads += 1;
+          if (lockReads === 3) {
+            await fs.rm(lockFilePath, { force: true });
+            await fs.rm(lockPath, { force: true });
+            throw Object.assign(new Error("lock disappeared"), { code: "ENOENT" });
+          }
+        }
+        return await originalReadFile(filePath, options as never);
+      }) as typeof fs.readFile);
+
+      try {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
+        await lock.release();
+        expect(lockReads).toBeGreaterThanOrEqual(3);
+        await expectPathMissing(lockPath);
+      } finally {
+        readFileSpy.mockRestore();
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
+  it("retries when a stale lock report is replaced before diagnostics", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const originalReadFile = fs.readFile.bind(fs);
+      let lockReads = 0;
+      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+        filePath,
+        options,
+      ) => {
+        const lockFilePath = readFilePathToString(filePath);
+        if (lockFilePath && path.basename(lockFilePath) === path.basename(lockPath)) {
+          lockReads += 1;
+          if (lockReads === 3) {
+            await fs.rm(lockFilePath, { force: true });
+            await fs.rm(lockPath, { force: true });
+            await fs.writeFile(
+              lockFilePath,
+              JSON.stringify({ pid: owner.pid, createdAt: new Date().toISOString() }),
+              "utf8",
+            );
+            setTimeout(() => {
+              void fs.rm(lockFilePath, { force: true });
+            }, 10);
+            throw Object.assign(new Error("lock disappeared"), { code: "ENOENT" });
+          }
+        }
+        return await originalReadFile(filePath, options as never);
+      }) as typeof fs.readFile);
+
+      try {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
+        await lock.release();
+        expect(lockReads).toBeGreaterThanOrEqual(3);
+        await expectPathMissing(lockPath);
+      } finally {
+        readFileSpy.mockRestore();
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
+  it("retries when a stale lock report is replaced by a fresh payload-less lock", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const originalReadFile = fs.readFile.bind(fs);
+      let lockReads = 0;
+      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+        filePath,
+        options,
+      ) => {
+        const lockFilePath = readFilePathToString(filePath);
+        if (lockFilePath && path.basename(lockFilePath) === path.basename(lockPath)) {
+          lockReads += 1;
+          if (lockReads === 3) {
+            await fs.rm(lockFilePath, { force: true });
+            await fs.writeFile(lockFilePath, "", "utf8");
+            setTimeout(() => {
+              void fs.rm(lockFilePath, { force: true });
+            }, 10);
+          }
+        }
+        return await originalReadFile(filePath, options as never);
+      }) as typeof fs.readFile);
+
+      try {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 800, staleMs: 10 });
+        await lock.release();
+        expect(lockReads).toBeGreaterThanOrEqual(3);
+        await expectPathMissing(lockPath);
+      } finally {
+        readFileSpy.mockRestore();
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -598,6 +763,14 @@ describe("acquireSessionWriteLock", () => {
       timeoutMs: Number.POSITIVE_INFINITY,
       staleMs: 30 * 60 * 1000,
     });
+  });
+
+  it("preserves one acquire timeout budget across retries", () => {
+    expect(testing.resolveRemainingAcquireTimeoutMs(500, 1_000, 1_125)).toBe(375);
+    expect(testing.resolveRemainingAcquireTimeoutMs(500, 1_000, 1_500)).toBe(0);
+    expect(testing.resolveRemainingAcquireTimeoutMs(Number.POSITIVE_INFINITY, 1_000, 9_000)).toBe(
+      Number.POSITIVE_INFINITY,
+    );
   });
 
   it("uses resolved stale policy when cleaning stale lock files", async () => {

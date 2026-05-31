@@ -1,6 +1,6 @@
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 
 type Awaitable<T> = T | Promise<T>;
@@ -125,7 +125,7 @@ export async function startGatewayEarlyRuntime(params: {
     // Task registry maintenance is authoritative in the Gateway process so
     // restart-blocker counts reflect the same cron store as runtime execution.
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
-      cronStorePath: resolveCronStorePath(params.cfgAtStart.cron?.store),
+      cronStorePath: resolveCronJobsStorePath(params.cfgAtStart.cron?.store),
       runtimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();

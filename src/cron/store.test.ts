@@ -11,7 +11,6 @@ import {
   loadCronQuarantineFile,
   loadCronStore,
   loadCronStoreSync,
-  loadCronStoreWithConfigJobs,
   resolveCronQuarantinePath,
   resolveCronStorePath,
   saveCronQuarantineFile,

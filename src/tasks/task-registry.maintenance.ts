@@ -19,7 +19,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
-import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
+import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
@@ -114,8 +114,8 @@ type TaskRegistryMaintenanceRuntime = {
   resolveTaskForLookupToken: typeof resolveTaskForLookupToken;
   setTaskCleanupAfterById: typeof setTaskCleanupAfterById;
   isRuntimeAuthoritative: () => boolean;
-  resolveCronStorePath: typeof resolveCronStorePath;
-  loadCronStoreSync: typeof loadCronStoreSync;
+  resolveCronJobsStorePath: typeof resolveCronJobsStorePath;
+  loadCronJobsStoreSync: typeof loadCronJobsStoreSync;
   readCronRunLogEntriesSync: typeof readCronRunLogEntriesSync;
 };
 
@@ -154,8 +154,8 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
   isRuntimeAuthoritative: () => configuredRuntimeAuthoritative,
-  resolveCronStorePath: () => configuredCronStorePath ?? resolveCronStorePath(),
-  loadCronStoreSync,
+  resolveCronJobsStorePath: () => configuredCronStorePath ?? resolveCronJobsStorePath(),
+  loadCronJobsStoreSync,
   readCronRunLogEntriesSync,
 };
 
@@ -223,7 +223,7 @@ type BackingSessionLookupContext = {
 
 function createCronRecoveryContext(): CronRecoveryContext {
   return {
-    storePath: taskRegistryMaintenanceRuntime.resolveCronStorePath(),
+    storePath: taskRegistryMaintenanceRuntime.resolveCronJobsStorePath(),
     runLogsByJobId: new Map<string, CronRunLogEntry[]>(),
   };
 }
@@ -386,7 +386,7 @@ function getCronStore(context: CronRecoveryContext): CronStoreFile | null {
     return context.store;
   }
   try {
-    context.store = taskRegistryMaintenanceRuntime.loadCronStoreSync(context.storePath);
+    context.store = taskRegistryMaintenanceRuntime.loadCronJobsStoreSync(context.storePath);
   } catch {
     context.store = null;
   }
