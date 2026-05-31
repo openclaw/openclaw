@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentCompactionConfig } from "../../agents/agent-scope-config.js";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
@@ -78,17 +79,25 @@ export async function readPostCompactionContext(
       }
     })();
 
-    const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
-    if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
+    // Extract configured sections from AGENTS.md.
+    // An explicit empty array disables post-compaction context injection entirely.
+    const configuredSections = resolveAgentCompactionConfig(cfg, agentId)?.postCompactionSections;
+    if (!Array.isArray(configuredSections)) {
       return null;
     }
-    const sectionNames = configuredSections;
+
+    if (configuredSections.length === 0) {
+      return null;
+    }
 
     const foundSectionNames: string[] = [];
-    let sections = extractSections(content, sectionNames, foundSectionNames);
+    let sections = extractSections(content, configuredSections, foundSectionNames);
 
-    // Legacy "Every Session" / "Safety" fallback is preserved only for users
-    // who explicitly opt in to the documented default section pair.
+    // Fall back to legacy section names ("Every Session" / "Safety") when using
+    // defaults and the current headings aren't found — preserves compatibility
+    // with older AGENTS.md templates. The fallback also applies when the user
+    // explicitly configures the default pair, so that pinning the documented
+    // defaults never silently changes behavior vs. leaving the field unset.
     const isDefaultSections = matchesSectionSet(
       configuredSections,
       DEFAULT_POST_COMPACTION_SECTIONS,
@@ -102,7 +111,7 @@ export async function readPostCompactionContext(
     }
 
     // Only reference section names that were actually found and injected.
-    const displayNames = foundSectionNames.length > 0 ? foundSectionNames : sectionNames;
+    const displayNames = foundSectionNames.length > 0 ? foundSectionNames : configuredSections;
 
     const resolvedNowMs = effectiveNowMs ?? Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);

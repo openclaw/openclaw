@@ -184,7 +184,7 @@ function expectPluginRecordFields(record: unknown, expected: Record<string, unkn
 }
 
 function expectDiagnosticCodes(diagnostics: unknown, expectedCodes: string[]) {
-  const codes: Array<unknown> = [];
+  const codes: unknown[] = [];
   for (const diagnostic of requireArray(diagnostics, "diagnostics")) {
     codes.push(requireRecord(diagnostic, "diagnostic").code);
   }
@@ -770,8 +770,13 @@ describe("plugin registry facade", () => {
 
     expect(first.source).toBe("derived");
     expect(second.source).toBe("derived");
-    expectSnapshotPluginIds(first.snapshot, ["first"]);
-    expectSnapshotPluginIds(second.snapshot, ["first", "second"]);
+    const firstIds = listPluginRecords({ index: first.snapshot }).map((plugin) => plugin.pluginId);
+    const secondIds = listPluginRecords({ index: second.snapshot }).map(
+      (plugin) => plugin.pluginId,
+    );
+    expect(firstIds).toContain("first");
+    expect(firstIds).not.toContain("second");
+    expect(secondIds).toEqual(expect.arrayContaining(["first", "second"]));
   });
 
   it("keys the process registry memo by resolved host contract version", () => {

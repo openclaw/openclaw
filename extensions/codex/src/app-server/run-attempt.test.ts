@@ -3866,6 +3866,128 @@ describe("runCodexAppServerAttempt", () => {
     expect(savedBinding?.threadId).toBe("thread-1");
   });
 
+  it("uses per-agent native rollout rotation settings for non-main Codex sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:worker:session-1";
+    params.agentId = "worker";
+    params.agentDir = agentDir;
+    params.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            truncateAfterCompaction: false,
+            maxActiveTranscriptBytes: "10mb",
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "1k",
+            },
+          },
+        ],
+      },
+    } as never;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.map((entry) => entry.method)).toContain("thread/start");
+    expect(requests.map((entry) => entry.method)).not.toContain("thread/resume");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-1");
+  });
+
+  it("inherits default native rollout rotation with an empty per-agent compaction block", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:worker:session-1";
+    params.agentId = "worker";
+    params.agentDir = agentDir;
+    params.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            truncateAfterCompaction: true,
+            maxActiveTranscriptBytes: "1k",
+          },
+        },
+        list: [{ id: "worker", compaction: {} }],
+      },
+    } as never;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.map((entry) => entry.method)).toContain("thread/start");
+    expect(requests.map((entry) => entry.method)).not.toContain("thread/resume");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-1");
+  });
+
+  it("inherits default native rollout rotation settings with a partial per-agent compaction block", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:worker:session-1";
+    params.agentId = "worker";
+    params.agentDir = agentDir;
+    params.config = {
+      agents: {
+        defaults: {
+          compaction: {
+            truncateAfterCompaction: true,
+            maxActiveTranscriptBytes: "10mb",
+          },
+        },
+        list: [{ id: "worker", compaction: { maxActiveTranscriptBytes: "1k" } }],
+      },
+    } as never;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.map((entry) => entry.method)).toContain("thread/start");
+    expect(requests.map((entry) => entry.method)).not.toContain("thread/resume");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-1");
+  });
+
   it("preserves bound auth when rotating a fallback-fuse native rollout", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

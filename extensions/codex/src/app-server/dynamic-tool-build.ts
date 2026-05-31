@@ -58,6 +58,7 @@ export type DynamicToolBuildParams = {
   profilerEnabled?: boolean;
   forceHeartbeatTool?: boolean;
   ignoreRuntimePlan?: boolean;
+  skipRuntimeToolNormalization?: boolean;
   onYieldDetected: () => void;
   onCodexAppServerEvent?: (event: CodexDynamicToolBuildEvent) => void;
 };
@@ -285,6 +286,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
   toolBuildStages.mark("allowlist-filter");
+  if (input.skipRuntimeToolNormalization) {
+    return filteredTools;
+  }
   const normalizedTools = normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
     tools: filteredTools,

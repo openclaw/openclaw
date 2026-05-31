@@ -1584,7 +1584,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const afterTurn = vi.fn(
       async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
     );
-    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
     const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -1607,6 +1611,57 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(afterTurnCall.messages.some((message) => message.role === "user")).toBe(true);
     expect(afterTurnCall.messages.some((message) => message.role === "assistant")).toBe(true);
     expect(maintain).toHaveBeenCalledTimes(1);
+  });
+
+  it("threads explicit agent scope into Codex context-engine lifecycle maintenance", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("existing context", Date.now()) as never,
+    );
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    const contextEngine = createContextEngine({ maintain });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "legacy-session-key";
+    params.agentId = "lossless-agent";
+    params.contextEngine = contextEngine;
+    params.config = {
+      agents: {
+        defaults: { model: "openai/gpt-default" },
+        list: [{ id: "lossless-agent", model: "openai/gpt-lossless" }],
+      },
+    } as EmbeddedRunAttemptParams["config"];
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
+
+    expect(maintain).toHaveBeenCalledTimes(2);
+    for (const [maintainParams] of maintain.mock.calls) {
+      const runtimeContext = (maintainParams as { runtimeContext?: { llm?: unknown } })
+        .runtimeContext;
+      const llm = runtimeContext?.llm as
+        | {
+            complete?: (params: {
+              messages: Array<{ role: "user"; content: string }>;
+              agentId?: string;
+            }) => Promise<unknown>;
+          }
+        | undefined;
+      expect(llm?.complete).toBeTypeOf("function");
+      await expect(
+        llm?.complete?.({
+          messages: [{ role: "user", content: "summarize" }],
+          agentId: "other-agent",
+        }),
+      ).rejects.toThrow("cannot override the active session agent");
+    }
   });
 
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
@@ -1687,7 +1742,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const ingestBatch = vi.fn(async () => ({ ingestedCount: 2 }));
-    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
     const contextEngine = createContextEngine({
       afterTurn: undefined,
       ingestBatch,

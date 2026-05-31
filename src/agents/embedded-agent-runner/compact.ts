@@ -46,6 +46,7 @@ import {
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
+import { resolveAgentCompactionConfig, resolveAgentConfig } from "../agent-scope-config.js";
 import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
@@ -131,7 +132,10 @@ import {
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
-import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import {
+  resolveEmbeddedCompactionTarget,
+  resolveEmbeddedCompactionThinkingLevel,
+} from "./compaction-runtime-context.js";
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -358,17 +362,36 @@ function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   );
 }
 
-function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): boolean {
-  return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
+function resolveCompactionAgentId(params: CompactEmbeddedAgentSessionParams): string | undefined {
+  return resolveSessionAgentIds({
+    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  }).sessionAgentId;
+}
+
+function hasExplicitCompactionModel(
+  params: CompactEmbeddedAgentSessionParams,
+  agentId?: string,
+): boolean {
+  return Boolean(
+    (params.config && agentId
+      ? (resolveAgentConfig(params.config, agentId)?.compaction ??
+        params.config.agents?.defaults?.compaction)
+      : params.config?.agents?.defaults?.compaction
+    )?.model,
+  );
 }
 
 function resolveCompactionFallbacksOverride(
   params: CompactEmbeddedAgentSessionParams,
 ): string[] | undefined {
+  const agentId = resolveCompactionAgentId(params);
   return (
     params.modelFallbacksOverride ??
     resolveRunModelFallbacksOverride({
       cfg: params.config,
+      agentId,
       sessionKey: params.sessionKey,
     })
   );
@@ -416,11 +439,16 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactRe
 export async function compactEmbeddedAgentSessionDirect(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
+  const fallbackAgentId = resolveCompactionAgentId(params);
+  if (
+    hasExplicitCompactionModel(params, fallbackAgentId) ||
+    !hasCompactionModelFallbackCandidates(params)
+  ) {
     return await compactEmbeddedAgentSessionDirectOnce(params);
   }
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
+    agentId: fallbackAgentId,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
@@ -431,11 +459,6 @@ export async function compactEmbeddedAgentSessionDirect(
   const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const requestedPrimaryProvider = params.provider?.trim() || DEFAULT_PROVIDER;
   const fallbacksOverride = resolveCompactionFallbacksOverride(params);
-  const fallbackAgentId = resolveSessionAgentIds({
-    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  }).sessionAgentId;
   const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
   try {
     const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
@@ -507,6 +530,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       : params.agentId;
   const policyCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
+    agentId: earlyAgentIds.sessionAgentId,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
@@ -529,6 +553,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const selectedHarnessRuntime = params.agentHarnessId ?? configuredHarnessRuntime;
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
+    agentId: earlyAgentIds.sessionAgentId,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
@@ -554,7 +579,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
       workspaceDir: resolvedWorkspace,
     });
   }
-  let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
+  let thinkLevel = resolveEmbeddedCompactionThinkingLevel({
+    config: params.config,
+    agentId: earlyAgentIds.sessionAgentId,
+    thinkLevel: params.thinkLevel,
+  });
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);
@@ -1058,7 +1087,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
     };
 
-    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config, sessionAgentId);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       ...resolveSessionWriteLockOptions(params.config, {
@@ -1099,6 +1128,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
+        agentId: sessionAgentId,
         pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
           config: params.config,
           env: process.env,
@@ -1111,9 +1141,12 @@ async function compactEmbeddedAgentSessionDirectOnce(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
+        agentId: sessionAgentId,
         provider,
         modelId,
         model,
+        modelRegistry,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
         cwd: effectiveCwd,
@@ -1130,6 +1163,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       applyAgentCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
+        agentId: sessionAgentId,
         contextTokenBudget,
       });
       // contextEngineInfo is intentionally omitted: this guard runs inside the
@@ -1353,7 +1387,12 @@ async function compactEmbeddedAgentSessionDirectOnce(
               const hardenedBoundary = await hardenManualCompactionBoundary({
                 sessionFile: params.sessionFile,
                 preserveRecentTail:
-                  typeof params.config?.agents?.defaults?.compaction?.keepRecentTokens === "number",
+                  typeof (
+                    params.config && sessionAgentId
+                      ? (resolveAgentConfig(params.config, sessionAgentId)?.compaction ??
+                        params.config.agents?.defaults?.compaction)
+                      : params.config?.agents?.defaults?.compaction
+                  )?.keepRecentTokens === "number",
               });
               if (hardenedBoundary.applied) {
                 effectiveFirstKeptEntryId =
@@ -1380,7 +1419,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
           let transcriptRotation: CompactionTranscriptRotation = { rotated: false };
-          if (shouldRotateCompactionTranscript(params.config)) {
+          if (shouldRotateCompactionTranscript(params.config, sessionAgentId)) {
             try {
               transcriptRotation = await rotateTranscriptAfterCompaction({
                 sessionManager: transcriptRotationSessionManager,

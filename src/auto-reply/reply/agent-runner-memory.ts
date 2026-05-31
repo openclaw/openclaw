@@ -5,6 +5,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  resolveAgentCompactionConfig,
+  resolveAgentConfig,
+} from "../../agents/agent-scope-config.js";
+import { resolveCompactionReserveTokensFloor } from "../../agents/agent-settings.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import {
@@ -734,11 +739,11 @@ export async function runPreflightCompactionIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const activeAgentId = params.followupRun.run.agentId;
+  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, agentId: activeAgentId });
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
-    20_000;
+    resolveCompactionReserveTokensFloor(params.cfg, activeAgentId);
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
@@ -749,7 +754,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
-  const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
+  const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg, activeAgentId);
   const shouldCheckActiveTranscriptBytes = typeof maxActiveTranscriptBytes === "number";
   const transcriptUsageTokens =
     typeof freshPersistedTokens === "number"
@@ -858,6 +863,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const result = await deps.compactEmbeddedAgentSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
+    agentId: activeAgentId,
     sandboxSessionKey: params.runtimePolicySessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.followupRun.run.messageProvider,
@@ -970,7 +976,8 @@ export async function runMemoryFlushIfNeeded(params: {
   replyOperation: ReplyOperation;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const activeAgentId = params.followupRun.run.agentId;
+  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, agentId: activeAgentId });
   if (!memoryFlushPlan) {
     return params.sessionEntry;
   }
@@ -1185,6 +1192,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const activeMemoryFlushPlan =
     resolveMemoryFlushPlan({
       cfg: params.cfg,
+      agentId: activeAgentId,
       nowMs: memoryFlushNowMs,
     }) ?? memoryFlushPlan;
   const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;

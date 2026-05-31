@@ -13,6 +13,7 @@ import {
   estimateTokensMock,
   getMemorySearchManagerMock,
   guardSessionManagerMock,
+  hardenManualCompactionBoundaryMock,
   hookRunner,
   listRegisteredPluginAgentPromptGuidanceMock,
   loadCompactHooksHarness,
@@ -21,9 +22,12 @@ import {
   registerProviderStreamForModelMock,
   resolveContextWindowInfoMock,
   resolveContextEngineMock,
+  resolveContextEngineCapabilitiesMock,
   resolveEmbeddedAgentStreamFnMock,
+  resolveCompactionTimeoutMsMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
+  resolveRunModelFallbacksOverrideMock,
   resolveSandboxContextMock,
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
@@ -924,6 +928,73 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(config).toEqual(configBefore);
   });
 
+  it("uses explicit agent fallback scope for legacy direct compaction sessions", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(Object.assign(new Error("400 invalid request body"), { status: 400 }))
+      .mockResolvedValueOnce({
+        summary: "agent fallback summary",
+        firstKeptEntryId: "entry-agent-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+    resolveRunModelFallbacksOverrideMock.mockReturnValue(["anthropic/claude-agent-fallback"]);
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "legacy-session-1",
+      sessionKey: "legacy-topic-47",
+      agentId: "lossless-agent",
+      sessionFile: "/tmp/legacy-session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: ["google/gemini-default-fallback"],
+            },
+          },
+          list: [
+            {
+              id: "lossless-agent",
+              model: {
+                fallbacks: ["anthropic/claude-agent-fallback"],
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("agent fallback summary");
+    expect(resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      agentId: "lossless-agent",
+      sessionKey: "legacy-topic-47",
+    });
+    const modelCalls = resolveModelMock.mock.calls.map(
+      ([provider, modelId]) => `${String(provider)}/${String(modelId)}`,
+    );
+    expect(modelCalls).toEqual(["openai/gpt-primary", "anthropic/claude-agent-fallback"]);
+    const fallbackCall = findMockCall(resolveModelMock, ([provider, modelId]) =>
+      `${String(provider)}/${String(modelId)}`.includes("claude-agent-fallback"),
+    );
+    expect(fallbackCall[2]).toBeTypeOf("string");
+    expect(
+      resolveModelMock.mock.calls.some(
+        ([provider, modelId]) => provider === "google" && modelId === "gemini-default-fallback",
+      ),
+    ).toBe(false);
+  });
+
   it("preserves explicit compaction.model behavior without session fallback", async () => {
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },
@@ -953,6 +1024,54 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
               model: "azure/compact-primary",
             },
           },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(resolveModelMock).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(resolveModelMock)).toBe("azure");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("compact-primary");
+    expect(mockCallArg(resolveModelMock, 0, 2)).toBeTypeOf("string");
+    if (mockCallArg(resolveModelMock, 0, 3) === undefined) {
+      throw new Error("Expected resolve-model options");
+    }
+  });
+
+  it("preserves per-agent compaction.model behavior without session fallback", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl.mockRejectedValueOnce(
+      Object.assign(new Error("400 invalid request body"), { status: 400 }),
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: ["anthropic/claude-fallback"],
+            },
+          },
+          list: [
+            {
+              id: "main",
+              compaction: {
+                model: "azure/compact-primary",
+              },
+            },
+          ],
         },
       } as never,
     });
@@ -1223,6 +1342,99 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     }
   });
 
+  it("honors per-agent transcript rotation and post-index sync overrides", async () => {
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+    rotateTranscriptAfterCompactionMock.mockResolvedValueOnce({
+      rotated: true,
+      sessionId: "agent-rotated-session",
+      sessionFile: "/tmp/agent-rotated-session.jsonl",
+      leafId: "agent-rotated-leaf",
+    });
+
+    try {
+      const result = await compactEmbeddedAgentSessionDirect({
+        sessionId: "session-1",
+        sessionKey: TEST_SESSION_KEY,
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                truncateAfterCompaction: false,
+                postIndexSync: "off",
+              },
+            },
+            list: [
+              {
+                id: "main",
+                compaction: {
+                  truncateAfterCompaction: true,
+                  postIndexSync: "await",
+                },
+              },
+            ],
+          },
+        } as never,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        agentId: "main",
+        sessionFile: "/tmp/agent-rotated-session.jsonl",
+        sessionKey: TEST_SESSION_KEY,
+      });
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(sync).toHaveBeenCalledWith({
+        reason: "post-compaction",
+        sessionFiles: ["/tmp/agent-rotated-session.jsonl"],
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("honors explicit agentId scope for legacy direct compaction sessions", async () => {
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "legacy-session-1",
+      sessionKey: "legacy-topic-47",
+      agentId: "lossless-agent",
+      sessionFile: "/tmp/legacy-session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              postIndexSync: "off",
+            },
+          },
+          list: [
+            {
+              id: "lossless-agent",
+              compaction: {
+                postIndexSync: "await",
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledWith({
+      reason: "post-compaction",
+      sessionFiles: ["/tmp/legacy-session.jsonl"],
+    });
+  });
+
   it("preserves tokensAfter when full-session context exceeds result.tokensBefore", () => {
     estimateTokensMock.mockImplementation((message: unknown) => {
       const role = (message as { role?: string }).role;
@@ -1334,7 +1546,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       sessionFile: TEST_SESSION_FILE,
     });
 
-    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledTimes(1);
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(sync).not.toHaveBeenCalled();
   });
@@ -1371,6 +1583,39 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     await expect(syncStarted.promise).resolves.toEqual({
       reason: "post-compaction",
       sessionFiles: [TEST_SESSION_FILE],
+    });
+  });
+
+  it("preserves the manual compaction tail when keepRecentTokens is configured per-agent", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: TEST_SESSION_ID,
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_FILE,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      trigger: "manual",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              keepRecentTokens: undefined,
+            },
+          },
+          list: [
+            {
+              id: "main",
+              compaction: {
+                keepRecentTokens: 12_000,
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(hardenManualCompactionBoundaryMock).toHaveBeenCalledTimes(1);
+    expect(hardenManualCompactionBoundaryMock).toHaveBeenCalledWith({
+      sessionFile: TEST_SESSION_FILE,
+      preserveRecentTail: true,
     });
   });
 
@@ -1788,6 +2033,133 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
     });
+  });
+
+  it("honors explicit agentId scope for legacy queued compaction sessions", async () => {
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        sessionKey: "legacy-topic-47",
+        agentId: "lossless-agent",
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                model: "openai/gpt-5.5",
+              },
+            },
+            list: [
+              {
+                id: "lossless-agent",
+                compaction: {
+                  model: "google/gemini-3.1-pro-preview",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(mockCallArg(resolveModelMock)).toBe("google");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gemini-3.1-pro-preview");
+    expect(mockCallArg(resolveModelMock, 0, 2)).toBe("/tmp/agents/lossless-agent/agent");
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+  });
+
+  it("selects context-engine compaction timeout from the resolved queued session agent", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          compaction: {
+            timeoutSeconds: 60,
+          },
+        },
+        list: [
+          {
+            id: "lossless-agent",
+            compaction: {
+              timeoutSeconds: 1,
+            },
+          },
+        ],
+      },
+    };
+
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        sessionKey: "legacy-topic-47",
+        agentId: "lossless-agent",
+        config,
+      }),
+    );
+
+    expect(resolveCompactionTimeoutMsMock).toHaveBeenCalledWith(config, "lossless-agent");
+  });
+
+  it("uses caller thinking level for queued context-engine compaction", async () => {
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        sessionKey: "legacy-topic-47",
+        agentId: "lossless-agent",
+        config: {
+          agents: {
+            defaults: {
+              compaction: {},
+            },
+            list: [
+              {
+                id: "lossless-agent",
+                compaction: {},
+              },
+            ],
+          },
+        },
+        thinkLevel: "high",
+      }),
+    );
+
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expect(compactArg.runtimeContext?.thinkLevel).toBe("high");
+  });
+
+  it("binds queued post-compaction maintenance to the resolved legacy session agent", async () => {
+    const maintain = vi.fn(async (_params?: unknown) => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: true },
+      compact: contextEngineCompactMock,
+      maintain,
+    } as never);
+
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        sessionKey: "legacy-topic-47",
+        agentId: "lossless-agent",
+      }),
+    );
+
+    expect(maintain).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(maintain)).toMatchObject({
+      sessionKey: "legacy-topic-47",
+    });
+    expect(resolveContextEngineCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "legacy-topic-47",
+        agentId: "lossless-agent",
+        purpose: "context-engine.compaction.maintenance",
+      }),
+    );
   });
 
   it("passes resolved OpenAI runtime context to context-engine compaction", async () => {

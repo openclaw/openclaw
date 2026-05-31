@@ -10,6 +10,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { resolveAgentCompactionConfig } from "../../agents/agent-scope-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -51,6 +52,7 @@ import {
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
+  resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
   type SessionEntry,
   updateSessionStore,
@@ -65,6 +67,7 @@ import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { classifySessionKeyShape } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -1525,8 +1528,15 @@ export async function runAgentTurnWithFallback(params: {
     params.opts?.onAgentRunStart?.(runId);
   };
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+  const sessionKeyShape = classifySessionKeyShape(params.sessionKey);
+  const activeAgentId =
+    sessionKeyShape === "agent"
+      ? resolveAgentIdFromSessionKey(params.sessionKey)
+      : (params.followupRun.run.agentId ??
+        resolveAgentIdFromSessionKey(params.sessionKey) ??
+        undefined);
   const shouldNotifyUserAboutCompaction =
-    runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
+    resolveAgentCompactionConfig(runtimeConfig, activeAgentId)?.notifyUser === true;
   const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
     if (!params.opts?.onBlockReply) {
       return;

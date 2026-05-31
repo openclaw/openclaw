@@ -125,6 +125,20 @@ describe("resolveCompactionTimeoutMs", () => {
     ).toBe(1_800_000);
   });
 
+  it("prefers a per-agent timeoutSeconds override when agentId is provided", () => {
+    expect(
+      resolveCompactionTimeoutMs(
+        {
+          agents: {
+            defaults: { compaction: { timeoutSeconds: 1800 } },
+            list: [{ id: "main", compaction: { timeoutSeconds: 45 } }],
+          },
+        },
+        "main",
+      ),
+    ).toBe(45_000);
+  });
+
   it("floors fractional seconds", () => {
     expect(
       resolveCompactionTimeoutMs({

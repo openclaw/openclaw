@@ -450,6 +450,7 @@ export async function runCodexAppServerAttempt(
     agentDir,
     codexHome: appServer.start.env?.CODEX_HOME,
     config: params.config,
+    sessionAgentId,
     contextEngineActive: isActiveHarnessContextEngine(params.contextEngine),
   });
   preDynamicStartupStages.mark("rotate-binding");
@@ -578,6 +579,7 @@ export async function runCodexAppServerAttempt(
     profilerEnabled,
     forceHeartbeatTool: true,
     ignoreRuntimePlan: true,
+    skipRuntimeToolNormalization: true,
     onYieldDetected: () => {
       yieldDetected = true;
     },
@@ -648,6 +650,7 @@ export async function runCodexAppServerAttempt(
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       runMaintenance: runHarnessContextEngineMaintenance,
       config: params.config,
+      agentId: sessionAgentId,
       warn: (message) => embeddedAgentLog.warn(message),
     });
     historyMessages =
@@ -714,6 +717,7 @@ export async function runCodexAppServerAttempt(
         contextTokenBudget: params.contextTokenBudget,
         reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
           config: params.config,
+          activeAgentId: sessionAgentId,
         }),
       }),
       toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
@@ -814,6 +818,7 @@ export async function runCodexAppServerAttempt(
       agentDir,
       codexHome: appServer.start.env?.CODEX_HOME,
       config: params.config,
+      sessionAgentId,
       contextEngineActive: Boolean(activeContextEngine),
       projectedTurnTokens,
     });
@@ -872,7 +877,9 @@ export async function runCodexAppServerAttempt(
   let codexExecutionCwd = effectiveCwd;
   let codexSandboxPolicy: CodexSandboxPolicy | undefined;
   let restartContextEngineCodexThread:
-    | (() => Promise<CodexAppServerThreadLifecycleBinding>)
+    | ((
+        contextEngineProjection?: CodexContextEngineThreadBootstrapProjection,
+      ) => Promise<CodexAppServerThreadLifecycleBinding>)
     | undefined;
   const startupTimeoutMs = resolveCodexStartupTimeoutMs({
     timeoutMs: params.timeoutMs,
@@ -2180,6 +2187,7 @@ export async function runCodexAppServerAttempt(
         }),
         runMaintenance: runHarnessContextEngineMaintenance,
         config: params.config,
+        agentId: sessionAgentId,
         warn: (message) => embeddedAgentLog.warn(message),
       });
     }

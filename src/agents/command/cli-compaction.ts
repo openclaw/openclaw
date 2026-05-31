@@ -52,6 +52,7 @@ type CliCompactionDeps = {
     cwd: string;
     agentDir: string;
     cfg?: OpenClawConfig;
+    agentId?: string | null;
     contextTokenBudget?: number;
   }) => SettingsManagerLike | Promise<SettingsManagerLike>;
   applyAgentAutoCompactionGuard: (params: {
@@ -81,6 +82,7 @@ type CliCompactionRuntimeContextParams = {
   sessionKey: string;
   messageChannel?: string;
   agentAccountId?: string;
+  sessionAgentId?: string;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -199,6 +201,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       messageChannel: params.messageChannel,
       messageProvider: params.messageChannel,
       agentAccountId: params.agentAccountId,
+      agentId: params.sessionAgentId,
       authProfileId: undefined,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
@@ -209,6 +212,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       provider: params.provider,
       modelId: params.model,
       thinkLevel: params.thinkLevel,
+      useCompactionThinkingLevel: true,
       extraSystemPrompt: params.extraSystemPrompt,
     }),
     currentTokenCount: params.currentTokenCount,
@@ -235,6 +239,7 @@ async function compactCliTranscript(params: {
   messageChannel?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  sessionAgentId: string;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
   bestEffortMaintenance?: boolean;
@@ -243,6 +248,7 @@ async function compactCliTranscript(params: {
     sessionKey: params.sessionKey,
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
+    sessionAgentId: params.sessionAgentId,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     agentDir: params.agentDir,
@@ -272,7 +278,7 @@ async function compactCliTranscript(params: {
         compactionTarget: "budget",
         runtimeContext,
       },
-      resolveCompactionTimeoutMs(params.cfg),
+      resolveCompactionTimeoutMs(params.cfg, params.sessionAgentId),
     );
   } catch (error) {
     log.warn(
@@ -304,6 +310,7 @@ async function compactCliTranscript(params: {
       sessionManager: params.sessionManager,
       runtimeContext,
       config: params.cfg,
+      agentId: params.sessionAgentId,
     });
   } catch (error) {
     if (!params.bestEffortMaintenance) {
@@ -333,13 +340,14 @@ async function compactNativeHarnessCliTranscript(params: {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   agentAccountId?: string;
+  sessionAgentId: string;
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<NativeHarnessCliCompactionOutcome> {
   let result: EmbeddedAgentCompactResult | undefined;
   try {
-    const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey);
+    const sessionAgentId = params.sessionAgentId || readAgentIdFromSessionKey(params.sessionKey);
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,
@@ -380,6 +388,7 @@ async function compactNativeHarnessCliTranscript(params: {
                   sessionKey: params.sessionKey,
                   messageChannel: params.messageChannel,
                   agentAccountId: params.agentAccountId,
+                  sessionAgentId,
                   workspaceDir: params.workspaceDir,
                   cwd: params.cwd,
                   agentDir: params.agentDir,
@@ -399,7 +408,7 @@ async function compactNativeHarnessCliTranscript(params: {
           ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
           ...(abortSignal ? { abortSignal } : {}),
         }),
-      resolveCompactionTimeoutMs(params.cfg),
+      resolveCompactionTimeoutMs(params.cfg, sessionAgentId),
     );
   } catch (error) {
     log.warn(
@@ -466,6 +475,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     cwd: params.cwd ?? params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
+    agentId: params.sessionAgentId,
     contextTokenBudget,
   });
 
@@ -506,7 +516,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     await cliCompactionDeps.applyAgentAutoCompactionGuard({
       settingsManager,
       contextEngineInfo: contextEngine.info,
-      compactionMode: resolveEffectiveCompactionMode(params.cfg),
+      compactionMode: resolveEffectiveCompactionMode(params.cfg, params.sessionAgentId),
     });
   };
 
@@ -531,6 +541,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       skillsSnapshot: params.skillsSnapshot,
       messageChannel: params.messageChannel,
       agentAccountId: params.agentAccountId,
+      sessionAgentId: params.sessionAgentId,
       senderIsOwner: params.senderIsOwner,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
@@ -576,12 +587,16 @@ export async function runCliTurnCompactionLifecycle(params: {
       messageChannel: params.messageChannel,
       agentAccountId: params.agentAccountId,
       senderIsOwner: params.senderIsOwner,
+      sessionAgentId: params.sessionAgentId,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
       bestEffortMaintenance: nativeFallbackToContextEngine,
     });
     compacted = contextOutcome.compacted;
     if (!compacted) {
+      if (!params.sessionStore || !params.storePath) {
+        return params.sessionEntry;
+      }
       throw new Error(
         `CLI transcript compaction failed for ${params.provider}/${params.model}: ${
           contextOutcome.failureReason ?? "compaction did not reduce context"

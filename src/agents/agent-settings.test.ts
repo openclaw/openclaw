@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
 import {
   applyAgentAutoCompactionGuard,
@@ -350,6 +351,48 @@ describe("resolveCompactionReserveTokensFloor", () => {
       }),
     ).toBe(0);
   });
+
+  it("uses per-agent reserveTokensFloor when an agent id is provided", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            reserveTokensFloor: 20_000,
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            compaction: {
+              reserveTokensFloor: 24_000,
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveCompactionReserveTokensFloor(cfg, "worker")).toBe(24_000);
+    expect(resolveCompactionReserveTokensFloor(cfg, "other")).toBe(20_000);
+  });
+
+  it("inherits default reserveTokensFloor when per-agent compaction is empty or partial", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            reserveTokensFloor: 24_000,
+          },
+        },
+        list: [
+          { id: "empty", compaction: {} },
+          { id: "partial", compaction: { keepRecentTokens: 12_000 } },
+        ],
+      },
+    };
+
+    expect(resolveCompactionReserveTokensFloor(cfg, "empty")).toBe(24_000);
+    expect(resolveCompactionReserveTokensFloor(cfg, "partial")).toBe(24_000);
+  });
 });
 describe("resolveEffectiveCompactionMode", () => {
   it("defaults to default compaction mode", () => {
@@ -383,6 +426,50 @@ describe("resolveEffectiveCompactionMode", () => {
         agents: { defaults: { compaction: { mode: "default", provider: "deepseek" } } },
       }),
     ).toBe("safeguard");
+  });
+
+  it("prefers per-agent compaction mode and provider overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "default",
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            compaction: {
+              mode: "safeguard",
+              provider: "anthropic",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveEffectiveCompactionMode(cfg, "worker")).toBe("safeguard");
+    expect(resolveEffectiveCompactionMode(cfg, "other")).toBe("default");
+  });
+
+  it("inherits default provider when per-agent compaction is empty or partial", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            provider: "deepseek",
+          },
+        },
+        list: [
+          { id: "empty", compaction: {} },
+          { id: "partial", compaction: { keepRecentTokens: 12_000 } },
+        ],
+      },
+    };
+
+    expect(resolveEffectiveCompactionMode(cfg, "empty")).toBe("safeguard");
+    expect(resolveEffectiveCompactionMode(cfg, "partial")).toBe("safeguard");
+    expect(resolveEffectiveCompactionMode(cfg, "other")).toBe("safeguard");
   });
 });
 

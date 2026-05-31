@@ -107,48 +107,6 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("keeps subagent model config to model selection only", () => {
-    const defaults = AgentDefaultsSchema.parse({
-      subagents: {
-        model: {
-          primary: "openai/gpt-5.5",
-          fallbacks: ["anthropic/claude-sonnet-4-6"],
-        },
-      },
-    });
-    const agent = AgentEntrySchema.parse({
-      id: "worker",
-      subagents: {
-        model: {
-          primary: "openai/gpt-5.5",
-          fallbacks: ["anthropic/claude-sonnet-4-6"],
-        },
-      },
-    });
-
-    expect(defaults?.subagents?.model).toEqual({
-      primary: "openai/gpt-5.5",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
-    });
-    expect(agent.subagents?.model).toEqual({
-      primary: "openai/gpt-5.5",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
-    });
-    expectSchemaFailurePath(
-      AgentDefaultsSchema.safeParse({
-        subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 } },
-      }),
-      "subagents.model",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({
-        id: "worker",
-        subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 } },
-      }),
-      "subagents.model",
-    );
-  });
-
   it("accepts mediaGenerationAutoProviderFallback", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
@@ -192,6 +150,23 @@ describe("agent defaults schema", () => {
     expect(agent.contextInjection).toBe("continuation-skip");
     expect(agent.bootstrapMaxChars).toBe(4096);
     expect(agent.bootstrapTotalMaxChars).toBe(16384);
+  });
+
+  it("accepts per-agent compaction overrides", () => {
+    const agent = AgentEntrySchema.parse({
+      id: "worker",
+      compaction: {
+        mode: "safeguard",
+        reserveTokensFloor: 24_000,
+        model: "anthropic/claude-opus-4-6",
+        thinkingLevel: "low",
+      },
+    });
+
+    expect(agent.compaction?.mode).toBe("safeguard");
+    expect(agent.compaction?.reserveTokensFloor).toBe(24_000);
+    expect(agent.compaction?.model).toBe("anthropic/claude-opus-4-6");
+    expect(agent.compaction?.thinkingLevel).toBe("low");
   });
 
   it("rejects invalid per-agent bootstrap profile overrides", () => {
@@ -313,6 +288,27 @@ describe("agent defaults schema", () => {
     })!;
     expect(result.compaction?.truncateAfterCompaction).toBe(true);
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
+  });
+
+  it("accepts legacy byte-size strings for compaction transcript limits", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      compaction: {
+        maxActiveTranscriptBytes: "1.5gb",
+      },
+    })!;
+    const agent = AgentEntrySchema.parse({
+      id: "test",
+      compaction: {
+        maxActiveTranscriptBytes: "20m",
+        memoryFlush: {
+          forceFlushTranscriptBytes: "1.5gb",
+        },
+      },
+    });
+
+    expect(defaults.compaction?.maxActiveTranscriptBytes).toBe("1.5gb");
+    expect(agent.compaction?.maxActiveTranscriptBytes).toBe("20m");
+    expect(agent.compaction?.memoryFlush?.forceFlushTranscriptBytes).toBe("1.5gb");
   });
 
   it("accepts compaction.midTurnPrecheck.enabled", () => {

@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
@@ -93,27 +94,42 @@ function appendCurrentTimeLine(text: string, timeLine: string): string {
   return `${trimmed}\n${timeLine}`;
 }
 
+function resolveCompactionConfig(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["compaction"] | undefined {
+  if (!cfg) {
+    return undefined;
+  }
+  if (agentId) {
+    return resolveAgentConfig(cfg, agentId)?.compaction ?? cfg.agents?.defaults?.compaction;
+  }
+  return cfg.agents?.defaults?.compaction;
+}
+
 export function buildMemoryFlushPlan(
   params: {
     cfg?: OpenClawConfig;
+    agentId?: string;
     nowMs?: number;
   } = {},
 ): MemoryFlushPlan | null {
   const resolved = params;
   const nowMs = resolveMemoryCoreNowMs(resolved.nowMs);
   const cfg = resolved.cfg;
-  const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
-  if (defaults?.enabled === false) {
+  const compaction = resolveCompactionConfig(cfg, resolved.agentId);
+  const memoryFlush = compaction?.memoryFlush;
+  if (memoryFlush?.enabled === false) {
     return null;
   }
 
   const softThresholdTokens =
-    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+    normalizeNonNegativeInt(memoryFlush?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const forceFlushTranscriptBytes =
-    parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
+    parseNonNegativeByteSize(memoryFlush?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
   const reserveTokensFloor =
-    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
+    normalizeNonNegativeInt(compaction?.reserveTokensFloor) ??
     DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
@@ -121,11 +137,11 @@ export function buildMemoryFlushPlan(
   const relativePath = `memory/${dateStamp}.md`;
 
   const promptBase = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
+    ensureMemoryFlushSafetyHints(memoryFlush?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
   );
   const systemPrompt = ensureNoReplyHint(
     ensureMemoryFlushSafetyHints(
-      defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
+      memoryFlush?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
     ),
   );
 
@@ -133,7 +149,7 @@ export function buildMemoryFlushPlan(
     softThresholdTokens,
     forceFlushTranscriptBytes,
     reserveTokensFloor,
-    model: defaults?.model?.trim() || undefined,
+    model: memoryFlush?.model?.trim() || undefined,
     prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
     systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,

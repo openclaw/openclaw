@@ -180,6 +180,114 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("inherits default compaction when per-agent compaction is absent", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "default",
+            reserveTokensFloor: 20_000,
+            model: "gpt-5.4",
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.compaction).toEqual({
+      mode: "default",
+      reserveTokensFloor: 20_000,
+      model: "gpt-5.4",
+    });
+  });
+
+  it("merges default compaction with per-agent compaction", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "default",
+            reserveTokensFloor: 20_000,
+            model: "gpt-5.4",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            compaction: {
+              reserveTokensFloor: 24_000,
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.compaction).toEqual({
+      mode: "default",
+      reserveTokensFloor: 24_000,
+      model: "gpt-5.4",
+    });
+  });
+
+  it("inherits compaction from an empty per-agent compaction block", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            model: "gpt-5.4",
+            provider: "test-provider",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            compaction: {},
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.compaction).toEqual({
+      model: "gpt-5.4",
+      provider: "test-provider",
+    });
+  });
+
+  it("deep-merges nested per-agent compaction blocks", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            qualityGuard: { enabled: true, maxRetries: 1 },
+            memoryFlush: {
+              enabled: true,
+              model: "ollama/qwen3:8b",
+              prompt: "Write durable notes.",
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            compaction: {
+              qualityGuard: { maxRetries: 3 },
+              memoryFlush: { model: "openai/gpt-5.4-mini" },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.compaction).toEqual({
+      qualityGuard: { enabled: true, maxRetries: 3 },
+      memoryFlush: {
+        enabled: true,
+        model: "openai/gpt-5.4-mini",
+        prompt: "Write durable notes.",
+      },
+    });
+  });
+
   it("resolves explicit and effective model primary separately", () => {
     const cfgWithStringDefault = {
       agents: {
