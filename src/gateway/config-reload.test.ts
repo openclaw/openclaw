@@ -423,6 +423,18 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.auth.mode");
   });
 
+  it("skips restart for auth.cooldowns changes", () => {
+    const plan = buildGatewayReloadPlan(["auth.cooldowns"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("auth.cooldowns");
+  });
+
+  it("skips restart for auth.cooldowns sub-path changes", () => {
+    const plan = buildGatewayReloadPlan(["auth.cooldowns.billingBackoffHours"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("auth.cooldowns.billingBackoffHours");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
