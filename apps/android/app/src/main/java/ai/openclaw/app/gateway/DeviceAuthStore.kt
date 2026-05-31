@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/** Stored gateway device-token material scoped by device id and role. */
 data class DeviceAuthEntry(
   val token: String,
   val role: String,
@@ -18,6 +19,7 @@ private data class PersistedDeviceAuthMetadata(
   val updatedAtMs: Long = 0L,
 )
 
+/** Persistence interface used by gateway pairing/session code for role tokens. */
 interface DeviceAuthTokenStore {
   fun loadEntry(
     deviceId: String,
@@ -103,6 +105,8 @@ class DeviceAuthStore(
   ): String {
     val normalizedDevice = normalizeDeviceId(deviceId)
     val normalizedRole = normalizeRole(role)
+    // Keep key normalization shared with metadata keys so token and metadata
+    // are added/removed as one logical auth entry.
     return "gateway.deviceToken.$normalizedDevice.$normalizedRole"
   }
 
@@ -123,6 +127,8 @@ class DeviceAuthStore(
     scopes
       .map { it.trim() }
       .filter { it.isNotEmpty() }
+      // Persist deterministic scope lists because they are displayed and may be
+      // compared across process restarts.
       .distinct()
       .sorted()
 }
