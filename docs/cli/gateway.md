@@ -127,14 +127,17 @@ openclaw gateway restart --force
 
 The Gateway installs handlers for the signals that are part of the OpenClaw lifecycle contract. Use `openclaw gateway restart` for managed-service restarts; it routes to the Gateway restart path and avoids relying on platform-specific hangup behavior.
 
-| Signal    | Foreground Gateway                                                                                                                                    | Supervised Gateway (`launchd`, `systemd`, `schtasks`)                 |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `SIGTERM` | Graceful shutdown.                                                                                                                                    | Graceful shutdown.                                                    |
-| `SIGINT`  | Graceful shutdown.                                                                                                                                    | Graceful shutdown.                                                    |
-| `SIGUSR1` | Authorized in-process restart.                                                                                                                        | Authorized in-process restart.                                        |
-| `SIGHUP`  | No OpenClaw handler; Node.js default behavior applies. On non-Windows platforms this terminates the process, normally as exit `129` (`128 + SIGHUP`). | Ignored so terminal hangups do not stop a supervisor-managed Gateway. |
+| Signal    | Foreground Gateway             | Supervised Gateway (`launchd`, `systemd`, `schtasks`) |
+| --------- | ------------------------------ | ----------------------------------------------------- |
+| `SIGTERM` | Graceful shutdown.             | Graceful shutdown.                                    |
+| `SIGINT`  | Graceful shutdown.             | Graceful shutdown.                                    |
+| `SIGUSR1` | Authorized in-process restart. | Authorized in-process restart.                        |
+| `SIGHUP`  | Logged and ignored.            | Logged and ignored.                                   |
 
 `SIGUSR1` restart requires restart commands to be authorized. `commands.restart` is enabled by default; set `commands.restart: false` to block manual restart while gateway tool, config apply, and update restart paths remain allowed.
+
+On non-Windows platforms, the `SIGHUP` handler removes Node.js default hangup termination, so terminal hangup does not stop the Gateway.
+On Windows, Node.js may still be terminated after a console close even when a `SIGHUP` listener runs.
 
 <Warning>
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.

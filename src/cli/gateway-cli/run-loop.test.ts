@@ -394,9 +394,8 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("ignores SIGHUP when running under a supervisor", async () => {
+  it("ignores SIGHUP unconditionally", async () => {
     vi.clearAllMocks();
-    detectRespawnSupervisor.mockReturnValue("launchd");
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { runtime, exited } = await createSignaledLoopHarness();
@@ -406,6 +405,10 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(runtime.exit).not.toHaveBeenCalled();
+      expect(gatewayLog.info).toHaveBeenCalledWith(
+        "signal SIGHUP received; ignoring terminal hangup",
+      );
+      expect(detectRespawnSupervisor).not.toHaveBeenCalled();
 
       const sigterm = captureSignal("SIGTERM");
       sigterm();
@@ -415,20 +418,18 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("does not install SIGHUP handler in foreground (no supervisor)", async () => {
+  it("handles SIGHUP without supervisor detection", async () => {
     vi.clearAllMocks();
-    detectRespawnSupervisor.mockReturnValue(null);
-
-    const existingHupListeners = new Set(
-      process.listeners("SIGHUP") as Array<(...args: unknown[]) => void>,
-    );
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { runtime, exited } = await createSignaledLoopHarness();
+      const sighup = captureSignal("SIGHUP");
 
-      // SIGHUP listener should NOT be registered when no supervisor is detected
-      const sighupListener = addedSignalListener("SIGHUP", existingHupListeners);
-      expect(sighupListener).toBeNull();
+      sighup();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(detectRespawnSupervisor).not.toHaveBeenCalled();
 
       const sigterm = captureSignal("SIGTERM");
       sigterm();

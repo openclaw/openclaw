@@ -717,11 +717,8 @@ export async function runGatewayLoop(params: {
     gatewayLog.info("signal SIGINT received");
     request("stop", "SIGINT");
   };
-  const supervisor = eagerLifecycleRuntime.detectRespawnSupervisor();
   const onSighup = () => {
-    gatewayLog.info(
-      `signal SIGHUP received; ignoring (${supervisor} supervised daemon survives terminal hangup)`,
-    );
+    gatewayLog.info("signal SIGHUP received; ignoring terminal hangup");
   };
   const onSigusr1 = () => {
     gatewayLog.info("signal SIGUSR1 received");
@@ -794,9 +791,7 @@ export async function runGatewayLoop(params: {
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);
   process.on("SIGUSR1", onSigusr1);
-  if (supervisor) {
-    process.on("SIGHUP", onSighup);
-  }
+  process.on("SIGHUP", onSighup);
 
   try {
     const onIteration = createRestartIterationHook(async () => {
