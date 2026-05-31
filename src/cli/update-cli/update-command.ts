@@ -71,7 +71,6 @@ import {
   fetchNpmPackageTargetStatus,
   resolveNpmChannelTag,
   checkUpdateStatus,
-  type PackageManager,
 } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
@@ -88,6 +87,7 @@ import {
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolvePnpmGlobalDirFromGlobalRoot,
+  type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
@@ -1048,10 +1048,10 @@ function readNpmRegistryEnv(env: NodeJS.ProcessEnv): string | null {
 }
 
 function resolvePackageManagerRegistryConfigArgs(params: {
-  manager?: PackageManager | null;
+  manager?: GlobalInstallManager | null;
   prefix?: string | null;
 }): string[] | null {
-  const manager = params.manager && params.manager !== "unknown" ? params.manager : "npm";
+  const manager = params.manager ?? "npm";
   if (manager === "pnpm") {
     return ["pnpm", "config", "get", "registry"];
   }
@@ -1093,7 +1093,7 @@ async function resolveEffectiveNpmRegistry(params: {
   root?: string | null;
   invocationCwd?: string;
   timeoutMs?: number;
-  manager?: PackageManager | null;
+  manager?: GlobalInstallManager | null;
 }): Promise<string | null> {
   const registryEnv = readNpmRegistryEnv(params.env);
   if (registryEnv) {
@@ -1126,7 +1126,7 @@ async function hasCustomNpmRegistryOverride(params: {
   root?: string | null;
   invocationCwd?: string;
   timeoutMs?: number;
-  manager?: PackageManager | null;
+  manager?: GlobalInstallManager | null;
 }): Promise<boolean> {
   const env = params.env ?? process.env;
   const registry = await resolveEffectiveNpmRegistry({
@@ -1222,7 +1222,7 @@ async function resolvePackageTargetAvailabilityPreflightError(params: {
   env?: NodeJS.ProcessEnv;
   root?: string | null;
   invocationCwd?: string;
-  manager?: PackageManager | null;
+  manager?: GlobalInstallManager | null;
 }): Promise<string | null> {
   const target = resolvePackageRegistryTargetFromInstallSpec(params.installSpec);
   if (!target) {
@@ -3412,6 +3412,22 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     }
   }
 
+  let packageUpdateManager: GlobalInstallManager | null = null;
+  const resolvePackageUpdateManager = async (): Promise<GlobalInstallManager | null> => {
+    if (updateInstallKind !== "package") {
+      return null;
+    }
+    if (packageUpdateManager) {
+      return packageUpdateManager;
+    }
+    packageUpdateManager = await resolveGlobalManager({
+      root,
+      installKind,
+      timeoutMs: updateStepTimeoutMs,
+    });
+    return packageUpdateManager;
+  };
+
   if (updateInstallKind !== "git") {
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
     if (explicitTag) {
@@ -3442,13 +3458,18 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       tag,
       env: process.env,
     });
+    const availabilityInstallSpec = hasPackageInstallSpecOverride(process.env)
+      ? null
+      : packageInstallSpec;
     const targetAvailabilityError = await resolvePackageTargetAvailabilityPreflightError({
-      installSpec: hasPackageInstallSpecOverride(process.env) ? null : packageInstallSpec,
+      installSpec: availabilityInstallSpec,
       timeoutMs,
       env: process.env,
       root,
       invocationCwd,
-      manager: updateStatus.packageManager,
+      manager: resolvePackageRegistryTargetFromInstallSpec(availabilityInstallSpec)
+        ? await resolvePackageUpdateManager()
+        : null,
     });
     if (targetAvailabilityError) {
       defaultRuntime.error(targetAvailabilityError);
@@ -3462,11 +3483,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     if (updateInstallKind === "git") {
       mode = "git";
     } else if (updateInstallKind === "package") {
-      mode = await resolveGlobalManager({
-        root,
-        installKind,
-        timeoutMs: updateStepTimeoutMs,
-      });
+      mode = (await resolvePackageUpdateManager()) ?? "unknown";
     }
 
     const actions: string[] = [];

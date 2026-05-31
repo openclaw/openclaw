@@ -2102,6 +2102,7 @@ describe("update-cli", () => {
   it("uses pnpm registry config before deciding availability preflight", async () => {
     const root = createCaseDir("openclaw-update-pnpm");
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    resolveGlobalManager.mockResolvedValue("pnpm");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root,
       installKind: "package",
@@ -2126,6 +2127,51 @@ describe("update-cli", () => {
       expect(options.cwd).toBe(process.cwd());
       return {
         stdout: "https://pnpm.internal.example/\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
+    expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
+    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+  });
+
+  it("uses the resolved global manager instead of package metadata for registry config", async () => {
+    const root = createCaseDir("openclaw-update-npm-with-pnpm-metadata");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    resolveGlobalManager.mockResolvedValue("npm");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "package",
+      packageManager: "pnpm",
+      deps: {
+        manager: "pnpm",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
+      expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
+      expect(options.cwd).toBe(process.cwd());
+      return {
+        stdout: "https://npm.internal.example/\n",
         stderr: "",
         code: 0,
         signal: null,
