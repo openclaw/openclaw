@@ -3,7 +3,7 @@ import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-u
 import { fetchDeepSeekUsage } from "./provider-usage.fetch.deepseek.js";
 
 describe("fetchDeepSeekUsage", () => {
-  it("parses CNY balance snapshots", async () => {
+  it("aggregates mixed-currency balance snapshots", async () => {
     const mockFetch = createProviderUsageFetch(async (url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
       expect(url).toBe("https://api.deepseek.com/user/balance");
@@ -34,7 +34,7 @@ describe("fetchDeepSeekUsage", () => {
       provider: "deepseek",
       displayName: "DeepSeek",
       windows: [],
-      summary: "Balance ¥42.50 · Granted ¥12.00 · Topped up ¥30.50",
+      summary: "Balance $1.25 · Balance ¥42.50 · Granted ¥12.00 · Topped up ¥30.50",
     });
   });
 

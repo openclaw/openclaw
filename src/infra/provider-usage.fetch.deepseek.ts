@@ -85,9 +85,10 @@ export async function fetchDeepSeekUsage(
 
   const data = parsed.data as DeepSeekBalanceResponse;
   const balances = Array.isArray(data.balance_infos) ? data.balance_infos : [];
-  const preferred =
-    balances.find((info) => info.currency?.trim().toUpperCase() === "CNY") ?? balances[0];
-  const summary = preferred ? buildBalanceSummary(preferred) : undefined;
+  const summary = balances
+    .map((info) => buildBalanceSummary(info))
+    .filter((entry): entry is string => Boolean(entry))
+    .join(" · ");
   if (!summary) {
     return {
       provider: "deepseek",
