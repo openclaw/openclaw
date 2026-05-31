@@ -6,6 +6,7 @@ import {
   type BundleMcpDiagnostic,
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
@@ -46,22 +47,37 @@ export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): Bundl
 export function loadMergedBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   mapConfiguredServer?: BundleMcpServerMapper;
 }): MergedBundleMcpConfig {
   const bundleMcp = loadEnabledBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const disabledConfiguredNames = new Set(
+    Object.entries(configuredMcp)
+      .filter(([, server]) => server.enabled === false)
+      .map(([name]) => name),
+  );
+  const enabledConfiguredMcp = Object.fromEntries(
+    Object.entries(configuredMcp).filter(([, server]) => server.enabled !== false),
+  );
+  const enabledBundleMcp = Object.fromEntries(
+    Object.entries(bundleMcp.config.mcpServers).filter(
+      ([name]) => !disabledConfiguredNames.has(name),
+    ),
+  );
   const mapConfiguredServer = params.mapConfiguredServer ?? ((server) => server);
 
   return {
     config: {
       // OpenClaw config is the owner-managed layer, so it overrides bundle defaults.
       mcpServers: {
-        ...bundleMcp.config.mcpServers,
+        ...enabledBundleMcp,
         ...Object.fromEntries(
-          Object.entries(configuredMcp).map(([name, server]) => [
+          Object.entries(enabledConfiguredMcp).map(([name, server]) => [
             name,
             mapConfiguredServer(server as BundleMcpServerConfig, name),
           ]),

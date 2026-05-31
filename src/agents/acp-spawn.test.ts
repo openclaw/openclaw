@@ -910,7 +910,7 @@ describe("spawnAcpDirect", () => {
       {
         task: "Investigate flaky tests",
         agentId: "codex",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
       {
@@ -922,7 +922,7 @@ describe("spawnAcpDirect", () => {
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
     });
@@ -993,6 +993,45 @@ describe("spawnAcpDirect", () => {
     );
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
     expectGatewayMethodNotCalled("agent");
+  });
+
+  it("forwards prepared image attachments through the gateway agent call", async () => {
+    const imageBase64 = Buffer.from("png-bytes").toString("base64");
+    const result = await spawnAcpDirect(
+      {
+        task: "describe the image",
+        agentId: "codex",
+        attachments: [{ mediaType: "image/png", data: imageBase64 }],
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.attachments).toEqual([
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: imageBase64 },
+      },
+    ]);
+  });
+
+  it("omits attachments from gateway call when none are provided", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params).not.toHaveProperty("attachments");
   });
 
   it("maps OpenClaw ACP runtime agent aliases to their configured harness id", async () => {

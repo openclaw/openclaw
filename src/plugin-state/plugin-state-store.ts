@@ -1,6 +1,7 @@
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  clearPluginStateSqliteStoreForTests,
-  closePluginStateSqliteStore,
+  clearPluginStateDatabaseForTests,
+  closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
   pluginStateConsume,
@@ -31,10 +32,11 @@ export type {
 } from "./plugin-state-store.types.js";
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
+  closePluginStateDatabase,
   closePluginStateSqliteStore,
   countPluginStateLiveEntries,
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   isPluginStateDatabaseOpen,
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   probePluginStateStore,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
@@ -111,7 +113,7 @@ function validateOptionalTtlMs(
   if (value == null) {
     return undefined;
   }
-  if (!Number.isInteger(value) || value < 1) {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw invalidInput("plugin state ttlMs must be a positive integer", operation);
   }
   return value;
@@ -424,13 +426,14 @@ export function createCorePluginStateSyncKeyedStore<T>(
 }
 
 export function clearPluginStateStoreForTests(): void {
-  clearPluginStateSqliteStoreForTests();
+  clearPluginStateDatabaseForTests();
   namespaceOptionSignatures.clear();
 }
 
 export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
   if (options.closeDatabase !== false) {
-    closePluginStateSqliteStore();
+    closePluginStateDatabase();
+    closeOpenClawStateDatabaseForTest();
   }
   namespaceOptionSignatures.clear();
 }

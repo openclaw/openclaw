@@ -3,6 +3,9 @@ import {
   abortChatRunById,
   abortChatRunsForProvider,
   isChatStopCommandText,
+  registerChatAbortController,
+  resolveAgentRunExpiresAtMs,
+  resolveChatRunExpiresAtMs,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
   updateChatRunProvider,
@@ -11,6 +14,7 @@ import {
 type ChatAbortPayload = {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   seq: number;
   state: "aborted";
   stopReason?: string;
@@ -132,6 +136,48 @@ describe("isChatStopCommandText", () => {
   });
 });
 
+describe("registerChatAbortController", () => {
+  it("expires registrations immediately when the process clock is invalid", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-invalid-clock",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      now: Number.NaN,
+    });
+
+    expect(registration.registered).toBe(true);
+    expect(registration.entry).toMatchObject({
+      startedAtMs: 0,
+      expiresAtMs: 0,
+    });
+    expect(chatAbortControllers.get("run-invalid-clock")?.expiresAtMs).toBe(0);
+  });
+
+  it("expires registrations immediately when explicit expiry is invalid", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-invalid-expiry",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+      now: 1_800_000_000_000,
+      expiresAtMs: Number.POSITIVE_INFINITY,
+    });
+
+    expect(registration.entry?.expiresAtMs).toBe(0);
+  });
+
+  it("bounds default and agent run expiry calculations to valid Date timestamps", () => {
+    expect(resolveChatRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
+    expect(resolveChatRunExpiresAtMs({ now: 8_640_000_000_000_000, timeoutMs: 60_000 })).toBe(0);
+    expect(resolveAgentRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
+  });
+});
+
 describe("abortChatRunById", () => {
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
@@ -188,6 +234,39 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: true });
     const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
+  });
+
+  it("fans out default-agent global aborts to scoped and legacy global subscribers", () => {
+    const runId = "run-main-global";
+    const entry = {
+      ...createActiveEntry("global"),
+      agentId: "main",
+    };
+    const ops = createOps({ runId, entry });
+    ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
+
+    const result = abortChatRunById(ops, { runId, sessionKey: "global" });
+
+    expect(result).toEqual({ aborted: true });
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+    expect(payload.agentId).toBe("main");
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
+  });
+
+  it("resolves unscoped global aborts to the default agent subscribers", () => {
+    const runId = "run-unscoped-global";
+    const entry = createActiveEntry("global");
+    const ops = createOps({ runId, entry });
+    ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
+
+    const result = abortChatRunById(ops, { runId, sessionKey: "global" });
+
+    expect(result).toEqual({ aborted: true });
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+    expect(payload.agentId).toBe("main");
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
   });
 
   it("tags maintenance timeouts as timeout abort reasons", () => {

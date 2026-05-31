@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
@@ -26,7 +27,9 @@ vi.mock("../model-selection.js", () => ({
 vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
-    provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
+    ["codex-cli", "openai"].includes(provider.trim().toLowerCase())
+      ? "openai"
+      : provider.trim().toLowerCase(),
 }));
 
 vi.mock("../model-runtime-aliases.js", async () => {
@@ -179,6 +182,7 @@ describe("CLI attempt execution", () => {
     sessionStore: Record<string, SessionEntry>;
     body: string;
     runId: string;
+    cwd?: string;
   }) {
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -191,6 +195,7 @@ describe("CLI attempt execution", () => {
       sessionAgentId: "main",
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
+      cwd: params.cwd,
       body: params.body,
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
@@ -213,7 +218,10 @@ describe("CLI attempt execution", () => {
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
     const homeDir = path.join(tmpDir, `home-${cliSessionId}`);
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -247,7 +255,10 @@ describe("CLI attempt execution", () => {
   it("clears stale Claude CLI session IDs before retrying after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
     const homeDir = path.join(tmpDir, "home");
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -437,7 +448,10 @@ describe("CLI attempt execution", () => {
     const sessionKey = "agent:main:direct:claude-transcript-present";
     const cliSessionId = "existing-claude-session";
     const homeDir = path.join(tmpDir, "home");
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -485,12 +499,54 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
   });
 
+  it("checks Claude CLI transcript content under the process cwd", async () => {
+    const sessionKey = "agent:main:direct:claude-transcript-cwd-present";
+    const cliSessionId = "existing-claude-cwd-session";
+    const homeDir = path.join(tmpDir, "home");
+    const cwd = path.join(tmpDir, "task");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: cwd,
+      homeDir,
+    });
+    process.env.HOME = homeDir;
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, `${cliSessionId}.jsonl`),
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "previous reply" }],
+        },
+      })}\n`,
+      "utf-8",
+    );
+    const sessionEntry = makeClaudeCliSessionEntry("openclaw-session-cwd", cliSessionId);
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("resumed cli response"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "continue from task cwd",
+      runId: "run-cli-transcript-cwd-present",
+      cwd,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(firstRunCliAgentArg().cwd).toBe(cwd);
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
+  });
+
   it("passes session-bound OpenAI Codex auth profile to codex-cli aliases", async () => {
     const sessionKey = "agent:main:direct:codex-cli-auth-alias";
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-codex",
       updatedAt: Date.now(),
-      authProfileOverride: "openai-codex:work",
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -521,14 +577,14 @@ describe("CLI attempt execution", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai-codex",
+      authProfileProvider: "openai",
       sessionStore,
       storePath,
       sessionHasHistory: false,
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(firstRunCliAgentArg().authProfileId).toBe("openai-codex:work");
+    expect(firstRunCliAgentArg().authProfileId).toBe("openai:work");
   });
 
   it("persists CLI replies into the session transcript", async () => {
@@ -1163,9 +1219,9 @@ describe("CLI attempt execution", () => {
 
   it("forwards user-pinned OpenAI API-key backup profiles to Codex harness runs", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
-    const sessionKey = "agent:main:direct:openai-codex-api-key";
+    const sessionKey = "agent:main:direct:openai-chatgpt-api-key";
     const sessionEntry: SessionEntry = {
-      sessionId: "openclaw-session-openai-codex-api-key",
+      sessionId: "openclaw-session-openai-chatgpt-api-key",
       updatedAt: Date.now(),
       authProfileOverride: "openai:backup",
       authProfileOverrideSource: "user",
@@ -1217,7 +1273,7 @@ describe("CLI attempt execution", () => {
         isFallbackRetry: false,
         resolvedThinkLevel: "medium",
         timeoutMs: 1_000,
-        runId: "run-openai-codex-api-key-backup",
+        runId: "run-openai-chatgpt-api-key-backup",
         opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
         runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
         spawnedBy: undefined,
@@ -1619,9 +1675,9 @@ describe("embedded attempt harness pinning", () => {
       JSON.stringify({
         version: 1,
         profiles: {
-          "openai-codex:work": {
+          "openai:work": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
@@ -1674,7 +1730,7 @@ describe("embedded attempt harness pinning", () => {
 
     expectMockArgFields(runEmbeddedAgentMock, {
       agentHarnessId: undefined,
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       authProfileIdSource: "auto",
     });
   });
@@ -1763,11 +1819,11 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("routes explicit OpenAI native runs with Codex OAuth through OpenClaw and the legacy Codex auth transport", async () => {
+  it("routes explicit OpenAI native runs with legacy Codex OAuth through OpenClaw", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-agent-codex-oauth-session",
       updatedAt: Date.now(),
-      authProfileOverride: "openai-codex:work",
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
     };
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -1808,16 +1864,16 @@ describe("embedded attempt harness pinning", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai-codex",
+      authProfileProvider: "openai",
       sessionHasHistory: false,
     });
 
     expectMockArgFields(runEmbeddedAgentMock, {
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       agentHarnessId: "openclaw",
       agentHarnessRuntimeOverride: "openclaw",
-      authProfileId: "openai-codex:work",
+      authProfileId: "openai:work",
       authProfileIdSource: "user",
     });
   });

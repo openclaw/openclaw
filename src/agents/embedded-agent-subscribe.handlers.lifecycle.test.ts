@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createInlineCodeState } from "../markdown/code-spans.js";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { handleAgentEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
@@ -220,7 +220,7 @@ describe("handleAgentEnd", () => {
     const ctx = createContext({
       role: "assistant",
       stopReason: "error",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       errorMessage:
         '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
@@ -256,7 +256,7 @@ describe("handleAgentEnd", () => {
       const ctx = createContext({
         role: "assistant",
         stopReason: "error",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.4",
         errorMessage,
         content: [{ type: "text", text: "" }],

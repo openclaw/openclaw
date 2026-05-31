@@ -14,6 +14,7 @@ import {
   getTelegramTextParts,
   normalizeForwardedContext,
 } from "./bot/helpers.js";
+import { parseTelegramMessageThreadId } from "./outbound-params.js";
 import { getOptionalTelegramRuntime } from "./runtime.js";
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
@@ -163,6 +164,7 @@ function normalizeMessageNode(
   const forwardedFrom = normalizeForwardedContext(msg);
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg);
+  const threadId = normalizeTelegramCacheThreadId(params.threadId);
   return {
     sourceMessage: msg,
     messageId: String(msg.message_id),
@@ -178,7 +180,7 @@ function normalizeMessageNode(
     ...(forwardedFrom?.fromId ? { forwardedFromId: forwardedFrom.fromId } : {}),
     ...(forwardedFrom?.fromUsername ? { forwardedFromUsername: forwardedFrom.fromUsername } : {}),
     ...(forwardedFrom?.date ? { forwardedDate: forwardedFrom.date * 1000 } : {}),
-    ...(params.threadId != null ? { threadId: String(params.threadId) } : {}),
+    ...(threadId !== undefined ? { threadId: String(threadId) } : {}),
   };
 }
 
@@ -195,9 +197,7 @@ function normalizeRequiredMessageNode(
 
 function resolveMessageThreadId(msg: Message): number | undefined {
   const threadId = (msg as { message_thread_id?: unknown }).message_thread_id;
-  return typeof threadId === "number" && Number.isFinite(threadId)
-    ? Math.trunc(threadId)
-    : undefined;
+  return normalizeTelegramCacheThreadId(threadId);
 }
 
 function normalizeMessageNodes(
@@ -206,10 +206,7 @@ function normalizeMessageNodes(
 ): TelegramCachedMessageObservation[] {
   const observations: TelegramCachedMessageObservation[] = [];
   const visited = new Set<string>();
-  const nodeThreadId = (node: TelegramCachedMessageNode) => {
-    const threadId = Number(node.threadId);
-    return Number.isFinite(threadId) ? threadId : undefined;
-  };
+  const nodeThreadId = (node: TelegramCachedMessageNode) => parseCachedThreadId(node.threadId);
   const visit = (
     message: Message,
     inheritedThreadId: number | undefined,
@@ -245,6 +242,14 @@ function parseSafeMessageId(value: string | undefined): number | undefined {
   return value === undefined ? undefined : parseStrictPositiveInteger(value);
 }
 
+function parseCachedThreadId(value: unknown): number | undefined {
+  return normalizeTelegramCacheThreadId(value);
+}
+
+function normalizeTelegramCacheThreadId(value: unknown): number | undefined {
+  return parseTelegramMessageThreadId(value);
+}
+
 function isTelegramSourceMessage(value: unknown): value is Message {
   return (
     isRecord(value) &&
@@ -272,12 +277,10 @@ function parsePersistedEntry(value: unknown): Array<{
     return [];
   }
   const keyPrefix = value.key.slice(0, separatorIndex + 1);
-  const threadId = Number(readOptionalString(value.node, "threadId"));
+  const threadId = parseCachedThreadId(readOptionalString(value.node, "threadId"));
   const sourceMessageId = String(value.node.sourceMessage.message_id);
-  return normalizeMessageNodes(
-    value.node.sourceMessage,
-    Number.isFinite(threadId) ? { threadId } : {},
-  ).map(({ node, mode }) => ({
+  const threadParams = threadId !== undefined ? { threadId } : {};
+  return normalizeMessageNodes(value.node.sourceMessage, threadParams).map(({ node, mode }) => ({
     key: `${keyPrefix}${node.messageId}`,
     node,
     mode: node.messageId === sourceMessageId ? "authoritative" : mode,
@@ -425,12 +428,12 @@ function mergeCachedMessageNode(
   incoming: TelegramCachedMessageNode,
   mode: TelegramMessageObservationMode,
 ): TelegramCachedMessageNode {
-  const threadId = Number(incoming.threadId ?? existing.threadId);
+  const threadId = parseCachedThreadId(incoming.threadId ?? existing.threadId);
   const sourceMessage =
     mode === "authoritative"
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
       : mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage);
-  return normalizeRequiredMessageNode(sourceMessage, Number.isFinite(threadId) ? { threadId } : {});
+  return normalizeRequiredMessageNode(sourceMessage, threadId !== undefined ? { threadId } : {});
 }
 
 function upsertCachedMessageNode(params: {
@@ -752,7 +755,11 @@ export function createTelegramMessageCache(params?: {
   }) => {
     await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
     const prefix = telegramMessageCacheKeyPrefix({ scopeKey, ...params });
-    const threadId = params.threadId != null ? String(params.threadId) : undefined;
+    const normalizedThreadId = normalizeTelegramCacheThreadId(params.threadId);
+    if (params.threadId != null && normalizedThreadId === undefined) {
+      return [];
+    }
+    const threadId = normalizedThreadId !== undefined ? String(normalizedThreadId) : undefined;
     return Array.from(messages, ([key, node]) => ({ key, node }))
       .filter(({ key, node }) => {
         if (!key.startsWith(prefix)) {

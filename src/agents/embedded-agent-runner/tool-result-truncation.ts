@@ -1,8 +1,8 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -668,6 +668,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   const { sessionManager, contextWindowTokens } = params;
   const maxChars = Math.max(
@@ -706,6 +707,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     emitSessionTranscriptUpdate({
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     });
   }
 
@@ -731,6 +733,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   aggregateMaxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { state, contextWindowTokens } = params;
@@ -775,6 +778,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
     emitSessionTranscriptUpdate({
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     });
   }
 
@@ -800,6 +804,7 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   try {
     return truncateOversizedToolResultsInExistingSessionManager(params);
@@ -817,6 +822,7 @@ export async function truncateOversizedToolResultsInSession(params: {
   aggregateMaxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;

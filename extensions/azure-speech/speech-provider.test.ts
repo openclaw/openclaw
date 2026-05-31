@@ -17,29 +17,23 @@ vi.mock("./tts.js", async (importOriginal) => {
 import { buildAzureSpeechProvider } from "./speech-provider.js";
 
 describe("buildAzureSpeechProvider", () => {
-  const originalEnv = {
-    AZURE_SPEECH_KEY: process.env.AZURE_SPEECH_KEY,
-    AZURE_SPEECH_API_KEY: process.env.AZURE_SPEECH_API_KEY,
-    AZURE_SPEECH_REGION: process.env.AZURE_SPEECH_REGION,
-    AZURE_SPEECH_ENDPOINT: process.env.AZURE_SPEECH_ENDPOINT,
-    SPEECH_KEY: process.env.SPEECH_KEY,
-    SPEECH_REGION: process.env.SPEECH_REGION,
-  };
+  const envKeys = [
+    "AZURE_SPEECH_KEY",
+    "AZURE_SPEECH_API_KEY",
+    "AZURE_SPEECH_REGION",
+    "AZURE_SPEECH_ENDPOINT",
+    "SPEECH_KEY",
+    "SPEECH_REGION",
+  ] as const;
 
   beforeEach(() => {
-    for (const key of Object.keys(originalEnv)) {
-      delete process.env[key];
+    for (const key of envKeys) {
+      vi.stubEnv(key, undefined);
     }
   });
 
   afterEach(() => {
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    vi.unstubAllEnvs();
     azureSpeechTTSMock.mockClear();
     listAzureSpeechVoicesMock.mockClear();
     vi.restoreAllMocks();
@@ -52,12 +46,6 @@ describe("buildAzureSpeechProvider", () => {
 
   it("reports configured only when key plus region or endpoint is available", () => {
     const provider = buildAzureSpeechProvider();
-    delete process.env.AZURE_SPEECH_KEY;
-    delete process.env.AZURE_SPEECH_API_KEY;
-    delete process.env.SPEECH_KEY;
-    delete process.env.AZURE_SPEECH_REGION;
-    delete process.env.SPEECH_REGION;
-    delete process.env.AZURE_SPEECH_ENDPOINT;
 
     expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
     expect(provider.isConfigured({ providerConfig: { apiKey: "key" }, timeoutMs: 30_000 })).toBe(
@@ -70,8 +58,8 @@ describe("buildAzureSpeechProvider", () => {
       }),
     ).toBe(true);
 
-    process.env.AZURE_SPEECH_KEY = "env-key";
-    process.env.AZURE_SPEECH_REGION = "eastus";
+    vi.stubEnv("AZURE_SPEECH_KEY", "env-key");
+    vi.stubEnv("AZURE_SPEECH_REGION", "eastus");
     expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30_000 })).toBe(true);
   });
 

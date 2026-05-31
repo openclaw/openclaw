@@ -4,6 +4,7 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
@@ -254,6 +255,13 @@ function filterRows(
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
     const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
     const status = normalizeLowercaseStringOrEmpty(row.status);
+    const goal = row.goal
+      ? normalizeLowercaseStringOrEmpty(
+          `${row.goal.objective} ${row.goal.status} ${formatGoalSummary(row.goal)} ${
+            row.goal.lastStatusNote ?? ""
+          }`,
+        )
+      : "";
     const liveState = isSessionRunActive(row)
       ? "live running"
       : row.hasActiveRun === false
@@ -266,6 +274,7 @@ function filterRows(
       displayName.includes(q) ||
       runtime.includes(q) ||
       status.includes(q) ||
+      goal.includes(q) ||
       liveState.includes(q)
     ) {
       return true;
@@ -388,6 +397,22 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
+function renderSessionGoalChip(goal: GatewaySessionRow["goal"]) {
+  if (!goal) {
+    return nothing;
+  }
+  return html`
+    <span
+      class="session-goal-chip session-goal-chip--${goal.status}"
+      title=${formatGoalDetail(goal)}
+      aria-label=${formatGoalDetail(goal)}
+    >
+      <span class="session-goal-chip__label">${formatGoalSummary(goal)}</span>
+      <span class="session-goal-chip__objective">${goal.objective}</span>
+    </span>
+  `;
+}
+
 function sessionDetailItems(params: {
   row: GatewaySessionRow;
   updated: string;
@@ -408,6 +433,10 @@ function sessionDetailItems(params: {
     }
   };
   add(t("sessionsView.status"), row.status);
+  if (row.goal) {
+    details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
+  }
+  add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
   add(t("sessionsView.runtime"), formatRuntimeMs(row.runtimeMs));
@@ -919,7 +948,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td>
         <span class="data-table-badge ${badgeClass}">${row.kind}</span>
       </td>
-      <td class="session-status-col">${renderSessionStatusBadge(row)}</td>
+      <td class="session-status-col">
+        <div class="session-status-stack">
+          ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+        </div>
+      </td>
       <td class="session-runtime-cell">
         <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
       </td>
@@ -1056,7 +1089,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                       : nothing}
                   </div>
                   <div class="session-details-panel__badges">
-                    ${renderSessionStatusBadge(row)}
+                    ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
                     <span class="data-table-badge ${badgeClass}">${row.kind}</span>
                   </div>
                 </div>

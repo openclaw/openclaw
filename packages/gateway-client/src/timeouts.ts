@@ -22,6 +22,21 @@ export function resolveSafeTimeoutDelayMs(delayMs: number, opts?: { minMs?: numb
   return Math.min(MAX_SAFE_TIMEOUT_DELAY_MS, Math.max(minMs, candidateMs));
 }
 
+export function addSafeTimeoutDelayGraceMs(
+  delayMs: number,
+  graceMs: number,
+  opts?: { minMs?: number },
+): number {
+  if (!Number.isFinite(delayMs) || !Number.isFinite(graceMs)) {
+    return resolveSafeTimeoutDelayMs(MAX_SAFE_TIMEOUT_DELAY_MS, opts);
+  }
+  const withGrace = delayMs + graceMs;
+  return resolveSafeTimeoutDelayMs(
+    Number.isFinite(withGrace) ? withGrace : MAX_SAFE_TIMEOUT_DELAY_MS,
+    opts,
+  );
+}
+
 export function resolveFiniteTimeoutDelayMs(
   delayMs: number | null | undefined,
   fallbackMs: number,

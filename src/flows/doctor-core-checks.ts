@@ -1,9 +1,9 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { SkillStatusEntry } from "../agents/skills-status.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
+  noteChromeMcpBrowserReadiness,
   type LegacyClawdBrowserProfileResidue,
 } from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
@@ -19,11 +19,16 @@ import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.j
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
+import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+
+const loadDoctorCoreChecksRuntimeModule = async () =>
+  await import("./doctor-core-checks.runtime.js");
+const loadDoctorWorkspaceModule = async () => await import("../commands/doctor-workspace.js");
 
 export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
@@ -37,7 +42,7 @@ export type CoreHealthCheckDeps = {
 async function detectUnavailableSkillsWithRuntime(
   cfg: OpenClawConfig,
 ): Promise<readonly SkillStatusEntry[]> {
-  const runtime = await import("./doctor-core-checks.runtime.js");
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
   return runtime.detectUnavailableSkills(cfg);
 }
 
@@ -50,8 +55,7 @@ async function collectWorkspaceSuggestionNotesWithRuntime(
   workspaceDir: string,
 ): Promise<readonly string[]> {
   const { collectWorkspaceBackupTip } = await import("../commands/doctor-state-integrity.js");
-  const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } =
-    await import("../commands/doctor-workspace.js");
+  const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } = await loadDoctorWorkspaceModule();
   const notes: string[] = [];
   const backupTip = collectWorkspaceBackupTip(workspaceDir);
   if (backupTip) {
@@ -66,7 +70,7 @@ async function collectWorkspaceSuggestionNotesWithRuntime(
 async function collectRuntimeToolSchemaFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  const runtime = await import("./doctor-core-checks.runtime.js");
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
   return runtime.collectRuntimeToolSchemaFindings(ctx.cfg);
 }
 
@@ -609,7 +613,6 @@ const browserCheck: HealthCheck = {
   description: "Browser readiness is captured as structured findings.",
   source: "doctor",
   async detect(ctx) {
-    const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
     const collector = createNoteCollector("core/doctor/browser");
     await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
     return collector.findings;
@@ -622,7 +625,7 @@ const workspaceStatusCheck: HealthCheck = {
   description: "Workspace directory exists and has no legacy duplicates.",
   source: "doctor",
   async detect(ctx) {
-    const { detectLegacyWorkspaceDirs } = await import("../commands/doctor-workspace.js");
+    const { detectLegacyWorkspaceDirs } = await loadDoctorWorkspaceModule();
     const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
     const legacy = detectLegacyWorkspaceDirs({ workspaceDir });
     if (legacy.legacyDirs.length === 0) {

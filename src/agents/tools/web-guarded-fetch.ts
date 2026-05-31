@@ -1,3 +1,4 @@
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
   type GuardedFetchOptions,
@@ -39,7 +40,7 @@ function resolveTimeoutMs(params: {
     "timeoutSeconds",
   );
   if (timeoutSeconds !== undefined) {
-    return timeoutSeconds * 1000;
+    return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
   }
   return undefined;
 }

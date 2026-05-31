@@ -1,3 +1,5 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -14,8 +16,6 @@ import type {
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { resolveIntegerOption } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -521,6 +521,8 @@ export function installSessionToolResultGuard(
   opts?: {
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
+    /** Optional agent id for selected-global transcript update broadcasts. */
+    agentId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -780,6 +782,7 @@ export function installSessionToolResultGuard(
       emitSessionTranscriptUpdate({
         sessionFile,
         sessionKey: opts?.sessionKey,
+        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
         ...(messageSeq !== undefined ? { messageSeq } : {}),

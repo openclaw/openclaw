@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { RawData, WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -70,7 +71,6 @@ import {
   requestNodePairing,
   updatePairedNodeMetadata,
 } from "../../../infra/node-pairing.js";
-import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -84,7 +84,7 @@ import {
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
-import { uniqueStrings } from "../../../shared/string-normalization.js";
+import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import {
   isBrowserOperatorUiClient,
   isGatewayCliClient,
@@ -116,7 +116,7 @@ import {
   indexPluginNodeCapabilitySurfaces,
   mintPluginNodeCapabilityToken,
   type PluginNodeCapabilitySurface,
-  resolvePluginNodeCapabilityTtlMs,
+  resolvePluginNodeCapabilityExpiresAtMs,
   setClientPluginNodeCapability,
 } from "../../plugin-node-capability.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -1635,8 +1635,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (pluginSurfaceBaseUrl) {
           for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
             const capability = mintPluginNodeCapabilityToken();
-            const expiresAtMs =
-              Date.now() + resolvePluginNodeCapabilityTtlMs(pluginCapabilitySurface);
+            const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
+            if (expiresAtMs === undefined) {
+              continue;
+            }
             const scopedUrl =
               buildPluginNodeCapabilityScopedHostUrl(pluginSurfaceBaseUrl, capability) ??
               pluginSurfaceBaseUrl;

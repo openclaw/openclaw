@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
-type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield";
+type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield" | "namespace";
 
 type CodeModeConfig = {
   timeoutMs: number;
@@ -30,12 +30,26 @@ type SettledBridgeRequest = {
   error?: string;
 };
 
+type SerializedCodeModeNamespaceValue =
+  | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
+  | { kind: "function"; path: string[] }
+  | { kind: "object"; entries: Array<[string, SerializedCodeModeNamespaceValue]> }
+  | { kind: "value"; value: unknown };
+
+type CodeModeNamespaceDescriptor = {
+  id: string;
+  globalName: string;
+  description?: string;
+  scope: SerializedCodeModeNamespaceValue;
+};
+
 type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
       config: CodeModeConfig;
       catalog: unknown[];
+      namespaces: CodeModeNamespaceDescriptor[];
     }
   | {
       kind: "resume";
@@ -170,6 +184,7 @@ const CONTROLLER_SOURCE = String.raw`
   const output = [];
   const pending = new Map();
   const catalog = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
+  const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
 
   function safe(value) {
     if (value === undefined) return null;
@@ -197,6 +212,34 @@ const CONTROLLER_SOURCE = String.raw`
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
     });
+  }
+
+  function namespaceFunction(namespaceId, path) {
+    const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => String(entry)));
+    return (...args) => request("namespace", [namespaceId, callablePath, args]);
+  }
+
+  function deserializeNamespaceValue(namespaceId, value) {
+    if (!value || typeof value !== "object") return null;
+    if (value.kind === "function") {
+      return namespaceFunction(namespaceId, Array.isArray(value.path) ? value.path.slice() : []);
+    }
+    if (value.kind === "array") {
+      return Object.freeze((Array.isArray(value.items) ? value.items : []).map((item) => deserializeNamespaceValue(namespaceId, item)));
+    }
+    if (value.kind === "object") {
+      const object = Object.create(null);
+      for (const entry of Array.isArray(value.entries) ? value.entries : []) {
+        const key = Array.isArray(entry) && typeof entry[0] === "string" ? entry[0] : "";
+        if (!key) continue;
+        Object.defineProperty(object, key, {
+          value: deserializeNamespaceValue(namespaceId, entry[1]),
+          enumerable: true,
+        });
+      }
+      return Object.freeze(object);
+    }
+    return safe(value.value);
   }
 
   function settle(id, ok, payload) {
@@ -243,8 +286,28 @@ const CONTROLLER_SOURCE = String.raw`
     });
   }
 
+  const namespaceGlobals = Object.create(null);
+  for (const descriptor of namespaceDescriptors) {
+    const id = typeof descriptor?.id === "string" ? descriptor.id : "";
+    const globalName = typeof descriptor?.globalName === "string" ? descriptor.globalName : "";
+    if (!id || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(globalName)) continue;
+    const scope = deserializeNamespaceValue(id, descriptor.scope);
+    Object.defineProperty(namespaceGlobals, globalName, {
+      value: scope,
+      enumerable: true,
+    });
+    const existingGlobal = Object.getOwnPropertyDescriptor(globalThis, globalName);
+    if (existingGlobal && existingGlobal.configurable === false) continue;
+    Object.defineProperty(globalThis, globalName, {
+      value: scope,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+
   Object.defineProperties(globalThis, {
     ALL_TOOLS: { value: Object.freeze(catalog.slice()), enumerable: true },
+    namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
@@ -269,7 +332,13 @@ function createHostRequestHandler(params: {
       throw new Error("too many pending code mode tool calls");
     }
     const method = methodHandle.toString();
-    if (method !== "search" && method !== "describe" && method !== "call" && method !== "yield") {
+    if (
+      method !== "search" &&
+      method !== "describe" &&
+      method !== "call" &&
+      method !== "yield" &&
+      method !== "namespace"
+    ) {
       throw new Error("unsupported code mode bridge method");
     }
     let args: unknown = [];
@@ -290,18 +359,20 @@ function createHostRequestHandler(params: {
 
 async function createVm(params: {
   catalog: unknown[];
+  namespaces: CodeModeNamespaceDescriptor[];
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
+  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
   const vm = await QuickJS.create({
     wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
-      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      timedOut = deadlineReached();
       return timedOut;
     },
   });
@@ -310,6 +381,12 @@ async function createVm(params: {
     vm.setProp(vm.global, "__openclawCatalog", catalogHandle);
   } finally {
     catalogHandle.dispose();
+  }
+  const namespacesHandle = vm.hostToHandle(params.namespaces);
+  try {
+    vm.setProp(vm.global, "__openclawNamespaces", namespacesHandle);
+  } finally {
+    namespacesHandle.dispose();
   }
   const hostRequest = vm.newFunction(
     "__openclawHostRequest",
@@ -325,7 +402,7 @@ async function createVm(params: {
     hostRequest.dispose();
   }
   vm.evalCode(CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
-  return { vm, didTimeout: () => timedOut };
+  return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
 
 async function restoreVm(params: {
@@ -335,6 +412,7 @@ async function restoreVm(params: {
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
+  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
     wasm: await getQuickJsWasmModule(),
@@ -342,7 +420,7 @@ async function restoreVm(params: {
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
-      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      timedOut = deadlineReached();
       return timedOut;
     },
   });
@@ -354,7 +432,7 @@ async function restoreVm(params: {
       config: params.config,
     }),
   );
-  return { vm, didTimeout: () => timedOut };
+  return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
 
 function takeOutput(vm: QuickJS): unknown[] {
@@ -469,6 +547,7 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
   const pendingRequests: PendingBridgeRequest[] = [];
   const { vm, didTimeout } = await createVm({
     catalog: input.catalog,
+    namespaces: input.namespaces,
     config: input.config,
     pendingRequests,
   });
@@ -576,6 +655,9 @@ async function main(): Promise<CodeModeWorkerResult> {
         source: input.source,
         config: input.config as CodeModeConfig,
         catalog: Array.isArray(input.catalog) ? input.catalog : [],
+        namespaces: Array.isArray(input.namespaces)
+          ? (input.namespaces as CodeModeNamespaceDescriptor[])
+          : [],
       });
     }
     if (input.kind === "resume" && input.snapshotBytes instanceof Uint8Array) {

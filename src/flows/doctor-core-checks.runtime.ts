@@ -22,7 +22,6 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
-import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../agents/skills-status.js";
 import { collectExplicitAllowlist, normalizeToolName } from "../agents/tool-policy.js";
 import {
   inspectRuntimeToolInputSchemas,
@@ -35,6 +34,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../skills/discovery/status.js";
 import type { HealthFinding } from "./health-checks.js";
 
 type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
@@ -56,18 +56,15 @@ function buildDoctorRuntimeModel(params: {
 }): ProviderRuntimeModel {
   const provider = params.provider || DEFAULT_PROVIDER;
   const id = params.modelId || DEFAULT_MODEL;
-  const api =
-    provider === "openai-codex"
-      ? "openai-codex-responses"
-      : provider === "openai"
-        ? "openai-responses"
-        : undefined;
+  const api = params.entry?.api ?? (provider === "openai" ? "openai-responses" : undefined);
+  const entryBaseUrl = (params.entry as { baseUrl?: string } | undefined)?.baseUrl;
   const baseUrl =
-    provider === "openai-codex"
+    entryBaseUrl ??
+    (api === "openai-chatgpt-responses"
       ? "https://chatgpt.com/backend-api"
       : provider === "openai"
         ? "https://api.openai.com/v1"
-        : undefined;
+        : undefined);
   return {
     ...params.entry,
     provider,
