@@ -1,7 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawApp } from "./app.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
+
+async function createApp() {
+  await import("./app.ts");
+  return document.createElement("openclaw-app") as OpenClawApp;
+}
 
 describe("OpenClawApp full-message sidebar upgrade", () => {
   async function createApp() {
