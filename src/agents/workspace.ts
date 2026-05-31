@@ -372,7 +372,7 @@ async function hasRecentWorkspaceAttestation(attestationPath: string): Promise<b
   }
 }
 
-async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
+export async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
   try {
     const stat = await fs.lstat(attestationPath);
     if (!stat.isFile() || stat.size > WORKSPACE_ATTESTATION_MAX_BYTES) {

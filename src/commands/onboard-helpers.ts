@@ -14,6 +14,7 @@ import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
+  isWorkspaceAttestationMarker,
   resolveWorkspaceAttestationPath,
 } from "../agents/workspace.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -305,7 +306,18 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);
-    await moveToTrash(resolveWorkspaceAttestationPath(workspaceDir), runtime);
+    const attestationPath = resolveWorkspaceAttestationPath(workspaceDir);
+    if (await shouldMoveWorkspaceAttestation(attestationPath)) {
+      await moveToTrash(attestationPath, runtime);
+    }
+  }
+}
+
+async function shouldMoveWorkspaceAttestation(attestationPath: string): Promise<boolean> {
+  try {
+    return await isWorkspaceAttestationMarker(attestationPath);
+  } catch {
+    return false;
   }
 }
 
