@@ -66,6 +66,7 @@ export const AgentDefaultsSchema = z
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
+    dmDirective: z.string().optional(),
     repoRoot: z.string().optional(),
     promptOverlays: z
       .object({

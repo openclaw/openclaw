@@ -1257,6 +1257,32 @@ describe("buildAgentSystemPrompt", () => {
     expect(reactionsPos).toBeGreaterThan(boundaryPos);
     expect(voicePos).toBeGreaterThan(boundaryPos);
   });
+
+  it("renders active directives after Runtime as the final system block", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "SOUL.md", content: "You are Operator. Be brief." }],
+      extraSystemPrompt: "Ambient room context",
+      extraSystemPromptDirective: "For this turn, use a warm onboarding-guide voice.",
+      runtimeInfo: {
+        agentId: "operator",
+        channel: "telegram",
+      },
+    });
+
+    const ambientPos = prompt.indexOf("## Group Chat Context");
+    const runtimePos = prompt.indexOf("## Runtime");
+    const directivePos = prompt.indexOf("## Active Directive (overrides persona for this turn)");
+
+    expect(ambientPos).toBeGreaterThan(-1);
+    expect(runtimePos).toBeGreaterThan(ambientPos);
+    expect(directivePos).toBeGreaterThan(runtimePos);
+    expect(prompt.slice(directivePos)).toContain("Where they conflict, follow this block.");
+    expect(prompt.slice(directivePos)).toContain(
+      "For this turn, use a warm onboarding-guide voice.",
+    );
+    expect(prompt.slice(directivePos + 1)).not.toMatch(/\n## /u);
+  });
 });
 
 describe("buildAgentBootstrapSystemContext", () => {

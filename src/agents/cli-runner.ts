@@ -866,6 +866,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     runId: params.runId,
     jobId: params.jobId,
     extraSystemPrompt: params.extraSystemPrompt,
+    extraSystemPromptDirective: params.extraSystemPromptDirective,
     inputProvenance: params.inputProvenance,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,

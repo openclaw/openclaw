@@ -598,6 +598,7 @@ export async function runPreparedReply(
         silentReplyPolicy: silentReplySettings.policy,
       }).allowEmptyAssistantReplyAsSilent);
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
+  const dmDirective = isDirectChat ? normalizeOptionalString(agentCfg?.dmDirective) ?? "" : "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
@@ -1326,6 +1327,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPromptDirective: dmDirective || undefined,
       sourceReplyDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),

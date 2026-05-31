@@ -2103,6 +2103,7 @@ export async function runAgentTurnWithFallback(params: {
                     runId,
                     lane: runLane,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                    extraSystemPromptDirective: params.followupRun.run.extraSystemPromptDirective,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
@@ -2218,6 +2219,7 @@ export async function runAgentTurnWithFallback(params: {
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                    extraSystemPromptDirective: params.followupRun.run.extraSystemPromptDirective,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                     forceMessageTool:
                       params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",

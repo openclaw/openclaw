@@ -1001,6 +1001,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupSpace?: string;
       lane?: string;
       extraSystemPrompt?: string;
+      extraSystemPromptDirective?: string;
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
@@ -2321,6 +2322,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
               extraSystemPrompt: request.extraSystemPrompt,
+              extraSystemPromptDirective: request.extraSystemPromptDirective,
               bootstrapContextMode: request.bootstrapContextMode,
               bootstrapContextRunKind: request.bootstrapContextRunKind,
               acpTurnSource: request.acpTurnSource,

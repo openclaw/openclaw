@@ -239,6 +239,8 @@ export type AgentDefaultsConfig = {
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
+  /** Optional direct-chat directive rendered as a final per-turn system prompt block. */
+  dmDirective?: string;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Provider-independent prompt overlays applied by model family. */

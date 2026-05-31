@@ -401,6 +401,52 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
   });
 
+  it("routes configured DM directives separately from ambient prompt context", async () => {
+    await runPreparedReply(
+      baseParams({
+        agentCfg: {
+          dmDirective: "Use a warm onboarding-guide voice for this DM.",
+        } as never,
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          ThreadHistoryBody: "Earlier direct message",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          ThreadHistoryBody: "Earlier direct message",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.followupRun.run.extraSystemPromptDirective).toBe(
+      "Use a warm onboarding-guide voice for this DM.",
+    );
+    expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("onboarding-guide");
+
+    await runPreparedReply(
+      baseParams({
+        agentCfg: {
+          dmDirective: "Use a warm onboarding-guide voice for this DM.",
+        } as never,
+      }),
+    );
+
+    const groupCall = requireLastRunReplyAgentCall();
+    expect(groupCall.followupRun.run.extraSystemPromptDirective).toBeUndefined();
+  });
+
   it("passes message-tool-only delivery into direct chat prompt context", async () => {
     await runPreparedReply(
       baseParams({

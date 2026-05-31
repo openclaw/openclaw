@@ -538,6 +538,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "reasoningLevel"
   | "bashElevated"
   | "extraSystemPrompt"
+  | "extraSystemPromptDirective"
   | "ownerNumbers"
   | "authProfileId"
 > & {
@@ -579,6 +580,7 @@ export function buildAfterTurnRuntimeContext(params: {
       reasoningLevel: params.attempt.reasoningLevel,
       bashElevated: params.attempt.bashElevated,
       extraSystemPrompt: params.attempt.extraSystemPrompt,
+      extraSystemPromptDirective: params.attempt.extraSystemPromptDirective,
       ownerNumbers: params.attempt.ownerNumbers,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({

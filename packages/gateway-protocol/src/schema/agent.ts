@@ -189,6 +189,7 @@ export const AgentParamsSchema = Type.Object(
       Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
     ),
     extraSystemPrompt: Type.Optional(Type.String()),
+    extraSystemPromptDirective: Type.Optional(Type.String()),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
     ),
