@@ -261,6 +261,75 @@ describe("RealtimeTalkSession consult handoff", () => {
     });
   });
 
+  it("keeps source-reply final text when the empty-final wait completes first", async () => {
+    vi.useFakeTimers();
+    try {
+      let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
+      const request = vi.fn(async (method: string) => {
+        if (method === "talk.client.toolCall") {
+          window.setTimeout(() => {
+            listener?.({
+              event: "chat",
+              payload: {
+                runId: "run-1",
+                state: "final",
+                message: undefined,
+              },
+            });
+            window.setTimeout(() => {
+              listener?.({
+                event: "chat",
+                payload: {
+                  runId: "run-1",
+                  state: "final",
+                  message: {
+                    role: "assistant",
+                    provider: "openclaw",
+                    model: "delivery-mirror",
+                    text: "The source reply beats the fallback.",
+                  },
+                },
+              });
+            }, 300);
+          }, 0);
+          return { runId: "run-1" };
+        }
+        if (method === "agent.wait") {
+          return { runId: "run-1", status: "ok" };
+        }
+        throw new Error(`unexpected request: ${method}`);
+      });
+      const addEventListener = vi.fn((callback: typeof listener) => {
+        listener = callback;
+        return () => {
+          listener = undefined;
+        };
+      });
+      const submit = vi.fn();
+
+      const consult = submitRealtimeTalkConsult({
+        ctx: {
+          client: { request, addEventListener },
+          sessionKey: "agent:main:main",
+          callbacks: {},
+        } as never,
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+      });
+
+      await vi.advanceTimersByTimeAsync(300);
+      await consult;
+
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(submit).toHaveBeenCalledWith("call-1", {
+        result: "The source reply beats the fallback.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("submits the no-text fallback after an empty final and completed Gateway run", async () => {
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
     const request = vi.fn(async (method: string) => {

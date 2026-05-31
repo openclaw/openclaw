@@ -210,6 +210,8 @@ type AgentWaitResult = {
   yielded?: boolean;
 };
 
+const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
+
 function extractTextFromMessage(message: unknown): string {
   if (!message || typeof message !== "object") {
     return "";
@@ -279,6 +281,7 @@ function waitForChatResult(params: {
     }, params.timeoutMs);
     let settled = false;
     let emptyFinalWaitStarted = false;
+    let emptyFinalFallbackTimer: number | undefined;
     const onAbort = () => {
       settleReject(new DOMException("OpenClaw tool call aborted", "AbortError"));
     };
@@ -322,7 +325,9 @@ function waitForChatResult(params: {
           if (result?.status === "timeout") {
             return;
           }
-          settleResolve("OpenClaw finished with no text.");
+          emptyFinalFallbackTimer = window.setTimeout(() => {
+            settleResolve("OpenClaw finished with no text.");
+          }, EMPTY_FINAL_FALLBACK_GRACE_MS);
         })
         .catch((error) => {
           settleReject(error instanceof Error ? error : new Error(String(error)));
@@ -354,6 +359,9 @@ function waitForChatResult(params: {
     });
     function cleanup() {
       window.clearTimeout(timer);
+      if (emptyFinalFallbackTimer !== undefined) {
+        window.clearTimeout(emptyFinalFallbackTimer);
+      }
       params.signal?.removeEventListener("abort", onAbort);
       unsubscribe();
     }
