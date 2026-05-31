@@ -142,6 +142,9 @@ function hasSessionsSpawnAttachmentToolCall(content: unknown[]): boolean {
   return false;
 }
 
+const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
@@ -159,9 +162,7 @@ function makeMissingToolResult(params: {
     content: [
       {
         type: "text",
-        text:
-          params.text ??
-          "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text: params.text ?? DEFAULT_MISSING_TOOL_RESULT_TEXT,
       },
     ],
     isError: true,
@@ -193,8 +194,7 @@ function isSyntheticMissingToolResult(msg: Extract<AgentMessage, { role: "toolRe
       typeof block === "object" &&
       block !== null &&
       (block as { type?: string }).type === "text" &&
-      typeof (block as { text?: string }).text === "string" &&
-      (block as { text: string }).text.includes("[openclaw] missing tool result"),
+      (block as { text?: string }).text === DEFAULT_MISSING_TOOL_RESULT_TEXT,
   );
 }
 
@@ -238,7 +238,7 @@ function normalizeLegacyToolResultId(
   return { ...message, toolCallId: toolCall.id, isError: true };
 }
 
-export { makeMissingToolResult };
+export { DEFAULT_MISSING_TOOL_RESULT_TEXT, makeMissingToolResult };
 
 type ToolCallInputRepairReport = {
   messages: AgentMessage[];
@@ -532,6 +532,7 @@ export function repairToolUseResultPairing(
           if (addedIdx !== -1) {
             added.splice(addedIdx, 1);
           }
+          droppedDuplicateCount += 1;
           changed = true;
           return;
         }
@@ -635,10 +636,10 @@ export function repairToolUseResultPairing(
             !isSyntheticMissingToolResult(normalizedToolResult)
           ) {
             spanResultsById.set(id, normalizedToolResult);
+            droppedDuplicateCount += 1;
             changed = true;
           } else {
-            // Dropping a duplicate tool result (either synthetic or repeated real);
-            // the transcript changes since this occurrence will be removed.
+            droppedDuplicateCount += 1;
             changed = true;
           }
           continue;
