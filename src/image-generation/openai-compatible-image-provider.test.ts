@@ -13,6 +13,7 @@ const {
   postMultipartRequestMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationRemainingTimeoutMsMock,
   resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
@@ -41,6 +42,10 @@ const {
   resolveProviderOperationTimeoutMsMock: vi.fn(
     (params: Record<string, unknown>) => params.defaultTimeoutMs,
   ),
+  resolveProviderOperationRemainingTimeoutMsMock: vi.fn(
+    (params: { deadline: { timeoutMs?: number }; defaultTimeoutMs: number }) =>
+      params.deadline.timeoutMs ?? params.defaultTimeoutMs,
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
 }));
 
@@ -59,6 +64,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationRemainingTimeoutMs: resolveProviderOperationRemainingTimeoutMsMock,
   resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
@@ -156,6 +162,7 @@ describe("OpenAI-compatible image provider helper", () => {
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "provider-key" });
     resolveProviderHttpRequestConfigMock.mockClear();
+    resolveProviderOperationRemainingTimeoutMsMock.mockClear();
     resolveProviderOperationTimeoutMsMock.mockClear();
     sanitizeConfiguredModelProviderRequestMock.mockClear();
   });
@@ -271,6 +278,11 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(init).toEqual({ method: "GET" });
     expect(timeoutMs).toBe(123);
     expect(fetchFn).toBe(fetch);
+    expect(createProviderOperationDeadlineMock).toHaveBeenCalledWith({
+      timeoutMs: 123,
+      label: "Sample image generation",
+    });
+    expect(resolveProviderOperationRemainingTimeoutMsMock).toHaveBeenCalledTimes(2);
     expect(guardedOptions).toEqual({
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       auditContext: "sample-image-download",
@@ -388,12 +400,12 @@ describe("OpenAI-compatible image provider helper", () => {
       timeoutMs: 123,
       label: "Sample image generation",
     });
-    expect(resolveProviderOperationTimeoutMsMock).toHaveBeenCalledWith({
+    expect(resolveProviderOperationRemainingTimeoutMsMock).toHaveBeenCalledWith({
       deadline: { timeoutMs: 123, label: "Sample image generation" },
       defaultTimeoutMs: 60_000,
     });
     const timeoutRequest = requireFirstCallArg(postJsonRequestMock) as { timeoutMs?: number };
-    expect(timeoutRequest.timeoutMs).toBe(60_000);
+    expect(timeoutRequest.timeoutMs).toBe(123);
   });
 
   it("wraps malformed successful image responses with provider-owned errors", async () => {

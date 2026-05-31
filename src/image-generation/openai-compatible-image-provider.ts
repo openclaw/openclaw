@@ -10,7 +10,7 @@ import {
   postJsonRequest,
   postMultipartRequest,
   resolveProviderHttpRequestConfig,
-  resolveProviderOperationTimeoutMs,
+  resolveProviderOperationRemainingTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -124,10 +124,10 @@ function createRequestTimeoutResolver(params: {
   req: ImageGenerationRequest;
   mode: OpenAiCompatibleImageRequestMode;
 }): () => number | undefined {
-  if (params.options.defaultTimeoutMs === undefined) {
+  if (params.options.defaultTimeoutMs === undefined && params.req.timeoutMs === undefined) {
     return () => params.req.timeoutMs;
   }
-  const defaultTimeoutMs = params.options.defaultTimeoutMs;
+  const defaultTimeoutMs = params.options.defaultTimeoutMs ?? params.req.timeoutMs ?? 1;
   const label =
     params.mode === "edit"
       ? (params.options.failureLabels?.edit ?? `${params.options.label} image edit`)
@@ -137,7 +137,7 @@ function createRequestTimeoutResolver(params: {
     label,
   });
   return () =>
-    resolveProviderOperationTimeoutMs({
+    resolveProviderOperationRemainingTimeoutMs({
       deadline,
       defaultTimeoutMs,
     });

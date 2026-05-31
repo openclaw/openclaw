@@ -27,7 +27,7 @@ import {
   postJsonRequest,
   postMultipartRequest,
   resolveProviderHttpRequestConfig,
-  resolveProviderOperationTimeoutMs,
+  resolveProviderOperationRemainingTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -968,7 +968,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         ? DEFAULT_AZURE_OPENAI_IMAGE_TIMEOUT_MS
         : DEFAULT_OPENAI_IMAGE_TIMEOUT_MS;
       const resolveTimeoutMs = () =>
-        resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs });
+        resolveProviderOperationRemainingTimeoutMs({ deadline, defaultTimeoutMs });
       const timeoutMs = resolveTimeoutMs();
       const sizeResolution = resolveOpenAIImageRequestSize({
         model,

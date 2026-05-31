@@ -12,6 +12,7 @@ const {
   postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationRemainingTimeoutMsMock,
   resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequestMock,
   logInfoMock,
@@ -57,6 +58,10 @@ const {
     (params: { deadline: { timeoutMs?: number }; defaultTimeoutMs: number }) =>
       params.deadline.timeoutMs ?? params.defaultTimeoutMs,
   ),
+  resolveProviderOperationRemainingTimeoutMsMock: vi.fn(
+    (params: { deadline: { timeoutMs?: number }; defaultTimeoutMs: number }) =>
+      params.deadline.timeoutMs ?? params.defaultTimeoutMs,
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn((request) => request),
   logInfoMock: vi.fn(),
 }));
@@ -78,6 +83,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationRemainingTimeoutMs: resolveProviderOperationRemainingTimeoutMsMock,
   resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
 }));
@@ -347,6 +353,8 @@ describe("openai image generation provider", () => {
     postMultipartRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
+    resolveProviderOperationRemainingTimeoutMsMock.mockClear();
+    resolveProviderOperationTimeoutMsMock.mockClear();
     sanitizeConfiguredModelProviderRequestMock.mockClear();
     logInfoMock.mockClear();
     vi.unstubAllEnvs();
@@ -590,6 +598,25 @@ describe("openai image generation provider", () => {
     });
 
     expect(jsonRequestCall().ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+  });
+
+  it("lets explicit OpenAI image timeouts exceed the provider default", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "slow image",
+      cfg: {},
+      timeoutMs: 300_000,
+    });
+
+    expect(resolveProviderOperationRemainingTimeoutMsMock).toHaveBeenCalledWith({
+      deadline: { timeoutMs: 300_000, label: "OpenAI image generation" },
+      defaultTimeoutMs: 180_000,
+    });
+    expect(jsonRequestCall().timeoutMs).toBe(300_000);
   });
 
   it("downloads OpenAI URL image responses through guarded provider HTTP", async () => {
