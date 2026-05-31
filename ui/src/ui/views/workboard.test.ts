@@ -609,16 +609,33 @@ describe("renderWorkboard", () => {
         position: 1000,
         createdAt: 1,
         updatedAt: 1,
+        metadata: {
+          comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 2 }],
+        },
       },
     ];
-    const request = vi.fn(async () => ({
-      card: {
-        ...state.cards[0],
-        title: "Renamed",
-        priority: "high",
-        updatedAt: 2,
-      },
-    }));
+    const request = vi.fn(async (method: string) =>
+      method === "workboard.cards.comment"
+        ? {
+            card: {
+              ...state.cards[0],
+              metadata: {
+                comments: [
+                  ...(state.cards[0]?.metadata?.comments ?? []),
+                  { id: "comment-2", body: "Ship after CI", createdAt: 3 },
+                ],
+              },
+            },
+          }
+        : {
+            card: {
+              ...state.cards[0],
+              title: "Renamed",
+              priority: "high",
+              updatedAt: 2,
+            },
+          },
+    );
     const props = {
       host,
       client: { request } as unknown as GatewayBrowserClient,
@@ -638,6 +655,24 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Edit card");
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Needs owner check");
+    const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
+    commentInput!.value = "Ship after CI";
+    commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    render(renderWorkboard(props), container);
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Create"))
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.comment", {
+      id: "card-1",
+      body: "Ship after CI",
+    });
+    expect(state.cards[0]?.metadata?.comments?.at(-1)?.body).toBe("Ship after CI");
+    render(renderWorkboard(props), container);
+
     const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
     expect(title?.value).toBe("Rename me");
     title!.value = "Renamed";

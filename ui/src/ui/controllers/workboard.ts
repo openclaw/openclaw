@@ -310,6 +310,7 @@ export type WorkboardUiState = {
   draftAgentId: string;
   draftSessionKey: string;
   draftTemplateId: WorkboardTemplateId | "";
+  draftCommentBody: string;
   busyCardId: string | null;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
@@ -352,6 +353,7 @@ function createDefaultState(): WorkboardUiState {
     draftAgentId: "",
     draftSessionKey: "",
     draftTemplateId: "",
+    draftCommentBody: "",
     busyCardId: null,
     draggedCardId: null,
     syncingCardIds: new Set(),
@@ -947,6 +949,7 @@ function resetDraftState(state: WorkboardUiState) {
   state.draftAgentId = "";
   state.draftSessionKey = "";
   state.draftTemplateId = "";
+  state.draftCommentBody = "";
 }
 
 function normalizeDraftLabels(value: string): string[] {
@@ -1410,6 +1413,34 @@ export async function saveWorkboardCardDraft(params: {
     });
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
+  } catch (error) {
+    state.error = formatError(error);
+  } finally {
+    state.loading = false;
+    params.requestUpdate?.();
+  }
+}
+
+export async function addWorkboardCardComment(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  const body = state.draftCommentBody.trim();
+  if (!state.editingCardId || !params.client || !body) {
+    return;
+  }
+  state.loading = true;
+  state.error = null;
+  params.requestUpdate?.();
+  try {
+    const payload = await params.client.request("workboard.cards.comment", {
+      id: state.editingCardId,
+      body,
+    });
+    replaceCard(state, normalizeCardPayload(payload));
+    state.draftCommentBody = "";
   } catch (error) {
     state.error = formatError(error);
   } finally {
