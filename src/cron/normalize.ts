@@ -564,9 +564,9 @@ export function normalizeCronJobInput(
     }
   }
 
-  if (isRecord(base.schedule)) {
-    next.schedule = coerceSchedule(base.schedule);
-  } else if (!isRecord(next.schedule)) {
+  if (isRecord(next.schedule)) {
+    next.schedule = coerceSchedule(next.schedule);
+  } else {
     const inferredSchedule = inferTopLevelSchedule(next);
     if (inferredSchedule) {
       next.schedule = inferredSchedule;
@@ -580,8 +580,8 @@ export function normalizeCronJobInput(
     }
   }
 
-  if (isRecord(base.payload)) {
-    next.payload = coercePayload(base.payload);
+  if (isRecord(next.payload)) {
+    next.payload = coercePayload(next.payload);
   }
 
   if (isRecord(base.delivery)) {
