@@ -68,7 +68,10 @@ function compileDenyPathGlob(pattern: string): RegExp {
 // Normalizes paths/patterns for cross-platform glob matching: strips Win32
 // `\\?\`/`\\.\` prefixes, replaces `\` with `/`, and lowercases on Windows
 // for case-insensitive matching. Mirrors normalizeMatchTarget in
-// exec-allowlist-pattern.ts.
+// exec-allowlist-pattern.ts. The `\`->`/` rewrite is what lets a Windows-style
+// path token (e.g. `C:\Users\op\.ssh\id_rsa`) match a POSIX-style deny pattern
+// like `**/.ssh/*`; it runs on every host, not just win32, so an argv token
+// carrying backslashes is still caught on a Linux/macOS gateway.
 function normalizeMatchTarget(value: string): string {
   if (process.platform === "win32") {
     const stripped = value.replace(/^\\\\[?.]\\/, "");
@@ -109,9 +112,14 @@ export function tokenizeShellPayload(payload: string): string[] {
       escape = false;
       continue;
     }
-    // POSIX shells use backslash as an escape; Windows paths use it as a
-    // separator. Only treat it as an escape off-Windows so that Windows-style
-    // path tokens (C:\\Users\\...\\.ssh) survive tokenization for matching (#74379 P1).
+    // POSIX shells use backslash as an escape; Windows shells use it as a path
+    // separator. Only treat it as an escape on non-win32 hosts. On win32 the
+    // backslash is preserved so a Windows-style path token inside a shell `-c`
+    // payload (C:\\Users\\...\\.ssh) survives to normalizeMatchTarget, which
+    // rewrites it to forward slashes for matching (#74379 P1). On a POSIX host
+    // a `\` inside a shell payload is a genuine escape and is consumed here;
+    // Windows paths arriving as discrete argv tokens (not shell-payload text)
+    // skip this function entirely and still match via normalizeMatchTarget.
     if (process.platform !== "win32" && !inSingle && ch === "\\") {
       escape = true;
       continue;
@@ -201,7 +209,11 @@ export function evaluateExecDenyPathMatch(params: {
   }
 
   const candidates: string[] = [];
-  for (const arg of params.argv ?? []) {
+  // `argv` crosses a process boundary (gateway/node-host wire payload), so a
+  // non-array is a real hostile/malformed input, not a hypothetical: guard it
+  // before iterating rather than trusting `?? []` to imply array-ness.
+  const argv = Array.isArray(params.argv) ? params.argv : [];
+  for (const arg of argv) {
     if (typeof arg === "string") {
       candidates.push(arg);
     }
@@ -224,12 +236,21 @@ export function evaluateExecDenyPathMatch(params: {
     // left the documented `**/.env` hard-deny unenforced on the no-cwd
     // node-host path (#74379 review P1).
     const expanded = expandHomePrefix(arg, { home: homeDir });
-    const resolved =
-      cwd && !path.isAbsolute(expanded)
-        ? path.resolve(cwd, expanded)
-        : path.isAbsolute(expanded)
-          ? path.resolve(expanded)
-          : expanded;
+    // With a cwd, anchor relative targets to it. Without one, keep the value
+    // relative rather than anchoring to the gateway's own process.cwd(): the
+    // command's working directory is unknown here, so resolving against our
+    // cwd would invent a path that could both miss real matches and create
+    // false ones. The relative form is still matched because deny patterns use
+    // the `**/` globstar (matches zero leading segments), so `config/.env` and
+    // bare `.env` are caught by `**/.env`.
+    let resolved: string;
+    if (path.isAbsolute(expanded)) {
+      resolved = path.resolve(expanded);
+    } else if (cwd) {
+      resolved = path.resolve(cwd, expanded);
+    } else {
+      resolved = expanded;
+    }
     const normalizedArg = normalizeMatchTarget(arg);
     const normalizedExpanded = normalizeMatchTarget(expanded);
     const normalizedResolved = normalizeMatchTarget(resolved);
