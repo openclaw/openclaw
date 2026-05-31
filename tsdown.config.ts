@@ -459,9 +459,20 @@ function buildMediaCoreDistEntries(): Record<string, string> {
 
 function buildAcpCoreDistEntries(): Record<string, string> {
   return {
+    "error-format": "packages/acp-core/src/error-format.ts",
     index: "packages/acp-core/src/index.ts",
+    meta: "packages/acp-core/src/meta.ts",
     "normalize-text": "packages/acp-core/src/normalize-text.ts",
+    "numeric-options": "packages/acp-core/src/numeric-options.ts",
     "record-shared": "packages/acp-core/src/record-shared.ts",
+    session: "packages/acp-core/src/session.ts",
+    "session-interaction-mode": "packages/acp-core/src/session-interaction-mode.ts",
+    "session-lineage-meta": "packages/acp-core/src/session-lineage-meta.ts",
+    types: "packages/acp-core/src/types.ts",
+    "runtime/error-text": "packages/acp-core/src/runtime/error-text.ts",
+    "runtime/errors": "packages/acp-core/src/runtime/errors.ts",
+    "runtime/session-identifiers": "packages/acp-core/src/runtime/session-identifiers.ts",
+    "runtime/session-identity": "packages/acp-core/src/runtime/session-identity.ts",
     "runtime/types": "packages/acp-core/src/runtime/types.ts",
   };
 }

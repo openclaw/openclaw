@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { GatewaySessionRow } from "../gateway/session-utils.js";
 
 const SUBAGENT_ROLES = ["orchestrator", "leaf"] as const;
 const SUBAGENT_CONTROL_SCOPES = ["children", "none"] as const;
@@ -20,19 +19,18 @@ export type AcpSessionLineageMeta = {
   spawnedCwd?: string;
 };
 
-export type AcpSessionLineageRow = Pick<
-  GatewaySessionRow,
-  | "key"
-  | "kind"
-  | "channel"
-  | "parentSessionKey"
-  | "spawnedBy"
-  | "spawnDepth"
-  | "subagentRole"
-  | "subagentControlScope"
-  | "spawnedWorkspaceDir"
-  | "spawnedCwd"
->;
+export type AcpSessionLineageRow = {
+  key: string;
+  kind?: string;
+  channel?: string;
+  parentSessionKey?: string;
+  spawnedBy?: string;
+  spawnDepth?: number;
+  subagentRole?: string;
+  subagentControlScope?: string;
+  spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
+};
 
 function readInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {

@@ -81,6 +81,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["", "index.ts"],
       ["normalize-text", "normalize-text.ts"],
       ["record-shared", "record-shared.ts"],
+      ["runtime/errors", path.join("runtime", "errors.ts")],
       ["runtime/types", path.join("runtime", "types.ts")],
     ],
   },

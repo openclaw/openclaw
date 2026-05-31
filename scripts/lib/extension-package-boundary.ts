@@ -154,6 +154,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/acp-core/record-shared": [
     "../dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts",
   ],
+  "@openclaw/acp-core/runtime/errors": [
+    "../dist/plugin-sdk/packages/acp-core/src/runtime/errors.d.ts",
+  ],
   "@openclaw/acp-core/runtime/types": [
     "../dist/plugin-sdk/packages/acp-core/src/runtime/types.d.ts",
   ],

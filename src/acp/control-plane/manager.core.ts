@@ -1,3 +1,13 @@
+import {
+  createIdentityFromEnsure,
+  identityHasStableSessionId,
+  identityEquals,
+  isSessionIdentityPending,
+  mergeSessionIdentity,
+  resolveRuntimeResumeSessionId,
+  resolveRuntimeHandleIdentifiersFromIdentity,
+  resolveSessionIdentityFromMeta,
+} from "@openclaw/acp-core/runtime/session-identity";
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -29,16 +39,6 @@ import {
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
 import type { AcpRuntimeErrorCode } from "../runtime/errors.js";
-import {
-  createIdentityFromEnsure,
-  identityHasStableSessionId,
-  identityEquals,
-  isSessionIdentityPending,
-  mergeSessionIdentity,
-  resolveRuntimeResumeSessionId,
-  resolveRuntimeHandleIdentifiersFromIdentity,
-  resolveSessionIdentityFromMeta,
-} from "../runtime/session-identity.js";
 import { clearAcpTurnActive, markAcpTurnActive } from "./active-turns.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import {

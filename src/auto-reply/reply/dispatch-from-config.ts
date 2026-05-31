@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -8,7 +9,6 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -206,7 +206,12 @@ function routeThreadIdsDiffer(
 function isSlackDirectRoutedThreadTurn(
   ctx: Pick<
     FinalizedMsgContext,
-    "ChatType" | "MessageThreadId" | "OriginatingChannel" | "Provider" | "Surface" | "TransportThreadId"
+    | "ChatType"
+    | "MessageThreadId"
+    | "OriginatingChannel"
+    | "Provider"
+    | "Surface"
+    | "TransportThreadId"
   >,
 ): boolean {
   if (normalizeChatType(ctx.ChatType) !== "direct") {

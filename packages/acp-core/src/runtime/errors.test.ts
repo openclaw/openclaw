@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { configureAcpErrorRedactor } from "../error-format.js";
 import {
   AcpRuntimeError,
   formatAcpErrorChain,
@@ -16,6 +17,10 @@ async function expectRejectedAcpRuntimeError(promise: Promise<unknown>): Promise
   }
   throw new Error("expected ACP runtime error rejection");
 }
+
+afterEach(() => {
+  configureAcpErrorRedactor(undefined);
+});
 
 describe("withAcpRuntimeErrorBoundary", () => {
   it("wraps generic errors with fallback code and source message", async () => {
@@ -154,5 +159,33 @@ describe("formatAcpErrorChain redaction", () => {
     expect(out).toMatch(/ACP_TURN_FAILED/);
     expect(out).toMatch(/upstream rejected/);
     expect(out).not.toContain(token);
+  });
+
+  it("redacts common HTTP, provider, and private-key credentials in ACP error text", () => {
+    const secrets = [
+      "Authorization: Basic dXNlcjpwYXNzd29yZGFiY2RlZg==",
+      "Bearer eyJabcdefghijklmnopqrstuvwxyz.abcdefghijklmnopqrstuvwxyz.abcdefghijklmnopqrstuvwxyz",
+      "github_pat_abcdefghijklmnopqrstuvwxyz123456",
+      ["xoxb", "1234567890", "abcdefghijklmnop"].join("-"),
+      "bot123456789:abcdefghijklmnopqrstuvwxyz123456",
+      "-----BEGIN PRIVATE KEY-----\nabcdefghijklmnopqrstuvwxyz\n-----END PRIVATE KEY-----",
+    ];
+    const out = formatAcpErrorChain(
+      new AcpRuntimeError("ACP_TURN_FAILED", `backend failed: ${secrets.join(" ")}`),
+    );
+
+    for (const secret of secrets) {
+      expect(out).not.toContain(secret);
+    }
+    expect(out).toContain("backend failed");
+  });
+
+  it("uses a configured host redactor before rendering ACP error text", () => {
+    configureAcpErrorRedactor((value) => value.replaceAll("custom-secret", "[CUSTOM]"));
+
+    const out = formatAcpErrorChain(new AcpRuntimeError("ACP_TURN_FAILED", "custom-secret"));
+
+    expect(out).toContain("[CUSTOM]");
+    expect(out).not.toContain("custom-secret");
   });
 });

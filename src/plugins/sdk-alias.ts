@@ -771,6 +771,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
   {
     packageName: "@openclaw/acp-core",
     packageDir: "acp-core",
+    subpath: "runtime/errors",
+    srcFile: path.join("runtime", "errors.ts"),
+    distFile: path.join("runtime", "errors.mjs"),
+  },
+  {
+    packageName: "@openclaw/acp-core",
+    packageDir: "acp-core",
     subpath: "runtime/types",
     srcFile: path.join("runtime", "types.ts"),
     distFile: path.join("runtime", "types.mjs"),

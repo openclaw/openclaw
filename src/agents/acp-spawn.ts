@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import {
+  resolveAcpSessionCwd,
+  resolveAcpThreadSessionDetailLines,
+} from "@openclaw/acp-core/runtime/session-identifiers";
 import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import {
   normalizeOptionalLowercaseString,
@@ -12,10 +16,6 @@ import {
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
-import {
-  resolveAcpSessionCwd,
-  resolveAcpThreadSessionDetailLines,
-} from "../acp/runtime/session-identifiers.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import {
   resolveChannelDefaultBindingPlacement,
