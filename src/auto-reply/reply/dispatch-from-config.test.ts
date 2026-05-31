@@ -6912,6 +6912,61 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     // Delivery MUST be suppressed
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
+    expect(result.sendPolicyDenied).toBe(true);
+  });
+
+  it("does not mark allowed group silence eligible for no-visible fallback", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "feishu",
+      Provider: "feishu",
+      SessionKey: "agent:main:feishu:group:oc_group",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+  });
+
+  it("marks disallowed group silence eligible for no-visible fallback", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "feishu",
+      Provider: "feishu",
+      SessionKey: "agent:main:feishu:group:oc_group",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              group: "disallow",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
+    });
   });
 
   it("suppresses tool result delivery when sendPolicy is deny", async () => {
