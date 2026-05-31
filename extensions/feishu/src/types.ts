@@ -98,7 +98,7 @@ export type FeishuToolsConfig = {
   scopes?: boolean;
   /** Bitable/Base operations (default: true). */
   bitable?: boolean;
-  /** Backward-compatible alias for bitable tools. */
+  /** @deprecated Use bitable. */
   base?: boolean;
 };
 

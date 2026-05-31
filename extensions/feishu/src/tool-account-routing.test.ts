@@ -217,6 +217,38 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
+  test("bitable tool rejects a disabled contextual account when another account enables it", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { bitable: false },
+        toolsB: { bitable: true },
+      }),
+    );
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool("feishu_bitable_get_meta", { agentAccountId: "a" });
+    const result = await tool.execute("call", { url: "invalid-url" });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toBe('Feishu Bitable tools are disabled for account "a"');
+  });
+
+  test("bitable tool rejects an explicit disabled account override", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { bitable: false },
+        toolsB: { bitable: true },
+      }),
+    );
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool("feishu_bitable_get_meta", { agentAccountId: "b" });
+    const result = await tool.execute("call", { url: "invalid-url", accountId: "a" });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toBe('Feishu Bitable tools are disabled for account "a"');
+  });
+
   test("bitable tool routes to agentAccountId and allows explicit accountId override", async () => {
     const { api, resolveTool } = createToolFactoryHarness(createConfig({}));
     registerFeishuBitableTools(api);
@@ -287,6 +319,23 @@ describe("feishu tool account routing", () => {
     await tool.execute("call", { url: "invalid-url" });
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+  });
+
+  test("account base alias disable wins over inherited top-level bitable enable", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        topTools: { bitable: true },
+        toolsA: { base: false },
+        toolsB: { bitable: true },
+      }),
+    );
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool("feishu_bitable_get_meta", { agentAccountId: "a" });
+    const result = await tool.execute("call", { url: "invalid-url" });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toBe('Feishu Bitable tools are disabled for account "a"');
   });
 
   test("bitable tools are not registered when account bitable configs disable them", async () => {
