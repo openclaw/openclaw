@@ -506,6 +506,8 @@ describe("launchctl list detection", () => {
     expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.update.2026.5.12")).toBe(true);
     expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.1717168800")).toBe(true);
     expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.gateway")).toBe(false);
+    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.gateway")).toBe(false);
+    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.profile")).toBe(false);
     expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-updater.1717168800")).toBe(false);
     expect(isOpenClawUpdateLaunchdLabel("com.example.update")).toBe(false);
   });
@@ -623,6 +625,19 @@ describe("launchctl list detection", () => {
         disableCurrentOpenClawUpdateLaunchdJob({
           LAUNCH_JOB_LABEL: "ai.openclaw.manual-update.1717168800",
           OPENCLAW_PROFILE: "manual-update.1717168800",
+        }),
+      ).resolves.toBe(false);
+
+      expect(state.launchctlCalls).toEqual([]);
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "does not disable custom gateway launchd labels under the manual-update prefix",
+    async () => {
+      await expect(
+        disableCurrentOpenClawUpdateLaunchdJob({
+          LAUNCH_JOB_LABEL: "ai.openclaw.manual-update.gateway",
         }),
       ).resolves.toBe(false);
 

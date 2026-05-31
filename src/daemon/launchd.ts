@@ -46,10 +46,8 @@ const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
-const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIXES = [
-  "ai.openclaw.update.",
-  "ai.openclaw.manual-update.",
-];
+const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
+const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -62,9 +60,10 @@ function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
     return null;
   }
   const trimmed = label.trim();
-  return OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
-    ? trimmed
-    : null;
+  if (trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
+    return trimmed;
+  }
+  return OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
 }
 
 function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): boolean {
