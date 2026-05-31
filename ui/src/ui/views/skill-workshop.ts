@@ -93,7 +93,11 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
         ${selected ? renderDetail(props, selected) : renderEmpty()}
       </div>
     </section>
-    ${preview && selected ? renderFilePreview(selected, preview, props.onClosePreview) : nothing}
+    ${preview && selected
+      ? renderFilePreview(selected, preview, props.onClosePreview, (path) =>
+          props.onPreviewFile(selected.key, path),
+        )
+      : nothing}
   `;
 }
 
@@ -187,7 +191,14 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
             <span>·</span>
             <span>v${proposal.version}</span>
             <span>·</span>
-            <span>${proposal.supportFiles.length} support files</span>
+            ${proposal.supportFiles.length > 0
+              ? html`<button
+                  class="sw-detail__meta-link"
+                  @click=${() => props.onPreviewFile(proposal.key, proposal.supportFiles[0].path)}
+                >
+                  ${proposal.supportFiles.length} support files
+                </button>`
+              : html`<span>0 support files</span>`}
           </div>
         </div>
         <div class="sw-detail__nav">
@@ -270,34 +281,79 @@ function renderFilePreview(
   proposal: SkillWorkshopProposal,
   file: SkillWorkshopFile,
   onClose: () => void,
+  onSelect: (path: string) => void,
 ) {
-  const extension = file.path.split(".").pop()?.toUpperCase() ?? "FILE";
   return html`
-    <div class="sw-drawer-backdrop" @click=${onClose}></div>
-    <aside class="sw-drawer" role="dialog" aria-label="File preview">
-      <header class="sw-drawer__head">
-        <div class="sw-drawer__icon">📄</div>
-        <div class="sw-drawer__meta">
-          <div class="sw-drawer__filename">${file.path}</div>
-          <div class="sw-drawer__sub">
-            <span>${file.size}</span><span class="sw-drawer__sep">·</span> <span>${extension}</span
-            ><span class="sw-drawer__sep">·</span>
-            <span>read-only</span>
-          </div>
-        </div>
-        <button class="sw-drawer__close" title="Close (Esc)" @click=${onClose}>×</button>
+    <div class="sw-modal-backdrop" @click=${onClose}></div>
+    <div class="sw-modal" role="dialog" aria-label="Support files">
+      <header class="sw-modal__head">
+        <span class="sw-modal__search-icon">⌕</span>
+        <input class="sw-modal__search" placeholder="Search files…" autofocus />
+        <span class="sw-modal__state">
+          ${proposal.supportFiles.length} files
+          <span class="sw-modal__esc">esc</span>
+        </span>
       </header>
-      <div class="sw-drawer__body">
-        <pre class="sw-drawer__pre">${file.contents}</pre>
+      <div class="sw-modal__body">
+        <aside class="sw-modal__list">
+          <div class="sw-modal__list-section">FILES · ${proposal.supportFiles.length}</div>
+          ${proposal.supportFiles.map((f) => {
+            const isActive = f.path === file.path;
+            return html`
+              <button
+                class="sw-modal__item ${isActive ? "is-active" : ""}"
+                @click=${() => onSelect(f.path)}
+              >
+                <span class="sw-modal__item-dot"></span>
+                <span class="sw-modal__item-name">${f.path}</span>
+                <span class="sw-modal__item-meta">${f.size}</span>
+              </button>
+            `;
+          })}
+        </aside>
+        <section class="sw-modal__detail">
+          <div class="sw-modal__detail-head">
+            <h2 class="sw-modal__detail-title">${file.path}</h2>
+            <div class="sw-modal__chips">
+              <span class="sw-modal__chip sw-modal__chip--accent">${fileKind(file.path)}</span>
+              <span class="sw-modal__chip">${file.size}</span>
+              <span class="sw-modal__chip">read-only</span>
+              <span class="sw-modal__chip sw-modal__chip--ok">in ${proposal.slug}</span>
+            </div>
+          </div>
+          <div class="sw-modal__detail-body">
+            <pre class="sw-modal__pre">${file.contents}</pre>
+          </div>
+        </section>
       </div>
-      <footer class="sw-drawer__foot">
-        <button class="sw-btn">✎ Edit this file</button>
-        <button class="sw-btn sw-btn--ghost">Copy contents</button>
+      <footer class="sw-modal__foot">
+        <span class="sw-modal__foot-group"><span class="sw-modal__kbd">↑↓</span> navigate</span>
+        <span class="sw-modal__foot-group"><span class="sw-modal__kbd">↵</span> open</span>
+        <span class="sw-modal__foot-group"><span class="sw-modal__kbd">⌘C</span> copy</span>
+        <span class="sw-modal__foot-group"><span class="sw-modal__kbd">⌘E</span> edit</span>
         <span class="sw-action-bar__spacer"></span>
-        <span class="sw-drawer__esc"> <code>Esc</code> close · proposal: ${proposal.slug} </span>
+        <button class="sw-btn sw-btn--ghost" @click=${onClose}>
+          Close <span class="sw-kbd">esc</span>
+        </button>
       </footer>
-    </aside>
+    </div>
   `;
+}
+
+function fileKind(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  const map: Record<string, string> = {
+    md: "Markdown",
+    txt: "Text",
+    json: "JSON",
+    yaml: "YAML",
+    yml: "YAML",
+    ts: "TypeScript",
+    js: "JavaScript",
+    py: "Python",
+    sh: "Shell",
+  };
+  return map[ext] ?? (ext ? ext.toUpperCase() : "File");
 }
 
 function renderProposalBody(body: string) {
