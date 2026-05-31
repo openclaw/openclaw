@@ -98,6 +98,7 @@ const MAX_FILE_LOG_CONTEXT_VALUE_CHARS = 512;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const defaultHostnameResolver: HostnameResolver = () => os.hostname();
 let hostnameResolver: HostnameResolver = defaultHostnameResolver;
+let cachedHostname: string | null = null;
 
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
@@ -298,7 +299,15 @@ function buildFileLogMessage(numericArgs: readonly unknown[]): string | undefine
 }
 
 function resolveLogHostname(): string {
-  return hostnameResolver().trim() || "unknown";
+  if (cachedHostname) {
+    return cachedHostname;
+  }
+  const hostname = hostnameResolver().trim();
+  if (!hostname) {
+    return "unknown";
+  }
+  cachedHostname = hostname;
+  return hostname;
 }
 
 function withResolvedLogMetaHostname(meta: unknown, hostname: string): unknown {
@@ -725,12 +734,14 @@ export function resetLogger() {
   loggingState.overrideSettings = null;
   loadLoggerConfig = loadLoggerConfigDefault;
   hostnameResolver = defaultHostnameResolver;
+  cachedHostname = null;
 }
 
 export const testApi = {
   resolveActiveLogFile,
   setHostnameResolverForTests: (resolver?: HostnameResolver) => {
     hostnameResolver = resolver ?? defaultHostnameResolver;
+    cachedHostname = null;
   },
   shouldSkipMutatingLoggingConfigRead,
 };
