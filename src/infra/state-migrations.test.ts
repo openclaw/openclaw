@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
@@ -278,6 +279,145 @@ describe("state migrations", () => {
     ).resolves.toBe('["123","456"]\n');
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "default"));
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
+  });
+
+  it("migrates legacy delivery queue files into shared SQLite state", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    await fs.mkdir(path.join(stateDir, "delivery-queue"), { recursive: true });
+    await fs.mkdir(path.join(stateDir, "session-delivery-queue"), { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "delivery-queue", "outbound-1.json"),
+      JSON.stringify({
+        id: "outbound-1",
+        enqueuedAt: 10,
+        retryCount: 2,
+        channel: "telegram",
+        to: "123",
+        accountId: "main",
+        payloads: [{ text: "hi" }],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(stateDir, "session-delivery-queue", "session-1.json"),
+      JSON.stringify({
+        id: "session-1",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "resume",
+        messageId: "m1",
+        retryCount: 0,
+        enqueuedAt: 20,
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.deliveryQueues.hasLegacy).toBe(true);
+
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      "Migrated 1 outbound delivery queue entry → shared SQLite state",
+    );
+    expect(result.changes).toContain(
+      "Migrated 1 session delivery queue entry → shared SQLite state",
+    );
+    const { db } = openOpenClawStateDatabase({ env });
+    const rows = db
+      .prepare(
+        "SELECT queue_name, id, channel, target, retry_count FROM delivery_queue_entries ORDER BY queue_name, id",
+      )
+      .all();
+    expect(rows).toEqual([
+      {
+        queue_name: "outbound",
+        id: "outbound-1",
+        channel: "telegram",
+        target: "123",
+        retry_count: 2,
+      },
+      { queue_name: "session", id: "session-1", channel: null, target: null, retry_count: 0 },
+    ]);
+    await expectMissingPath(path.join(stateDir, "delivery-queue"));
+    await expectMissingPath(path.join(stateDir, "session-delivery-queue"));
+  });
+
+  it("keeps legacy delivery queue files when shared SQLite already has a conflicting row", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const queueDir = path.join(stateDir, "delivery-queue");
+    await fs.mkdir(queueDir, { recursive: true });
+    await fs.writeFile(
+      path.join(queueDir, "outbound-1.json"),
+      JSON.stringify({
+        id: "outbound-1",
+        enqueuedAt: 10,
+        retryCount: 2,
+        channel: "telegram",
+        to: "123",
+        payloads: [{ text: "hi" }],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(queueDir, "outbound-2.json"),
+      JSON.stringify({
+        id: "outbound-2",
+        enqueuedAt: 11,
+        retryCount: 1,
+        channel: "telegram",
+        to: "456",
+        payloads: [{ text: "still pending" }],
+      }),
+      "utf8",
+    );
+
+    const { db } = openOpenClawStateDatabase({ env });
+    db.prepare(
+      `
+        INSERT INTO delivery_queue_entries (
+          queue_name, id, status, channel, target, retry_count, entry_json,
+          enqueued_at, updated_at
+        ) VALUES (
+          'outbound', 'outbound-1', 'pending', 'telegram', '123', 0,
+          '{"id":"outbound-1","retryCount":0}', 10, 10
+        )
+      `,
+    ).run();
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.changes).toContain(
+      "Migrated 1 outbound delivery queue entry → shared SQLite state",
+    );
+    expect(result.warnings).toStrictEqual([
+      "Left outbound delivery queue in place because 1 entry already existed in shared state: outbound-1",
+    ]);
+    await expect(fs.readFile(path.join(queueDir, "outbound-1.json"), "utf8")).resolves.toContain(
+      '"retryCount":2',
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT retry_count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-1'",
+        )
+        .get(),
+    ).toEqual({ retry_count: 0 });
+    expect(
+      db
+        .prepare(
+          "SELECT retry_count FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-2'",
+        )
+        .get(),
+    ).toEqual({ retry_count: 1 });
   });
 
   it("preserves a corrupt target session store instead of overwriting it with legacy-only data", async () => {

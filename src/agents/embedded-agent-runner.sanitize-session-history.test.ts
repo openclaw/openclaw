@@ -1372,18 +1372,6 @@ describe("sanitizeSessionHistory", () => {
       modelApi: "openai-completions",
       provider: "vllm",
       modelId: "Qwen3.6-27B",
-      model: {
-        id: "Qwen3.6-27B",
-        name: "Qwen3.6 27B",
-        provider: "vllm",
-        api: "openai-completions",
-        baseUrl: "https://example.invalid",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
@@ -235,17 +236,20 @@ function resultDetails(result: Awaited<ReturnType<typeof handleTelegramAction>>)
 }
 
 function readDurableQueueEntries(stateDir: string): Record<string, unknown>[] {
-  const queueDir = path.join(stateDir, "delivery-queue");
-  if (!fs.existsSync(queueDir)) {
-    return [];
-  }
-  return fs
-    .readdirSync(queueDir)
-    .filter((name) => name.endsWith(".json"))
-    .map((name) => JSON.parse(fs.readFileSync(path.join(queueDir, name), "utf-8"))) as Record<
-    string,
-    unknown
-  >[];
+  const { db } = openOpenClawStateDatabase({
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  const rows = db
+    .prepare(
+      `
+        SELECT entry_json
+          FROM delivery_queue_entries
+         WHERE queue_name = 'outbound' AND status = 'pending'
+         ORDER BY enqueued_at ASC, id ASC
+      `,
+    )
+    .all() as Array<{ entry_json: string }>;
+  return rows.map((row) => JSON.parse(row.entry_json) as Record<string, unknown>);
 }
 
 describe("handleTelegramAction", () => {
