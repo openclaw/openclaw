@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 
 async function makeFixtureRoot(prefix: string): Promise<string> {
@@ -72,6 +74,66 @@ describe("runPostUpgradeProbes — plugin.index_unavailable", () => {
 });
 
 describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
+  it("reads the canonical SQLite plugin index by default", async () => {
+    const root = await makeFixtureRoot("entry-sqlite");
+    try {
+      const pluginDir = path.join(root, "user-plugins", "sqlite-ghost");
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "sqlite-ghost",
+          version: "0.0.1",
+          type: "module",
+          openclaw: { extensions: ["./dist/index.js"] },
+        }),
+        "utf-8",
+      );
+      const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+      await fs.writeFile(manifestPath, JSON.stringify({ id: "sqlite-ghost" }), "utf-8");
+      const index: InstalledPluginIndex = {
+        version: 1,
+        hostContractVersion: "test-host",
+        compatRegistryVersion: "test-compat",
+        migrationVersion: 1,
+        policyHash: "test-policy",
+        generatedAtMs: 1,
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "sqlite-ghost",
+            manifestPath,
+            manifestHash: "manifest-hash",
+            rootDir: pluginDir,
+            origin: "global",
+            enabled: true,
+            startup: {
+              sidecar: false,
+              memory: false,
+              deferConfiguredChannelFullLoadUntilAfterListen: false,
+              agentHarnesses: [],
+            },
+            compat: [],
+            packageJson: { path: "package.json", hash: "package-hash" },
+          },
+        ],
+        diagnostics: [],
+      };
+      await writePersistedInstalledPluginIndex(index, { stateDir: root });
+
+      const report = await runPostUpgradeProbes({ stateDir: root });
+
+      expect(report.findings).not.toContainEqual(
+        expect.objectContaining({ code: "plugin.index_unavailable" }),
+      );
+      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
+      expect(finding).toBeDefined();
+      expect(finding?.plugin).toBe("sqlite-ghost");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("flags an enabled plugin whose declared entry does not exist on disk", async () => {
     const root = await makeFixtureRoot("entry-unresolved");
     try {

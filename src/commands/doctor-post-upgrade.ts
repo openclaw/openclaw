@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { PackageManifest } from "../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../plugins/package-entry-resolution.js";
 import {
@@ -71,6 +72,19 @@ async function readInstallsJson(installsPath: string): Promise<InstallsJson | nu
   }
 }
 
+async function readInstalledPluginIndex(params: {
+  installsPath?: string;
+  stateDir?: string;
+}): Promise<InstallsJson | null> {
+  if (params.installsPath) {
+    return await readInstallsJson(params.installsPath);
+  }
+  const index = await readPersistedInstalledPluginIndex(
+    params.stateDir ? { stateDir: params.stateDir } : {},
+  );
+  return index && isInstallsJson(index) ? { plugins: [...index.plugins] } : null;
+}
+
 async function readInstalledPackageJson(
   rootDir: string,
   packageJsonRelPath: string,
@@ -90,10 +104,11 @@ async function sha256OfFile(absPath: string): Promise<string | null> {
 }
 
 export async function runPostUpgradeProbes(params: {
-  installsPath: string;
+  installsPath?: string;
+  stateDir?: string;
 }): Promise<PostUpgradeReport> {
   const findings: PostUpgradeFinding[] = [];
-  const installs = await readInstallsJson(params.installsPath);
+  const installs = await readInstalledPluginIndex(params);
   if (!installs) {
     findings.push({
       level: "error",
