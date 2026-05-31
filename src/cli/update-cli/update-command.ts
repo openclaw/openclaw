@@ -215,6 +215,7 @@ type PreUpdateConfigRestoreInput = {
 
 type ProtectedRouteEntry = {
   path: string;
+  pathParts: string[];
   value: string;
 };
 
@@ -293,14 +294,16 @@ function isProtectedRouteValue(pathLabel: string, value: string): boolean {
 
 function collectProtectedRouteEntries(value: unknown): ProtectedRouteEntry[] {
   const entries: ProtectedRouteEntry[] = [];
-  const visit = (candidate: unknown, pathLabel: string) => {
+  const visit = (candidate: unknown, pathLabel: string, pathParts: string[]) => {
     const normalized = normalizeProtectedRouteString(candidate);
     if (normalized && isProtectedRouteValue(pathLabel, normalized)) {
-      entries.push({ path: pathLabel, value: normalized });
+      entries.push({ path: pathLabel, pathParts, value: normalized });
       return;
     }
     if (Array.isArray(candidate)) {
-      candidate.forEach((entry, index) => visit(entry, `${pathLabel}.${index}`));
+      candidate.forEach((entry, index) =>
+        visit(entry, `${pathLabel}.${index}`, [...pathParts, String(index)]),
+      );
       return;
     }
     if (!isRecord(candidate)) {
@@ -309,19 +312,19 @@ function collectProtectedRouteEntries(value: unknown): ProtectedRouteEntry[] {
     for (const [key, entry] of Object.entries(candidate).toSorted(([left], [right]) =>
       left.localeCompare(right),
     )) {
-      visit(entry, pathLabel ? `${pathLabel}.${key}` : key);
+      visit(entry, pathLabel ? `${pathLabel}.${key}` : key, [...pathParts, key]);
     }
   };
-  visit(value, "");
+  visit(value, "", []);
   return entries;
 }
 
-function readPathValue(value: unknown, pathLabel: string): unknown {
-  if (!pathLabel) {
+function readPathValue(value: unknown, pathParts: readonly string[]): unknown {
+  if (pathParts.length === 0) {
     return value;
   }
   let cursor = value;
-  for (const part of pathLabel.split(".")) {
+  for (const part of pathParts) {
     if (Array.isArray(cursor)) {
       const index = Number.parseInt(part, 10);
       cursor = Number.isInteger(index) ? cursor[index] : undefined;
@@ -341,10 +344,7 @@ function diffProtectedRouteEntries(params: {
 }): ProtectedRouteDrift[] {
   return collectProtectedRouteEntries(params.before)
     .map((entry) => {
-      const after = normalizeProtectedRouteString(readPathValue(params.after, entry.path));
-      if (after === undefined) {
-        return null;
-      }
+      const after = normalizeProtectedRouteString(readPathValue(params.after, entry.pathParts));
       const drift: ProtectedRouteDrift = { path: entry.path, before: entry.value, after };
       return after === entry.value ? null : drift;
     })

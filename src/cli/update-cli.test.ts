@@ -1630,7 +1630,11 @@ describe("update-cli", () => {
       agents: {
         defaults: {
           model: { primary: "codex/gpt-5.5", fallbacks: ["codex/gpt-5.4"] },
-          agentRuntime: { id: "codex" },
+          models: {
+            "codex/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
         },
       },
     } as OpenClawConfig;
@@ -1652,6 +1656,55 @@ describe("update-cli", () => {
     const output = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(output?.status).toBe("error");
     expect(output?.reason).toBe("protected-route-drift");
+    expect(replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: beforeConfig,
+        baseHash: "after",
+        writeOptions: expect.objectContaining({ skipPluginValidation: true }),
+      }),
+    );
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("fails closed and restores config when protected routes are deleted during update", async () => {
+    const beforeConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "codex/gpt-5.5", fallbacks: ["codex/gpt-5.4"] },
+          models: {
+            "codex/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const afterConfig = {
+      agents: {
+        defaults: {
+          model: {},
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce(makeConfigSnapshot(beforeConfig, { hash: "before" }))
+      .mockResolvedValueOnce(makeConfigSnapshot(afterConfig, { hash: "after" }));
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+
+    await updateCommand({ json: false, restart: false });
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("protected model/runtime routes changed"),
+    );
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain(
+      "agents.defaults.models.codex/gpt-5.5.agentRuntime.id: codex -> <missing>",
+    );
+    expect(logs.join("\n")).toContain(
+      "agents.defaults.model.fallbacks.0: codex/gpt-5.4 -> <missing>",
+    );
+    expect(logs.join("\n")).toContain("agents.defaults.model.primary: codex/gpt-5.5 -> <missing>");
     expect(replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         nextConfig: beforeConfig,
