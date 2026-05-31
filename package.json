@@ -133,7 +133,6 @@
     "!docs/images/**",
     "!docs/**/*.jpg",
     "!docs/**/*.png",
-    "scripts/gateway_watchdog.ps1",
     "start_windows_node.bat",
     "src/agents/templates/",
     "scripts/crabbox-wrapper.mjs",

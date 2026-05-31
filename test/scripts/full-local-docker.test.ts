@@ -2588,17 +2588,6 @@ describe("scripts/docker/full-local", () => {
     }
   });
 
-  it("keeps the Sentinel watchdog wired to the sidecar Compose overlay", () => {
-    const watchdog = readFileSync("scripts/gateway_watchdog.ps1", "utf8");
-
-    expect(watchdog).toContain(
-      'docker compose -f "$RepoRoot\\docker-compose.yml" -f "$RepoRoot\\docker-compose.sidecars.yml" --profile sentinel ps --format json openclaw-sentinel',
-    );
-    expect(watchdog).toContain(
-      'compose -f `"$RepoRoot\\docker-compose.yml`" -f `"$RepoRoot\\docker-compose.sidecars.yml`" --profile sentinel restart openclaw-sentinel',
-    );
-  });
-
   it("builds a container-safe full-local config overlay for memory/wiki proof", () => {
     const configDir = path.resolve("home", ".openclaw");
     const repoRoot = path.resolve("repo-root");
