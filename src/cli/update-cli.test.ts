@@ -28,6 +28,8 @@ const resolveGlobalManager = vi.fn();
 const serviceLoaded = vi.fn();
 const serviceStop = vi.fn();
 const serviceRestart = vi.fn();
+const suspendScheduledTaskAutoStartForUpdate = vi.fn();
+const resumeScheduledTaskAutoStartAfterUpdate = vi.fn();
 const prepareRestartScript = vi.fn();
 const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
@@ -41,6 +43,23 @@ const probeGateway = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
+type PostCorePluginConvergenceMockResult = {
+  changes: unknown[];
+  warnings: Array<{ pluginId?: string; message: string; guidance?: string[] }>;
+  errored: boolean;
+  smokeFailures: unknown[];
+  installRecords: unknown;
+};
+type RunPostCorePluginConvergenceMock = (params: {
+  baselineInstallRecords?: unknown;
+}) => Promise<PostCorePluginConvergenceMockResult>;
+const runPostCorePluginConvergence = vi.fn<RunPostCorePluginConvergenceMock>(async (params) => ({
+  changes: [],
+  warnings: [],
+  errored: false,
+  smokeFailures: [],
+  installRecords: params.baselineInstallRecords ?? {},
+}));
 const loadInstalledPluginIndexInstallRecords = vi.fn(
   async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
 );
@@ -245,13 +264,8 @@ vi.mock("./update-cli/post-core-plugin-convergence.js", () => ({
       })),
     errored: convergence.errored,
   }),
-  runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
-    changes: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: params.baselineInstallRecords ?? {},
-  })),
+  runPostCorePluginConvergence: (...args: Parameters<RunPostCorePluginConvergenceMock>) =>
+    runPostCorePluginConvergence(...args),
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -283,6 +297,13 @@ vi.mock("../daemon/service.js", () => ({
     stop: (...args: unknown[]) => serviceStop(...args),
     restart: (...args: unknown[]) => serviceRestart(...args),
   })),
+}));
+
+vi.mock("../daemon/schtasks.js", () => ({
+  suspendScheduledTaskAutoStartForUpdate: (...args: unknown[]) =>
+    suspendScheduledTaskAutoStartForUpdate(...args),
+  resumeScheduledTaskAutoStartAfterUpdate: (...args: unknown[]) =>
+    resumeScheduledTaskAutoStartAfterUpdate(...args),
 }));
 
 vi.mock("../daemon/launchd.js", async (importOriginal) => ({
@@ -430,6 +451,96 @@ describe("update-cli", () => {
         markerPath: null,
       },
     });
+  };
+
+  const setupRunningManagedPackageUpdate = async (prefix: string) => {
+    const tempDir = await createTrackedTempDir(prefix);
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const entryPath = path.join(pkgRoot, "dist", "index.js");
+    mockPackageInstallStatus(pkgRoot);
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (
+        Array.isArray(argv) &&
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv.includes("--prefix")
+      ) {
+        await writeStagedOpenClawPackageInstall(argv);
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+    return { entryPath, nodeModules, pkgRoot, tempDir };
+  };
+
+  const writeStagedOpenClawPackageInstall = async (argv: string[], version = "9999.0.0") => {
+    const prefixIndex = argv.indexOf("--prefix");
+    if (prefixIndex < 0) {
+      return;
+    }
+    const stagePrefix = argv[prefixIndex + 1];
+    if (typeof stagePrefix !== "string") {
+      throw new Error("missing stage prefix");
+    }
+    const stageRoot =
+      process.platform === "win32"
+        ? path.join(stagePrefix, "node_modules", "openclaw")
+        : path.join(stagePrefix, "lib", "node_modules", "openclaw");
+    const entryPath = path.join(stageRoot, "dist", "index.js");
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(stageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    await writePackageDistInventory(stageRoot);
   };
 
   const expectUpdateCallChannel = (channel: string) => {
@@ -597,16 +708,17 @@ describe("update-cli", () => {
       expect(packagePackCommandCall()).toBeUndefined();
     }
     const call = packageInstallCommandCall();
-    expect(call?.[0]).toEqual([
-      "npm",
-      "i",
-      "-g",
-      installSpec,
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-      "--min-release-age=0",
-    ]);
+    const argv = call?.[0] ?? [];
+    expect(argv.slice(0, 3)).toEqual(["npm", "i", "-g"]);
+    if (argv.includes("--prefix")) {
+      expect(typeof argv[argv.indexOf("--prefix") + 1]).toBe("string");
+    }
+    expect(argv).toEqual(
+      expect.arrayContaining([installSpec, "--no-fund", "--no-audit", "--loglevel=error"]),
+    );
+    expect(argv.some((arg) => arg === "--min-release-age=0" || /^--before=.+/u.test(arg))).toBe(
+      true,
+    );
     if (call?.[1] === undefined) {
       throw new Error("Expected package install command options");
     }
@@ -785,6 +897,8 @@ describe("update-cli", () => {
     resolveGlobalManager.mockResolvedValue("npm");
     serviceStop.mockResolvedValue(undefined);
     serviceRestart.mockResolvedValue({ outcome: "completed" });
+    suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(false);
+    resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(false);
     serviceLoaded.mockResolvedValue(false);
     serviceReadCommand.mockImplementation(async () =>
       (await serviceLoaded()) ? { programArguments: ["openclaw", "gateway", "run"] } : null,
@@ -837,6 +951,15 @@ describe("update-cli", () => {
       config: baseConfig,
       outcomes: [],
     });
+    runPostCorePluginConvergence.mockImplementation(
+      async (params: { baselineInstallRecords?: unknown }) => ({
+        changes: [],
+        warnings: [],
+        errored: false,
+        smokeFailures: [],
+        installRecords: params.baselineInstallRecords ?? {},
+      }),
+    );
     checkShellCompletionStatus.mockResolvedValue({
       shell: "zsh",
       profileInstalled: false,
@@ -2709,6 +2832,170 @@ describe("update-cli", () => {
     expect(requiredServiceStopCallOrder).toBeLessThan(requiredNpmInstallCallOrder);
   });
 
+  it("suspends Windows Scheduled Task autostart around package replacement", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await setupRunningManagedPackageUpdate("openclaw-update-windows-task-");
+      suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+      resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+
+      await withEnvAsync(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        async () => {
+          await updateCommand({ yes: true });
+        },
+      );
+
+      const npmInstallCallIndex = vi
+        .mocked(runCommandWithTimeout)
+        .mock.calls.findIndex(
+          (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "i",
+        );
+      const npmInstallCallOrder =
+        vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[npmInstallCallIndex];
+      const serviceEnv = {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      };
+      expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledWith(
+        expect.objectContaining(serviceEnv),
+      );
+      expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledWith(
+        expect.objectContaining(serviceEnv),
+      );
+
+      const suspendOrder = suspendScheduledTaskAutoStartForUpdate.mock.invocationCallOrder[0];
+      const stopOrder = serviceStop.mock.invocationCallOrder[0];
+      const resumeOrder = resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0];
+      expect(requireValue(suspendOrder, "Scheduled Task suspend order")).toBeLessThan(
+        requireValue(stopOrder, "service stop order"),
+      );
+      expect(requireValue(stopOrder, "service stop order")).toBeLessThan(
+        requireValue(npmInstallCallOrder, "npm install call order"),
+      );
+      expect(requireValue(npmInstallCallOrder, "npm install call order")).toBeLessThan(
+        requireValue(resumeOrder, "Scheduled Task resume order"),
+      );
+      expect(spawn).toHaveBeenCalled();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("reports a failed Windows Scheduled Task resume after service stop fails", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await setupRunningManagedPackageUpdate("openclaw-update-windows-task-stop-fail-");
+      suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+      serviceStop.mockRejectedValueOnce(new Error("stop failed"));
+      resumeScheduledTaskAutoStartAfterUpdate.mockRejectedValueOnce(new Error("enable failed"));
+
+      await withEnvAsync(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        async () => {
+          await updateCommand({ yes: true });
+        },
+      );
+
+      const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+      expect(errors.join("\n")).toContain(
+        "Failed to resume Windows Scheduled Task autostart after service stop failed: Error: enable failed",
+      );
+      expect(errors.join("\n")).toContain("Original stop failure: Error: stop failed");
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(
+        vi
+          .mocked(runCommandWithTimeout)
+          .mock.calls.some(([argv]) => Array.isArray(argv) && argv[0] === "npm" && argv[1] === "i"),
+      ).toBe(false);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { name: "stopped runtime with restart", restart: true, runtimeStatus: "stopped" },
+    { name: "stopped runtime with --no-restart", restart: false, runtimeStatus: "stopped" },
+    { name: "unknown runtime with restart", restart: true, runtimeStatus: "unknown" },
+    { name: "unknown runtime with --no-restart", restart: false, runtimeStatus: "unknown" },
+  ])(
+    "suspends Windows Scheduled Task autostart while updating an installed gateway with $name",
+    async ({ restart, runtimeStatus }) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      try {
+        await setupRunningManagedPackageUpdate("openclaw-update-windows-task-stopped-");
+        serviceLoaded.mockResolvedValue(false);
+        serviceReadRuntime.mockResolvedValue({
+          status: runtimeStatus,
+          state: runtimeStatus,
+        });
+        suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+        resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+
+        await updateCommand(restart ? { yes: true } : { yes: true, restart: false });
+
+        const npmInstallCallIndex = vi
+          .mocked(runCommandWithTimeout)
+          .mock.calls.findIndex(
+            (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "i",
+          );
+        const npmInstallCallOrder =
+          vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[npmInstallCallIndex];
+        const suspendOrder = suspendScheduledTaskAutoStartForUpdate.mock.invocationCallOrder[0];
+        const resumeOrder = resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0];
+        expect(serviceStop).not.toHaveBeenCalled();
+        expect(serviceRestart).not.toHaveBeenCalled();
+        expect(requireValue(suspendOrder, "Scheduled Task suspend order")).toBeLessThan(
+          requireValue(npmInstallCallOrder, "npm install call order"),
+        );
+        expect(requireValue(npmInstallCallOrder, "npm install call order")).toBeLessThan(
+          requireValue(resumeOrder, "Scheduled Task resume order"),
+        );
+      } finally {
+        platformSpy.mockRestore();
+      }
+    },
+  );
+
+  it("resumes Windows Scheduled Task autostart before post-core fresh-process handoff", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      await setupRunningManagedPackageUpdate("openclaw-update-windows-task-post-core-");
+      suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+      resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
+
+      await withEnvAsync(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        async () => {
+          await updateCommand({ yes: true });
+        },
+      );
+
+      const resumeOrder = resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0];
+      const spawnOrder = vi.mocked(spawn).mock.invocationCallOrder[0];
+      expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        }),
+      );
+      expect(requireValue(resumeOrder, "Scheduled Task resume order")).toBeLessThan(
+        requireValue(spawnOrder, "post-core fresh-process spawn order"),
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("keeps managed service stop output off stdout during json package updates", async () => {
     const tempDir = await createTrackedTempDir("openclaw-update-json-stop-service-");
     const nodeModules = path.join(tempDir, "node_modules");
@@ -2891,6 +3178,14 @@ describe("update-cli", () => {
           termination: "exit",
         };
       }
+      if (
+        Array.isArray(argv) &&
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv.includes("--prefix")
+      ) {
+        await writeStagedOpenClawPackageInstall(argv, "2026.4.23");
+      }
       return {
         stdout: "",
         stderr: "",
@@ -2960,6 +3255,14 @@ describe("update-cli", () => {
           termination: "exit",
         };
       }
+      if (
+        Array.isArray(argv) &&
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv.includes("--prefix")
+      ) {
+        await writeStagedOpenClawPackageInstall(argv);
+      }
       return {
         stdout: "",
         stderr: "",
@@ -2975,29 +3278,19 @@ describe("update-cli", () => {
     const installArgvs = commandCalls()
       .map(([argv]) => argv)
       .filter((argv) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
-    expect(installArgvs).toEqual([
-      [
-        "npm",
-        "i",
-        "-g",
-        "openclaw@latest",
-        "--no-fund",
-        "--no-audit",
-        "--loglevel=error",
-        "--min-release-age=0",
-      ],
-      [
-        "npm",
-        "i",
-        "-g",
-        "openclaw@latest",
-        "--omit=optional",
-        "--no-fund",
-        "--no-audit",
-        "--loglevel=error",
-        "--min-release-age=0",
-      ],
-    ]);
+    expect(installArgvs).toHaveLength(2);
+    for (const [index, argv] of installArgvs.entries()) {
+      if (argv.includes("--prefix")) {
+        expect(typeof argv[argv.indexOf("--prefix") + 1]).toBe("string");
+      }
+      expect(argv).toEqual(
+        expect.arrayContaining(["openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"]),
+      );
+      expect(argv.some((arg) => arg === "--min-release-age=0" || /^--before=.+/u.test(arg))).toBe(
+        true,
+      );
+      expect(argv.includes("--omit=optional")).toBe(index === 1);
+    }
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
