@@ -225,4 +225,29 @@ describe("loadSessionLearnings", () => {
     await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual(["Use bullets"]);
     await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual(["Avoid bullets"]);
   });
+
+  it("keeps the same session key isolated by store path", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const workStorePath = path.join(tmpDir, "work");
+    const opsStorePath = path.join(tmpDir, "ops");
+
+    await storeSessionLearning({
+      storePath: workStorePath,
+      sessionKey: "msteams:user1",
+      learning: "Use bullets",
+    });
+    await storeSessionLearning({
+      storePath: opsStorePath,
+      sessionKey: "msteams:user1",
+      learning: "Avoid bullets",
+    });
+
+    await expect(loadSessionLearnings(workStorePath, "msteams:user1")).resolves.toEqual([
+      "Use bullets",
+    ]);
+    await expect(loadSessionLearnings(opsStorePath, "msteams:user1")).resolves.toEqual([
+      "Avoid bullets",
+    ]);
+  });
 });

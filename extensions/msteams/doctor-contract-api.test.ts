@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +28,10 @@ function encodeSessionKey(sessionKey: string): string {
   return Buffer.from(sessionKey, "utf8").toString("base64url");
 }
 
+function learningStoreKey(storePath: string, sessionKey: string): string {
+  return createHash("sha256").update(`${storePath}\0${sessionKey}`, "utf8").digest("hex");
+}
+
 describe("msteams doctor state migration", () => {
   let stateDir = "";
   let env: NodeJS.ProcessEnv;
@@ -50,11 +55,19 @@ describe("msteams doctor state migration", () => {
       mainStorePath,
       `${encodeSessionKey(encodedSessionKey)}.learnings.json`,
     );
-    const sanitizedSourcePath = path.join(workStorePath, "msteams_user2.learnings.json");
+    const sanitizedSessionKey = "msteams:channel:19:abc@thread.tacv2";
+    const sanitizedSourcePath = path.join(
+      workStorePath,
+      "msteams_channel_19_abc_thread_tacv2.learnings.json",
+    );
     await fs.mkdir(mainStorePath, { recursive: true });
     await fs.mkdir(workStorePath, { recursive: true });
+    await fs.writeFile(
+      path.join(workStorePath, "sessions.json"),
+      JSON.stringify({ sessions: { [sanitizedSessionKey]: {} } }),
+    );
     await fs.writeFile(encodedSourcePath, JSON.stringify(["Be concise", "Use examples"]));
-    await fs.writeFile(sanitizedSourcePath, JSON.stringify(["Prefer cards"]));
+    await fs.writeFile(sanitizedSourcePath, JSON.stringify(["Prefer cards for channel feedback"]));
 
     const migration = stateMigrations[0];
     const context = createDoctorContext(env);
@@ -63,7 +76,7 @@ describe("msteams doctor state migration", () => {
         namespace: "feedback-learnings",
         maxEntries: 10_000,
       })
-      .register(encodeSessionKey(encodedSessionKey), {
+      .register(learningStoreKey(mainStorePath, encodedSessionKey), {
         sessionKey: encodedSessionKey,
         learnings: ["Use examples", "New runtime note"],
         updatedAt: 1900,
@@ -96,23 +109,31 @@ describe("msteams doctor state migration", () => {
     });
 
     expect(result.changes).toEqual([
-      expect.stringContaining("Migrated 1 Microsoft Teams feedback-learning entry"),
+      expect.stringContaining("Migrated 2 Microsoft Teams feedback-learning entries"),
+      expect.stringContaining("Archived Microsoft Teams feedback-learning legacy source"),
       expect.stringContaining("Archived Microsoft Teams feedback-learning legacy source"),
     ]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining("legacy filename cannot be mapped to a session key"),
-    ]);
+    expect(result.warnings).toEqual([]);
     await expect(fs.access(encodedSourcePath)).rejects.toThrow();
-    await expect(fs.access(sanitizedSourcePath)).resolves.toBeUndefined();
+    await expect(fs.access(sanitizedSourcePath)).rejects.toThrow();
     await expect(fs.access(`${encodedSourcePath}.migrated`)).resolves.toBeUndefined();
+    await expect(fs.access(`${sanitizedSourcePath}.migrated`)).resolves.toBeUndefined();
 
     const store = context.openPluginStateKeyedStore({
       namespace: "feedback-learnings",
       maxEntries: 10_000,
     });
-    await expect(store.lookup(encodeSessionKey(encodedSessionKey))).resolves.toMatchObject({
+    await expect(
+      store.lookup(learningStoreKey(mainStorePath, encodedSessionKey)),
+    ).resolves.toMatchObject({
       sessionKey: encodedSessionKey,
       learnings: ["Be concise", "Use examples", "New runtime note"],
+    });
+    await expect(
+      store.lookup(learningStoreKey(workStorePath, sanitizedSessionKey)),
+    ).resolves.toMatchObject({
+      sessionKey: sanitizedSessionKey,
+      learnings: ["Prefer cards for channel feedback"],
     });
   });
 });

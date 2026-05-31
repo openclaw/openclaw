@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { getMSTeamsRuntime } from "./runtime.js";
 
 /** Default cooldown between reflections per session (5 minutes). */
@@ -19,6 +20,10 @@ type FeedbackLearningEntry = {
 
 function encodeSessionKey(sessionKey: string): string {
   return Buffer.from(sessionKey, "utf8").toString("base64url");
+}
+
+function learningStoreKey(storePath: string, sessionKey: string): string {
+  return crypto.createHash("sha256").update(`${storePath}\0${sessionKey}`, "utf8").digest("hex");
 }
 
 function openLearningStore() {
@@ -69,7 +74,7 @@ export async function storeSessionLearning(params: {
   learning: string;
 }): Promise<void> {
   const store = openLearningStore();
-  const key = encodeSessionKey(params.sessionKey);
+  const key = learningStoreKey(params.storePath, params.sessionKey);
   const existing = await store.lookup(key);
   let learnings = existing?.learnings ?? [];
   learnings.push(params.learning);
@@ -85,10 +90,10 @@ export async function storeSessionLearning(params: {
 
 /** Load session learnings for injection into extraSystemPrompt. */
 export async function loadSessionLearnings(
-  _storePath: string,
+  storePath: string,
   sessionKey: string,
 ): Promise<string[]> {
-  const key = encodeSessionKey(sessionKey);
+  const key = learningStoreKey(storePath, sessionKey);
   const stored = await openLearningStore().lookup(key);
   if (stored) {
     return stored.learnings;

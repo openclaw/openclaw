@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
@@ -16,6 +17,10 @@ function encodeSessionKey(sessionKey: string): string {
   return Buffer.from(sessionKey, "utf8").toString("base64url");
 }
 
+function learningStoreKey(storePath: string, sessionKey: string): string {
+  return crypto.createHash("sha256").update(`${storePath}\0${sessionKey}`, "utf8").digest("hex");
+}
+
 function decodeSessionKey(fileStem: string): string | null {
   try {
     const decoded = Buffer.from(fileStem, "base64url").toString("utf8");
@@ -27,6 +32,42 @@ function decodeSessionKey(fileStem: string): string | null {
 
 function resolveLearningSessionKey(fileStem: string): string | null {
   return decodeSessionKey(fileStem);
+}
+
+function legacySanitizeSessionKey(sessionKey: string): string {
+  return sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+async function listKnownSessionKeys(storePath: string): Promise<string[]> {
+  const candidates = [storePath, path.join(storePath, "sessions.json")];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(candidate, "utf8")) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        continue;
+      }
+      const sessions =
+        (parsed as { sessions?: unknown }).sessions &&
+        typeof (parsed as { sessions?: unknown }).sessions === "object" &&
+        !Array.isArray((parsed as { sessions?: unknown }).sessions)
+          ? (parsed as { sessions: Record<string, unknown> }).sessions
+          : (parsed as Record<string, unknown>);
+      return Object.keys(sessions).filter((key) => key.trim());
+    } catch {
+      // Try the next known session index shape/location.
+    }
+  }
+  return [];
+}
+
+function resolveLegacySanitizedSessionKey(
+  fileStem: string,
+  knownSessionKeys: string[],
+): string | null {
+  const matches = knownSessionKeys.filter(
+    (sessionKey) => legacySanitizeSessionKey(sessionKey) === fileStem,
+  );
+  return matches.length === 1 ? matches[0] : null;
 }
 
 function listAgentIds(config: { agents?: { list?: Array<{ id?: unknown }> } }): string[] {
@@ -62,7 +103,9 @@ async function fileExists(filePath: string): Promise<boolean> {
 
 async function listLegacyLearningFiles(
   storePath: string,
-): Promise<Array<{ sessionKey: string | null; filePath: string; learnings: string[] }>> {
+): Promise<
+  Array<{ storePath: string; sessionKey: string | null; filePath: string; learnings: string[] }>
+> {
   let entries: fs.Dirent[] = [];
   try {
     entries = await fs.readdir(storePath, { withFileTypes: true });
@@ -70,20 +113,28 @@ async function listLegacyLearningFiles(
     return [];
   }
   const suffix = ".learnings.json";
-  const files: Array<{ sessionKey: string | null; filePath: string; learnings: string[] }> = [];
+  const knownSessionKeys = await listKnownSessionKeys(storePath);
+  const files: Array<{
+    storePath: string;
+    sessionKey: string | null;
+    filePath: string;
+    learnings: string[];
+  }> = [];
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(suffix)) {
       continue;
     }
     const fileStem = entry.name.slice(0, -suffix.length);
-    const sessionKey = resolveLearningSessionKey(fileStem);
+    const sessionKey =
+      resolveLearningSessionKey(fileStem) ??
+      resolveLegacySanitizedSessionKey(fileStem, knownSessionKeys);
     const filePath = path.join(storePath, entry.name);
     try {
       const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
       if (Array.isArray(parsed)) {
         const learnings = parsed.filter((item): item is string => typeof item === "string");
         if (learnings.length > 0) {
-          files.push({ sessionKey, filePath, learnings: learnings.slice(-10) });
+          files.push({ storePath, sessionKey, filePath, learnings: learnings.slice(-10) });
         }
       }
     } catch {
@@ -166,7 +217,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const importableFiles = files.filter((file) => file.sessionKey);
       const missingKeys = new Set(
         importableFiles
-          .map((file) => encodeSessionKey(file.sessionKey ?? ""))
+          .map((file) => learningStoreKey(file.storePath, file.sessionKey ?? ""))
           .filter((key) => !existingKeys.has(key)),
       );
       if (missingKeys.size > MAX_LEARNING_ENTRIES - existingKeys.size) {
@@ -183,7 +234,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           );
           continue;
         }
-        const key = encodeSessionKey(file.sessionKey);
+        const key = learningStoreKey(file.storePath, file.sessionKey);
         const existing = await store.lookup(key);
         await store.register(key, {
           sessionKey: existing?.sessionKey ?? file.sessionKey,
