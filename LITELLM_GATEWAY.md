@@ -66,6 +66,36 @@ Changes take effect on the next gateway restart:
 systemctl --user restart openclaw.service
 ```
 
+## Health monitor (alert + auto-restart)
+
+A systemd `--user` timer checks `/health/liveliness` every 2 minutes. If the
+gateway is down it attempts an idempotent `docker compose up -d`, rechecks, and
+alerts the owner over the existing Telegram bot via `openclaw message send` (no
+new token, no polling conflict). Alerts fire only on transitions (up↔down), so
+no spam.
+
+Files:
+- `litellm-health-monitor.sh` — the check + restart + alert logic
+- `deploy/systemd/litellm-health-monitor.{service,timer}` — installed copies live
+  in `~/.config/systemd/user/`
+
+Install / control:
+```bash
+cp deploy/systemd/litellm-health-monitor.* ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now litellm-health-monitor.timer
+systemctl --user list-timers litellm-health-monitor.timer   # next fire
+tail -f ~/.openclaw/litellm-monitor.log                     # monitor log
+```
+
+State: `~/.openclaw/.litellm-monitor-state` (`up`/`down`). Owner Telegram target
+is resolved at runtime (first user peer) — no chat id stored on disk; override
+with `MONITOR_TARGET` if needed.
+
+> The monitor auto-restarts the container. To take LiteLLM down for real
+> (rollback), **stop the timer first** or it will bring the container back:
+> `systemctl --user disable --now litellm-health-monitor.timer`
+
 ## Teardown / rollback
 
 ```bash

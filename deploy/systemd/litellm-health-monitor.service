@@ -1,0 +1,11 @@
+[Unit]
+Description=LiteLLM health monitor for OpenClaw (alert + auto-restart)
+After=network-online.target
+# Do not let monitor failures cascade into the gateway.
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/zero/openclaw/litellm-health-monitor.sh
+# Never let a single check hang forever.
+TimeoutStartSec=120
