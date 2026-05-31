@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { runSkillSetupHook } from "./setup.js";
 
@@ -63,25 +64,6 @@ function setupSkillMdWithEnv(script: string, envVars: string[]): string {
     "",
     "# Test",
   ].join("\n");
-}
-
-async function withEnv(vars: Record<string, string>, run: () => Promise<void>): Promise<void> {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(vars)) {
-    previous.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-  try {
-    await run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
 }
 
 afterEach(async () => {
@@ -157,7 +139,7 @@ describe("runSkillSetupHook", () => {
       ].join("\n"),
     );
 
-    await withEnv({ MY_TOKEN: "test-token-value", MY_KEY: "test-key-value" }, async () => {
+    await withEnvAsync({ MY_TOKEN: "test-token-value", MY_KEY: "test-key-value" }, async () => {
       const result = await runSkillSetupHook({ targetDir: dir, mode: "install" });
       expect(result).toEqual({ ok: true });
     });
@@ -190,7 +172,7 @@ describe("runSkillSetupHook", () => {
       ].join("\n"),
     );
 
-    await withEnv(
+    await withEnvAsync(
       {
         MY_TOKEN: "test-token-value",
         BASH_ENV: "/tmp/unsafe-bash-env",
