@@ -10,7 +10,6 @@ import type { PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -145,8 +144,8 @@ function resolvePluginRegistrySnapshotMemoKey(
     preferPersisted: params.preferPersisted ?? null,
     // Plugin manifests are process-stable inside the Gateway, while the persisted
     // registry envelope can change through explicit refresh/install flows.
-    registryFile: fileFingerprint(
-      resolveInstalledPluginIndexStorePath({
+    registry: hashJson(
+      readPersistedInstalledPluginIndexSync({
         env,
         ...(params.stateDir ? { stateDir: params.stateDir } : {}),
       }),

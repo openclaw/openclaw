@@ -22,7 +22,6 @@ import {
 import { createConfigValidationMetadataPluginIdScope } from "../plugins/channel-plugin-ids.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
-  resolveInstalledPluginIndexRecordsStorePath,
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import {
@@ -138,16 +137,6 @@ type ShippedPluginInstallConfigWriteMigration =
     }
   | {
       migrated: true;
-      filePath: string;
-      writtenHash: string;
-      previousFile:
-        | {
-            existed: false;
-          }
-        | {
-            existed: true;
-            raw: string;
-          };
     };
 
 type ShippedPluginInstallConfigReadMigration = {
@@ -1409,49 +1398,6 @@ export function createConfigIO(
     return applyConfigOverrides(cfgWithOwnerDisplaySecret);
   }
 
-  function captureFileSnapshotSync(filePath: string):
-    | {
-        existed: false;
-      }
-    | {
-        existed: true;
-        raw: string;
-      } {
-    return deps.fs.existsSync(filePath)
-      ? ({
-          existed: true,
-          raw: deps.fs.readFileSync(filePath, "utf-8"),
-        } as const)
-      : ({ existed: false } as const);
-  }
-
-  function restoreFileSnapshotSync(
-    filePath: string,
-    previousFile:
-      | {
-          existed: false;
-        }
-      | {
-          existed: true;
-          raw: string;
-        },
-  ): void {
-    if (previousFile.existed) {
-      deps.fs.writeFileSync(filePath, previousFile.raw, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      return;
-    }
-    try {
-      deps.fs.unlinkSync(filePath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-  }
-
   function replaceConfigFileSync(raw: string): void {
     replaceFileAtomicSync({
       filePath: configPath,
@@ -1479,11 +1425,6 @@ export function createConfigIO(
 
     try {
       const stateDir = resolveStateDir(deps.env, deps.homedir);
-      const filePath = resolveInstalledPluginIndexRecordsStorePath({
-        env: deps.env,
-        stateDir,
-      });
-      const previousFile = captureFileSnapshotSync(filePath);
       const existingRecords = loadInstalledPluginIndexInstallRecordsSync({
         env: deps.env,
         stateDir,
@@ -1508,12 +1449,7 @@ export function createConfigIO(
         const persistedRootRaw = JSON.stringify(persistedRootParsed, null, 2)
           .trimEnd()
           .concat("\n");
-        try {
-          replaceConfigFileSync(persistedRootRaw);
-        } catch (err) {
-          restoreFileSnapshotSync(filePath, previousFile);
-          throw err;
-        }
+        replaceConfigFileSync(persistedRootRaw);
         return { config: stripped, persistedRootParsed, persistedRootRaw };
       }
     } catch (err) {
@@ -1572,10 +1508,6 @@ export function createConfigIO(
     }
 
     const stateDir = resolveStateDir(deps.env, deps.homedir);
-    const filePath = resolveInstalledPluginIndexRecordsStorePath({
-      env: deps.env,
-      stateDir,
-    });
     const existingRecords = loadInstalledPluginIndexInstallRecordsSync({
       env: deps.env,
       stateDir,
@@ -1584,14 +1516,8 @@ export function createConfigIO(
       return { migrated: false };
     }
 
-    const previousFile = deps.fs.existsSync(filePath)
-      ? ({
-          existed: true,
-          raw: deps.fs.readFileSync(filePath, "utf-8"),
-        } as const)
-      : ({ existed: false } as const);
     try {
-      const writtenPath = writePersistedInstalledPluginIndexInstallRecordsSync(
+      writePersistedInstalledPluginIndexInstallRecordsSync(
         {
           ...installRecords,
           ...existingRecords,
@@ -1602,14 +1528,8 @@ export function createConfigIO(
           stateDir,
         },
       );
-      const writtenRaw = deps.fs.existsSync(writtenPath)
-        ? deps.fs.readFileSync(writtenPath, "utf-8")
-        : null;
       return {
         migrated: true,
-        filePath: writtenPath,
-        writtenHash: hashConfigRaw(writtenRaw),
-        previousFile,
       };
     } catch (err) {
       throw new Error(
@@ -1627,27 +1547,7 @@ export function createConfigIO(
     if (!migration.migrated) {
       return false;
     }
-    const currentRaw = deps.fs.existsSync(migration.filePath)
-      ? deps.fs.readFileSync(migration.filePath, "utf-8")
-      : null;
-    if (hashConfigRaw(currentRaw) !== migration.writtenHash) {
-      return false;
-    }
-    if (migration.previousFile.existed) {
-      deps.fs.writeFileSync(migration.filePath, migration.previousFile.raw, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      return true;
-    }
-    try {
-      deps.fs.unlinkSync(migration.filePath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-    return true;
+    return false;
   }
 
   function loadConfigLocal(): OpenClawConfig {

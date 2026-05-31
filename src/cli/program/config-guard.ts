@@ -110,6 +110,7 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "agents"),
       path.join(stateDir, "flows", "registry.sqlite"),
       path.join(stateDir, "plugin-state", "state.sqlite"),
+      path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "sessions"),
       path.join(stateDir, "tasks", "runs.sqlite"),
     ].some(fileOrDirExists) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
