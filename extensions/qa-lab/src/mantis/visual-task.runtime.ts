@@ -516,7 +516,9 @@ export async function runMantisVisualDriver(
       runner,
       stdio: "inherit",
     });
-    await new Promise((resolve) => setTimeout(resolve, opts.settleMs ?? DEFAULT_SETTLE_MS));
+    await new Promise((resolve) => {
+      setTimeout(resolve, opts.settleMs ?? DEFAULT_SETTLE_MS);
+    });
     await runCommandWithExternalOutput({
       command: crabboxBin,
       outputPath: screenshotPath,

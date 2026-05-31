@@ -282,8 +282,10 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   }
 }
 
-function usage() {
-  console.error(`Usage: node scripts/test-live-shard.mjs <${LIVE_TEST_SHARDS.join("|")}> [--list]`);
+function usage(stream = process.stderr) {
+  stream.write(
+    `Usage: node scripts/test-live-shard.mjs <${LIVE_TEST_SHARDS.join("|")}> [--list]\n`,
+  );
 }
 
 export function parseLiveShardArgs(args) {
@@ -309,9 +311,17 @@ export function parseLiveShardArgs(args) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const rawArgs = process.argv.slice(2);
+  const separatorIndex = rawArgs.indexOf("--");
+  const optionArgs = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : rawArgs;
+  if (optionArgs.includes("--help") || optionArgs.includes("-h")) {
+    usage(process.stdout);
+    process.exit(0);
+  }
+
   let parsedArgs;
   try {
-    parsedArgs = parseLiveShardArgs(process.argv.slice(2));
+    parsedArgs = parseLiveShardArgs(rawArgs);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     usage();

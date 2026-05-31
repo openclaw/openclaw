@@ -1,7 +1,14 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export function normalizeWindowsArgv(argv: string[]): string[] {
-  if (process.platform !== "win32") {
+export function normalizeWindowsArgv(
+  argv: string[],
+  options: {
+    platform?: NodeJS.Platform;
+    execPath?: string;
+  } = {},
+): string[] {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "win32") {
     return argv;
   }
   if (argv.length < 2) {
@@ -27,7 +34,7 @@ export function normalizeWindowsArgv(argv: string[]): string[] {
     normalizeArg(value).replace(/^\\\\\\?\\/, "");
   const basename = (value: string): string => value.split(/[\\/]/).pop() ?? value;
 
-  const execPath = normalizeCandidate(process.execPath);
+  const execPath = normalizeCandidate(options.execPath ?? process.execPath);
   const execPathLower = normalizeLowercaseStringOrEmpty(execPath);
   const execBase = normalizeLowercaseStringOrEmpty(basename(execPath));
   const isExecPath = (value: string | undefined): boolean => {
@@ -52,7 +59,7 @@ export function normalizeWindowsArgv(argv: string[]): string[] {
   const argv0IsExecPath = isExecPath(argv[0]);
   const next = [...argv];
   let removedLauncherPrefix = false;
-  for (let i = 1; i < next.length; ) {
+  for (const i = 1; i < next.length; ) {
     if (isExecPath(next[i])) {
       next.splice(i, 1);
       removedLauncherPrefix = true;
@@ -64,7 +71,7 @@ export function normalizeWindowsArgv(argv: string[]): string[] {
     return next;
   }
   const cleaned = [...next];
-  for (let i = 2; i < cleaned.length; ) {
+  for (const i = 2; i < cleaned.length; ) {
     const arg = cleaned[i];
     if (!arg || arg.startsWith("-")) {
       break;

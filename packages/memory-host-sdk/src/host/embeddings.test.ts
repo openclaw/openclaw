@@ -4,11 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./embedding-worker-errors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
-import {
-  createLocalEmbeddingProvider,
-  createLocalEmbeddingProviderInProcess,
-  DEFAULT_LOCAL_MODEL,
-} from "./embeddings.js";
+import { createLocalEmbeddingProviderInProcess, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 
 const nodeLlamaMock = vi.hoisted(() => ({
   importNodeLlamaCpp: vi.fn(),
@@ -434,7 +430,9 @@ process.on("message", (message) => {
     const closePromise = provider.close?.() ?? Promise.resolve();
     const closeResult = await Promise.race([
       closePromise.then(() => "closed" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 1_000);
+      }),
     ]);
 
     expect(closeResult).toBe("closed");

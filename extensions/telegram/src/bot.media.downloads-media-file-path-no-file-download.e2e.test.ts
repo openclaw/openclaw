@@ -426,8 +426,8 @@ describe("telegram media groups", () => {
               },
             ],
             expectedReplyCount: 1,
-            assert: (replySpy: ReturnType<typeof vi.fn>) => {
-              const payload = replyPayload(replySpy);
+            assert: (replySpyLocal: ReturnType<typeof vi.fn>) => {
+              const payload = replyPayload(replySpyLocal);
               expect(payload?.Body).toContain("Here are my photos");
               expect(payload?.MediaPaths).toHaveLength(2);
             },

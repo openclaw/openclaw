@@ -140,8 +140,6 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     channel: params.channel,
     accountId,
   });
-
-  let sessionBindingAdapter: SessionBindingAdapter;
   const manager: AccountScopedConversationBindingManager<TKind> = {
     accountId,
     getByConversationId: (conversationId) =>
@@ -158,7 +156,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       if (!normalizedConversationId || !normalizedTargetSessionKey) {
         return null;
       }
-      const existing = getState<TKind>(params.stateKey).bindingsByAccountConversation.get(
+      const existingLocal = getState<TKind>(params.stateKey).bindingsByAccountConversation.get(
         resolveBindingKey({ accountId, conversationId: normalizedConversationId }),
       );
       const now = Date.now();
@@ -170,15 +168,15 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         agentId:
           typeof metadata?.agentId === "string" && metadata.agentId.trim()
             ? metadata.agentId.trim()
-            : (existing?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
+            : (existingLocal?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()
-            : existing?.label,
+            : existingLocal?.label,
         boundBy:
           typeof metadata?.boundBy === "string" && metadata.boundBy.trim()
             ? metadata.boundBy.trim()
-            : existing?.boundBy,
+            : existingLocal?.boundBy,
         boundAt: now,
         lastActivityAt: now,
       };
@@ -241,7 +239,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     },
   };
 
-  sessionBindingAdapter = {
+  const sessionBindingAdapter: SessionBindingAdapter = {
     channel: params.channel,
     accountId,
     capabilities: {

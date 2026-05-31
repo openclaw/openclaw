@@ -138,9 +138,15 @@ const rules = [
   },
   {
     id: "plugin-sdk-compat-subpaths",
-    roots: ["src", "extensions", "packages"],
+    roots: ["src", "packages"],
     moduleSpecifiers: buildDeprecatedPluginSdkModuleSpecifiers(),
     message: "use focused non-deprecated plugin SDK subpaths",
+  },
+  {
+    id: "extension-plugin-sdk-compat-subpaths",
+    roots: ["extensions"],
+    moduleSpecifiers: buildDeprecatedPluginSdkModuleSpecifiers(),
+    message: "extensions must use focused non-deprecated plugin SDK subpaths",
   },
   {
     id: "message-api",
@@ -159,6 +165,7 @@ const rules = [
     allowedFiles: [
       "src/channels/turn/durable-delivery.ts",
       "src/channels/turn/kernel.ts",
+      "src/channels/message/inbound-reply-dispatch.ts",
       "src/infra/outbound/deliver-runtime.ts",
       "src/infra/outbound/deliver.ts",
       "src/plugin-sdk/channel-message-runtime.ts",

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   AssistantMessage,
   StopReason,
@@ -8,9 +9,8 @@ import type {
   ToolCall,
   Tool,
   Usage,
-} from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+} from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, streamSimple } from "openclaw/plugin-sdk/llm";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createMoonshotThinkingWrapper,
+  createPlainTextToolCallCompatWrapper,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -50,10 +51,48 @@ const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
+const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
+const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
+
+type OllamaStreamCooperativeScheduler = {
+  afterEvent: () => Promise<void>;
+};
+
+function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error("Request was aborted");
+  }
+}
+
+function createOllamaStreamCooperativeScheduler(
+  signal?: AbortSignal,
+): OllamaStreamCooperativeScheduler {
+  let lastYieldedAt = Date.now();
+  let eventsSinceYield = 0;
+  return {
+    async afterEvent() {
+      throwIfOllamaStreamAborted(signal);
+      eventsSinceYield += 1;
+      const now = Date.now();
+      if (
+        eventsSinceYield < OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
+        now - lastYieldedAt < OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
+      ) {
+        return;
+      }
+      eventsSinceYield = 0;
+      lastYieldedAt = now;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      throwIfOllamaStreamAborted(signal);
+    },
+  };
+}
 
 function countMatches(text: string, re: RegExp): number {
   re.lastIndex = 0;
@@ -343,6 +382,18 @@ function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, 
   return options;
 }
 
+function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>): void {
+  if (options.temperature !== 0) {
+    return;
+  }
+  if (
+    options.top_p === undefined ||
+    (typeof options.top_p === "number" && Number.isFinite(options.top_p) && options.top_p !== 1)
+  ) {
+    options.top_p = 1;
+  }
+}
+
 function resolveOllamaTopLevelParams(
   model: ProviderRuntimeModel,
 ): Record<string, unknown> | undefined {
@@ -510,18 +561,22 @@ function buildStreamAssistantMessage(params: {
 
 function buildStreamErrorAssistantMessage(params: {
   model: StreamModelDescriptor;
+  stopReason: Extract<StopReason, "aborted" | "error">;
   errorMessage: string;
   timestamp?: number;
-}): AssistantMessage & { stopReason: "error"; errorMessage: string } {
+}): AssistantMessage & {
+  stopReason: Extract<StopReason, "aborted" | "error">;
+  errorMessage: string;
+} {
   return {
     ...buildStreamAssistantMessage({
       model: params.model,
       content: [],
-      stopReason: "error",
+      stopReason: params.stopReason,
       usage: buildUsageWithNoCost({}),
       timestamp: params.timestamp,
     }),
-    stopReason: "error",
+    stopReason: params.stopReason,
     errorMessage: params.errorMessage,
   };
 }
@@ -1068,7 +1123,7 @@ function resolveOllamaRequestTimeoutMs(
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
 }
 
-export function createOllamaStreamFn(
+function createRawOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
@@ -1098,6 +1153,7 @@ export function createOllamaStreamFn(
         if (typeof options?.maxTokens === "number") {
           ollamaOptions.num_predict = options.maxTokens;
         }
+        normalizeOllamaGreedySamplingOptions(ollamaOptions);
 
         const body = buildOllamaChatRequest({
           modelId: model.id,
@@ -1155,6 +1211,7 @@ export function createOllamaStreamFn(
           let pendingFinalVisibleContent: string | undefined;
           const modelInfo = { api: model.api, provider: model.provider, id: model.id };
           const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
+          const cooperativeScheduler = createOllamaStreamCooperativeScheduler(options?.signal);
           let streamStarted = false;
           let thinkingStarted = false;
           let thinkingEnded = false;
@@ -1275,6 +1332,7 @@ export function createOllamaStreamFn(
           };
 
           for await (const chunk of parseNdjsonStream(reader)) {
+            throwIfOllamaStreamAborted(options?.signal);
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta) {
               if (!streamStarted) {
@@ -1327,6 +1385,7 @@ export function createOllamaStreamFn(
               finalResponse = chunk;
               break;
             }
+            await cooperativeScheduler.afterEvent();
           }
 
           if (!finalResponse) {
@@ -1378,11 +1437,13 @@ export function createOllamaStreamFn(
           await release();
         }
       } catch (err) {
+        const stopReason = options?.signal?.aborted ? "aborted" : "error";
         stream.push({
           type: "error",
-          reason: "error",
+          reason: stopReason,
           error: buildStreamErrorAssistantMessage({
             model,
+            stopReason,
             errorMessage: formatErrorMessage(err),
           }),
         });
@@ -1394,6 +1455,13 @@ export function createOllamaStreamFn(
     queueMicrotask(() => void run());
     return stream;
   };
+}
+
+export function createOllamaStreamFn(
+  baseUrl: string,
+  defaultHeaders?: Record<string, string>,
+): StreamFn {
+  return createPlainTextToolCallCompatWrapper(createRawOllamaStreamFn(baseUrl, defaultHeaders));
 }
 
 export function createConfiguredOllamaStreamFn(params: {

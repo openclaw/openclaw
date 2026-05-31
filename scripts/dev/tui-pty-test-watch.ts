@@ -54,7 +54,9 @@ function parseOptions(args = process.argv.slice(2)): Options {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function shouldUseAltScreen(options: Options) {

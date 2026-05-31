@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildDirectChatContext,
@@ -264,7 +264,7 @@ const happyPathModel = {
   api: "responses",
   input: ["text"],
   contextWindow: 272_000,
-} as unknown as Model<Api>;
+} as unknown as Model;
 
 function stableJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) {

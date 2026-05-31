@@ -103,7 +103,9 @@ class FlushController {
     if (!this.flushInProgress) {
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => this.flushResolvers.push(resolve));
+    return new Promise<void>((resolve) => {
+      this.flushResolvers.push(resolve);
+    });
   }
 
   /** 取消所有 pending timer + 等待正在执行的 flush 完成，确保 flush 活动彻底停止 */

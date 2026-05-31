@@ -47,6 +47,28 @@ describe("normalizeWindowsArgv", () => {
     }
   });
 
+  it("preserves non-launcher positionals containing node.exe after a duplicated launcher", () => {
+    const platform = mockProcessPlatform("win32");
+    try {
+      expect(
+        normalizeWindowsArgv([
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+          "debug node.exe-wrapper startup",
+          "--verbose",
+        ]),
+      ).toEqual([
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+        "debug node.exe-wrapper startup",
+        "--verbose",
+      ]);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it("preserves exact node.exe option values outside the launcher prefix", () => {
     const platform = mockProcessPlatform("win32");
     try {

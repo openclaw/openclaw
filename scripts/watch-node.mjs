@@ -92,7 +92,10 @@ const isProcessAlive = (pid, signalProcess) => {
   return true;
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const createWatchLockKey = (cwd, args) =>
   createHash("sha256").update(cwd).update("\0").update(args.join("\0")).digest("hex").slice(0, 12);
@@ -289,8 +292,6 @@ export async function runWatchMain(params = {}) {
     let watcher = null;
     let lockHandle = null;
     let autoDoctorAttempted = false;
-    let onSigInt;
-    let onSigTerm;
 
     const settle = (code) => {
       if (settled) {
@@ -448,14 +449,14 @@ export async function runWatchMain(params = {}) {
       void resolveCreateWatcher().then(attachWatcher).catch(rejectWatcherStartupError);
     };
 
-    onSigInt = () => {
+    const onSigInt = () => {
       shuttingDown = true;
       if (watchProcess && typeof watchProcess.kill === "function") {
         watchProcess.kill(WATCH_RESTART_SIGNAL);
       }
       settle(130);
     };
-    onSigTerm = () => {
+    const onSigTerm = () => {
       shuttingDown = true;
       if (watchProcess && typeof watchProcess.kill === "function") {
         watchProcess.kill(WATCH_RESTART_SIGNAL);

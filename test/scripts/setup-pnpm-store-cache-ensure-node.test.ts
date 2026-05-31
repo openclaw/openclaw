@@ -2,9 +2,13 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const ensureNodeScript = resolve(".github/actions/setup-pnpm-store-cache/ensure-node.sh");
+let missingToolcacheCase: {
+  status: number | null;
+  stderr: string;
+};
 
 function writeFakeNode(binDir: string, version: string) {
   mkdirSync(binDir, { recursive: true });
@@ -55,7 +59,54 @@ function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.Process
   return result;
 }
 
+function runVersionMatch(actual: string, requested: string) {
+  return spawnSync(
+    "bash",
+    [
+      "-c",
+      [
+        `source "${ensureNodeScript}"`,
+        `openclaw_node_version_matches "${actual}" "${requested}"`,
+      ].join("; "),
+    ],
+    { encoding: "utf8", env: process.env },
+  );
+}
+
 describe("setup-pnpm-store-cache ensure-node", () => {
+  beforeAll(() => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source "${ensureNodeScript}"`,
+            `openclaw_find_toolcache_node "99.99.99"`,
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH ?? "",
+            RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
+            AGENT_TOOLSDIRECTORY: join(root, "missing-agent-tools"),
+            ACTIONS_RUNNER_TOOL_CACHE: join(root, "missing-actions-cache"),
+            OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing-container-cache"),
+          },
+        },
+      );
+      missingToolcacheCase = {
+        status: result.status,
+        stderr: result.stderr,
+      };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses a matching active node", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {
@@ -186,6 +237,31 @@ exit 1
     }
   });
 
+  it("keeps the Node 22 wildcard at the supported minimum", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "22.18.0");
+      const toolcacheBin = join(root, "toolcache", "node", "22.22.3", "x64", "bin");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "22.22.3");
+      const result = runEnsureNode(root, "22.x", {
+        PATH: `${activeBin}:${process.env.PATH ?? ""}`,
+        RUNNER_TOOL_CACHE: join(root, "toolcache"),
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`Using Node 22.22.3 from ${toolcacheNode}`);
+      expect(result.stdout.trim().endsWith("22.22.3")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Node 22 wildcard matches below the supported minimum", () => {
+    expect(runVersionMatch("22.18.0", "22.x").status).toBe(1);
+    expect(runVersionMatch("22.19.0", "22.x").status).toBe(0);
+  });
+
   it("fails clearly when no matching node is available", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {
@@ -202,5 +278,10 @@ exit 1
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("handles missing toolcache roots under nounset", () => {
+    expect(missingToolcacheCase.status).toBe(1);
+    expect(missingToolcacheCase.stderr).not.toContain("unbound variable");
   });
 });

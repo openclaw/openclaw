@@ -19,6 +19,11 @@ APP_VERSION_INPUT="${APP_VERSION:-$(cd "$ROOT_DIR" && node -p "require('./packag
 # Default to universal binary for distribution builds (supports both Apple Silicon and Intel Macs)
 export BUILD_ARCHS="${BUILD_ARCHS:-all}"
 export BUILD_CONFIG
+DSYM_ARCHS_VALUE="$BUILD_ARCHS"
+if [[ "$DSYM_ARCHS_VALUE" == "all" ]]; then
+  DSYM_ARCHS_VALUE="arm64 x86_64"
+fi
+IFS=' ' read -r -a DSYM_ARCHS <<< "$DSYM_ARCHS_VALUE"
 
 # Use release bundle ID (not .debug) so Sparkle auto-update works.
 # The .debug suffix in package-mac-app.sh blanks SUFeedURL intentionally for dev builds.
@@ -136,24 +141,49 @@ else
 fi
 
 if [[ "$SKIP_DSYM" != "1" ]]; then
-  DSYM_ARM64="$(find "$BUILD_ROOT/arm64" -type d -path "*/$BUILD_CONFIG/$PRODUCT.dSYM" -print -quit)"
-  DSYM_X86="$(find "$BUILD_ROOT/x86_64" -type d -path "*/$BUILD_CONFIG/$PRODUCT.dSYM" -print -quit)"
-  if [[ -n "$DSYM_ARM64" || -n "$DSYM_X86" ]]; then
+  DSYM_PATHS=()
+  MISSING_DSYM_ARCHS=()
+  for arch in "${DSYM_ARCHS[@]}"; do
+    if [[ ! -d "$BUILD_ROOT/$arch" ]]; then
+      MISSING_DSYM_ARCHS+=("$arch")
+      continue
+    fi
+    DSYM_FOR_ARCH="$(find "$BUILD_ROOT/$arch" -type d -path "*/$BUILD_CONFIG/$PRODUCT.dSYM" -print -quit)"
+    if [[ -n "$DSYM_FOR_ARCH" ]]; then
+      DSYM_PATHS+=("$DSYM_FOR_ARCH")
+    else
+      MISSING_DSYM_ARCHS+=("$arch")
+    fi
+  done
+
+  if [[ "${#MISSING_DSYM_ARCHS[@]}" -gt 0 ]]; then
+    echo "Error: dSYM not found for architecture(s): ${MISSING_DSYM_ARCHS[*]} (set SKIP_DSYM=1 to skip symbols)" >&2
+    exit 1
+  fi
+
+  if [[ "${#DSYM_PATHS[@]}" -gt 0 ]]; then
     TMP_DSYM="$ROOT_DIR/dist/$PRODUCT.dSYM"
     rm -rf "$TMP_DSYM"
-    if [[ -n "$DSYM_ARM64" && -n "$DSYM_X86" ]]; then
-      cp -R "$DSYM_ARM64" "$TMP_DSYM"
+    if [[ "${#DSYM_PATHS[@]}" -gt 1 ]]; then
+      cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"
       DWARF_OUT="$TMP_DSYM/Contents/Resources/DWARF/$PRODUCT"
-      DWARF_ARM="$DSYM_ARM64/Contents/Resources/DWARF/$PRODUCT"
-      DWARF_X86="$DSYM_X86/Contents/Resources/DWARF/$PRODUCT"
-      if [[ -f "$DWARF_ARM" && -f "$DWARF_X86" ]]; then
-        /usr/bin/lipo -create "$DWARF_ARM" "$DWARF_X86" -output "$DWARF_OUT"
+      DWARF_INPUTS=()
+      for dsym in "${DSYM_PATHS[@]}"; do
+        DWARF_INPUT="$dsym/Contents/Resources/DWARF/$PRODUCT"
+        if [[ ! -f "$DWARF_INPUT" ]]; then
+          echo "Error: missing DWARF binaries for dSYM merge (set SKIP_DSYM=1 to skip symbols)" >&2
+          exit 1
+        fi
+        DWARF_INPUTS+=("$DWARF_INPUT")
+      done
+      if [[ "${#DWARF_INPUTS[@]}" -gt 1 ]]; then
+        /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"
       else
         echo "Error: missing DWARF binaries for dSYM merge (set SKIP_DSYM=1 to skip symbols)" >&2
         exit 1
       fi
     else
-      cp -R "${DSYM_ARM64:-$DSYM_X86}" "$TMP_DSYM"
+      cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"
     fi
     echo "🧩 dSYM: $DSYM_ZIP"
     rm -f "$DSYM_ZIP"

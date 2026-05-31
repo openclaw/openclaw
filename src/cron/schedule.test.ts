@@ -58,19 +58,6 @@ describe("cron schedule", () => {
     ).toThrow("invalid cron schedule: expr is required");
   });
 
-  it("supports legacy cron field when expr is missing", () => {
-    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
-    const next = computeNextRunAtMs(
-      {
-        kind: "cron",
-        cron: "0 9 * * 3",
-        tz: "America/Los_Angeles",
-      } as unknown as { kind: "cron"; expr: string; tz?: string },
-      nowMs,
-    );
-    expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
-  });
-
   it("computes next run for every schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const now = anchor + 10_000;
@@ -86,7 +73,7 @@ describe("cron schedule", () => {
     expect(next).toBe(now + 30_000);
   });
 
-  it("handles string-typed everyMs and anchorMs from legacy persisted data", () => {
+  it("handles string-typed everyMs and anchorMs", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const now = anchor + 10_000;
     const next = computeNextRunAtMs(
@@ -250,6 +237,8 @@ describe("coerceFiniteScheduleNumber", () => {
   it("returns undefined for invalid inputs", () => {
     expect(coerceFiniteScheduleNumber("")).toBeUndefined();
     expect(coerceFiniteScheduleNumber("abc")).toBeUndefined();
+    expect(coerceFiniteScheduleNumber("60000ms")).toBeUndefined();
+    expect(coerceFiniteScheduleNumber("0x10")).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Number.NaN)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(null)).toBeUndefined();

@@ -245,13 +245,13 @@ describe("setActivePluginRegistry", () => {
   it.each([
     {
       name: "same active registry is refreshed",
-      refresh(nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) {
+      refresh: (nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) => {
         setActivePluginRegistry(nextRegistry);
       },
     },
     {
       name: "active registry advances again",
-      refresh() {
+      refresh: () => {
         setActivePluginRegistry(createEmptyPluginRegistry());
       },
     },

@@ -1,34 +1,85 @@
+import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+type ExecFileCallback = (error: ExecFileException | null, stdout: string, stderr: string) => void;
+type ExecFileMock = (
+  command: string,
+  args: string[],
+  options: ExecFileOptionsWithStringEncoding,
+  callback: ExecFileCallback,
+) => unknown;
+
+const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
 const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
+const findSystemGatewayServicesMock = vi.hoisted(() =>
+  vi.fn<
+    () => Promise<
+      Array<{
+        platform: "linux";
+        label: string;
+        detail: string;
+        scope: "user" | "system";
+        marker?: "openclaw" | "clawdbot";
+        legacy?: boolean;
+      }>
+    >
+  >(async () => []),
+);
+
+vi.mock("./inspect.js", () => ({
+  findSystemGatewayServices: () => findSystemGatewayServicesMock(),
+}));
 
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: existsSyncMock,
 }));
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessExecFile(
-    Object.assign(execFileMock, {
-      __promisify__: vi.fn(),
-    }) as typeof import("node:child_process").execFile,
-  );
+vi.mock("./exec-file.js", () => {
+  return {
+    execFileUtf8: async (
+      command: string,
+      args: string[],
+      options: Omit<ExecFileOptionsWithStringEncoding, "encoding"> = {},
+    ) => {
+      let settled:
+        | {
+            stdout: string;
+            stderr: string;
+            code: number;
+          }
+        | undefined;
+
+      execFileMock(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+        settled = {
+          stdout: stdout ?? "",
+          stderr: stderr || error?.message || "",
+          code: error && typeof error.code === "number" ? error.code : error ? 1 : 0,
+        };
+      });
+
+      if (!settled) {
+        throw new Error(`execFile mock did not settle for ${command} ${args.join(" ")}`);
+      }
+      return settled;
+    },
+  };
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  findInstalledSystemdGatewayScope,
   installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
   isSystemdUnitActive,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceRuntime,
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
@@ -166,6 +217,9 @@ describe("systemd availability", () => {
     existsSyncMock.mockReturnValue(true);
     execFileMock.mockImplementation((_cmd, args, opts, cb) => {
       assertUserSystemctlArgs(args, "status");
+      if (!opts.env) {
+        throw new Error("expected systemctl env");
+      }
       expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
       expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1000/bus");
       cb(null, "", "");
@@ -417,7 +471,7 @@ describe("isSystemdServiceEnabled", () => {
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args[0]).toBe("--machine");
-        expect(String(args[1])).toMatch(/^[^@]+@$/);
+        expect(args[1]).toMatch(/^[^@]+@$/);
         expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
         const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;
@@ -470,6 +524,219 @@ describe("isSystemdUnitActive", () => {
     await expect(
       isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE, "system"),
     ).resolves.toBe(false);
+  });
+});
+
+describe("system-scope gateway unit detection (openclaw#87577)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockUnitFileLayout(layout: { user?: boolean; system?: string | false }) {
+    vi.spyOn(fs, "access").mockImplementation(async (pathArg) => {
+      const p = pathLikeToString(pathArg);
+      if (layout.user && p.includes("/.config/systemd/user/")) {
+        return undefined;
+      }
+      if (typeof layout.system === "string" && p === layout.system) {
+        return undefined;
+      }
+      const err = new Error("ENOENT") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      throw err;
+    });
+  }
+
+  it("findInstalledSystemdGatewayScope prefers user scope when both exist", async () => {
+    mockUnitFileLayout({
+      user: true,
+      system: "/etc/systemd/system/openclaw-gateway.service",
+    });
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result?.scope).toBe("user");
+    expect(result?.unitName).toBe(GATEWAY_SERVICE);
+    expect(result?.unitPath).toContain("/.config/systemd/user/openclaw-gateway.service");
+  });
+
+  it("findInstalledSystemdGatewayScope detects system-scope unit in /etc/systemd/system", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: GATEWAY_SERVICE,
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope falls back to /usr/lib/systemd/system", async () => {
+    mockUnitFileLayout({ system: "/usr/lib/systemd/system/openclaw-gateway.service" });
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result?.scope).toBe("system");
+    expect(result?.unitPath).toBe("/usr/lib/systemd/system/openclaw-gateway.service");
+  });
+
+  it("findInstalledSystemdGatewayScope returns null when no unit file exists", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([]);
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope falls back to marker-owned system unit with custom name", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw.service",
+      unitPath: "/etc/systemd/system/openclaw.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope ignores legacy clawdbot system units in the marker fallback", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "clawdbot.service",
+        detail: "unit: /etc/systemd/system/clawdbot.service",
+        scope: "system",
+        marker: "clawdbot",
+        legacy: true,
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toBeNull();
+  });
+
+  it("isSystemdServiceEnabled queries the marker-owned custom system unit name", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-enabled", "openclaw.service"]);
+      cb(null, "enabled\n", "");
+    });
+    await expect(isSystemdServiceEnabled({ env: { HOME: TEST_MANAGED_HOME } })).resolves.toBe(true);
+  });
+
+  it("restartSystemdService surfaces sudo guidance using the marker-owned custom unit name", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockEffectiveUid(1000);
+    const { stdout, write } = createWritableStreamMock();
+    await expect(
+      restartSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } }),
+    ).rejects.toThrow(
+      /openclaw\.service is a system-scope unit \(\/etc\/systemd\/system\/openclaw\.service\); run `sudo systemctl restart openclaw\.service`/,
+    );
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("isSystemdServiceEnabled reports true for an enabled system-scope unit", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-enabled", GATEWAY_SERVICE]);
+      cb(null, "enabled\n", "");
+    });
+    await expect(isSystemdServiceEnabled({ env: { HOME: TEST_MANAGED_HOME } })).resolves.toBe(true);
+  });
+
+  it("isSystemdServiceEnabled reports false for a disabled system-scope unit", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-enabled", GATEWAY_SERVICE]);
+      cb(createExecFileError("disabled", { code: 1 }), "disabled\n", "");
+    });
+    await expect(isSystemdServiceEnabled({ env: { HOME: TEST_MANAGED_HOME } })).resolves.toBe(
+      false,
+    );
+  });
+
+  it("readSystemdServiceRuntime queries the system manager for system-scope units", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args[0]).toBe("show");
+      expect(args).not.toContain("--user");
+      cb(
+        null,
+        [
+          "Id=openclaw-gateway.service",
+          "ActiveState=active",
+          "SubState=running",
+          "MainPID=4242",
+        ].join("\n"),
+        "",
+      );
+    });
+    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    expect(runtime.status).toBe("running");
+    expect(runtime.pid).toBe(4242);
+    expect(runtime.systemd?.unit).toBe("openclaw-gateway.service");
+  });
+
+  it("restartSystemdService refuses to use the user manager when the unit is system-scope and the caller is not root", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    mockEffectiveUid(1000);
+    const { stdout, write } = createWritableStreamMock();
+    await expect(
+      restartSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } }),
+    ).rejects.toThrow(
+      /system-scope unit .* run `sudo systemctl restart openclaw-gateway\.service`/,
+    );
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("restartSystemdService restarts the system unit directly when running as root", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    mockEffectiveUid(0);
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["restart", GATEWAY_SERVICE]);
+      cb(null, "", "");
+    });
+    const { stdout, write } = createWritableStreamMock();
+    const result = await restartSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } });
+    expect(result).toEqual({ outcome: "completed" });
+    expect(requireFirstWrite(write)).toContain("Restarted systemd service");
+  });
+
+  it("stopSystemdService surfaces sudo guidance for system-scope units without root", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    mockEffectiveUid(1000);
+    const { stdout } = createWritableStreamMock();
+    await expect(stopSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } })).rejects.toThrow(
+      /sudo systemctl stop openclaw-gateway\.service/,
+    );
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 });
 
@@ -528,6 +795,77 @@ describe("systemd runtime parsing", () => {
       activeState: "inactive",
       subState: "dead",
       execMainCode: "exited",
+    });
+  });
+
+  it("rejects invalid cgroup counters as junk", () => {
+    const output = [
+      "ActiveState=active",
+      "SubState=running",
+      "MainPID=1",
+      "ExecMainStatus=0",
+      "ExecMainCode=running",
+      "KillMode=process",
+      "TasksCurrent=42abc",
+      "MemoryCurrent=11GB",
+    ].join("\n");
+    expect(parseSystemdShow(output)).toEqual({
+      activeState: "active",
+      subState: "running",
+      mainPid: 1,
+      execMainStatus: 0,
+      execMainCode: "running",
+      killMode: "process",
+    });
+  });
+});
+
+describe("readSystemdServiceRuntime", () => {
+  it("surfaces systemd cgroup metrics and KillMode", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(
+          args,
+          "show",
+          GATEWAY_SERVICE,
+          "--no-page",
+          "--property",
+          "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+        );
+        cb(
+          null,
+          [
+            "Id=openclaw-gateway.service",
+            "ActiveState=active",
+            "SubState=running",
+            "MainPID=1234",
+            "ExecMainStatus=0",
+            "ExecMainCode=running",
+            "KillMode=process",
+            "TasksCurrent=807",
+            "MemoryCurrent=11918534246",
+          ].join("\n"),
+          "",
+        );
+      });
+    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    expect(runtime).toEqual({
+      status: "running",
+      state: "active",
+      subState: "running",
+      pid: 1234,
+      lastExitStatus: 0,
+      lastExitReason: "running",
+      systemd: {
+        unit: "openclaw-gateway.service",
+        killMode: "process",
+        tasksCurrent: 807,
+        memoryCurrent: 11_918_534_246,
+      },
     });
   });
 });

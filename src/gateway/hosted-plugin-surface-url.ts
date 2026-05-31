@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { isLoopbackHost } from "./net.js";
 
 type HostSource = string | null | undefined;
@@ -38,7 +39,7 @@ const parseHostHeader = (value: HostSource): ParsedHostHeader => {
   try {
     const parsed = new URL(`http://${value.trim()}`);
     const portRaw = parsed.port.trim();
-    const port = portRaw ? Number.parseInt(portRaw, 10) : undefined;
+    const port = parseStrictPositiveInteger(portRaw);
     return {
       host: parsed.hostname,
       port: Number.isFinite(port) ? port : undefined,
@@ -73,8 +74,8 @@ export function resolveHostedPluginSurfaceUrl(params: HostedPluginSurfaceUrlPara
   const forwardedHostRaw = parseForwardedHost(params.forwardedHost);
   const parsedForwardedHost = parseHostHeader(forwardedHostRaw);
   const parsedRequestHost = parseHostHeader(params.requestHost);
-  const requestHost = normalizeHost(parsedRequestHost.host, !!override);
-  const forwardedHost = normalizeHost(parsedForwardedHost.host, !!override);
+  const requestHost = normalizeHost(parsedRequestHost.host, Boolean(override));
+  const forwardedHost = normalizeHost(parsedForwardedHost.host, Boolean(override));
   const advertisedHost = forwardedHost ? parsedForwardedHost : parsedRequestHost;
   const localAddress = normalizeHost(
     params.localAddress,

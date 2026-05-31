@@ -71,7 +71,9 @@ async function waitRegistry() {
     if (await registryHealthy()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   throw new Error("Local npm metadata registry failed to start");
 }
@@ -172,10 +174,7 @@ function assertCorruptPluginDetails(plugins, pluginId) {
   const evidence = collectPluginEvidence(plugins, pluginId);
   const outcome = evidence.outcome;
   const disabledAfterFailure = isCorruptPluginDisabledAfterUpdate(evidence, pluginId);
-  if (
-    !outcome ||
-    (outcome.status !== "error" && !disabledAfterFailure)
-  ) {
+  if (!outcome || (outcome.status !== "error" && !disabledAfterFailure)) {
     throw new Error(
       `expected error or disabled-after-failure outcome for ${pluginId}, got ${JSON.stringify({
         outcomes: plugins.npm?.outcomes ?? [],

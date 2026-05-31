@@ -4,6 +4,10 @@ import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
   createRealtimeVoiceForcedConsultCoordinator,
   createTalkSessionController,
@@ -519,9 +523,13 @@ export class RealtimeCallHandler {
 
   private issueStreamToken(meta: Omit<PendingStreamToken, "expiry"> = {}): string {
     const token = randomUUID();
-    this.pendingStreamTokens.set(token, { expiry: Date.now() + STREAM_TOKEN_TTL_MS, ...meta });
+    const now = Date.now();
+    const expiry = resolveExpiresAtMsFromDurationMs(STREAM_TOKEN_TTL_MS, { nowMs: now });
+    if (expiry !== undefined) {
+      this.pendingStreamTokens.set(token, { expiry, ...meta });
+    }
     for (const [candidate, entry] of this.pendingStreamTokens) {
-      if (Date.now() > entry.expiry) {
+      if (!isFutureDateTimestampMs(entry.expiry, { nowMs: now })) {
         this.pendingStreamTokens.delete(candidate);
       }
     }
@@ -534,7 +542,7 @@ export class RealtimeCallHandler {
       return null;
     }
     this.pendingStreamTokens.delete(token);
-    if (Date.now() > entry.expiry) {
+    if (!isFutureDateTimestampMs(entry.expiry)) {
       return null;
     }
     return {
@@ -769,7 +777,7 @@ export class RealtimeCallHandler {
           source: "realtime",
         });
       },
-      onToolCall: (toolEvent, session) => {
+      onToolCall: (toolEvent, sessionLocal) => {
         const turnId = ensureTalkTurn();
         emitTalkEvent({
           type: "tool.call",
@@ -782,7 +790,7 @@ export class RealtimeCallHandler {
           `[voice-call] realtime tool call received callId=${callId} providerCallId=${callSid} tool=${toolEvent.name}`,
         );
         void this.executeToolCall(
-          session,
+          sessionLocal,
           callId,
           toolEvent.callId || toolEvent.itemId,
           toolEvent.name,
@@ -1009,9 +1017,9 @@ export class RealtimeCallHandler {
       if (quietFor >= CONSULT_TRANSCRIPT_SETTLE_MS || now >= deadline) {
         return;
       }
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now)),
-      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now));
+      });
     }
   }
 

@@ -2,13 +2,17 @@ import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveStateDir } from "../config/paths.js";
 import { readStateDirDotEnvVarsFromStateDir } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import {
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "../infra/parse-finite-number.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -72,6 +76,85 @@ function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
 
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPath(env);
+}
+
+const SYSTEM_SYSTEMD_UNIT_DIRS = [
+  "/etc/systemd/system",
+  "/usr/lib/systemd/system",
+  "/lib/systemd/system",
+] as const;
+
+async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string | null> {
+  const serviceFile = `${resolveSystemdServiceName(env)}.service`;
+  for (const dir of SYSTEM_SYSTEMD_UNIT_DIRS) {
+    const candidate = path.posix.join(dir, serviceFile);
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+export type InstalledSystemdGatewayScope = {
+  scope: SystemdUnitScope;
+  unitName: string;
+  unitPath: string;
+};
+
+async function findMarkerOwnedSystemSystemdUnit(): Promise<{
+  unitName: string;
+  unitPath: string;
+} | null> {
+  const { findSystemGatewayServices } = await import("./inspect.js");
+  let services: Awaited<ReturnType<typeof findSystemGatewayServices>>;
+  try {
+    services = await findSystemGatewayServices();
+  } catch {
+    return null;
+  }
+  for (const svc of services) {
+    if (
+      svc.platform !== "linux" ||
+      svc.scope !== "system" ||
+      svc.marker !== "openclaw" ||
+      !svc.label?.endsWith(".service")
+    ) {
+      continue;
+    }
+    const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());
+    const unitPath = match?.[1]?.trim();
+    if (unitPath) {
+      return { unitName: svc.label, unitPath };
+    }
+  }
+  return null;
+}
+
+export async function findInstalledSystemdGatewayScope(
+  env: GatewayServiceEnv,
+): Promise<InstalledSystemdGatewayScope | null> {
+  const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
+  let userPath: string | null;
+  try {
+    userPath = resolveSystemdUnitPath(env);
+  } catch {
+    userPath = null;
+  }
+  if (userPath) {
+    try {
+      await fs.access(userPath);
+      return { scope: "user", unitName: canonicalUnitName, unitPath: userPath };
+    } catch {}
+  }
+  const systemPath = await findSystemSystemdUnitPath(env);
+  if (systemPath) {
+    return { scope: "system", unitName: canonicalUnitName, unitPath: systemPath };
+  }
+  const owned = await findMarkerOwnedSystemSystemdUnit();
+  return owned ? { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath } : null;
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
@@ -389,6 +472,10 @@ type SystemdServiceInfo = {
   mainPid?: number;
   execMainStatus?: number;
   execMainCode?: string;
+  unit?: string;
+  killMode?: string;
+  tasksCurrent?: number;
+  memoryCurrent?: number;
 };
 
 export function parseSystemdShow(output: string): SystemdServiceInfo {
@@ -419,6 +506,28 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   const execMainCode = entries.execmaincode;
   if (execMainCode) {
     info.execMainCode = execMainCode;
+  }
+  const unit = entries.id;
+  if (unit) {
+    info.unit = unit;
+  }
+  const killMode = entries.killmode;
+  if (killMode) {
+    info.killMode = killMode;
+  }
+  const tasksCurrentValue = entries.taskscurrent;
+  if (tasksCurrentValue) {
+    const tasksCurrent = parseStrictNonNegativeInteger(tasksCurrentValue);
+    if (tasksCurrent !== undefined) {
+      info.tasksCurrent = tasksCurrent;
+    }
+  }
+  const memoryCurrentValue = entries.memorycurrent;
+  if (memoryCurrentValue) {
+    const memoryCurrent = parseStrictNonNegativeInteger(memoryCurrentValue);
+    if (memoryCurrent !== undefined) {
+      info.memoryCurrent = memoryCurrent;
+    }
   }
   return info;
 }
@@ -801,7 +910,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   // OpenClaw-managed keys (identified by inlineManagedKeys) are excluded: a stale
   // file copy would override the fresh inline Environment= value because systemd's
   // EnvironmentFile takes precedence over inline Environment= directives.
-  let existing: Record<string, string> = {};
+  const existing: Record<string, string> = {};
   const legacyNodeEnvFilePath = resolveLegacyNodeSystemdEnvironmentFilePath({
     stateDir: params.stateDir,
     environment: params.environment,
@@ -861,7 +970,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     stateDir,
     environment: env,
   });
-  let existing: Record<string, string> = {};
+  let existing: Record<string, string>;
   try {
     existing = await readSystemdEnvironmentFile(envFilePath);
   } catch {
@@ -1007,6 +1116,17 @@ export async function uninstallSystemdService({
   }
 }
 
+function isRunningAsRoot(): boolean {
+  if (typeof process.geteuid === "function") {
+    try {
+      return process.geteuid() === 0;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 async function runSystemdServiceAction(params: {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
@@ -1014,9 +1134,22 @@ async function runSystemdServiceAction(params: {
   label: string;
 }) {
   const env = params.env ?? process.env;
+  const installed = await findInstalledSystemdGatewayScope(env);
+  const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  if (installed?.scope === "system") {
+    if (!isRunningAsRoot()) {
+      throw new Error(
+        `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
+      );
+    }
+    const res = await execSystemctl([params.action, unitName], env);
+    if (res.code !== 0) {
+      throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+    }
+    params.stdout.write(`${formatLine(params.label, unitName)}\n`);
+    return;
+  }
   await assertSystemdAvailable(env);
-  const serviceName = resolveSystemdServiceName(env);
-  const unitName = `${serviceName}.service`;
   const res = await execSystemctlUser(env, [params.action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
@@ -1051,18 +1184,14 @@ export async function restartSystemdService({
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
-  try {
-    await fs.access(resolveSystemdUnitPath(env));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
+  const installed = await findInstalledSystemdGatewayScope(env);
+  if (!installed) {
+    return false;
   }
-
-  const serviceName = resolveSystemdServiceName(env);
-  const unitName = `${serviceName}.service`;
-  const res = await execSystemctlUser(env, ["is-enabled", unitName]);
+  const res =
+    installed.scope === "system"
+      ? await execSystemctl(["is-enabled", installed.unitName], env)
+      : await execSystemctlUser(env, ["is-enabled", installed.unitName]);
   if (res.code === 0) {
     return true;
   }
@@ -1076,23 +1205,29 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
 export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
-  try {
-    await assertSystemdAvailable(env);
-  } catch (err) {
-    return {
-      status: "unknown",
-      detail: formatErrorMessage(err),
-    };
+  const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);
+  if (installed?.scope !== "system") {
+    try {
+      await assertSystemdAvailable(env);
+    } catch (err) {
+      return {
+        status: "unknown",
+        detail: formatErrorMessage(err),
+      };
+    }
   }
-  const serviceName = resolveSystemdServiceName(env);
-  const unitName = `${serviceName}.service`;
-  const res = await execSystemctlUser(env, [
+  const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  const showArgs = [
     "show",
     unitName,
     "--no-page",
     "--property",
-    "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
-  ]);
+    "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+  ];
+  const res =
+    installed?.scope === "system"
+      ? await execSystemctl(showArgs, env)
+      : await execSystemctlUser(env, showArgs);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
     const missing = normalizeLowercaseStringOrEmpty(detail).includes("not found");
@@ -1112,6 +1247,12 @@ export async function readSystemdServiceRuntime(
     pid: parsed.mainPid,
     lastExitStatus: parsed.execMainStatus,
     lastExitReason: parsed.execMainCode,
+    systemd: {
+      unit: parsed.unit ?? unitName,
+      killMode: parsed.killMode,
+      tasksCurrent: parsed.tasksCurrent,
+      memoryCurrent: parsed.memoryCurrent,
+    },
   };
 }
 type LegacySystemdUnit = {

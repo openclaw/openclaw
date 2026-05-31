@@ -495,7 +495,10 @@ export async function startGatewayBonjourAdvertiser(
       return { responder, services };
     }
 
-    async function stopCycle(cycle: BonjourCycle | null, opts?: { shutdownResponder?: boolean }) {
+    async function stopCycle(
+      cycle: BonjourCycle | null,
+      optsValue?: { shutdownResponder?: boolean },
+    ) {
       if (!cycle) {
         return;
       }
@@ -507,7 +510,7 @@ export async function startGatewayBonjourAdvertiser(
         }
       }
       try {
-        if (opts?.shutdownResponder) {
+        if (optsValue?.shutdownResponder) {
           await cycle.responder.shutdown();
         }
       } catch {
@@ -615,7 +618,7 @@ export async function startGatewayBonjourAdvertiser(
       }
     };
 
-    const recreateAdvertiser = async (reason: string, opts?: { stuckState?: boolean }) => {
+    const recreateAdvertiser = async (reason: string, optsLocal?: { stuckState?: boolean }) => {
       if (stopped || disabled) {
         return;
       }
@@ -624,7 +627,9 @@ export async function startGatewayBonjourAdvertiser(
       }
       recreatePromise = (async () => {
         consecutiveRestarts += 1;
-        consecutiveStuckStateRestarts = opts?.stuckState ? consecutiveStuckStateRestarts + 1 : 0;
+        consecutiveStuckStateRestarts = optsLocal?.stuckState
+          ? consecutiveStuckStateRestarts + 1
+          : 0;
         const now = Date.now();
         while (
           restartTimestamps.length > 0 &&

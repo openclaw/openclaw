@@ -15,19 +15,27 @@ if ! declare -F docker_e2e_docker_cmd >/dev/null 2>&1; then
 fi
 if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
   docker_e2e_docker_run_cmd() {
-    if [ -n "${DOCKER_COMMAND_TIMEOUT:-}" ] && declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-      docker_e2e_timeout_cmd "$DOCKER_COMMAND_TIMEOUT" docker "$@"
+    if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
+      docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
       return
     fi
-    if [ -n "${DOCKER_COMMAND_TIMEOUT:-}" ] && command -v timeout >/dev/null 2>&1; then
-      if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-        timeout --kill-after=30s "$DOCKER_COMMAND_TIMEOUT" docker "$@"
+    local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
+    local timeout_bin=""
+    if command -v timeout >/dev/null 2>&1; then
+      timeout_bin="timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then
+      timeout_bin="gtimeout"
+    fi
+    if [ -n "$timeout_bin" ]; then
+      if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+        "$timeout_bin" --kill-after=30s "$timeout_value" docker "$@"
       else
-        timeout "$DOCKER_COMMAND_TIMEOUT" docker "$@"
+        "$timeout_bin" "$timeout_value" docker "$@"
       fi
       return
     fi
-    docker "$@"
+    echo "timeout command not found; cannot bound Docker run after ${timeout_value}" >&2
+    return 127
   }
 fi
 
@@ -92,6 +100,9 @@ docker_e2e_package_mount_args() {
   if [ -n "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-}" ]; then
     DOCKER_E2E_PACKAGE_ARGS+=(-e "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$OPENCLAW_E2E_NPM_INSTALL_TIMEOUT")
   fi
+  if [ -n "${OPENCLAW_E2E_COMMAND_TIMEOUT:-}" ]; then
+    DOCKER_E2E_PACKAGE_ARGS+=(-e "OPENCLAW_E2E_COMMAND_TIMEOUT=$OPENCLAW_E2E_COMMAND_TIMEOUT")
+  fi
 }
 
 docker_e2e_cleanup_package_tgz() {
@@ -146,4 +157,14 @@ docker_e2e_run_logged_with_harness() {
   local label="$1"
   shift
   run_logged "$label" docker_e2e_run_with_harness "$@"
+}
+
+docker_e2e_run_logged_print_with_harness() {
+  local label="$1"
+  shift
+  run_logged_print_heartbeat \
+    "$label" \
+    "${OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS:-30}" \
+    docker_e2e_run_with_harness \
+    "$@"
 }

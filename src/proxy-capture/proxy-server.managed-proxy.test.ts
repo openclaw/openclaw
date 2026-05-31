@@ -47,7 +47,9 @@ async function connectThroughProxy(proxyUrl: string): Promise<string> {
     socket.connect(Number(target.port), target.hostname, resolve);
   });
   socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n");
-  await new Promise<void>((resolve) => socket.once("end", resolve));
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
   socket.destroy();
   return data;
 }
@@ -66,7 +68,9 @@ async function requestThroughProxy(proxyUrl: string, targetUrl: string): Promise
     socket.connect(Number(proxy.port), proxy.hostname, resolve);
   });
   socket.write(`GET ${target.href} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`);
-  await new Promise<void>((resolve) => socket.once("end", resolve));
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
   socket.destroy();
   return data;
 }
@@ -84,7 +88,9 @@ async function requestRawThroughProxy(proxyUrl: string, request: string): Promis
     socket.connect(Number(proxy.port), proxy.hostname, resolve);
   });
   socket.write(request);
-  await new Promise<void>((resolve) => socket.once("end", resolve));
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
   socket.destroy();
   return data;
 }

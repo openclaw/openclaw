@@ -1,98 +1,40 @@
-import { win32 } from "node:path";
+import process from "node:process";
 import { describe, expect, it } from "vitest";
-import {
-  resolveControlUiI18nNpmInstallCommand,
-  resolveControlUiI18nPnpmCommand,
-  resolveControlUiI18nProcessCommand,
-  resolvePiShimNodeCommand,
-} from "../../scripts/control-ui-i18n.ts";
+import { appendBoundedProcessOutput, runProcess } from "../../scripts/control-ui-i18n.ts";
 
-describe("control-ui-i18n command resolution", () => {
-  const comSpec = String.raw`C:\Windows\System32\cmd.exe`;
+describe("control-ui-i18n process runner", () => {
+  it("keeps a bounded process output tail", () => {
+    const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
+    const second = appendBoundedProcessOutput(first, "ghij", 5);
 
-  it("resolves Windows pi.cmd shims to the node CLI before multiline RPC prompts", () => {
-    const piCmdPath = String.raw`C:\Users\runner\AppData\Roaming\npm\pi.cmd`;
-    const cliPath = win32.join(
-      win32.dirname(piCmdPath),
-      "node_modules",
-      "@earendil-works",
-      "pi-coding-agent",
-      "dist",
-      "cli.js",
-    );
-    const command = resolvePiShimNodeCommand(piCmdPath, {
-      existsSync: (candidate) => candidate === cliPath,
-      platform: "win32",
-    });
-
-    expect(command).toEqual({
-      args: [cliPath],
-      executable: "node",
-    });
-    if (!command) {
-      throw new Error("expected Windows Pi shim to resolve to a node command");
-    }
-    expect(
-      resolveControlUiI18nProcessCommand(
-        command.executable,
-        [...command.args, "--system-prompt", "line one\nline two"],
-        {
-          comSpec,
-          platform: "win32",
-        },
-      ),
-    ).toEqual({
-      args: [cliPath, "--system-prompt", "line one\nline two"],
-      executable: "node",
-      shell: false,
-    });
+    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
+    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 
-  it("routes Windows Pi package installs through toolchain-local npm.cmd", () => {
-    const nodeExecPath = String.raw`C:\Program Files\nodejs\node.exe`;
-    const npmCmdPath = win32.resolve(win32.dirname(nodeExecPath), "npm.cmd");
-
-    expect(
-      resolveControlUiI18nNpmInstallCommand("@pi/pai@1.2.3", {
-        comSpec,
-        env: { ComSpec: comSpec },
-        execPath: nodeExecPath,
-        existsSync: (candidate) => candidate === npmCmdPath,
-        platform: "win32",
-      }),
-    ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        String.raw`""C:\Program Files\nodejs\npm.cmd" install --silent --no-audit --no-fund @pi/pai@1.2.3"`,
-      ],
-      executable: comSpec,
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
+  it("bounds failure diagnostics to the newest output", async () => {
+    await expect(
+      runProcess(
+        process.execPath,
+        [
+          "-e",
+          [
+            "process.stderr.write('stderr-begin-' + 'x'.repeat(128) + '-stderr-end', () => process.exit(2));",
+          ].join(" "),
+        ],
+        { maxOutputChars: 64, rejectOnFailure: true },
+      ),
+    ).rejects.toThrow(/output truncated[\s\S]*stderr-end/u);
   });
 
-  it("routes Windows formatting through the active pnpm.cmd runner", () => {
-    expect(
-      resolveControlUiI18nPnpmCommand(
-        ["exec", "oxfmt", "--stdin-filepath", "ui/src/i18n/generated.ts"],
+  it("rejects successful commands before returning truncated stdout", async () => {
+    await expect(
+      runProcess(
+        process.execPath,
+        ["-e", "process.stdout.write('x'.repeat(128), () => process.exit(0));"],
         {
-          comSpec,
-          npmExecPath: String.raw`C:\Program Files\nodejs\pnpm.cmd`,
-          platform: "win32",
+          maxOutputChars: 12,
         },
       ),
-    ).toEqual({
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        String.raw`""C:\Program Files\nodejs\pnpm.cmd" exec oxfmt --stdin-filepath ui/src/i18n/generated.ts"`,
-      ],
-      executable: comSpec,
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
+    ).rejects.toThrow("produced more than 12 stdout chars");
   });
 });

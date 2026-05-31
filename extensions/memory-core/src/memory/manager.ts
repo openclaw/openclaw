@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { type FSWatcher } from "chokidar";
+import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -353,8 +353,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
-    void Promise.resolve(degradedProvider.close?.()).catch((err: unknown) => {
-      log.debug(`memory embeddings: failed to close degraded local provider: ${String(err)}`);
+    void Promise.resolve(degradedProvider.close?.()).catch((errLocal: unknown) => {
+      log.debug(`memory embeddings: failed to close degraded local provider: ${String(errLocal)}`);
     });
     log.warn("memory embeddings: local provider degraded after worker failure", {
       error: message,
@@ -540,7 +540,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     let queryVec: number[];
     try {
-      queryVec = await this.embedQueryWithTimeout(cleaned);
+      queryVec = await this.embedQueryWithRetry(cleaned);
     } catch (err) {
       const message = formatErrorMessage(err);
       const activatedFallback = this.shouldFallbackOnError(err)
@@ -554,7 +554,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       if (activatedFallback) {
         await this.runSafeReindex({ reason: "fallback", force: true });
         keywordResults = await loadKeywordResults();
-        queryVec = await this.embedQueryWithTimeout(cleaned);
+        queryVec = await this.embedQueryWithRetry(cleaned);
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
         log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
         return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
@@ -738,14 +738,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
-    await this.ensureProviderInitialized();
     if (this.syncing) {
       if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
         return this.enqueueTargetedSessionSync(params.sessionFiles);
       }
       return this.syncing;
     }
-    this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
+    this.syncing = (async () => {
+      await this.ensureProviderInitialized();
+      await this.runSyncWithReadonlyRecovery(params);
+    })().finally(() => {
       this.syncing = null;
     });
     return this.syncing ?? Promise.resolve();
@@ -1025,7 +1027,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return;
     }
     this.closed = true;
-    const pendingSync = this.syncing;
     const pendingProviderInit = this.providerInitPromise;
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
@@ -1049,11 +1050,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe = null;
     }
     const closeErrors = new Map<EmbeddingProvider, unknown>();
-    const closeCurrentProvider = async () => {
+    // Sync/provider fallback may swap this.provider while close is awaiting.
+    // Keep every observed provider and drain the set after sync has settled.
+    const providersToClose = new Set<EmbeddingProvider>();
+    const rememberCurrentProvider = () => {
       const provider = this.provider;
       if (!provider) {
         return;
       }
+      providersToClose.add(provider);
+    };
+    const closeProvider = async (provider: EmbeddingProvider) => {
       try {
         await provider.close?.();
         closeErrors.delete(provider);
@@ -1062,13 +1069,37 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       } catch (err) {
         closeErrors.set(provider, err);
+        providersToClose.add(provider);
+      } finally {
+        rememberCurrentProvider();
       }
     };
-    await awaitPendingManagerWork({ pendingProviderInit });
-    await closeCurrentProvider();
-    try {
+    const drainTrackedProviders = async () => {
+      for (let attempt = 0; attempt < 2 && providersToClose.size > 0; attempt += 1) {
+        const providers = Array.from(providersToClose);
+        providersToClose.clear();
+        try {
+          for (const provider of providers) {
+            await closeProvider(provider);
+          }
+        } finally {
+          rememberCurrentProvider();
+        }
+      }
+    };
+    const awaitCurrentSync = async () => {
+      const pendingSync = this.syncing;
+      if (!pendingSync) {
+        return;
+      }
       await awaitPendingManagerWork({ pendingSync });
-      await closeCurrentProvider();
+    };
+    await awaitPendingManagerWork({ pendingProviderInit });
+    rememberCurrentProvider();
+    try {
+      await awaitCurrentSync();
+      rememberCurrentProvider();
+      await drainTrackedProviders();
     } finally {
       closeMemoryDatabase(this.db);
       if (INDEX_CACHE.get(this.cacheKey) === this) {

@@ -92,15 +92,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   }
   return value;
 }
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
-
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
@@ -242,6 +233,38 @@ describe("plugin registry install migration", () => {
     });
     const current = requireMigratedIndex(result);
     expect(requirePlugin(current, "openai").enabledByDefault).toBe(true);
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
+  });
+
+  it("keeps legacy OpenAI Codex plugin references doctor-only", async () => {
+    const stateDir = makeTempDir();
+    const openaiDir = path.join(stateDir, "plugins", "openai");
+    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
+    fs.mkdirSync(openaiDir, { recursive: true });
+    fs.mkdirSync(unusedBundledDir, { recursive: true });
+
+    const result = await migratePluginRegistryForInstall({
+      stateDir,
+      candidates: [
+        createCandidate(openaiDir, "openai", "bundled"),
+        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
+      ],
+      readConfig: async () => ({
+        plugins: {
+          entries: {
+            "openai-codex": {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      env: hermeticEnv(),
+    });
+
+    const current = requireMigratedIndex(result);
+    expect(current.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);

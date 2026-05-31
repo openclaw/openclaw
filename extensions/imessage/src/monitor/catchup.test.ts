@@ -419,9 +419,9 @@ describe("performIMessageCatchup", () => {
     // clamped to `earliestHeldFailureRow.rowid - 1` (== 9) so the next pass
     // refetches row 10.
     let dispatchCount = 0;
-    const dispatch = vi.fn<CatchupDispatchFn>(async (row) => {
+    const dispatch = vi.fn<CatchupDispatchFn>(async (rowLocal) => {
       dispatchCount += 1;
-      if (row.guid === "A") {
+      if (rowLocal.guid === "A") {
         return { ok: false };
       }
       return { ok: true };

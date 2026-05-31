@@ -139,7 +139,7 @@ import {
   closeMemorySearchManager,
   getMemorySearchManager,
 } from "./search-manager.js";
-const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
+const createQmdManagerMock = vi.mocked(QmdMemoryManager["create"]);
 
 type QmdManagerInstance = Awaited<ReturnType<typeof QmdMemoryManager.create>>;
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
@@ -147,7 +147,7 @@ type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 
 function createQmdCfg(
   agentId: string,
-  workspace: string = "/tmp/workspace",
+  workspace = "/tmp/workspace",
   qmd: Record<string, unknown> = {},
 ): OpenClawConfig {
   return {

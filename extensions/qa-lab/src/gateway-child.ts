@@ -8,6 +8,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -226,6 +227,7 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_CANVAS_HOST: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
+    OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS: "2000",
     OPENCLAW_QA_PARENT_PID: String(process.pid),
     OPENCLAW_QA_TEMP_ROOT: params.tempRoot,
     ...(params.stagedBundledPluginsRoot
@@ -305,13 +307,17 @@ async function waitForQaGatewayRestartBoundary(params: {
   timeoutMs?: number;
 }) {
   const timeoutMs = params.timeoutMs ?? QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS;
-  const pollMs = params.pollMs ?? 100;
+  const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 100, 100, 0);
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (params.logs().slice(params.offset).includes("restart mode:")) {
       return;
     }
-    await sleep(pollMs);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(pollMs, remainingMs));
   }
   throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
 }
@@ -370,7 +376,9 @@ async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number)
     return true;
   }
   return await Promise.race([
-    new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+    new Promise<boolean>((resolve) => {
+      child.once("exit", () => resolve(true));
+    }),
     sleep(timeoutMs).then(() => false),
   ]);
 }
@@ -408,43 +416,6 @@ function normalizeQaLiveProviderConfig(value: unknown): ModelProviderConfig | nu
   } as ModelProviderConfig;
 }
 
-function isQaLiveOfficialOpenAiProviderConfig(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return true;
-  }
-  const baseUrl = value.baseUrl;
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return true;
-  }
-  try {
-    const url = new URL(baseUrl.trim());
-    return (
-      url.protocol === "https:" &&
-      url.hostname.toLowerCase() === "api.openai.com" &&
-      (url.pathname === "" ||
-        url.pathname === "/" ||
-        url.pathname === "/v1" ||
-        url.pathname === "/v1/")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function expandQaLiveProviderConfigIds(
-  providerIds: readonly string[],
-  providers: Record<string, unknown>,
-) {
-  const expanded = new Set(providerIds);
-  if (expanded.has("openai-codex")) {
-    expanded.add("openai");
-    expanded.add("openai-codex");
-  } else if (expanded.has("openai") && isQaLiveOfficialOpenAiProviderConfig(providers.openai)) {
-    expanded.add("openai-codex");
-  }
-  return [...expanded];
-}
-
 async function readQaLiveProviderConfigOverrides(params: {
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
@@ -468,7 +439,7 @@ async function readQaLiveProviderConfigOverrides(params: {
         : {}
       : {};
     const selected: Record<string, ModelProviderConfig> = {};
-    for (const providerId of expandQaLiveProviderConfigIds(providerIds, providers)) {
+    for (const providerId of providerIds) {
       const providerConfig = normalizeQaLiveProviderConfig(providers[providerId]);
       if (providerConfig) {
         selected[providerId] = providerConfig;

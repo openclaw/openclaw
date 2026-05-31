@@ -12,7 +12,12 @@ export function formatTokenShort(value?: number) {
     return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   }
   if (n < 1_000_000) {
-    return `${Math.round(n / 1_000)}k`;
+    const thousands = Math.round(n / 1_000);
+    // Rounding can reach 1000 (e.g. 999_500 -> 1000); fall through to the
+    // million branch instead of emitting an out-of-scheme "1000k".
+    if (thousands < 1_000) {
+      return `${thousands}k`;
+    }
   }
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
 }

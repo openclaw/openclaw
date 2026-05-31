@@ -14,6 +14,7 @@ import {
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type {
   MigrationApplyResult,
   MigrationItem,
@@ -29,6 +30,7 @@ import {
 } from "../app-server/auth-bridge.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  isCodexPluginsMarketplaceName,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
@@ -42,7 +44,8 @@ import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
-  getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
@@ -86,8 +89,8 @@ export function prepareTargetCodexAppServer(
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
   const targets = resolveCodexMigrationTargets(ctx);
-  let warmedClient: Awaited<ReturnType<typeof getSharedCodexAppServerClient>> | undefined;
-  const ready = getSharedCodexAppServerClient({
+  let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
+  const ready = getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: 60_000,
     agentDir: targets.agentDir,
@@ -101,6 +104,9 @@ export function prepareTargetCodexAppServer(
   return {
     async dispose() {
       await ready;
+      if (warmedClient) {
+        releaseLeasedSharedCodexAppServerClient(warmedClient);
+      }
       await clearSharedCodexAppServerClientIfCurrentAndWait(warmedClient, {
         exitTimeoutMs: 2_000,
         forceKillDelayMs: 250,
@@ -349,18 +355,23 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   const marketplaces = (response as { marketplaces?: unknown }).marketplaces;
   return (
     Array.isArray(marketplaces) &&
-    marketplaces.some(
-      (marketplace) =>
-        marketplace &&
-        typeof marketplace === "object" &&
-        (marketplace as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
-    )
+    marketplaces.some((marketplace) => {
+      if (!marketplace || typeof marketplace !== "object") {
+        return false;
+      }
+      const name = (marketplace as { name?: unknown }).name;
+      return name === CODEX_PLUGINS_MARKETPLACE_NAME;
+    })
   );
 }
 
-function targetCodexMarketplaceDiscoveryTimeoutMs(): number {
-  const configured = Number(process.env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV]);
-  if (Number.isFinite(configured) && configured >= 0) {
+export function targetCodexMarketplaceDiscoveryTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const configured = parseStrictNonNegativeInteger(
+    env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
+  );
+  if (configured !== undefined) {
     return configured;
   }
   return TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
@@ -376,7 +387,9 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
@@ -485,14 +498,15 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
   const pluginName = item.details?.pluginName;
   if (
     typeof configKey !== "string" ||
-    marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+    typeof marketplaceName !== "string" ||
+    !isCodexPluginsMarketplaceName(marketplaceName) ||
     typeof pluginName !== "string"
   ) {
     return undefined;
   }
   return {
     configKey,
-    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    marketplaceName,
     pluginName,
     enabled: true,
     allowDestructiveActions: true,

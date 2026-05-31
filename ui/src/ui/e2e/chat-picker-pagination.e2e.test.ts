@@ -78,7 +78,9 @@ async function waitForSessionsRequest(
     if (match) {
       return match;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
   throw new Error(`No matching sessions.list request found: ${JSON.stringify(requests)}`);
 }
