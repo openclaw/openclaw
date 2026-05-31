@@ -75,7 +75,7 @@ export async function detectUiProtocolFreshnessIssues(
     const changesSinceBuild = await (
       opts.collectChangesSinceBuild ?? collectProtocolSchemaChangesSince
     )(root, uiStats.mtime);
-    if (changesSinceBuild !== null && changesSinceBuild.length === 0) {
+    if (changesSinceBuild === null || changesSinceBuild.length === 0) {
       return [];
     }
     return [
@@ -83,7 +83,7 @@ export async function detectUiProtocolFreshnessIssues(
         kind: "stale-assets",
         root,
         uiIndexPath,
-        changesSinceBuild: changesSinceBuild ?? [],
+        changesSinceBuild,
         canBuild,
       },
     ];

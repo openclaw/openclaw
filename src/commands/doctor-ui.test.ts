@@ -104,7 +104,7 @@ describe("UI protocol freshness health mapping", () => {
     ).resolves.toEqual([]);
   });
 
-  it("reports stale assets when git history is unavailable", async () => {
+  it("does not report stale assets when git history is unavailable", async () => {
     const root = await createOpenClawRoot();
     const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
     const uiIndexPath = path.join(root, "dist/control-ui/index.html");
@@ -118,14 +118,6 @@ describe("UI protocol freshness health mapping", () => {
           return null;
         },
       }),
-    ).resolves.toEqual([
-      {
-        kind: "stale-assets",
-        root,
-        uiIndexPath,
-        changesSinceBuild: [],
-        canBuild: false,
-      },
-    ]);
+    ).resolves.toEqual([]);
   });
 });
