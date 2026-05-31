@@ -1,4 +1,3 @@
-import { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { splitBatchRequests } from "./batch-utils.js";
 
@@ -22,6 +21,39 @@ function resolveEmbeddingBatchPollIntervalMs(params: {
       ? resolveSafeTimeoutDelayMs(params.timeoutMs)
       : safePollIntervalMs;
   return Math.min(safePollIntervalMs, safeTimeoutMs);
+}
+
+async function runBatchGroupTasks(params: {
+  tasks: Array<() => Promise<void>>;
+  concurrency: number;
+}): Promise<void> {
+  let next = 0;
+  let firstError: unknown;
+
+  const workers = Array.from(
+    { length: Math.min(params.concurrency, params.tasks.length) },
+    async () => {
+      while (firstError === undefined) {
+        const index = next;
+        next += 1;
+        const task = params.tasks[index];
+        if (!task) {
+          return;
+        }
+        try {
+          await task();
+        } catch (error) {
+          firstError ??= error;
+          return;
+        }
+      }
+    },
+  );
+
+  await Promise.allSettled(workers);
+  if (firstError !== undefined) {
+    throw firstError;
+  }
 }
 
 export async function runEmbeddingBatchGroups<TRequest>(params: {
@@ -74,14 +106,7 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     timeoutMs,
   });
 
-  const { firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit: concurrency,
-    errorMode: "stop",
-  });
-  if (hasError) {
-    throw firstError;
-  }
+  await runBatchGroupTasks({ tasks, concurrency });
   return byCustomId;
 }
 
