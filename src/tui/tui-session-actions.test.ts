@@ -442,6 +442,45 @@ describe("tui session actions", () => {
     expect(btw.clear).toHaveBeenCalled();
   });
 
+  it("clears stale token counts when history supplies lightweight session metadata", async () => {
+    const listSessions = vi.fn().mockResolvedValue({ sessions: [] });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-2",
+      sessionInfo: {
+        key: "agent:main:other",
+        sessionId: "session-2",
+        model: "session-model",
+        modelProvider: "openai",
+        updatedAt: 50,
+      },
+      messages: [],
+    });
+    const state = createBaseState({
+      historyLoaded: true,
+      sessionInfo: {
+        inputTokens: 1,
+        outputTokens: 2,
+        totalTokens: 3,
+        updatedAt: 500,
+      },
+    });
+
+    const { setSession } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+    });
+
+    await setSession("agent:main:other");
+
+    expect(state.sessionInfo.inputTokens).toBeNull();
+    expect(state.sessionInfo.outputTokens).toBeNull();
+    expect(state.sessionInfo.totalTokens).toBeNull();
+    expect(listSessions).not.toHaveBeenCalled();
+  });
+
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),

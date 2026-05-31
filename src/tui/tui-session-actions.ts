@@ -188,6 +188,7 @@ export function createSessionActions(context: SessionActionContext) {
     entry?: SessionInfoEntry | null;
     defaults?: SessionInfoDefaults | null;
     force?: boolean;
+    clearMissingUsage?: boolean;
   }) => {
     const hasEntryUpdate = "entry" in params;
     const entry = params.entry ?? undefined;
@@ -244,6 +245,17 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
+    }
+    if (params.clearMissingUsage) {
+      if (entry?.inputTokens === undefined) {
+        next.inputTokens = null;
+      }
+      if (entry?.outputTokens === undefined) {
+        next.outputTokens = null;
+      }
+      if (entry?.totalTokens === undefined) {
+        next.totalTokens = null;
+      }
     }
     if (hasEntryUpdate) {
       next.goal = entry?.goal;
@@ -435,6 +447,7 @@ export function createSessionActions(context: SessionActionContext) {
           traceLevel: record.traceLevel,
         },
         defaults: record.defaults,
+        clearMissingUsage: Boolean(historySessionInfo),
       });
       if (!sessionInfo) {
         await refreshSessionInfo();

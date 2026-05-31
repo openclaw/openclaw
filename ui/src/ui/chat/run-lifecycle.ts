@@ -304,7 +304,11 @@ function isSessionRowForSelectedChat(
     return false;
   }
   const parsed = parseAgentSessionKey(sessionKey);
-  return parsed?.rest === DEFAULT_MAIN_KEY || parsed?.rest === configuredMainKey(host);
+  return (
+    parsed?.rest === "global" ||
+    parsed?.rest === DEFAULT_MAIN_KEY ||
+    parsed?.rest === configuredMainKey(host)
+  );
 }
 
 export function reconcileChatRunFromSessionRow(

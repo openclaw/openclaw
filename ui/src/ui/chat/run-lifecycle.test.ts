@@ -166,6 +166,27 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(host.chatStream).toBeNull();
   });
 
+  it("clears selected agent-global alias runs from canonical global history rows", () => {
+    const host = makeHost({
+      sessionKey: "agent:work:global",
+      chatRunId: "run-global",
+      chatStream: "streaming",
+      sessionsResult: makeSessionsResult([
+        { key: "agent:work:global", hasActiveRun: true, status: "running" },
+      ]),
+    });
+
+    const reconciled = reconcileChatRunFromSessionRow(
+      host,
+      { key: "global", kind: "global", updatedAt: 1, hasActiveRun: false, status: "done" },
+      { publishRunStatus: false },
+    );
+
+    expect(reconciled).toBe(true);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
   it("clears configured agent-main alias runs from canonical global history rows", () => {
     const host = makeHost({
       sessionKey: "agent:work:inbox",
