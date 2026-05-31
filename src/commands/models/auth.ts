@@ -427,6 +427,10 @@ async function persistProviderAuthResult(params: {
   );
 
   for (const profile of profiles) {
+    const configuredSelection = resolveConfiguredAuthSelectionForProvider(
+      params.config,
+      profile.credential.provider,
+    );
     await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
@@ -436,10 +440,8 @@ async function persistProviderAuthResult(params: {
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
-      createIfMissing: hasConfiguredAuthSelectionForProvider(
-        params.config,
-        profile.credential.provider,
-      ),
+      createIfMissing: configuredSelection.createIfMissing,
+      ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
     });
   }
 
@@ -505,20 +507,28 @@ async function persistProviderAuthResult(params: {
   }
 }
 
-function hasConfiguredAuthSelectionForProvider(cfg: OpenClawConfig, provider: string): boolean {
+function resolveConfiguredAuthSelectionForProvider(
+  cfg: OpenClawConfig,
+  provider: string,
+): { createIfMissing: boolean; order?: string[] } {
   const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
-  if (
-    Object.values(cfg.auth?.profiles ?? {}).some(
-      (profile) => resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
-    )
-  ) {
-    return true;
-  }
-  return Object.entries(cfg.auth?.order ?? {}).some(
-    ([orderProvider, profileIds]) =>
+  for (const [orderProvider, profileIds] of Object.entries(cfg.auth?.order ?? {})) {
+    if (
       profileIds.length > 0 &&
-      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey,
-  );
+      resolveProviderIdForAuth(orderProvider, { config: cfg }) === providerAuthKey
+    ) {
+      return { createIfMissing: true, order: profileIds };
+    }
+  }
+  const profileIds = Object.entries(cfg.auth?.profiles ?? {})
+    .filter(
+      ([, profile]) =>
+        resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+    )
+    .map(([profileId]) => profileId);
+  return profileIds.length > 0
+    ? { createIfMissing: true, order: profileIds }
+    : { createIfMissing: false };
 }
 
 async function runProviderAuthMethod(params: {

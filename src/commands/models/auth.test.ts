@@ -518,6 +518,7 @@ describe("modelsAuthLoginCommand", () => {
       provider: "openai",
       profileId: "openai:user@example.com",
       createIfMissing: true,
+      createFromOrder: ["openai:old-login"],
     });
   });
 
@@ -539,6 +540,7 @@ describe("modelsAuthLoginCommand", () => {
       provider: "openai",
       profileId: "openai:user@example.com",
       createIfMissing: true,
+      createFromOrder: ["openai:old-login"],
     });
   });
 

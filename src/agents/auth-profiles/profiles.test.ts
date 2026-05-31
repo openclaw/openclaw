@@ -484,16 +484,24 @@ describe("promoteAuthProfileInOrder", () => {
     try {
       fs.mkdirSync(agentDir, { recursive: true });
       const newProfileId = "openai:new-login";
-      const oldProfileId = "openai:old-login";
+      const primaryProfileId = "openai:primary-login";
+      const backupProfileId = "openai:backup-login";
       saveAuthProfileStore(
         {
           version: AUTH_STORE_VERSION,
           profiles: {
-            [oldProfileId]: {
+            [primaryProfileId]: {
               type: "oauth",
               provider: "openai",
-              access: "old-access",
-              refresh: "old-refresh",
+              access: "primary-access",
+              refresh: "primary-refresh",
+              expires: Date.now() + 30 * 60 * 1000,
+            },
+            [backupProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "backup-access",
+              refresh: "backup-refresh",
               expires: Date.now() + 30 * 60 * 1000,
             },
             [newProfileId]: {
@@ -513,12 +521,14 @@ describe("promoteAuthProfileInOrder", () => {
         provider: "openai",
         profileId: newProfileId,
         createIfMissing: true,
+        createFromOrder: [backupProfileId, primaryProfileId],
       });
 
-      expect(updated?.order?.["openai"]).toEqual([newProfileId, oldProfileId]);
+      expect(updated?.order?.["openai"]).toEqual([newProfileId, backupProfileId, primaryProfileId]);
       expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
         newProfileId,
-        oldProfileId,
+        backupProfileId,
+        primaryProfileId,
       ]);
     } finally {
       if (previousStateDir === undefined) {

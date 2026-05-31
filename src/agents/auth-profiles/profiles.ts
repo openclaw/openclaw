@@ -92,6 +92,7 @@ export async function promoteAuthProfileInOrder(params: {
   provider: string;
   profileId: string;
   createIfMissing?: boolean;
+  createFromOrder?: string[];
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   return await updateAuthProfileStoreWithLock({
@@ -110,7 +111,10 @@ export async function promoteAuthProfileInOrder(params: {
         if (!params.createIfMissing) {
           return false;
         }
-        const providerProfiles = listProfilesForProvider(store, providerKey);
+        const providerProfiles = dedupeProfileIds([
+          ...(params.createFromOrder ?? []),
+          ...listProfilesForProvider(store, providerKey),
+        ]);
         const next = dedupeProfileIds([
           params.profileId,
           ...providerProfiles.filter((profileId) => profileId !== params.profileId),
