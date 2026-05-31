@@ -133,6 +133,15 @@ vi.mock("../session-utils.js", async () => {
     ...original,
     loadSessionEntry: (rawKey: string, opts?: { agentId?: string }) => {
       mockState.loadSessionEntryCalls.push({ rawKey, opts });
+      const canonicalKey =
+        typeof mockState.sessionEntry.canonicalKey === "string"
+          ? mockState.sessionEntry.canonicalKey
+          : rawKey || "main";
+      const entry = {
+        sessionId: mockState.sessionId,
+        sessionFile: mockState.transcriptPath,
+        ...mockState.sessionEntry,
+      };
       return {
         ...(typeof mockState.sessionEntry.canonicalKey === "string"
           ? { canonicalKey: mockState.sessionEntry.canonicalKey }
@@ -145,15 +154,9 @@ vi.mock("../session-utils.js", async () => {
           },
         },
         storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-        entry: {
-          sessionId: mockState.sessionId,
-          sessionFile: mockState.transcriptPath,
-          ...mockState.sessionEntry,
-        },
-        canonicalKey:
-          typeof mockState.sessionEntry.canonicalKey === "string"
-            ? mockState.sessionEntry.canonicalKey
-            : rawKey || "main",
+        store: { [canonicalKey]: entry },
+        entry,
+        canonicalKey,
       };
     },
   };
