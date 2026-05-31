@@ -297,11 +297,13 @@ function applyLiveOllamaProviderEnvCompat(params: {
   const configuredBaseUrl = readConfiguredOllamaBaseUrl(existingProvider);
   const liveBaseUrl = params.env?.OPENCLAW_LIVE_OLLAMA_BASE_URL?.trim();
   const baseUrl = liveBaseUrl || configuredBaseUrl || OLLAMA_DEFAULT_BASE_URL;
-  const apiKey = isLocalOllamaBaseUrl(baseUrl)
-    ? OLLAMA_LOCAL_API_KEY_MARKER
-    : OLLAMA_REMOTE_API_KEY_ENV;
   const shouldPreserveConfiguredApiKey =
     !liveBaseUrl || Boolean(configuredBaseUrl && configuredBaseUrl === baseUrl);
+  const apiKey = resolveLiveOllamaProviderApiKey({
+    baseUrl,
+    existingApiKey: existingProvider?.apiKey,
+    shouldPreserveConfiguredApiKey,
+  });
   return {
     ...params.config,
     models: {
@@ -312,7 +314,7 @@ function applyLiveOllamaProviderEnvCompat(params: {
           ...existingProvider,
           api: "ollama",
           baseUrl,
-          apiKey: shouldPreserveConfiguredApiKey ? (existingProvider?.apiKey ?? apiKey) : apiKey,
+          apiKey,
           models: existingProvider?.models ?? [],
         },
       },
@@ -360,6 +362,36 @@ function createLiveOllamaRuntimeStreamFn(params: {
 
 function readConfiguredOllamaBaseUrl(provider: unknown): string {
   return readStringProperty(provider, "baseUrl") || readStringProperty(provider, "baseURL");
+}
+
+function resolveLiveOllamaProviderApiKey(params: {
+  baseUrl: string;
+  existingApiKey: unknown;
+  shouldPreserveConfiguredApiKey: boolean;
+}): unknown {
+  if (isLocalOllamaBaseUrl(params.baseUrl)) {
+    return params.shouldPreserveConfiguredApiKey &&
+      params.existingApiKey !== undefined &&
+      !isOllamaRemoteApiKeyReference(params.existingApiKey)
+      ? params.existingApiKey
+      : OLLAMA_LOCAL_API_KEY_MARKER;
+  }
+  return params.shouldPreserveConfiguredApiKey
+    ? (params.existingApiKey ?? OLLAMA_REMOTE_API_KEY_ENV)
+    : OLLAMA_REMOTE_API_KEY_ENV;
+}
+
+function isOllamaRemoteApiKeyReference(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim() === OLLAMA_REMOTE_API_KEY_ENV;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  return (
+    readStringProperty(value, "source") === "env" &&
+    readStringProperty(value, "id") === OLLAMA_REMOTE_API_KEY_ENV
+  );
 }
 
 function readStringProperty(value: unknown, key: string): string {
@@ -918,6 +950,44 @@ describe("explicit live model discovery scope", () => {
       expect(result.models?.providers?.ollama).toEqual({
         api: "ollama",
         baseUrl,
+        apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+        models: [],
+      });
+    }
+  });
+
+  it("does not preserve the cloud env marker for local Ollama endpoints", () => {
+    for (const apiKey of [
+      OLLAMA_REMOTE_API_KEY_ENV,
+      { source: "env", provider: "default", id: OLLAMA_REMOTE_API_KEY_ENV },
+    ]) {
+      const cfg = {
+        plugins: {
+          bundledDiscovery: "compat",
+        },
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              apiKey,
+              models: [],
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      const result = applyLiveProviderDiscoveryPluginCompat({
+        config: cfg,
+        providers: ["ollama"],
+        env: {
+          OLLAMA_API_KEY: "real-cloud-key",
+        },
+      });
+
+      expect(result.models?.providers?.ollama).toEqual({
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
         apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
         models: [],
       });
