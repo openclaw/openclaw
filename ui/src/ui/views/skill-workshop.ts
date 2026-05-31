@@ -380,8 +380,10 @@ function renderRow(
 }
 
 function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
-  const createdLabel = proposal.updatedAt
-    ? `Edited ${formatRelative(proposal.updatedAt)}`
+  const editedAt =
+    proposal.updatedAt && proposal.updatedAt > proposal.createdAt ? proposal.updatedAt : null;
+  const createdLabel = editedAt
+    ? `Edited ${formatRelative(editedAt)}`
     : `Created ${formatRelative(proposal.createdAt)}`;
   const detailLoading = props.inspectingKey === proposal.key && !proposal.body;
 
