@@ -2071,8 +2071,12 @@ describe("short-term promotion", () => {
       expect(applied.applied).toBe(1);
       expect(applied.appliedCandidates[0]?.startLine).toBe(4);
       expect(applied.appliedCandidates[0]?.endLine).toBe(4);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认",
+      );
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memoryText).toContain("memory/2026-05-28.md:4-4");
+      expect(memoryText).toContain("模型切换 (16:23): **需求**");
     });
   });
 
@@ -2123,9 +2127,174 @@ describe("short-term promotion", () => {
       expect(applied.applied).toBe(1);
       expect(applied.appliedCandidates[0]?.startLine).toBe(4);
       expect(applied.appliedCandidates[0]?.endLine).toBe(5);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认; **偏好**: 保持低成本默认路由",
+      );
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memoryText).toContain("memory/2026-05-28.md:4-5");
+      expect(memoryText).toContain("模型切换 (16:23): **需求**");
       expect(memoryText).toContain("**偏好**: 保持低成本默认路由");
+    });
+  });
+
+  it("rebuilds heading context from the live note during list rehydration", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## New model routing (16:23)",
+        "- Keep Xiaomi Mimo as the low-cost default.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 4,
+            endLine: 4,
+            score: 0.91,
+            snippet: "Old model routing: Keep Xiaomi Mimo as the low-cost default.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "New model routing (16:23): Keep Xiaomi Mimo as the low-cost default.",
+      );
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("New model routing (16:23)");
+      expect(memoryText).not.toContain("Old model routing");
+    });
+  });
+
+  it("does not reintroduce generic daily headings during list rehydration", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## Model routing",
+        "- Keep Xiaomi Mimo as the low-cost default.",
+        "",
+        "## Morning",
+        "- Reviewed travel timing before the workshop.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 7,
+            endLine: 7,
+            score: 0.91,
+            snippet: "Reviewed travel timing before the workshop.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "Reviewed travel timing before the workshop.",
+      );
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).not.toContain("Morning:");
+      expect(memoryText).not.toContain("Model routing: Reviewed travel timing");
+    });
+  });
+
+  it("does not reintroduce managed dreaming headings during list rehydration", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: scratch reflection",
+        "<!-- openclaw:dreaming:light:end -->",
+        "- Reviewed travel timing before the workshop.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 7,
+            endLine: 7,
+            score: 0.91,
+            snippet: "Reviewed travel timing before the workshop.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "Reviewed travel timing before the workshop.",
+      );
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).not.toContain("Light Sleep:");
     });
   });
 

@@ -53,7 +53,10 @@ const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
+const GENERIC_DAY_HEADING_RE =
+  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
+const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
@@ -1615,6 +1618,57 @@ function normalizeListMarkerFreeRangeSnippet(
   return normalizeSnippet(strippedLines.map((line) => line.text).join(joiner));
 }
 
+function normalizeDailyHeadingForPromotion(line: string): string | null {
+  const match = line.trim().match(/^#{1,6}\s+(.+)$/);
+  const heading = match?.[1]?.replace(PROMOTION_LIST_MARKER_RE, "").trim() ?? "";
+  const normalized = normalizeSnippet(heading);
+  if (
+    !normalized ||
+    SHORT_TERM_BASENAME_RE.test(normalized) ||
+    isGenericDailyHeadingForPromotion(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function isGenericDailyHeadingForPromotion(heading: string): boolean {
+  const normalized = heading.trim().replace(/\s+/g, " ");
+  const lower = normalized.toLowerCase();
+  if (MANAGED_DREAMING_HEADINGS.has(lower)) {
+    return true;
+  }
+  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
+    return true;
+  }
+  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
+    return true;
+  }
+  return GENERIC_DAY_HEADING_RE.test(normalized);
+}
+
+function findRelocatedDailyHeading(lines: string[], startLine: number): string | null {
+  for (let index = Math.max(0, startLine - 2); index >= 0; index -= 1) {
+    const line = lines[index] ?? "";
+    if (DREAMING_FENCE_START_RE.test(line) || DREAMING_FENCE_END_RE.test(line)) {
+      return null;
+    }
+    if (/^#{1,6}\s+.+$/.test(line.trim())) {
+      return normalizeDailyHeadingForPromotion(line);
+    }
+  }
+  return null;
+}
+
+function buildListMarkerFreeMatchSnippet(
+  lines: string[],
+  startLine: number,
+  listMarkerFreeSnippet: string,
+): string {
+  const heading = findRelocatedDailyHeading(lines, startLine);
+  return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
+}
+
 function compareCandidateWindow(
   targetSnippet: string,
   windowSnippet: string,
@@ -1676,13 +1730,14 @@ function relocateCandidateRange(
         listMarkerFreeSnippet === snippet
           ? { matched: false, quality: 0 }
           : compareCandidateWindow(targetSnippet, listMarkerFreeSnippet);
-      const bestComparison =
-        listMarkerFreeComparison.quality > comparison.quality
-          ? listMarkerFreeComparison
-          : comparison;
+      const useListMarkerFree = listMarkerFreeComparison.quality > comparison.quality;
+      const bestComparison = useListMarkerFree ? listMarkerFreeComparison : comparison;
       if (!bestComparison.matched) {
         continue;
       }
+      const matchedSnippet = useListMarkerFree
+        ? buildListMarkerFreeMatchSnippet(lines, startLine, listMarkerFreeSnippet)
+        : snippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
@@ -1696,7 +1751,7 @@ function relocateCandidateRange(
         bestMatch = {
           startLine,
           endLine,
-          snippet,
+          snippet: matchedSnippet,
           quality: bestComparison.quality,
           distance,
         };
