@@ -851,7 +851,7 @@ export function scanPolicyDataHandling(
 
   const session = isRecord(cfg.session) ? cfg.session : {};
   const maintenance = isRecord(session.maintenance) ? session.maintenance : {};
-  const retentionMode = typeof maintenance.mode === "string" ? maintenance.mode : "warn";
+  const retentionMode = typeof maintenance.mode === "string" ? maintenance.mode : "enforce";
   entries.push({
     id: "session-maintenance-mode",
     kind: "sessionRetentionMode",
