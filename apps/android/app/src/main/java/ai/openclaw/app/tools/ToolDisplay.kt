@@ -40,6 +40,7 @@ data class ToolDisplaySummary(
   val verb: String?,
   val detail: String?,
 ) {
+  /** Optional second-line detail assembled from the action verb and best argument preview. */
   val detailLine: String?
     get() {
       val parts = mutableListOf<String>()
@@ -48,6 +49,7 @@ data class ToolDisplaySummary(
       return if (parts.isEmpty()) null else parts.joinToString(" · ")
     }
 
+  /** Single-line fallback for compact tool rows that do not render detail separately. */
   val summaryLine: String
     get() = if (detailLine != null) "$emoji $label: $detailLine" else "$emoji $label"
 }
@@ -60,6 +62,7 @@ object ToolDisplayRegistry {
 
   @Volatile private var cachedConfig: ToolDisplayConfig? = null
 
+  /** Resolves a raw tool call into stable, bounded UI text for pending-tool surfaces. */
   fun resolve(
     context: Context,
     name: String?,
