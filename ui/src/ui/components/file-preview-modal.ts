@@ -429,9 +429,6 @@ export class OpenClawFilePreviewModal extends LitElement {
         </div>
         <footer class="foot">
           <span class="foot-group"><span class="kbd">↑↓</span> navigate</span>
-          <span class="foot-group"><span class="kbd">↵</span> open</span>
-          <span class="foot-group"><span class="kbd">⌘C</span> copy</span>
-          <span class="foot-group"><span class="kbd">⌘E</span> edit</span>
           <span class="spacer"></span>
           <button class="button" @click=${this.emitClose}>
             Close <span class="kbd">esc</span>

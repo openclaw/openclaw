@@ -3383,11 +3383,13 @@ export function renderApp(state: AppViewState) {
                 const idx = currentIndex < 0 ? 0 : currentIndex;
                 const next = (idx + offset + proposals.length) % proposals.length;
                 const proposal = proposals[next];
-                state.skillWorkshopSelectedKey = proposal.key;
+                selectSkillWorkshopProposal(state, proposal.key);
                 state.skillWorkshopReviewedKeys = rememberSkillWorkshopProposalReviewed(
                   state.skillWorkshopReviewedKeys,
                   proposal,
                 );
+                state.skillWorkshopFilePreviewKey = null;
+                state.skillWorkshopFilePreviewQuery = "";
               };
               return m.renderSkillWorkshop({
                 loading: state.skillWorkshopLoading,
