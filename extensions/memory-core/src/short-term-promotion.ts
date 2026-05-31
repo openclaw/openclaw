@@ -53,6 +53,7 @@ const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
+const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
@@ -1594,6 +1595,24 @@ function normalizeRangeSnippet(lines: string[], startLine: number, endLine: numb
   return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
 }
 
+function normalizeListMarkerFreeRangeSnippet(
+  lines: string[],
+  startLine: number,
+  endLine: number,
+): string {
+  const startIndex = Math.max(0, startLine - 1);
+  const endIndex = Math.min(lines.length, endLine);
+  if (startIndex >= endIndex) {
+    return "";
+  }
+  return normalizeSnippet(
+    lines
+      .slice(startIndex, endIndex)
+      .map((line) => line.trim().replace(PROMOTION_LIST_MARKER_RE, ""))
+      .join(" "),
+  );
+}
+
 function compareCandidateWindow(
   targetSnippet: string,
   windowSnippet: string,
@@ -1650,15 +1669,24 @@ function relocateCandidateRange(
       const endLine = startIndex + span;
       const snippet = normalizeRangeSnippet(lines, startLine, endLine);
       const comparison = compareCandidateWindow(targetSnippet, snippet);
-      if (!comparison.matched) {
+      const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
+      const listMarkerFreeComparison =
+        listMarkerFreeSnippet === snippet
+          ? { matched: false, quality: 0 }
+          : compareCandidateWindow(targetSnippet, listMarkerFreeSnippet);
+      const bestComparison =
+        listMarkerFreeComparison.quality > comparison.quality
+          ? listMarkerFreeComparison
+          : comparison;
+      if (!bestComparison.matched) {
         continue;
       }
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
-        comparison.quality > bestMatch.quality ||
-        (comparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
-        (comparison.quality === bestMatch.quality &&
+        bestComparison.quality > bestMatch.quality ||
+        (bestComparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
+        (bestComparison.quality === bestMatch.quality &&
           distance === bestMatch.distance &&
           Math.abs(span - preferredSpan) <
             Math.abs(bestMatch.endLine - bestMatch.startLine + 1 - preferredSpan))
@@ -1667,7 +1695,7 @@ function relocateCandidateRange(
           startLine,
           endLine,
           snippet,
-          quality: comparison.quality,
+          quality: bestComparison.quality,
           distance,
         };
       }
