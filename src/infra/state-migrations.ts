@@ -2252,18 +2252,27 @@ export async function autoMigrateLegacyStateDir(params: {
   }
   autoMigrateStateDirChecked = true;
 
-  const env = params.env ?? process.env;
-  if (env.OPENCLAW_STATE_DIR?.trim()) {
-    return { migrated: false, skipped: true, changes: [], warnings: [] };
-  }
-
   const homedir = params.homedir ?? os.homedir;
-  const targetDir = resolveNewStateDir(homedir);
+  const env = params.env ?? process.env;
+  const warnings: string[] = [];
+  const changes: string[] = [];
+  const hasCustomStateDir = Boolean(env.OPENCLAW_STATE_DIR?.trim());
+  const targetDir = hasCustomStateDir ? resolveStateDir(env, homedir) : resolveNewStateDir(homedir);
   const migratePluginInstallIndex = async () => {
     const result = await migrateLegacyInstalledPluginIndex({ stateDir: targetDir });
     changes.push(...result.changes);
     warnings.push(...result.warnings);
   };
+  if (hasCustomStateDir) {
+    await migratePluginInstallIndex();
+    return {
+      migrated: changes.length > 0,
+      skipped: changes.length === 0 && warnings.length === 0,
+      changes,
+      warnings,
+    };
+  }
+
   const legacyDirs = resolveLegacyStateDirs(homedir);
   let legacyDir = legacyDirs.find((dir) => {
     try {
@@ -2272,8 +2281,6 @@ export async function autoMigrateLegacyStateDir(params: {
       return false;
     }
   });
-  const warnings: string[] = [];
-  const changes: string[] = [];
 
   let legacyStat: fs.Stats | null;
   try {

@@ -27,20 +27,53 @@ const ORIGINAL_ENV = {
 
 const tempDirs: string[] = [];
 
+function restoreOpenClawStateDirEnv(): void {
+  const value = ORIGINAL_ENV.OPENCLAW_STATE_DIR;
+  if (value === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = value;
+  }
+}
+
+function restoreOpenClawHomeEnv(): void {
+  const value = ORIGINAL_ENV.OPENCLAW_HOME;
+  if (value === undefined) {
+    delete process.env.OPENCLAW_HOME;
+  } else {
+    process.env.OPENCLAW_HOME = value;
+  }
+}
+
+function restoreOpenClawDisableBundledPluginsEnv(): void {
+  const value = ORIGINAL_ENV.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  if (value === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = value;
+  }
+}
+
+function restoreOpenClawBundledPluginsDirEnv(): void {
+  const value = ORIGINAL_ENV.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  if (value === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = value;
+  }
+}
+
+function restoreEnv(): void {
+  restoreOpenClawStateDirEnv();
+  restoreOpenClawHomeEnv();
+  restoreOpenClawDisableBundledPluginsEnv();
+  restoreOpenClawBundledPluginsDirEnv();
+}
+
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-id-normalization-"));
   tempDirs.push(dir);
   return dir;
-}
-
-function restoreEnv(): void {
-  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
 }
 
 function writeInstallIndex(params: { stateDir: string; pluginDir: string }): void {
