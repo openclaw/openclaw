@@ -54,10 +54,12 @@ export function hasScheduledNextRunAtMs(value: unknown): value is number {
   return isFiniteTimestamp(value) && value > 0;
 }
 
+/** Resolves the newest persisted cron run status while older state is still readable. */
 export function resolveJobLastRunStatus(job: Pick<CronJob, "state">) {
   return job.state.lastRunStatus ?? job.state.lastStatus;
 }
 
+/** Resolves the retry backoff delay for a one-based consecutive error count. */
 export function errorBackoffMs(
   consecutiveErrors: number,
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
@@ -66,6 +68,7 @@ export function errorBackoffMs(
   return scheduleMs[Math.max(0, idx)] ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS[0];
 }
 
+/** Returns the earliest retry timestamp after a failed cron run and its runtime duration. */
 export function resolveJobErrorBackoffUntilMs(
   job: CronJob,
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
@@ -98,6 +101,8 @@ function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   const digest = crypto.createHash("sha256").update(jobId).digest();
   const offset = digest.readUInt32BE(0) % staggerMs;
   if (staggerOffsetCache.size >= STAGGER_OFFSET_CACHE_MAX) {
+    // The offset is deterministic, so the cache can evict oldest entries
+    // without changing scheduling semantics for future lookups.
     const first = staggerOffsetCache.keys().next();
     if (!first.done) {
       staggerOffsetCache.delete(first.value);
@@ -260,6 +265,7 @@ function resolveEveryAnchorMs(params: {
   return 0;
 }
 
+/** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
   if (typeof job.sessionTarget !== "string") {
     throw new Error(
@@ -366,6 +372,7 @@ function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "d
   }
 }
 
+/** Finds an in-memory cron job or throws the public unknown-id error. */
 export function findJobOrThrow(state: CronServiceState, id: string) {
   const job = state.store?.jobs.find((j) => j.id === id);
   if (!job) {
@@ -374,10 +381,12 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
+/** Returns the effective enabled flag, defaulting missing values to enabled. */
 export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
   return job.enabled ?? true;
 }
 
+/** Computes the next run timestamp for enabled jobs across every/at/cron schedules. */
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!isJobEnabled(job)) {
     return undefined;
@@ -423,6 +432,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   return isFiniteTimestamp(next) ? next : undefined;
 }
 
+/** Computes the previous effective cron timestamp, including per-job staggering. */
 export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
     return undefined;
@@ -434,6 +444,7 @@ export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number |
 /** Maximum consecutive schedule errors before auto-disabling a job. */
 const MAX_SCHEDULE_ERRORS = 3;
 
+/** Records a schedule-computation failure and auto-disables after repeated errors. */
 export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
@@ -597,6 +608,7 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
   return changed;
 }
 
+/** Recomputes missing, due, or repairable next-run timestamps for all schedulable jobs. */
 export function recomputeNextRuns(state: CronServiceState): boolean {
   return walkSchedulableJobs(state, ({ job, nowMs: now }) => {
     let changed = false;
@@ -672,6 +684,7 @@ export function recomputeNextRunsForMaintenance(
   );
 }
 
+/** Returns the next enabled wake timestamp from the in-memory cron store. */
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
   const enabled = jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs));
@@ -688,6 +701,7 @@ export function nextWakeAtMs(state: CronServiceState) {
   }, first);
 }
 
+/** Creates a normalized cron job row from public add input and computes its initial schedule. */
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
@@ -747,6 +761,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   return job;
 }
 
+/** Applies a public cron patch in-place, preserving omitted nested fields and validating the result. */
 export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
@@ -770,6 +785,8 @@ export function applyJobPatch(
       if (explicitStaggerMs !== undefined) {
         job.schedule = { ...patch.schedule, staggerMs: explicitStaggerMs };
       } else if (job.schedule.kind === "cron") {
+        // Preserve an existing explicit stagger when editing only the cron
+        // expression; otherwise a patch could silently change fire timing.
         job.schedule = { ...patch.schedule, staggerMs: job.schedule.staggerMs };
       } else {
         const defaultStaggerMs = resolveDefaultCronStaggerMs(patch.schedule.expr);
@@ -1041,6 +1058,7 @@ function mergeCronFailureAlert(
   return next;
 }
 
+/** Returns whether a cron job should execute at `nowMs`, honoring force mode and active runs. */
 export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
   if (!job.state) {
     job.state = {};
@@ -1058,6 +1076,7 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   );
 }
 
+/** Returns main-session queue text for system-event jobs, or undefined when empty/unsupported. */
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
   if (job.payload.kind !== "systemEvent") {
     return undefined;
