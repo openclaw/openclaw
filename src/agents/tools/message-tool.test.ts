@@ -2248,6 +2248,42 @@ describe("message tool boot-echo guard", () => {
       ],
     });
   });
+
+  it("sanitizes boot echo text from presentation button links before dispatch", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const echoedText =
+      "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel and report the active project status";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        message: "Visible",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Status", url: echoedText },
+                { label: "App", webApp: { url: echoedText }, web_app: { url: echoedText } },
+              ],
+            },
+          ],
+        },
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
+
+    expect(call?.params?.message).toBe("Visible");
+    expect(call?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Status" }, { label: "App" }],
+        },
+      ],
+    });
+  });
 });
 
 describe("message tool internal-runtime-context sanitization", () => {

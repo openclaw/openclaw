@@ -190,6 +190,33 @@ function sanitizePresentationTextFieldsResult(
             sanitizedButton.label = sanitized.text;
             suppressed ||= sanitized.suppressed;
           }
+          if (typeof sanitizedButton.url === "string") {
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.url, bootPrompt);
+            if (sanitized.text) {
+              sanitizedButton.url = sanitized.text;
+            } else {
+              delete sanitizedButton.url;
+            }
+            suppressed ||= sanitized.suppressed;
+          }
+          for (const webAppField of ["webApp", "web_app"]) {
+            const webApp = sanitizedButton[webAppField];
+            if (!webApp || typeof webApp !== "object" || Array.isArray(webApp)) {
+              continue;
+            }
+            const sanitizedWebApp = { ...(webApp as Record<string, unknown>) };
+            if (typeof sanitizedWebApp.url !== "string") {
+              continue;
+            }
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedWebApp.url, bootPrompt);
+            if (sanitized.text) {
+              sanitizedWebApp.url = sanitized.text;
+              sanitizedButton[webAppField] = sanitizedWebApp;
+            } else {
+              delete sanitizedButton[webAppField];
+            }
+            suppressed ||= sanitized.suppressed;
+          }
           return sanitizedButton;
         });
       }
