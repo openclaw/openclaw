@@ -1069,6 +1069,7 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
+      suppressTyping: false,
     });
   });
 
@@ -1085,10 +1086,11 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
+      suppressTyping: false,
     });
   });
 
-  it("suppresses typing for group chat without mention", async () => {
+  it("suppresses typing for message-tool-only group chat without mention", async () => {
     await dispatchBufferedReply({
       context: { Body: "hi", ChatType: "group" },
       msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: false }),
