@@ -19,6 +19,7 @@ const { mockCreateFeishuReplyDispatcher, mockCreateFeishuClient, mockResolveAgen
       },
       replyOptions: {},
       markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
     })),
     mockCreateFeishuClient: vi.fn(),
     mockResolveAgentRoute: vi.fn(),

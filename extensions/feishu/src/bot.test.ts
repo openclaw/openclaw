@@ -295,6 +295,7 @@ const {
     dispatcher: createReplyDispatcher(),
     replyOptions: {},
     markDispatchIdle: vi.fn(),
+    ensureNoVisibleReplyFallback: vi.fn(),
   })),
   mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
   mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
@@ -465,6 +466,7 @@ describe("handleFeishuMessage ACP routing", () => {
       dispatcher: createReplyDispatcher(),
       replyOptions: {},
       markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback: vi.fn(),
     });
 
     setFeishuRuntime(createFeishuBotRuntime());
