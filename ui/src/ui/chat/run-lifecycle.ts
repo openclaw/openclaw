@@ -34,6 +34,8 @@ type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
 type RunLifecycleHost = Omit<Partial<Parameters<typeof resetToolStream>[0]>, "hello"> & {
   sessionKey: string;
+  agentsList?: { mainKey?: string | null } | null;
+  hello?: { snapshot?: unknown } | null;
   chatRunId?: string | null;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
@@ -278,7 +280,23 @@ export function reconcileChatRunFromCurrentSessionRow(
   return reconcileChatRunFromSessionRow(host, row, options);
 }
 
-function isSessionRowForSelectedChat(rowKey: string, sessionKey: string): boolean {
+function configuredMainKey(host: RunLifecycleHost): string {
+  const snapshot =
+    host.hello?.snapshot && typeof host.hello.snapshot === "object"
+      ? (host.hello.snapshot as { sessionDefaults?: { mainKey?: string | null } })
+      : undefined;
+  return (
+    host.agentsList?.mainKey?.trim() ||
+    snapshot?.sessionDefaults?.mainKey?.trim() ||
+    DEFAULT_MAIN_KEY
+  ).toLowerCase();
+}
+
+function isSessionRowForSelectedChat(
+  host: RunLifecycleHost,
+  rowKey: string,
+  sessionKey: string,
+): boolean {
   if (areUiSessionKeysEquivalent(rowKey, sessionKey)) {
     return true;
   }
@@ -286,7 +304,7 @@ function isSessionRowForSelectedChat(rowKey: string, sessionKey: string): boolea
     return false;
   }
   const parsed = parseAgentSessionKey(sessionKey);
-  return parsed?.rest === DEFAULT_MAIN_KEY;
+  return parsed?.rest === DEFAULT_MAIN_KEY || parsed?.rest === configuredMainKey(host);
 }
 
 export function reconcileChatRunFromSessionRow(
@@ -294,7 +312,7 @@ export function reconcileChatRunFromSessionRow(
   row: GatewaySessionRow,
   options: { publishRunStatus?: boolean } = {},
 ): boolean {
-  if (!isSessionRowForSelectedChat(row.key, host.sessionKey)) {
+  if (!isSessionRowForSelectedChat(host, row.key, host.sessionKey)) {
     return false;
   }
   if (!host.chatRunId && host.chatStream == null) {
