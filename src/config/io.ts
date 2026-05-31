@@ -19,6 +19,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { createConfigValidationMetadataPluginIdScope } from "../plugins/channel-plugin-ids.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
   resolveInstalledPluginIndexRecordsStorePath,
@@ -1354,6 +1355,7 @@ export function createConfigIO(
   overrides: ConfigIoDeps & {
     pluginValidation?: "full" | "skip";
     preservedLegacyRootKeys?: readonly string[];
+    shellEnvFallback?: "load" | "defer";
   } = {},
 ) {
   const deps = normalizeDeps(overrides);
@@ -1376,7 +1378,11 @@ export function createConfigIO(
     applyConfigEnvVars(cfg, deps.env);
 
     const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
-    if (enabled && !shouldDeferShellEnvFallback(deps.env)) {
+    if (
+      enabled &&
+      overrides.shellEnvFallback !== "defer" &&
+      !shouldDeferShellEnvFallback(deps.env)
+    ) {
       loadShellEnvFallback({
         enabled: true,
         env: deps.env,
@@ -1648,7 +1654,11 @@ export function createConfigIO(
     try {
       maybeLoadDotEnvForConfig(deps.env);
       if (!deps.fs.existsSync(configPath)) {
-        if (shouldEnableShellEnvFallback(deps.env) && !shouldDeferShellEnvFallback(deps.env)) {
+        if (
+          overrides.shellEnvFallback !== "defer" &&
+          shouldEnableShellEnvFallback(deps.env) &&
+          !shouldDeferShellEnvFallback(deps.env)
+        ) {
           loadShellEnvFallback({
             enabled: true,
             env: deps.env,
@@ -1724,6 +1734,10 @@ export function createConfigIO(
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
           env: deps.env,
           allowWorkspaceScopedCurrent: true,
+          pluginIdScope: createConfigValidationMetadataPluginIdScope({
+            config: metadataConfig,
+            env: deps.env,
+          }),
         });
         return pluginMetadataSnapshot;
       };
@@ -1944,6 +1958,10 @@ export function createConfigIO(
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
           env: deps.env,
           allowWorkspaceScopedCurrent: true,
+          pluginIdScope: createConfigValidationMetadataPluginIdScope({
+            config: metadataConfig,
+            env: deps.env,
+          }),
         });
         return pluginMetadataSnapshot;
       };
@@ -2558,9 +2576,13 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
 export function loadConfig(options?: {
   skipPluginValidation?: boolean;
   pin?: boolean;
+  skipShellEnvFallback?: boolean;
 }): OpenClawConfig {
   const loadFresh = () =>
-    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig();
+    createConfigIO({
+      ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+      ...(options?.skipShellEnvFallback ? { shellEnvFallback: "defer" as const } : {}),
+    }).loadConfig();
   if (options?.pin === false) {
     return loadFresh();
   }
@@ -2573,6 +2595,7 @@ export function loadConfig(options?: {
 export function getRuntimeConfig(options?: {
   skipPluginValidation?: boolean;
   pin?: boolean;
+  skipShellEnvFallback?: boolean;
 }): OpenClawConfig {
   return loadConfig(options);
 }

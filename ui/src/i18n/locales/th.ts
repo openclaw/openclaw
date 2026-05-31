@@ -265,6 +265,7 @@ export const th: TranslationMap = {
       openFilesTab: "Open Files tab",
       primaryModel: "Primary Model",
       runtime: "รันไทม์",
+      thinkingDefault: "ระดับการคิดเริ่มต้น",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
       skillsFilter: "Skills Filter",
@@ -413,6 +414,7 @@ export const th: TranslationMap = {
     communications: "การสื่อสาร",
     appearance: "ลักษณะที่ปรากฏ",
     automation: "ระบบอัตโนมัติ",
+    mcp: "MCP",
     infrastructure: "โครงสร้างพื้นฐาน",
     aiAgents: "AI และเอเจนต์",
     debug: "ดีบัก",
@@ -436,6 +438,7 @@ export const th: TranslationMap = {
     communications: "ช่องทาง ข้อความ และการตั้งค่าเสียง",
     appearance: "ธีม UI และการตั้งค่าตัวช่วยเริ่มต้น",
     automation: "คำสั่ง hooks cron และ plugins",
+    mcp: "เซิร์ฟเวอร์ MCP, การยืนยันตัวตน, เครื่องมือ และการวินิจฉัย",
     infrastructure: "การตั้งค่าเกตเวย์ เว็บ เบราว์เซอร์ และสื่อ",
     aiAgents: "เอเจนต์ โมเดล ทักษะ เครื่องมือ หน่วยความจำ เซสชัน",
     debug: "สแนปช็อต เหตุการณ์ และ RPC",
@@ -1259,7 +1262,7 @@ export const th: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "ข้อผิดพลาดของเครื่องมือ",
     },
   },
   languages: {

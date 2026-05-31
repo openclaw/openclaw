@@ -267,6 +267,7 @@ export const it: TranslationMap = {
       openFilesTab: "Apri la scheda File",
       primaryModel: "Modello principale",
       runtime: "Runtime",
+      thinkingDefault: "Livello di ragionamento predefinito",
       identityName: "Nome identità",
       identityAvatar: "Avatar identità",
       skillsFilter: "Filtro Skills",
@@ -417,6 +418,7 @@ export const it: TranslationMap = {
     communications: "Comunicazioni",
     appearance: "Aspetto",
     automation: "Automazione",
+    mcp: "MCP",
     infrastructure: "Infrastruttura",
     aiAgents: "IA e agenti",
     debug: "Debug",
@@ -440,6 +442,7 @@ export const it: TranslationMap = {
     communications: "Canali, messaggi e impostazioni audio.",
     appearance: "Tema, UI e impostazioni della procedura guidata di configurazione.",
     automation: "Comandi, hook, cron e plugin.",
+    mcp: "Server MCP, autenticazione, strumenti e diagnostica.",
     infrastructure: "Impostazioni Gateway, web, browser e media.",
     aiAgents: "Agenti, modelli, skills, strumenti, memoria, sessione.",
     debug: "Snapshot, eventi, RPC.",
@@ -1296,7 +1299,7 @@ export const it: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "Errore dello strumento",
     },
   },
   languages: {

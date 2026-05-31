@@ -979,58 +979,87 @@ async function runLegacyMigrationPlans(
         const expectedKeys = new Set(existingKeys);
         let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
         const entries = await plan.readEntries();
-        const missingEntries = entries.filter(
-          ({ key }) => !existingKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
-        );
+        const candidateEntries: Array<{
+          key: string;
+          targetKey: string;
+          value: unknown;
+          ttlMs?: number;
+          existedBefore: boolean;
+        }> = [];
+        const failedTargetKeys = new Set<string>();
+        let missingEntryCount = 0;
+        for (const entry of entries) {
+          const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
+          const existingValue = existingValuesByKey.get(targetKey);
+          if (existingKeys.has(targetKey)) {
+            const shouldReplace =
+              existingValue !== undefined &&
+              (await plan.shouldReplaceExistingEntry?.({
+                key: entry.key,
+                existingValue,
+                incomingValue: entry.value,
+              }));
+            if (shouldReplace) {
+              candidateEntries.push({ ...entry, targetKey, existedBefore: true });
+            }
+            continue;
+          }
+          candidateEntries.push({ ...entry, targetKey, existedBefore: false });
+          missingEntryCount++;
+        }
         const pluginRemainingCapacity = Math.max(
           0,
           MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - pluginEntryCount,
         );
-        if (missingEntries.length > pluginRemainingCapacity) {
+        if (missingEntryCount > pluginRemainingCapacity) {
           warnings.push(
-            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntries.length} missing entries; left legacy source in place`,
+            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntryCount} missing entries; left legacy source in place`,
           );
           return;
         }
         let imported = 0;
-        const importedKeys: string[] = [];
-        for (const entry of entries) {
-          const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
-          if (existingKeys.has(targetKey)) {
-            continue;
-          }
-          if (remainingCapacity <= 0) {
+        const changedKeys: string[] = [];
+        for (const entry of candidateEntries) {
+          if (!entry.existedBefore && remainingCapacity <= 0) {
             break;
           }
           try {
             await store.register(
-              targetKey,
+              entry.targetKey,
               entry.value,
               entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
             );
             const nextExpectedKeys = new Set(expectedKeys);
-            nextExpectedKeys.add(targetKey);
+            nextExpectedKeys.add(entry.targetKey);
             const liveKeys = new Set((await store.entries()).map(({ key }) => key));
             const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
             if (missingKey) {
-              for (const importedKey of importedKeys.toReversed()) {
-                await store.delete(importedKey);
+              for (const changedKey of changedKeys.toReversed()) {
+                if (existingValuesByKey.has(changedKey)) {
+                  await store.register(changedKey, existingValuesByKey.get(changedKey));
+                } else {
+                  await store.delete(changedKey);
+                }
               }
-              await store.delete(targetKey);
-              if (existingValuesByKey.has(missingKey)) {
-                await store.register(missingKey, existingValuesByKey.get(missingKey));
+              if (existingValuesByKey.has(entry.targetKey)) {
+                await store.register(entry.targetKey, existingValuesByKey.get(entry.targetKey));
+              } else {
+                await store.delete(entry.targetKey);
               }
               warnings.push(
                 `Stopped migrating ${plan.label} because plugin state cap evicted ${missingKey}; left legacy source in place`,
               );
               return;
             }
-            expectedKeys.add(targetKey);
-            existingKeys.add(targetKey);
-            importedKeys.push(targetKey);
-            remainingCapacity--;
+            expectedKeys.add(entry.targetKey);
+            existingKeys.add(entry.targetKey);
+            changedKeys.push(entry.targetKey);
+            if (!entry.existedBefore) {
+              remainingCapacity--;
+            }
             imported++;
           } catch (err) {
+            failedTargetKeys.add(entry.targetKey);
             warnings.push(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
           }
         }
@@ -1045,8 +1074,10 @@ async function runLegacyMigrationPlans(
         }
         const allEntriesCovered =
           entries.length > 0 &&
-          entries.every(({ key }) =>
-            cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+          entries.every(
+            ({ key }) =>
+              cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
+              !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
           );
         if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
           const archivedPath = `${plan.sourcePath}.migrated`;
@@ -2053,6 +2084,7 @@ export async function detectLegacyStateMigrations(params: {
 async function migrateLegacySessions(
   detected: LegacyStateDetection,
   now: () => number,
+  options: { recoverCorruptTargetStore?: boolean } = {},
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -2097,11 +2129,12 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
   });
+  let migratedDirectChatKey: string | undefined;
   if (!merged[mainKey]) {
     const latest = pickLatestLegacyDirectEntry(legacyStore);
     if (latest?.sessionId) {
       merged[mainKey] = latest;
-      changes.push(`Migrated latest direct-chat session → ${mainKey}`);
+      migratedDirectChatKey = mainKey;
     }
   }
 
@@ -2111,7 +2144,29 @@ async function migrateLegacySessions(
     );
   }
 
+  const targetExists = fileExists(detected.sessions.targetStorePath);
+  let targetReadable = !targetExists || targetParsed.ok;
+  if (!targetReadable) {
+    if (options.recoverCorruptTargetStore) {
+      const archivedTargetPath = `${detected.sessions.targetStorePath}.corrupt-${now()}`;
+      try {
+        fs.renameSync(detected.sessions.targetStorePath, archivedTargetPath);
+        changes.push(`Archived corrupt target sessions store → ${archivedTargetPath}`);
+        targetReadable = true;
+      } catch (err) {
+        warnings.push(
+          `Target sessions store unreadable; failed to archive ${detected.sessions.targetStorePath}: ${String(err)}`,
+        );
+      }
+    } else {
+      warnings.push(
+        `Target sessions store unreadable; left untouched to avoid overwriting at ${detected.sessions.targetStorePath}. Run openclaw doctor --fix to archive it and retry the legacy merge.`,
+      );
+    }
+  }
+
   if (
+    targetReadable &&
     (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
@@ -2126,10 +2181,17 @@ async function migrateLegacySessions(
     await saveSessionStore(detected.sessions.targetStorePath, normalized, {
       skipMaintenance: true,
     });
+    if (migratedDirectChatKey) {
+      changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
+    }
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
     }
+  }
+
+  if (!targetReadable) {
+    return { changes, warnings };
   }
 
   const entries = safeReadDir(detected.sessions.legacyDir);
@@ -2153,7 +2215,7 @@ async function migrateLegacySessions(
     }
   }
 
-  if (legacyParsed.ok) {
+  if (legacyParsed.ok && targetReadable) {
     try {
       if (fileExists(detected.sessions.legacyStorePath)) {
         fs.rmSync(detected.sessions.legacyStorePath, { force: true });
@@ -2260,6 +2322,7 @@ export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   config?: OpenClawConfig;
   now?: () => number;
+  recoverCorruptTargetStore?: boolean;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
@@ -2276,7 +2339,9 @@ export async function runLegacyStateMigrations(params: {
     detected,
     config: params.config ?? ({} as OpenClawConfig),
   });
-  const sessions = await migrateLegacySessions(detected, now);
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -2481,6 +2546,7 @@ export async function autoMigrateLegacyState(params: {
   homedir?: () => string;
   log?: MigrationLogger;
   now?: () => number;
+  recoverCorruptTargetStore?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -2604,7 +2670,9 @@ export async function autoMigrateLegacyState(params: {
     detected,
     config: params.cfg,
   });
-  const sessions = await migrateLegacySessions(detected, now);
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),

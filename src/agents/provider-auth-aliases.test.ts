@@ -77,10 +77,6 @@ describe("provider auth aliases", () => {
     expect(resolveProviderIdForAuth("openai")).toBe("openai");
   });
 
-  it("maps retired persisted OpenAI auth provider ids to canonical OpenAI", () => {
-    expect(resolveProviderIdForAuth(["openai", "codex"].join("-"))).toBe("openai");
-  });
-
   it("does not reuse aliases across env-resolved plugin roots", () => {
     const env = {
       HOME: "/home/one",

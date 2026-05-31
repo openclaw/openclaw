@@ -728,16 +728,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceRaw,
         });
         const device = controlUiAuthPolicy.device;
-
-        let {
-          authResult,
-          authOk,
-          authMethod,
-          sharedAuthOk,
-          bootstrapTokenCandidate,
-          deviceTokenCandidate,
-          deviceTokenCandidateSource,
-        } = await resolveConnectAuthState({
+        const connectAuthState = await resolveConnectAuthState({
           resolvedAuth,
           connectAuth: connectParams.auth,
           hasDeviceIdentity: Boolean(device),
@@ -747,6 +738,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
         });
+        const {
+          sharedAuthOk,
+          bootstrapTokenCandidate,
+          deviceTokenCandidate,
+          deviceTokenCandidateSource,
+        } = connectAuthState;
+        let { authResult, authOk, authMethod } = connectAuthState;
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
             resolveUnauthorizedHandshakeContext({
@@ -1116,6 +1114,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const clientAccessMetadata = {
             displayName: connectParams.client.displayName,
             remoteIp: reportedClientIp,
+            lastSeenAtMs: Date.now(),
+            lastSeenReason: "connect",
           };
           const requirePairing = async (
             reason: ConnectPairingRequiredReason,
@@ -1251,9 +1251,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   ? await approveBootstrapDevicePairing(
                       pairing.request.requestId,
                       boundBootstrapProfile,
+                      { accessMetadata: clientAccessMetadata },
                     )
                   : await approveDevicePairing(pairing.request.requestId, {
                       callerScopes: scopes,
+                      accessMetadata: clientAccessMetadata,
                     });
               if (approved?.status === "approved") {
                 if (allowSilentBootstrapPairing && boundBootstrapProfile) {

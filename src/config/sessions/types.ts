@@ -1,4 +1,11 @@
 import crypto from "node:crypto";
+import type {
+  AcpSessionRuntimeOptions,
+  SessionAcpIdentity,
+  SessionAcpIdentitySource,
+  SessionAcpIdentityState,
+  SessionAcpMeta,
+} from "@openclaw/acp-core/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
@@ -26,49 +33,12 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
-export type SessionAcpIdentitySource = "ensure" | "status" | "event";
-
-export type SessionAcpIdentityState = "pending" | "resolved";
-
-export type SessionAcpIdentity = {
-  state: SessionAcpIdentityState;
-  acpxRecordId?: string;
-  acpxSessionId?: string;
-  agentSessionId?: string;
-  source: SessionAcpIdentitySource;
-  lastUpdatedAt: number;
-};
-
-export type SessionAcpMeta = {
-  backend: string;
-  agent: string;
-  runtimeSessionName: string;
-  identity?: SessionAcpIdentity;
-  mode: "persistent" | "oneshot";
-  runtimeOptions?: AcpSessionRuntimeOptions;
-  cwd?: string;
-  state: "idle" | "running" | "error";
-  lastActivityAt: number;
-  lastError?: string;
-};
-
-export type AcpSessionRuntimeOptions = {
-  /**
-   * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
-   */
-  runtimeMode?: string;
-  /** ACP runtime config option: model id. */
-  model?: string;
-  /** ACP runtime config option: thinking/reasoning effort. */
-  thinking?: string;
-  /** Working directory override for ACP session turns. */
-  cwd?: string;
-  /** ACP runtime config option: permission profile id. */
-  permissionProfile?: string;
-  /** ACP runtime config option: per-turn timeout in seconds. */
-  timeoutSeconds?: number;
-  /** Backend-specific option bag mapped through session/set_config_option. */
-  backendExtras?: Record<string, string>;
+export type {
+  AcpSessionRuntimeOptions,
+  SessionAcpIdentity,
+  SessionAcpIdentitySource,
+  SessionAcpIdentityState,
+  SessionAcpMeta,
 };
 
 export type CliSessionBinding = {

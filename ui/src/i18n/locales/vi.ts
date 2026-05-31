@@ -267,6 +267,7 @@ export const vi: TranslationMap = {
       openFilesTab: "Mở tab Tệp",
       primaryModel: "Mô hình chính",
       runtime: "Runtime",
+      thinkingDefault: "Mức suy luận mặc định",
       identityName: "Tên danh tính",
       identityAvatar: "Ảnh đại diện danh tính",
       skillsFilter: "Bộ lọc Skills",
@@ -415,6 +416,7 @@ export const vi: TranslationMap = {
     communications: "Liên lạc",
     appearance: "Giao diện",
     automation: "Tự động hóa",
+    mcp: "MCP",
     infrastructure: "Hạ tầng",
     aiAgents: "AI & Agent",
     debug: "Gỡ lỗi",
@@ -438,6 +440,7 @@ export const vi: TranslationMap = {
     communications: "Kênh, tin nhắn và cài đặt âm thanh.",
     appearance: "Giao diện, UI và cài đặt trình hướng dẫn thiết lập.",
     automation: "Lệnh, hook, cron và plugin.",
+    mcp: "Máy chủ MCP, xác thực, công cụ và chẩn đoán.",
     infrastructure: "Cài đặt Gateway, web, trình duyệt và phương tiện.",
     aiAgents: "Agent, mô hình, skills, công cụ, bộ nhớ, phiên.",
     debug: "Ảnh chụp, sự kiện, RPC.",
@@ -1281,7 +1284,7 @@ export const vi: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "Lỗi công cụ",
     },
   },
   languages: {

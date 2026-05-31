@@ -30,7 +30,7 @@ import {
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   isIncompleteTerminalAssistantTurn,
-  resolveIncompleteTurnPayloadText,
+  resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
@@ -42,6 +42,14 @@ import {
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+
+function resolveIncompleteTurnPayloadText(
+  params: Omit<Parameters<typeof resolveIncompleteTurnPayloadTextCore>[0], "externalAbort"> & {
+    externalAbort?: boolean;
+  },
+): string | null {
+  return resolveIncompleteTurnPayloadTextCore({ externalAbort: false, ...params });
+}
 
 describe("runEmbeddedAgent incomplete-turn safety", () => {
   beforeAll(async () => {
@@ -127,6 +135,38 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(mockedClassifyFailoverReason).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
+  });
+
+  it("surfaces internal aborts after tool-use as visible incomplete-turn failures", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        aborted: true,
+        externalAbort: false,
+        assistantTexts: [],
+        toolMetas: [{ toolName: "web_search", meta: "query=next voice note" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-internal-abort-tool-use-incomplete",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
+    ]);
+    expect(result.meta?.livenessState).toBe("abandoned");
   });
 
   it("synthesizes a silent cron payload from a trailing current-attempt NO_REPLY tool result", () => {
@@ -1305,11 +1345,22 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const explicitCancellationText = resolveIncompleteTurnPayloadText({
       payloadCount: interruptedToolOnlyAttempt.assistantTexts.length,
       aborted: true,
+      externalAbort: true,
       timedOut: false,
       attempt: interruptedToolOnlyAttempt,
     });
 
     expect(explicitCancellationText).toBeNull();
+
+    const internalAbortText = resolveIncompleteTurnPayloadText({
+      payloadCount: interruptedToolOnlyAttempt.assistantTexts.length,
+      aborted: true,
+      externalAbort: false,
+      timedOut: false,
+      attempt: interruptedToolOnlyAttempt,
+    });
+
+    expect(internalAbortText).toContain("couldn't generate a response");
   });
 
   it("allows a same-prompt retry only for replay-safe missing assistant turns", () => {

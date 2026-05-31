@@ -556,6 +556,70 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
+  it("looks up each static fallback candidate with its own normalized model id", async () => {
+    resolveBundledStaticCatalogModelMock.mockImplementation(({ provider, modelId }) => ({
+      provider,
+      id: modelId,
+      name: modelId,
+      api: "openai-responses",
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }));
+
+    const anthropicResult = await resolveModelAsync(
+      "anthropic",
+      "anthropic/claude-haiku-4-5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+        skipProviderRuntimeHooks: true,
+      },
+    );
+    const openaiResult = await resolveModelAsync("openai", "gpt-4o", "/tmp/agent", undefined, {
+      allowBundledStaticCatalogFallback: true,
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+      skipProviderRuntimeHooks: true,
+    });
+
+    expectRecordFields(expectResolvedModel(anthropicResult), {
+      provider: "anthropic",
+      id: "claude-haiku-4-5",
+    });
+    expectRecordFields(expectResolvedModel(openaiResult), {
+      provider: "openai",
+      id: "gpt-4o",
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "anthropic",
+      modelId: "claude-haiku-4-5",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "openai",
+      modelId: "gpt-4o",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "claude-haiku-4-5",
+      }),
+    );
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "anthropic/claude-haiku-4-5",
+      }),
+    );
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
   it("applies provider overrides to bundled static catalog rows while skipping agent discovery", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "mistral",

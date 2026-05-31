@@ -235,6 +235,14 @@ export const CronFailureDestinationSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const CronCompletionDestinationSchema = Type.Object(
+  {
+    mode: Type.Literal("webhook"),
+    to: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
@@ -256,6 +264,7 @@ const CronDeliveryAnnounceSchema = Type.Object(
   {
     mode: Type.Literal("announce"),
     ...CronDeliverySharedProperties,
+    completionDestination: Type.Optional(CronCompletionDestinationSchema),
     to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -282,6 +291,9 @@ export const CronDeliveryPatchSchema = Type.Object(
       Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("webhook")]),
     ),
     ...CronDeliverySharedProperties,
+    completionDestination: Type.Optional(
+      Type.Union([CronCompletionDestinationSchema, Type.Null()]),
+    ),
     to: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

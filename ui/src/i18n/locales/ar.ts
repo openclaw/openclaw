@@ -266,6 +266,7 @@ export const ar: TranslationMap = {
       openFilesTab: "فتح تبويب الملفات",
       primaryModel: "النموذج الأساسي",
       runtime: "وقت التشغيل",
+      thinkingDefault: "مستوى التفكير الافتراضي",
       identityName: "اسم الهوية",
       identityAvatar: "صورة الهوية",
       skillsFilter: "مرشح Skills",
@@ -414,6 +415,7 @@ export const ar: TranslationMap = {
     communications: "الاتصالات",
     appearance: "المظهر",
     automation: "الأتمتة",
+    mcp: "MCP",
     infrastructure: "البنية التحتية",
     aiAgents: "الذكاء الاصطناعي والوكلاء",
     debug: "تصحيح الأخطاء",
@@ -437,6 +439,7 @@ export const ar: TranslationMap = {
     communications: "القنوات، والرسائل، وإعدادات الصوت.",
     appearance: "السمة، وواجهة المستخدم، وإعدادات معالج الإعداد.",
     automation: "الأوامر، والخطافات، وcron، والمكونات الإضافية.",
+    mcp: "خوادم MCP، والمصادقة، والأدوات، والتشخيصات.",
     infrastructure: "إعدادات Gateway، والويب، والمتصفح، والوسائط.",
     aiAgents: "الوكلاء، والنماذج، والمهارات، والأدوات، والذاكرة، والجلسة.",
     debug: "اللقطات، والأحداث، وRPC.",
@@ -1274,7 +1277,7 @@ export const ar: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "خطأ في الأداة",
     },
   },
   languages: {

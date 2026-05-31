@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import {
@@ -80,6 +81,29 @@ const localScheduling = resolveLocalVitestScheduling(
 
 function hasWorkerOverride(env: Record<string, string | undefined>): boolean {
   return Boolean((env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS)?.trim());
+}
+
+function sourcePackageAlias(packageId: string, subpath?: string) {
+  return {
+    find: `@openclaw/${packageId}${subpath ? `/${subpath}` : ""}`,
+    replacement: path.join(
+      repoRoot,
+      "packages",
+      packageId,
+      "src",
+      ...(subpath ? subpath.split("/") : ["index"]).map((part, index, parts) =>
+        index === parts.length - 1 ? `${part}.ts` : part,
+      ),
+    ),
+  };
+}
+
+function sourcePackageAliasesFromExports(packageId: string, exports: Record<string, unknown>) {
+  return Object.keys(exports)
+    .map((exportKey) => (exportKey === "." ? undefined : exportKey.slice(2)))
+    .filter((subpath) => subpath === undefined || (subpath && !subpath.includes("..")))
+    .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))
+    .map((subpath) => sourcePackageAlias(packageId, subpath));
 }
 
 export function resolveSharedVitestWorkerConfig(params: {
@@ -375,6 +399,18 @@ export const sharedVitestConfig = {
         find: "@openclaw/normalization-core",
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
+      sourcePackageAlias("media-core", "base64"),
+      sourcePackageAlias("media-core", "constants"),
+      sourcePackageAlias("media-core", "content-length"),
+      sourcePackageAlias("media-core", "file-name"),
+      sourcePackageAlias("media-core", "inbound-path-policy"),
+      sourcePackageAlias("media-core", "inline-image-data-url"),
+      sourcePackageAlias("media-core", "media-source-url"),
+      sourcePackageAlias("media-core", "mime"),
+      sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
+      sourcePackageAlias("media-core", "read-response-with-limit"),
+      sourcePackageAlias("media-core"),
+      ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),

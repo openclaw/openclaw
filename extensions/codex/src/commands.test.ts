@@ -112,12 +112,12 @@ function inMemoryCodexPluginsIO(
 } {
   const store: CodexPluginsConfigBlock = {
     enabled: options.enabled,
-    plugins: JSON.parse(JSON.stringify(initial)),
+    plugins: structuredClone(initial),
   };
   return {
-    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
-    currentConfig: () => JSON.parse(JSON.stringify(store)),
-    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
+    current: () => structuredClone(store.plugins ?? {}),
+    currentConfig: () => structuredClone(store),
+    readConfig: () => Promise.resolve(structuredClone(store)),
     mutate: async (update) => {
       update(store);
     },
@@ -149,6 +149,14 @@ function requireResultText(result: PluginCommandResult): string {
 
 function expectResultTextContains(result: PluginCommandResult, expected: string): void {
   expect(requireResultText(result)).toContain(expected);
+}
+
+function buttonValues(result: PluginCommandResult): string[] {
+  const block = result.presentation?.blocks.find((candidate) => candidate.type === "buttons");
+  if (!block || block.type !== "buttons") {
+    throw new Error("expected button presentation");
+  }
+  return block.buttons.map((button) => button.value ?? "");
 }
 
 function installAuthProfileStore(store: AuthProfileStore, config: PluginCommandContext["config"]) {
@@ -265,6 +273,31 @@ describe("codex command", () => {
 
     expect(result.text).toContain("Codex command failed: &lt;\uff20U123&gt; loader failed");
     expect(result.text).not.toContain("<@U123>");
+  });
+
+  it("renders the top-level Codex menu as portable native slash commands", async () => {
+    const result = await handleCodexCommand(createContext(""));
+
+    expectResultTextContains(result, "/codex plugins menu");
+    expect(buttonValues(result)).toEqual([
+      "/codex plugins menu",
+      "/codex permissions menu",
+      "/codex fast menu",
+      "/codex computer-use menu",
+      "/codex account",
+      "/codex help",
+    ]);
+  });
+
+  it("routes /codex plugins menu to the Codex-owned plugin picker", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO();
+
+    const result = await handleCodexCommand(createContext("plugins menu"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+
+    expectResultTextContains(result, "/codex plugins enable");
+    expect(buttonValues(result)).toContain("/codex plugins list");
   });
 
   it("lists Codex sub-plugins through the /codex plugins command surface", async () => {

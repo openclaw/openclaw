@@ -828,7 +828,6 @@ export class GatewayBrowserClient {
           }),
         );
       }
-      return;
     }
   }
 

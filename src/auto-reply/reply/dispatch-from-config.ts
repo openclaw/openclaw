@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -8,7 +9,6 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -138,6 +138,7 @@ import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
   isExplicitSourceReplyCommand,
+  isUnauthorizedTextSlashCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
@@ -205,7 +206,12 @@ function routeThreadIdsDiffer(
 function isSlackDirectRoutedThreadTurn(
   ctx: Pick<
     FinalizedMsgContext,
-    "ChatType" | "MessageThreadId" | "OriginatingChannel" | "Provider" | "Surface" | "TransportThreadId"
+    | "ChatType"
+    | "MessageThreadId"
+    | "OriginatingChannel"
+    | "Provider"
+    | "Surface"
+    | "TransportThreadId"
   >,
 ): boolean {
   if (normalizeChatType(ctx.ChatType) !== "direct") {
@@ -1506,13 +1512,10 @@ export async function dispatchReplyFromConfig(
     }
   };
 
-  const sendBindingNotice = async (
+  const deliverBindingPayload = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
-    if (suppressAutomaticSourceDelivery) {
-      return false;
-    }
     const result = await routeReplyToOriginating(payload, {
       kind: mode === "terminal" ? "final" : "tool",
     });
@@ -1528,6 +1531,15 @@ export async function dispatchReplyFromConfig(
     return mode === "additive"
       ? dispatcher.sendToolResult(payload)
       : dispatcher.sendFinalReply(payload);
+  };
+  const sendBindingNotice = async (
+    payload: ReplyPayload,
+    mode: "additive" | "terminal",
+  ): Promise<boolean> => {
+    if (suppressAutomaticSourceDelivery) {
+      return false;
+    }
+    return await deliverBindingPayload(payload, mode);
   };
 
   const pluginOwnedBindingRecord =
@@ -1684,6 +1696,13 @@ export async function dispatchReplyFromConfig(
     sourceReplyDeliveryMode === "message_tool_only"
       ? { ...result, sourceReplyDeliveryMode }
       : result;
+  const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
+  const unauthorizedTextSlashSourceReplyCtx =
+    (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
+  const shouldDeliverPluginBindingReply =
+    !suppressAutomaticSourceDelivery ||
+    explicitCommandTurnCtx ||
+    (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
 
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
@@ -1768,8 +1787,12 @@ export async function dispatchReplyFromConfig(
 
       switch (targetedClaimOutcome.status) {
         case "handled": {
-          if (targetedClaimOutcome.result.reply) {
-            await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal");
+          if (targetedClaimOutcome.result.reply && shouldDeliverPluginBindingReply) {
+            // A bound plugin's reply is the explicit output for this claimed turn,
+            // not an automatic agent final; message-tool-only suppression must not
+            // turn normal user-request bindings into silent channel responses.
+            // Ambient room events keep the same privacy guard as final replies.
+            await deliverBindingPayload(targetedClaimOutcome.result.reply, "terminal");
           }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
@@ -2771,7 +2794,6 @@ export async function dispatchReplyFromConfig(
     // suppressed in room_event. sendPolicy: deny still suppresses everything.
     // Uses the same helper as the source-reply visibility policy so the bypass
     // and the policy stay aligned.
-    const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
       !sendPolicyDenied &&

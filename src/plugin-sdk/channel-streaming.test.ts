@@ -377,7 +377,7 @@ describe("channel-streaming", () => {
     });
 
     expect(text).toBe(
-      "Shelling\n\n🛠️ run node script…enclaw/some/really/deep/path/that/keeps/going/and/going/index…",
+      "Shelling\n\n🛠️ run node script…e…y/deep/path/that/keeps/going/and/going/index.ts --flag value",
     );
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });

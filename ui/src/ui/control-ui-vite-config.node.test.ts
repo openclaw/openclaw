@@ -1,7 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveTsconfigPathAliasesForVite } from "../../vite.config.ts";
+import {
+  controlUiBrowserOnlySharedModuleAliases,
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../../vite.config.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -14,6 +18,16 @@ describe("Control UI Vite config", () => {
     expect(findStringAlias("@openclaw/net-policy/ip")?.replacement).toBe(
       path.join(repoRoot, "packages/net-policy/src/ip.ts"),
     );
+  });
+
+  it("resolves Control UI dev-server source aliases for internal packages", () => {
+    const aliases = resolveSourcePackageAliasesForVite();
+    expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/string-coerce"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/string-coerce",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/string-coerce.ts"),
+    });
   });
 
   it("keeps specific tsconfig aliases ahead of broad package aliases", () => {
@@ -36,5 +50,20 @@ describe("Control UI Vite config", () => {
     expect(broadOpenClawWildcardIndex).toBeGreaterThanOrEqual(0);
     expect(netPolicyIpIndex).toBeLessThan(netPolicyPackageIndex);
     expect(netPolicyWildcardIndex).toBeLessThan(broadOpenClawWildcardIndex);
+  });
+
+  it("uses a browser-safe redactor for shared tool display imports", async () => {
+    const plugin = controlUiBrowserOnlySharedModuleAliases();
+    const resolveId = plugin.resolveId;
+    expect(typeof resolveId).toBe("function");
+
+    const resolved = await resolveId.call(
+      {} as never,
+      "../logging/redact.js",
+      path.join(repoRoot, "src/agents/tool-display-common.ts"),
+      { attributes: {}, custom: {}, isEntry: false, ssr: false },
+    );
+
+    expect(resolved).toBe(path.join(repoRoot, "ui/src/ui/browser-redact.ts"));
   });
 });

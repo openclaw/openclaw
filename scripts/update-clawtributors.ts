@@ -109,7 +109,7 @@ for (const line of log.split("\n")) {
     continue;
   }
 
-  let login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+  const login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
   if (!login) {
     continue;
   }

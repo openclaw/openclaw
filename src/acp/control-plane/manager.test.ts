@@ -1,12 +1,13 @@
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { AcpRuntime, AcpRuntimeCapabilities } from "@openclaw/acp-core/runtime/types";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
+import { isAcpTurnActive, resetAcpActiveTurnsForTests } from "./active-turns.js";
 
 const hoisted = vi.hoisted(() => {
   const listAcpSessionEntriesMock = vi.fn();
@@ -307,6 +308,7 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 describe("AcpSessionManager", () => {
   beforeEach(() => {
     resetAcpSessionManagerForTests();
+    resetAcpActiveTurnsForTests();
     vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
@@ -638,6 +640,211 @@ describe("AcpSessionManager", () => {
     expect(maxInFlight).toBe(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
+
+  it("reports a live turn under the task record's childSessionKey while it is in flight (#88205)", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const releaseTurn = createDeferred();
+      runtimeState.runTurn.mockImplementation(async function* () {
+        await releaseTurn.promise;
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Live turn",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: { sessionId: "parent-1", updatedAt: Date.now() },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      const turn = manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "long running",
+        mode: "prompt",
+        requestId: "live-acp-turn",
+      });
+      await vi.waitFor(
+        () => {
+          expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+        },
+        { interval: 1 },
+      );
+
+      // The maintenance sweep probes liveness with exactly this key; prove it resolves to the
+      // turn the manager actually registered, so the reclaim gate cannot over-reclaim a live run.
+      const childSessionKey = requireTaskByRunId("live-acp-turn").childSessionKey;
+      if (!childSessionKey) {
+        throw new Error("Expected the ACP task record to carry a childSessionKey");
+      }
+      expect(childSessionKey).toBe("agent:codex:acp:child-1");
+      expect(isAcpTurnActive(childSessionKey)).toBe(true);
+
+      releaseTurn.resolve();
+      await turn;
+      await flushMicrotasks();
+
+      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+    });
+  }, 300_000);
+
+  it("marks liveness during runtime initialization, before the turn streams (#88205)", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const releaseInit = createDeferred();
+      // Hold runtime init (ensureSession) so the turn is stuck initializing: the task record
+      // already exists but the turn stream has not started. This is the window that previously
+      // let the authoritative sweep mark a live, slow-to-initialize ACP task as lost.
+      runtimeState.ensureSession.mockImplementation(
+        async (input: { sessionKey: string; mode: "persistent" | "oneshot" }) => {
+          await releaseInit.promise;
+          return {
+            sessionKey: input.sessionKey,
+            backend: "acpx",
+            runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+          };
+        },
+      );
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Init window",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: { sessionId: "parent-1", updatedAt: Date.now() },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      const turn = manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "slow init",
+        mode: "prompt",
+        requestId: "init-window-acp-turn",
+      });
+      await vi.waitFor(
+        () => {
+          expect(runtimeState.ensureSession).toHaveBeenCalled();
+        },
+        { interval: 1 },
+      );
+
+      const childSessionKey = requireTaskByRunId("init-window-acp-turn").childSessionKey;
+      if (!childSessionKey) {
+        throw new Error("Expected the ACP task record to carry a childSessionKey");
+      }
+      // Liveness must already cover initialization, while the turn stream has not started.
+      expect(runtimeState.runTurn).not.toHaveBeenCalled();
+      expect(isAcpTurnActive(childSessionKey)).toBe(true);
+
+      releaseInit.resolve();
+      await turn;
+      await flushMicrotasks();
+
+      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+    });
+  }, 300_000);
+
+  it("clears liveness when retry setup throws before task terminal update (#88205)", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementationOnce(async function* () {
+        yield { type: "error" as const, message: "acpx exited with code 1" };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      let childReads = 0;
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          childReads += 1;
+          if (childReads > 2) {
+            throw new Error("session store unavailable");
+          }
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Retry cleanup",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: { sessionId: "parent-1", updatedAt: Date.now() },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await expect(
+        manager.runTurn({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          text: "stale resume",
+          mode: "prompt",
+          requestId: "retry-cleanup-failure-acp-turn",
+        }),
+      ).rejects.toThrow("session store unavailable");
+
+      const childSessionKey = requireTaskByRunId("retry-cleanup-failure-acp-turn").childSessionKey;
+      if (!childSessionKey) {
+        throw new Error("Expected the ACP task record to carry a childSessionKey");
+      }
+      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+    });
+  }, 300_000);
 
   it("rejects a queued turn promptly when its caller aborts before the actor is free", async () => {
     const runtimeState = createRuntime();

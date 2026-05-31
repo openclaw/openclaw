@@ -124,6 +124,9 @@ function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps 
   };
 }
 
+// Auth profiles can be adopted by a provider-specific owner agent dir. Logout
+// must remove every owning store or stale profiles reappear on the next status
+// read and provider-auth warmup.
 async function removeProviderAuthProfilesAcrossOwnerStores(params: {
   provider: string;
   agentDir: string;
@@ -150,15 +153,17 @@ async function removeProviderAuthProfilesAcrossOwnerStores(params: {
   return true;
 }
 
+// UI expiry fields are emitted only when both timestamp and remaining duration
+// are valid, keeping profile/provider expiry shapes all-or-nothing.
 function buildExpiry(
   remainingMs: number | undefined,
   expiresAt: number | undefined,
 ): ModelAuthExpiry | undefined {
-  const validExpiresAt = asDateTimestampMs(expiresAt);
-  if (validExpiresAt === undefined || typeof remainingMs !== "number") {
+  const normalizedExpiresAt = asDateTimestampMs(expiresAt);
+  if (normalizedExpiresAt === undefined || typeof remainingMs !== "number") {
     return undefined;
   }
-  return { at: validExpiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
+  return { at: normalizedExpiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
 }
 
 function providerDisplayName(provider: string): string {
@@ -420,6 +425,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     try {
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveDefaultAgentDir(cfg);
+      // Use the external-profile-aware store for status reads so the dashboard
+      // reflects CLI-discovered credentials without persisting them here.
       const store = ensureAuthProfileStore(agentDir, {
         externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
       });

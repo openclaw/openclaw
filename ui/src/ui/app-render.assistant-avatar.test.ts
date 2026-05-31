@@ -3,10 +3,14 @@
 import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppViewState } from "./app-view-state.ts";
+import type { ChatProps } from "./views/chat.ts";
 import type { QuickSettingsProps } from "./views/config-quick.ts";
 
 const quickSettingsProps = vi.hoisted(() => ({
   current: null as QuickSettingsProps | null,
+}));
+const chatProps = vi.hoisted(() => ({
+  current: null as ChatProps | null,
 }));
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 
@@ -27,7 +31,10 @@ vi.mock("./views/config-quick.ts", () => ({
 }));
 
 vi.mock("./views/chat.ts", () => ({
-  renderChat: () => html`<div data-testid="chat"></div>`,
+  renderChat: (props: ChatProps) => {
+    chatProps.current = props;
+    return html`<div data-testid="chat"></div>`;
+  },
 }));
 
 vi.mock("./icons.ts", () => ({
@@ -76,6 +83,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     hello: null,
     lastError: null,
     lastErrorCode: null,
+    chatError: null,
     eventLog: [],
     assistantName: "Nova",
     assistantAvatar: "/avatar/main",
@@ -214,6 +222,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
 beforeEach(() => {
   localStorageValues.clear();
   quickSettingsProps.current = null;
+  chatProps.current = null;
 });
 
 describe("renderApp assistant avatar routing", () => {
@@ -251,6 +260,77 @@ describe("renderApp assistant avatar routing", () => {
     const content = container.querySelector<HTMLElement>("main.content");
     expect(content?.classList.contains("content--logs")).toBe(true);
     expect(content?.classList.contains("content--chat")).toBe(false);
+  });
+
+  it("does not render chat errors in non-chat page headers", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "sessions",
+          lastError: "transient tool failure",
+          chatError: "transient tool failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBeUndefined();
+  });
+
+  it("keeps non-chat global errors visible in non-chat page headers", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "nodes",
+          lastError: "node list failed",
+          chatError: "previous chat failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBe(
+      "node list failed",
+    );
+  });
+
+  it("routes chat errors through the chat view instead of the shared header", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          lastError: "transient tool failure",
+          chatError: "transient tool failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".page-meta .pill.danger")?.textContent?.trim()).toBeUndefined();
+    expect(chatProps.current?.error).toBe("transient tool failure");
+  });
+
+  it("routes newer global errors through the chat view ahead of stale chat errors", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          lastError: "gateway disconnected",
+          chatError: "previous chat failure",
+        }),
+      ),
+      container,
+    );
+
+    expect(chatProps.current?.error).toBe("gateway disconnected");
   });
 
   it("passes security quick setting fields to Quick Settings", () => {

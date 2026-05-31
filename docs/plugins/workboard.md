@@ -160,17 +160,92 @@ blocked cards that need attention, repeated failures, done cards without proof,
 and running cards that only have a loose session link.
 
 Dispatch is intentionally Gateway-local. It does not spawn arbitrary operating
-system processes; normal OpenClaw sessions still own execution. A dispatch nudge
-promotes dependency-ready cards, records dispatch metadata on ready cards,
-blocks expired claims or timed-out runs, marks board-configured triage cards as
-orchestration candidates, and leaves durable notification subscriptions for the
-caller that delivers notifications.
+system processes; normal OpenClaw subagent sessions still own execution. A
+dispatch nudge promotes dependency-ready cards, records dispatch metadata on
+ready cards, blocks expired claims or timed-out runs, marks board-configured
+triage cards as orchestration candidates, then claims a small batch of ready
+cards and starts worker runs through the Gateway subagent runtime. Workers get
+bounded card context plus the claim token they need to heartbeat, complete, or
+block the card through the Workboard tools.
+
+### Dispatch worker selection
+
+Each dispatch pass starts at most three workers by default. Ready cards are
+ordered by priority, position, and creation time, then filtered to avoid
+duplicate active ownership. A dispatch starts only one card for a given owner or
+agent in the same pass, and it skips owners that already have running or review
+work on the board.
+
+Archived cards, cards with active claims, and cards without `ready` status are
+not selected for worker starts. They can still be affected by the data side of
+dispatch when stale claims, dependency promotion, or timeout cleanup applies.
+
+### Worker prompt and lifecycle
+
+The worker prompt includes the card title, bounded notes and context, the
+assigned board, and the Workboard worker protocol. It also includes the claim
+owner and claim token so the worker can call `workboard_heartbeat`,
+`workboard_complete`, or `workboard_block` without another actor taking over the
+card.
+
+When a worker starts successfully, Workboard stores the session key, run id,
+engine, mode, model label, status, and worker log on the card. The session key
+is deterministic for the board and card, which makes repeated dispatches route
+back to the same worker lane instead of creating unrelated sessions.
+
+If a worker cannot be started after a card is claimed, Workboard blocks the
+card, clears the claim, records the run-start failure, and appends a worker log
+line. That failure is visible in the dashboard, CLI JSON, agent tools, and card
+diagnostics.
+
+### Dispatch entry points
+
+Ready-card worker starts can happen from:
+
+- the dashboard dispatch action
+- `openclaw workboard dispatch`
+- `/workboard dispatch` on a command-capable channel
+
+All three entry points use the Gateway subagent runtime when the Gateway is
+available. The CLI has one extra operator fallback: if the Gateway is offline or
+does not expose the Workboard dispatch method and no explicit `--url` or
+`--token` target was provided, it runs data-only dispatch against local SQLite
+state. That fallback can promote dependencies, clean stale claims, and block
+timed-out runs, but it cannot start workers.
 
 Board metadata can include orchestration settings such as `autoDecompose`,
 `autoDecomposePerDispatch`, `defaultAssignee`, and `orchestratorProfile`.
 OpenClaw records the orchestration intent and exposes it in worker context; the
-actual specification, decomposition, or session start still happens through the
-normal Workboard tools and dashboard session flow.
+actual specification and decomposition still happens through the normal
+Workboard tools.
+
+## CLI and slash command
+
+The plugin registers a root CLI command:
+
+```bash
+openclaw workboard list
+openclaw workboard create "Fix stale card lifecycle" --priority high --labels bug,workboard
+openclaw workboard show <card-id>
+openclaw workboard dispatch
+```
+
+`openclaw workboard dispatch` calls the running Gateway so worker starts use the
+same subagent runtime as the dashboard. If the Gateway is unavailable, it falls
+back to data-only dispatch so dependency promotion, stale-claim cleanup, and
+timeout blocking can still run. Auth, permission, and validation failures still
+surface as command errors, as do failures for explicit `--url` or `--token`
+targets.
+
+The `/workboard` slash command supports the same compact operator path:
+`/workboard list`, `/workboard show <card-id>`, `/workboard create <title>`, and
+`/workboard dispatch`. List and show are read operations for authorized command
+senders. Create and dispatch require owner status on chat surfaces or a Gateway
+client with `operator.write` or `operator.admin`.
+
+See [Workboard CLI](/cli/workboard) for command flags, JSON output, Gateway
+fallback behavior, unambiguous id-prefix handling, dispatch selection rules, and
+troubleshooting.
 
 ## Session lifecycle sync
 
@@ -289,9 +364,26 @@ Workboard creates links to normal dashboard sessions. Check the card's agent id
 and linked session, then open the Sessions or Chat view to inspect the actual
 run state.
 
+### Dispatch does not start a worker
+
+Confirm there is at least one `ready` card without an active claim:
+
+```bash
+openclaw workboard list --status ready
+```
+
+If the CLI reports data-only dispatch, start or restart the Gateway and retry.
+Data-only dispatch updates local board state but cannot start subagent worker
+runs.
+
+Cards can also be skipped when another card for the same owner or agent is
+already running or waiting for review. Complete, block, or release that active
+work before dispatching more work for the same owner.
+
 ## Related
 
 - [Control UI](/web/control-ui)
+- [Workboard CLI](/cli/workboard)
 - [Plugins](/tools/plugin)
 - [Manage plugins](/plugins/manage-plugins)
 - [Sessions](/concepts/session)

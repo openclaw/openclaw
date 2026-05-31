@@ -11,17 +11,20 @@
   "dependencies": {
     "@create-markdown/preview": "2.0.3",
     "@noble/ed25519": "3.1.0",
+    "@openclaw/media-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
-    "dompurify": "3.4.6",
+    "dompurify": "3.4.7",
     "highlight.js": "11.11.1",
     "json5": "2.2.3",
     "lit": "3.3.3",
     "markdown-it": "14.2.0",
     "markdown-it-task-lists": "2.1.1",
-    "marked": "18.0.4"
+    "marked": "18.0.4",
+    "three": "0.184.0"
   },
   "devDependencies": {
     "@types/markdown-it": "14.1.2",
+    "@types/three": "0.184.1",
     "@vitest/browser-playwright": "4.1.7",
     "jsdom": "29.1.1",
     "playwright": "1.60.0",

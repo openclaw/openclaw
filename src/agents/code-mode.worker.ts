@@ -146,7 +146,8 @@ function toJsonSafe(value: unknown): unknown {
     return null;
   }
   try {
-    return JSON.parse(JSON.stringify(value)) as unknown;
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
   } catch {
     if (value instanceof Error) {
       return { name: value.name, message: value.message };
@@ -686,5 +687,8 @@ async function main(): Promise<CodeModeWorkerResult> {
   }
 }
 
-// oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node worker_threads MessagePort, not window.postMessage.
-parentPort?.postMessage(await main());
+if (parentPort) {
+  Reflect.apply(Reflect.get(parentPort, "postMessage") as (message: unknown) => void, parentPort, [
+    await main(),
+  ]);
+}

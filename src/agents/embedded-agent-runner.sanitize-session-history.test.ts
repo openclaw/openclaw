@@ -171,9 +171,7 @@ describe("sanitizeSessionHistory", () => {
   const getAssistantContentTypes = (messages: AgentMessage[]) =>
     getAssistantMessage(messages).content.map((block: { type: string }) => block.type);
 
-  const makeThinkingAndTextAssistantMessages = (
-    thinkingSignature: string = "some_sig",
-  ): AgentMessage[] => {
+  const makeThinkingAndTextAssistantMessages = (thinkingSignature = "some_sig"): AgentMessage[] => {
     const user: UserMessage = {
       role: "user",
       content: "hello",
@@ -1349,6 +1347,53 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "text", text: "visible answer" },
+    ]);
+  });
+
+  it("preserves prior assistant reasoning for OpenAI-compatible replay with reasoning model metadata", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "visible answer" },
+      ]),
+      makeUserMessage("second"),
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
+      model: {
+        id: "Qwen3.6-27B",
+        name: "Qwen3.6 27B",
+        provider: "vllm",
+        api: "openai-completions",
+        baseUrl: "https://example.invalid",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+      },
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      {
+        type: "thinking",
+        thinking: "private reasoning",
+        thinkingSignature: "reasoning_content",
+      },
       { type: "text", text: "visible answer" },
     ]);
   });

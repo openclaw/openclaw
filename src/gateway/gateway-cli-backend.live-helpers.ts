@@ -360,7 +360,6 @@ async function connectClientOnce(params: {
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
-    let client: GatewayClient | undefined;
     const abortStart = new AbortController();
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
@@ -405,7 +404,7 @@ async function connectClientOnce(params: {
       clientOptions.tickWatchTimeoutMs = params.tickWatchTimeoutMs;
     }
 
-    client = new GatewayClient(clientOptions);
+    const client: GatewayClient | undefined = new GatewayClient(clientOptions);
 
     const connectTimeout = setTimeout(
       () => finish({ error: new Error("gateway connect timeout") }),

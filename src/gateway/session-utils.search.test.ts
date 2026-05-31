@@ -237,6 +237,30 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("keeps derived model search for colon model ids", () => {
+    const now = Date.now();
+    const cfg = createModelDefaultsConfig({
+      primary: "ollama/qwen3:0.6b",
+    });
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:inherited-local-model": {
+          sessionId: "sess-inherited-local-model",
+          updatedAt: now,
+          label: "Inherited local model",
+        } as SessionEntry,
+      },
+      opts: { search: "qwen3:0.6b" },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([
+      "agent:main:inherited-local-model",
+    ]);
+    expect(result.totalCount).toBe(1);
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {

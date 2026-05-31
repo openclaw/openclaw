@@ -15,6 +15,10 @@ safety interlock: commands are allowed only when policy + allowlist +
 tool policy and elevated gating (unless elevated is set to `full`, which
 skips approvals).
 
+For a mode-first overview of `deny`, `allowlist`, `ask`, `auto`, `full`,
+Codex Guardian mapping, and ACPX harness permissions, see
+[Permission modes](/tools/permission-modes).
+
 <Note>
 Effective policy is the **stricter** of `tools.exec.*` and approvals
 defaults; if an approvals field is omitted, the `tools.exec` value is

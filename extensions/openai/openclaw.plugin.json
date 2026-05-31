@@ -1,6 +1,5 @@
 {
   "id": "openai",
-  "legacyPluginIds": ["openai-codex"],
   "activation": {
     "onStartup": false
   },

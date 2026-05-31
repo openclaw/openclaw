@@ -297,8 +297,11 @@ function assertMainSessionAgentId(
 }
 
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
-  // No delivery object or mode is "none" -- nothing to validate.
-  if (!job.delivery || job.delivery.mode === "none") {
+  if (!job.delivery) {
+    return;
+  }
+  // No primary delivery and no completion webhook -- nothing to validate.
+  if (job.delivery.mode === "none" && !job.delivery.completionDestination) {
     return;
   }
   // Webhook delivery is allowed for any session target
@@ -308,6 +311,25 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
       throw new Error("cron webhook delivery requires delivery.to to be a valid http(s) URL");
     }
     job.delivery.to = target;
+  }
+  if (job.delivery.completionDestination?.mode === "webhook") {
+    if (job.delivery.mode !== "announce") {
+      throw new Error(
+        'cron completion destination webhook is only supported with delivery.mode="announce"',
+      );
+    }
+    const target = normalizeHttpWebhookUrl(job.delivery.completionDestination.to);
+    if (!target) {
+      throw new Error(
+        "cron completion destination webhook requires delivery.completionDestination.to to be a valid http(s) URL",
+      );
+    }
+    job.delivery.completionDestination.to = target;
+  }
+  if (job.delivery.mode === "none") {
+    return;
+  }
+  if (job.delivery.mode === "webhook") {
     return;
   }
   const isIsolatedLike =
@@ -378,18 +400,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return isFiniteTimestamp(next) ? next : undefined;
   }
   if (job.schedule.kind === "at") {
-    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
-    // The store migration should convert atMs→at, but be defensive in case
-    // the migration hasn't run yet or was bypassed.
-    const schedule = job.schedule as { at?: string; atMs?: number | string };
-    const atMs =
-      typeof schedule.atMs === "number" && Number.isFinite(schedule.atMs) && schedule.atMs > 0
-        ? schedule.atMs
-        : typeof schedule.atMs === "string"
-          ? parseAbsoluteTimeMs(schedule.atMs)
-          : typeof schedule.at === "string"
-            ? parseAbsoluteTimeMs(schedule.at)
-            : null;
+    const atMs = parseAbsoluteTimeMs(job.schedule.at);
     // One-shot jobs stay due until they successfully finish, but if the
     // schedule was updated to a time after the last run, re-arm the job.
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
@@ -885,6 +896,7 @@ function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
 ): CronDelivery {
+  const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
     mode: existing?.mode ?? "none",
     channel: existing?.channel,
@@ -892,6 +904,7 @@ function mergeCronDelivery(
     threadId: existing?.threadId,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
+    completionDestination: existing?.completionDestination,
     failureDestination: existing?.failureDestination,
   };
 
@@ -905,6 +918,9 @@ function mergeCronDelivery(
       next.channel = undefined;
       next.threadId = undefined;
       next.accountId = undefined;
+    }
+    if (!hasCompletionDestinationPatch && (next.mode === "none" || next.mode === "webhook")) {
+      next.completionDestination = undefined;
     }
   }
   if ("channel" in patch) {
@@ -921,6 +937,17 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if (hasCompletionDestinationPatch) {
+    if (patch.completionDestination == null) {
+      next.completionDestination = undefined;
+    } else {
+      const to = normalizeOptionalString(patch.completionDestination.to);
+      next.completionDestination = {
+        mode: "webhook",
+        ...(to ? { to } : {}),
+      };
+    }
   }
   if ("failureDestination" in patch) {
     if (patch.failureDestination === undefined) {

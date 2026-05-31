@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 type SlashCommandsModule = typeof import("./slash-commands.js");
-const browserImportPath: string = "./slash-commands.ts?browser-import";
+const browserImportPath = "./slash-commands.ts?browser-import";
 
 function importDeclarations(source: string): string[] {
   return (source.match(/^import[\s\S]*?;$/gmu) ?? []).map((declaration) =>

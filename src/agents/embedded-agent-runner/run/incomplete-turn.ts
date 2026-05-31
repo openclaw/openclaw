@@ -243,6 +243,7 @@ export function resolveAttemptReplayMetadata(attempt: {
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
+  externalAbort: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
@@ -255,7 +256,7 @@ export function resolveIncompleteTurnPayloadText(params: {
 
   if (
     (params.payloadCount !== 0 && !toolUseTerminal) ||
-    params.aborted ||
+    (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||

@@ -849,7 +849,7 @@ export function convertMessages(
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    params.push({ role: role, content: sanitizeSurrogates(context.systemPrompt) });
+    params.push({ role, content: sanitizeSurrogates(context.systemPrompt) });
   }
 
   let lastRole: string | null = null;

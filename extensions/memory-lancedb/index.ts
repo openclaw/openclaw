@@ -9,6 +9,7 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   optionalFiniteNumberSchema,
   optionalPositiveIntegerSchema,
@@ -195,6 +196,8 @@ function resolveAutoCaptureStartIndex(
 
 const TABLE_NAME = "memories";
 const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
+const DEFAULT_TOOL_RECALL_TIMEOUT_MS = 15_000;
+const DEFAULT_TOOL_RECALL_COOLDOWN_MS = 60_000;
 
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
@@ -442,8 +445,25 @@ class ProviderAdapterEmbeddings implements Embeddings {
     return result.provider;
   }
 
-  async embed(text: string): Promise<number[]> {
-    return await (await this.getProvider()).embedQuery(text);
+  async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
+    const provider = await this.getProvider();
+    if (!options?.timeoutMs) {
+      return await provider.embedQuery(text);
+    }
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      timer = setTimeout(
+        () => controller.abort(new Error("memory-lancedb embedding timed out")),
+        resolveTimerTimeoutMs(options.timeoutMs, 1),
+      );
+      timer.unref?.();
+      return await provider.embedQuery(text, { signal: controller.signal });
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 }
 
@@ -470,6 +490,34 @@ async function runWithTimeout<T>(params: {
     if (timeout) {
       clearTimeout(timeout);
     }
+  }
+}
+
+function formatMemoryRecallError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function buildMemoryRecallUnavailableResult(error: string): AgentToolResult<{
+  count: number;
+  disabled: true;
+  unavailable: true;
+  error: string;
+}> {
+  return {
+    content: [{ type: "text", text: "Memory recall is unavailable right now." }],
+    details: {
+      count: 0,
+      disabled: true,
+      unavailable: true,
+      error,
+    },
+  };
+}
+
+class MemoryRecallEmbeddingError extends Error {
+  constructor(readonly originalError: unknown) {
+    super(formatMemoryRecallError(originalError));
+    this.name = "MemoryRecallEmbeddingError";
   }
 }
 
@@ -676,6 +724,7 @@ export default definePluginEntry({
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
     const embeddings = createEmbeddings(api, cfg);
     const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
+    let memoryRecallCooldown: { until: number; error: string } | undefined;
     const resolveCurrentHookConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
         api.runtime.config?.current
@@ -708,6 +757,22 @@ export default definePluginEntry({
         ...asRecord(runtimePluginConfig),
       });
     };
+    const readMemoryRecallCooldown = (): { error: string } | undefined => {
+      if (!memoryRecallCooldown) {
+        return undefined;
+      }
+      if (memoryRecallCooldown.until <= Date.now()) {
+        memoryRecallCooldown = undefined;
+        return undefined;
+      }
+      return { error: memoryRecallCooldown.error };
+    };
+    const recordMemoryRecallCooldown = (error: string): void => {
+      memoryRecallCooldown = {
+        until: Date.now() + DEFAULT_TOOL_RECALL_COOLDOWN_MS,
+        error,
+      };
+    };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
     api.registerMemoryCapability?.({
@@ -739,10 +804,47 @@ export default definePluginEntry({
           const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
 
           const currentCfg = resolveCurrentHookConfig();
-          const vector = await embeddings.embed(
-            normalizeRecallQuery(query, currentCfg.recallMaxChars),
-          );
-          const results = await db.search(vector, limit, 0.1);
+          const cooldown = readMemoryRecallCooldown();
+          if (cooldown) {
+            return buildMemoryRecallUnavailableResult(cooldown.error);
+          }
+          let recall: Awaited<ReturnType<typeof runWithTimeout<MemorySearchResult[]>>>;
+          try {
+            recall = await runWithTimeout({
+              timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS,
+              task: async () => {
+                let vector: number[];
+                try {
+                  vector = await embeddings.embed(
+                    normalizeRecallQuery(query, currentCfg.recallMaxChars),
+                    { timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS },
+                  );
+                } catch (error) {
+                  throw new MemoryRecallEmbeddingError(error);
+                }
+                return await db.search(vector, limit, 0.1);
+              },
+            });
+          } catch (error) {
+            if (!(error instanceof MemoryRecallEmbeddingError)) {
+              throw error;
+            }
+            const message = formatMemoryRecallError(error.originalError);
+            recordMemoryRecallCooldown(message);
+            api.logger.warn?.(
+              `memory-lancedb: memory_recall failed: ${message}; returning unavailable memory result`,
+            );
+            return buildMemoryRecallUnavailableResult(message);
+          }
+          if (recall.status === "timeout") {
+            const message = `memory_recall timed out after ${Math.round(DEFAULT_TOOL_RECALL_TIMEOUT_MS / 1000)}s`;
+            recordMemoryRecallCooldown(message);
+            api.logger.warn?.(
+              `memory-lancedb: memory_recall timed out after ${DEFAULT_TOOL_RECALL_TIMEOUT_MS}ms; returning unavailable memory result`,
+            );
+            return buildMemoryRecallUnavailableResult(message);
+          }
+          const results = recall.value;
 
           if (results.length === 0) {
             return {

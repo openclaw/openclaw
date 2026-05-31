@@ -29,6 +29,8 @@ function requireApprovalsBaseHash(
   snapshot: ExecApprovalsSnapshot,
   respond: RespondFn,
 ): boolean {
+  // Approval allowlists are admin-editable state. Require the caller's last
+  // observed hash before writing so stale UI tabs cannot overwrite changes.
   if (!snapshot.exists) {
     return true;
   }
@@ -71,6 +73,8 @@ function requireApprovalsBaseHash(
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
+  // The socket token/defaults are runtime-only; expose only the path needed by
+  // the editor so GET responses cannot leak connection material.
   return {
     ...file,
     socket: socketPath ? { path: socketPath } : undefined,
@@ -153,6 +157,8 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
+      // Node invocations can return structured payloads or JSON strings
+      // depending on the transport; normalize before echoing the RPC response.
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
       respond(true, payload, undefined);
     });
@@ -186,6 +192,8 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
+      // node.set returns JSON on the command channel; keep the gateway response
+      // shape aligned with local exec.approvals.set.
       const payload = safeParseJson(res.payloadJSON ?? null);
       respond(true, payload, undefined);
     });

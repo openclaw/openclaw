@@ -252,6 +252,8 @@ function shouldQueueAsPendingForegroundAction(params: {
   command: string;
   error: unknown;
 }): boolean {
+  // iOS cannot run camera/screen/Talk commands in the background. Queue only
+  // those foreground-only commands when the node explicitly reports that state.
   const platform = normalizeLowercaseStringOrEmpty(params.platform);
   if (!platform.startsWith("ios") && !platform.startsWith("ipados")) {
     return false;
@@ -290,6 +292,8 @@ function enqueuePendingNodeAction(params: {
   const queue = prunePendingNodeActions(params.nodeId, nowMs);
   const existing = queue.find((entry) => entry.idempotencyKey === params.idempotencyKey);
   if (existing) {
+    // Keep retries idempotent so callers do not create duplicate foreground
+    // actions while the node is still backgrounded.
     return existing;
   }
   const entry: PendingNodeAction = {
@@ -349,6 +353,8 @@ function resolveAllowedPendingNodeActions(params: {
   if (pending.length === 0) {
     return pending;
   }
+  // Re-filter queued actions against the node's current declared commands and
+  // allowlist; app upgrades or permission changes can make old actions unsafe.
   const connect = params.client?.connect;
   const declaredCommands = Array.isArray(connect?.commands) ? connect.commands : [];
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
@@ -1234,6 +1240,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
         idempotencyKey: p.idempotencyKey,
       });
       if (policyResult) {
+        // Plugin policies can satisfy an invocation without crossing the raw
+        // node command channel; still emit mirrored Talk events for UI state.
         if (!policyResult.ok) {
           const errorCode = policyResult.unavailable
             ? ErrorCodes.UNAVAILABLE
@@ -1287,6 +1295,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
             error: res.error,
           })
         ) {
+          // Foreground-only iOS commands become pullable pending actions instead
+          // of failing permanently while the device is locked/backgrounded.
           const paramsJSON = toPendingParamsJSON(forwardedParams.params);
           const queued = enqueuePendingNodeAction({
             nodeId,

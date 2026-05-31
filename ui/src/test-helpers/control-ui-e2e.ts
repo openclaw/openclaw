@@ -7,6 +7,11 @@ import type { Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import {
+  controlUiBrowserOnlySharedModuleAliases,
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../../vite.config.ts";
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
@@ -38,6 +43,7 @@ export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
   defaultAgentId?: string;
+  deferredMethods?: string[];
   historyMessages?: unknown[];
   methodResponses?: Record<string, unknown>;
   models?: Array<{ id: string; name: string; provider: string }>;
@@ -107,21 +113,13 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
       ],
     },
     publicDir: path.join(uiRoot, "public"),
+    plugins: [controlUiBrowserOnlySharedModuleAliases()],
     resolve: {
-      alias: {
-        "@openclaw/net-policy/ip": path.join(repoRoot, "packages/net-policy/src/ip.ts"),
-        "@openclaw/net-policy/ipv4": path.join(repoRoot, "packages/net-policy/src/ipv4.ts"),
-        "@openclaw/net-policy/redact-sensitive-url": path.join(
-          repoRoot,
-          "packages/net-policy/src/redact-sensitive-url.ts",
-        ),
-        "@openclaw/net-policy/url-userinfo": path.join(
-          repoRoot,
-          "packages/net-policy/src/url-userinfo.ts",
-        ),
-        "@openclaw/net-policy": path.join(repoRoot, "packages/net-policy/src/index.ts"),
-        json5: json5EsmPath,
-      },
+      alias: [
+        { find: "json5", replacement: json5EsmPath },
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
     },
     root: uiRoot,
     server: {
@@ -175,6 +173,7 @@ function normalizeScenario(
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     defaultAgentId,
+    deferredMethods: scenario.deferredMethods ?? [],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
@@ -251,7 +250,7 @@ function installControlUiMockGateway(input: {
 
   const scenario: BrowserScenario = input.scenario;
   const protocolVersion = input.protocolVersion;
-  const deferredMethods: string[] = [];
+  const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
   const sockets: unknown[] = [];

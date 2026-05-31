@@ -90,7 +90,7 @@ function fixPathEncoding(
       log?.debug?.(`Decoding path with mixed encoding: ${result}`);
 
       // Step 1: 将八进制转义转换为字节
-      let decoded = result.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) =>
+      const decoded = result.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) =>
         String.fromCharCode(Number.parseInt(octal, 8)),
       );
 

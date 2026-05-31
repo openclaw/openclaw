@@ -165,6 +165,9 @@ function cacheToolsEffectiveResult(key: string, value: EffectiveToolInventoryRes
   trimToolsEffectiveCache();
 }
 
+// Base inventory resolution is pure CPU work, but it can still fan through
+// config/model policy. Coalesce identical refreshes so UI polling does not
+// recompute the same session inventory in parallel.
 function scheduleBaseToolsEffectiveRefresh(
   key: string,
   context: TrustedToolsEffectiveContext,
@@ -219,6 +222,8 @@ async function resolveCachedBaseToolsEffective(params: {
       return cached.value;
     }
     if (ageMs < TOOLS_EFFECTIVE_STALE_TTL_MS) {
+      // Stale-while-revalidate keeps the tools panel responsive while a new
+      // registry/config snapshot is rebuilt in the background.
       refreshBaseToolsEffectiveInBackground(key, params.context);
       return cached.value;
     }
@@ -251,6 +256,8 @@ function appendMcpInventoryGroups(params: {
   base: EffectiveToolInventoryResult;
   mcpInventory: ReturnType<typeof buildRuntimeCompatibleMcpToolInventory>;
 }): EffectiveToolInventoryResult {
+  // MCP notices apply even when no tools are projectable; only source=mcp
+  // entries become new groups beside the base runtime inventory.
   const mcpEntries = params.mcpInventory.entries.filter((entry) => entry.source === "mcp");
   const notices = [...(params.base.notices ?? []), ...params.mcpInventory.notices];
   const base = notices.length > 0 ? { ...params.base, notices } : params.base;
@@ -447,6 +454,8 @@ function resolveTrustedToolsEffectiveContext(params: {
   requestedAgentId?: string;
   respond: RespondFn;
 }) {
+  // The effective tools request is read-only but security-sensitive. Derive
+  // routing/account/model context from the persisted session, not client params.
   const loaded = loadSessionEntry(params.sessionKey);
   if (!loaded.entry) {
     params.respond(

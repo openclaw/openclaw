@@ -21,9 +21,7 @@ import type {
   PromptResponse,
   ResumeSessionRequest,
   ResumeSessionResponse,
-  SessionConfigOption,
   SessionInfo,
-  SessionModeState,
   SessionUpdate,
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
@@ -33,10 +31,12 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { readBool, readNonNegativeInteger, readNumber, readString } from "@openclaw/acp-core/meta";
+import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
+import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
-import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
 import {
@@ -58,7 +58,6 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
-import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
 import {
   buildAcpPermissionRequest,
   parseGatewayExecApprovalEventData,
@@ -68,22 +67,29 @@ import {
   type GatewayExecApprovalDetails,
   type GatewayExecApprovalEvent,
 } from "./permission-relay.js";
-import { toAcpSessionLineageMeta, type AcpSessionLineageMeta } from "./session-lineage-meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
-import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
+import {
+  ACP_ELEVATED_LEVEL_CONFIG_ID,
+  ACP_FAST_MODE_CONFIG_ID,
+  ACP_REASONING_LEVEL_CONFIG_ID,
+  ACP_RESPONSE_USAGE_CONFIG_ID,
+  ACP_THOUGHT_LEVEL_CONFIG_ID,
+  ACP_TIMEOUT_CONFIG_ID,
+  ACP_TIMEOUT_SECONDS_CONFIG_ID,
+  ACP_TRACE_LEVEL_CONFIG_ID,
+  ACP_VERBOSE_LEVEL_CONFIG_ID,
+  buildSessionMetadata,
+  buildSessionPresentation,
+  buildSessionUsageSnapshot,
+  normalizeClientCapabilities,
+  type ClientCapabilityState,
+  type GatewaySessionPresentationRow,
+  type SessionSnapshot,
+} from "./translator.presentation.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
-const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
-const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
-const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
-const ACP_TRACE_LEVEL_CONFIG_ID = "trace_level";
-const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
-const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
-const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
-const ACP_TIMEOUT_CONFIG_ID = "timeout";
-const ACP_TIMEOUT_SECONDS_CONFIG_ID = "timeout_seconds";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
 const ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE = 100;
@@ -128,12 +134,6 @@ type PendingPrompt = {
   toolCalls?: Map<string, PendingToolCall>;
 };
 
-type ClientCapabilityState = {
-  readTextFile: boolean;
-  writeTextFile: boolean;
-  terminal: boolean;
-};
-
 type PendingApprovalRelay = {
   approvalId: string;
   runId: string;
@@ -154,63 +154,6 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
   sessionStore?: AcpSessionStore;
 };
 
-type GatewaySessionPresentationRow = Pick<
-  GatewaySessionRow,
-  | "key"
-  | "kind"
-  | "channel"
-  | "parentSessionKey"
-  | "spawnedBy"
-  | "spawnDepth"
-  | "subagentRole"
-  | "subagentControlScope"
-  | "spawnedWorkspaceDir"
-  | "spawnedCwd"
-  | "displayName"
-  | "label"
-  | "derivedTitle"
-  | "updatedAt"
-  | "thinkingLevel"
-  | "fastMode"
-  | "modelProvider"
-  | "model"
-  | "thinkingLevels"
-  | "verboseLevel"
-  | "traceLevel"
-  | "reasoningLevel"
-  | "responseUsage"
-  | "elevatedLevel"
-  | "totalTokens"
-  | "totalTokensFresh"
-  | "contextTokens"
->;
-
-type SessionPresentation = {
-  configOptions: SessionConfigOption[];
-  modes: SessionModeState;
-};
-
-type SessionMetadata = {
-  title?: string | null;
-  updatedAt?: string | null;
-  _meta?: AcpSessionLineageMeta;
-};
-
-type SessionUsageSnapshot = {
-  size: number;
-  used: number;
-};
-
-function normalizeClientCapabilities(
-  capabilities: InitializeRequest["clientCapabilities"] | undefined,
-): ClientCapabilityState {
-  return {
-    readTextFile: capabilities?.fs?.readTextFile === true,
-    writeTextFile: capabilities?.fs?.writeTextFile === true,
-    terminal: capabilities?.terminal === true,
-  };
-}
-
 function isAdminScopeProvenanceRejection(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
@@ -229,11 +172,6 @@ function isAdminScopeProvenanceRejection(err: unknown): boolean {
 function isGatewayCloseError(err: unknown): boolean {
   return err instanceof Error && err.message.startsWith("gateway closed (");
 }
-
-type SessionSnapshot = SessionPresentation & {
-  metadata?: SessionMetadata;
-  usage?: SessionUsageSnapshot;
-};
 
 type AgentWaitResult = {
   status?: "ok" | "error" | "timeout";
@@ -314,139 +252,6 @@ function resolveListSessionsPageSize(meta: Record<string, unknown> | null | unde
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 
-function formatThinkingLevelName(level: string): string {
-  switch (level) {
-    case "xhigh":
-      return "Extra High";
-    case "adaptive":
-      return "Adaptive";
-    default:
-      return level.length > 0 ? `${level[0].toUpperCase()}${level.slice(1)}` : "Unknown";
-  }
-}
-
-function buildThinkingModeDescription(level: string): string | undefined {
-  if (level === "adaptive") {
-    return "Use the Gateway session default thought level.";
-  }
-  return undefined;
-}
-
-function formatConfigValueName(value: string): string {
-  switch (value) {
-    case "xhigh":
-      return "Extra High";
-    default:
-      return value.length > 0 ? `${value[0].toUpperCase()}${value.slice(1)}` : "Unknown";
-  }
-}
-
-function buildSelectConfigOption(params: {
-  id: string;
-  name: string;
-  description: string;
-  currentValue: string;
-  values: readonly string[];
-  category?: string;
-}): SessionConfigOption {
-  return {
-    type: "select",
-    id: params.id,
-    name: params.name,
-    category: params.category,
-    description: params.description,
-    currentValue: params.currentValue,
-    options: params.values.map((value) => ({
-      value,
-      name: formatConfigValueName(value),
-    })),
-  };
-}
-
-function buildSessionPresentation(params: {
-  row?: GatewaySessionPresentationRow;
-  overrides?: Partial<GatewaySessionPresentationRow>;
-}): SessionPresentation {
-  const row = {
-    ...params.row,
-    ...params.overrides,
-  };
-  const availableLevelIds: string[] = row.thinkingLevels?.map((level) => level.id) ?? [
-    ...BASE_THINKING_LEVELS,
-  ];
-  const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
-  if (!availableLevelIds.includes(currentModeId)) {
-    availableLevelIds.push(currentModeId);
-  }
-
-  const modes: SessionModeState = {
-    currentModeId,
-    availableModes: availableLevelIds.map((level) => ({
-      id: level,
-      name: formatThinkingLevelName(level),
-      description: buildThinkingModeDescription(level),
-    })),
-  };
-
-  const configOptions: SessionConfigOption[] = [
-    buildSelectConfigOption({
-      id: ACP_THOUGHT_LEVEL_CONFIG_ID,
-      name: "Thought level",
-      category: "thought_level",
-      description:
-        "Controls how much deliberate reasoning OpenClaw requests from the Gateway model.",
-      currentValue: currentModeId,
-      values: availableLevelIds,
-    }),
-    buildSelectConfigOption({
-      id: ACP_FAST_MODE_CONFIG_ID,
-      name: "Fast mode",
-      description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
-      currentValue: row.fastMode ? "on" : "off",
-      values: ["off", "on"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_VERBOSE_LEVEL_CONFIG_ID,
-      name: "Tool verbosity",
-      description:
-        "Controls how much tool progress and output detail OpenClaw keeps enabled for the session.",
-      currentValue: normalizeOptionalString(row.verboseLevel) || "off",
-      values: ["off", "on", "full"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_TRACE_LEVEL_CONFIG_ID,
-      name: "Plugin trace",
-      description: "Controls whether plugin-owned trace lines are shown for the session.",
-      currentValue: normalizeOptionalString(row.traceLevel) || "off",
-      values: ["off", "on"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_REASONING_LEVEL_CONFIG_ID,
-      name: "Reasoning stream",
-      description: "Controls whether reasoning-capable models emit reasoning text for the session.",
-      currentValue: normalizeOptionalString(row.reasoningLevel) || "off",
-      values: ["off", "on", "stream"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_RESPONSE_USAGE_CONFIG_ID,
-      name: "Usage detail",
-      description:
-        "Controls how much usage information OpenClaw attaches to responses for the session.",
-      currentValue: normalizeOptionalString(row.responseUsage) || "off",
-      values: ["off", "tokens", "full"],
-    }),
-    buildSelectConfigOption({
-      id: ACP_ELEVATED_LEVEL_CONFIG_ID,
-      name: "Elevated actions",
-      description: "Controls how aggressively the session allows elevated execution behavior.",
-      currentValue: normalizeOptionalString(row.elevatedLevel) || "off",
-      values: ["off", "on", "ask", "full"],
-    }),
-  ];
-
-  return { configOptions, modes };
-}
-
 function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
   const role = typeof message.role === "string" ? message.role : "";
   if (role !== "user" && role !== "assistant") {
@@ -492,48 +297,6 @@ function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
     }
   }
   return replayChunks;
-}
-
-function buildSessionMetadata(params: {
-  row?: GatewaySessionPresentationRow;
-  sessionKey: string;
-}): SessionMetadata {
-  const title =
-    normalizeOptionalString(params.row?.derivedTitle) ||
-    normalizeOptionalString(params.row?.displayName) ||
-    normalizeOptionalString(params.row?.label) ||
-    params.sessionKey;
-  const updatedAt = timestampMsToIsoString(params.row?.updatedAt) ?? null;
-  return {
-    title,
-    updatedAt,
-    _meta: toAcpSessionLineageMeta(
-      params.row ?? {
-        key: params.sessionKey,
-        kind: "unknown",
-      },
-    ),
-  };
-}
-
-function buildSessionUsageSnapshot(
-  row?: GatewaySessionPresentationRow,
-): SessionUsageSnapshot | undefined {
-  const totalTokens = row?.totalTokens;
-  const contextTokens = row?.contextTokens;
-  if (
-    row?.totalTokensFresh !== true ||
-    typeof totalTokens !== "number" ||
-    !Number.isFinite(totalTokens) ||
-    typeof contextTokens !== "number" ||
-    !Number.isFinite(contextTokens) ||
-    contextTokens <= 0
-  ) {
-    return undefined;
-  }
-  const size = Math.max(0, Math.floor(contextTokens));
-  const used = Math.max(0, Math.min(Math.floor(totalTokens), size));
-  return { size, used };
 }
 
 function buildSystemInputProvenance(originSessionId: string) {

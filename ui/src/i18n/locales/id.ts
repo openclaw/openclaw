@@ -267,6 +267,7 @@ export const id: TranslationMap = {
       openFilesTab: "Open Files tab",
       primaryModel: "Primary Model",
       runtime: "Runtime",
+      thinkingDefault: "Level pemikiran default",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
       skillsFilter: "Skills Filter",
@@ -415,6 +416,7 @@ export const id: TranslationMap = {
     communications: "Komunikasi",
     appearance: "Tampilan",
     automation: "Otomatisasi",
+    mcp: "MCP",
     infrastructure: "Infrastruktur",
     aiAgents: "AI & Agen",
     debug: "Debug",
@@ -438,6 +440,7 @@ export const id: TranslationMap = {
     communications: "Saluran, pesan, dan pengaturan audio.",
     appearance: "Tema, UI, dan pengaturan wizard penyiapan.",
     automation: "Perintah, hook, cron, dan plugin.",
+    mcp: "Server MCP, autentikasi, alat, dan diagnostik.",
     infrastructure: "Pengaturan Gateway, web, browser, dan media.",
     aiAgents: "Agen, model, Skills, alat, memori, sesi.",
     debug: "Snapshot, peristiwa, RPC.",
@@ -1289,7 +1292,7 @@ export const id: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "Kesalahan tool",
     },
   },
   languages: {

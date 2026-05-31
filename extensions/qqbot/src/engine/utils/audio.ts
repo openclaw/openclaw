@@ -37,8 +37,8 @@ function loadSilkWasm(): Promise<SilkWasm | null> {
 export function pcmToWav(
   pcmData: Uint8Array,
   sampleRate: number,
-  channels: number = 1,
-  bitsPerSample: number = 16,
+  channels = 1,
+  bitsPerSample = 16,
 ): Buffer {
   const byteRate = sampleRate * channels * (bitsPerSample / 8);
   const blockAlign = channels * (bitsPerSample / 8);
@@ -275,8 +275,8 @@ export async function audioFileToSilkBase64(
  */
 export async function waitForFile(
   filePath: string,
-  timeoutMs: number = 30000,
-  pollMs: number = 500,
+  timeoutMs = 30000,
+  pollMs = 500,
 ): Promise<number> {
   const start = Date.now();
   let lastSize = -1;

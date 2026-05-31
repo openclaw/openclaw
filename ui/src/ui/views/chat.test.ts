@@ -2615,6 +2615,37 @@ describe("chat session controls", () => {
     ).toEqual(["Inherited: Off"]);
   });
 
+  it("does not label a non-default chat model from global thinking defaults", () => {
+    const { state } = createChatHeaderState({
+      model: "deepseek-v4-flash",
+      modelProvider: "deepseek",
+      defaultsThinkingDefault: "off",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          provider: "deepseek",
+          reasoning: true,
+        },
+      ],
+    });
+    state.sessionsResult = createSessionsListResult({
+      model: "deepseek-v4-flash",
+      modelProvider: "deepseek",
+      defaultsModel: "MiniMax-M2.7",
+      defaultsProvider: "minimax",
+      defaultsThinkingDefault: "off",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Low");
+  });
+
   it("always renders full thinking labels", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",

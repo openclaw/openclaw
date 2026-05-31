@@ -206,15 +206,10 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
     provider?: unknown;
     stopReason?: unknown;
   };
-  const legacyOpenAIProvider = ["openai", "codex"].join("-");
-  const legacyOpenAIResponsesApi = `${legacyOpenAIProvider}-responses`;
-  const openAIProvider = message.provider === "openai" || message.provider === legacyOpenAIProvider;
-  const openAIResponsesApi =
-    message.api === "openai-chatgpt-responses" || message.api === legacyOpenAIResponsesApi;
   return (
     message.role === "assistant" &&
-    openAIResponsesApi &&
-    openAIProvider &&
+    message.api === "openai-chatgpt-responses" &&
+    message.provider === "openai" &&
     message.stopReason !== "error" &&
     message.stopReason !== "aborted"
   );

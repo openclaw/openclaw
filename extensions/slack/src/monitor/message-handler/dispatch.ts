@@ -780,11 +780,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
     const replyThreadTs = resolveDeliveryThreadTs(params);
+    const deliveryReplyThreadTs =
+      replyDeliveryMode === "off" && !forcedReplyThreadTs && !isThreadReply
+        ? undefined
+        : replyThreadTs;
     if (
       deliveryTracker.hasDelivered({
         kind: params.kind,
         payload: params.payload,
-        threadTs: replyThreadTs,
+        threadTs: deliveryReplyThreadTs,
       })
     ) {
       logVerbose("slack: suppressed duplicate normal delivery within the same turn");
@@ -798,7 +802,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       accountId: account.accountId,
       runtime,
       textLimit: ctx.textLimit,
-      replyThreadTs,
+      replyThreadTs: deliveryReplyThreadTs,
       replyToMode: replyDeliveryMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
@@ -810,7 +814,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     const deliveredThreadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: replyDeliveryMode,
       payloadReplyToId: params.payload.replyToId,
-      replyThreadTs,
+      replyThreadTs: deliveryReplyThreadTs,
     });
     // Record the thread ts only after confirmed delivery success.
     rememberDeliveredThreadTs(params.kind, deliveredThreadTs);
@@ -818,7 +822,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     deliveryTracker.markDelivered({
       kind: params.kind,
       payload: params.payload,
-      threadTs: replyThreadTs,
+      threadTs: deliveryReplyThreadTs,
     });
   };
 
@@ -1159,7 +1163,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
     }
 
-    const result = await deliverWithFinalizableLivePreviewAdapter({
+    await deliverWithFinalizableLivePreviewAdapter({
       kind: info.kind,
       payload,
       adapter: defineFinalizableLivePreviewAdapter({
@@ -1245,10 +1249,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
       },
     });
-
-    if (result.kind === "preview-finalized") {
-      return;
-    }
   };
   const onSlackDeliveryError = (err: unknown, info: { kind: string }) => {
     runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));

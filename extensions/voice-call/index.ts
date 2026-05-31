@@ -300,6 +300,7 @@ export default definePluginEntry({
             coreConfig: api.config as CoreConfig,
             fullConfig: api.config,
             agentRuntime: api.runtime.agent,
+            stateRuntime: api.runtime.state,
             ttsRuntime: api.runtime.tts,
             logger: api.logger,
           });
@@ -811,6 +812,7 @@ export default definePluginEntry({
           program,
           config,
           ensureRuntime,
+          stateRuntime: api.runtime.state,
           logger: api.logger,
         }),
       { commands: ["voicecall"] },

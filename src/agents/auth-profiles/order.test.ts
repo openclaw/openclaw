@@ -204,6 +204,63 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toStrictEqual([]);
   });
 
+  it("falls back to stored profiles when a stored order only has missing credentials", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:key": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-primary",
+        },
+        "fixture-provider:oauth": {
+          type: "oauth",
+          provider: "fixture-provider",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {
+        "fixture-provider": ["fixture-provider:deleted"],
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "fixture-provider",
+    });
+
+    expect(order).toStrictEqual(["fixture-provider:oauth", "fixture-provider:key"]);
+  });
+
+  it("does not fall back past an explicit configured auth order", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:primary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-primary",
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            "fixture-provider": ["fixture-provider:missing"],
+          },
+        },
+      },
+      store,
+      provider: "fixture-provider",
+    });
+
+    expect(order).toStrictEqual([]);
+  });
+
   it("lets Codex auth use friendly OpenAI auth order entries", async () => {
     const store: AuthProfileStore = {
       version: 1,

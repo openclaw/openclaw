@@ -314,7 +314,7 @@ describe("Session Store Cache", () => {
     if (!entry) {
       throw new Error("Expected cached entry");
     }
-    expect(entry?.polluted).toBeUndefined();
+    expect(entry.polluted).toBeUndefined();
     expect(Object.hasOwn(entry, "__proto__")).toBe(true);
     expect(Object.prototype).not.toHaveProperty("polluted");
   });

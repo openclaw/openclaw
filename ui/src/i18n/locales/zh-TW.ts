@@ -265,6 +265,7 @@ export const zh_TW: TranslationMap = {
       openFilesTab: "Open Files tab",
       primaryModel: "Primary Model",
       runtime: "執行階段",
+      thinkingDefault: "預設思考層級",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
       skillsFilter: "Skills Filter",
@@ -412,6 +413,7 @@ export const zh_TW: TranslationMap = {
     communications: "通訊",
     appearance: "外觀與設置",
     automation: "自動化",
+    mcp: "MCP",
     infrastructure: "基礎設施",
     aiAgents: "AI 與代理",
     debug: "調試",
@@ -435,6 +437,7 @@ export const zh_TW: TranslationMap = {
     communications: "頻道、消息和音頻設置。",
     appearance: "主題、界面和設置向導設置。",
     automation: "命令、鉤子、定時任務和插件設置。",
+    mcp: "MCP 伺服器、驗證、工具與診斷。",
     infrastructure: "網關、Web、瀏覽器和媒體設置。",
     aiAgents: "代理、模型、技能、工具、記憶和會話設置。",
     debug: "快照、事件、RPC。",
@@ -1256,7 +1259,7 @@ export const zh_TW: TranslationMap = {
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
-      toolError: "Tool error",
+      toolError: "工具錯誤",
     },
   },
   languages: {

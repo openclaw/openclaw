@@ -28,6 +28,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import { isGemma4ModelId } from "../shared/google-models.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -3504,7 +3505,8 @@ function shouldPreserveReasoningContentReplay(
   if (
     compat.requiresReasoningContentOnAssistantMessages ||
     compat.thinkingFormat === "deepseek" ||
-    compat.thinkingFormat === "zai"
+    compat.thinkingFormat === "zai" ||
+    shouldTrustReasoningContentReplayMetadata(model)
   ) {
     return true;
   }
@@ -3519,6 +3521,17 @@ function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolea
   }
   const normalizedModelId = model.id.trim().toLowerCase();
   return !(normalizedModelId.startsWith("anthropic/") || normalizedModelId.startsWith("x-ai/"));
+}
+
+function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): boolean {
+  if (!model.reasoning || isGemma4ModelId(model.id)) {
+    return false;
+  }
+  const provider = model.provider.trim().toLowerCase();
+  if (provider === "openai") {
+    return false;
+  }
+  return shouldPreserveOpenRouterReasoningReplay(model);
 }
 
 // OpenAI Chat Completions assistant-message input does not define reasoning

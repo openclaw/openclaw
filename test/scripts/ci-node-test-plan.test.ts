@@ -505,6 +505,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "agentic-control-plane-http-models",
       "agentic-control-plane-http-plugin-ws",
       "agentic-control-plane-runtime",
+      "agentic-control-plane-runtime-cron",
+      "agentic-control-plane-runtime-network",
+      "agentic-control-plane-runtime-server",
+      "agentic-control-plane-runtime-state",
       "agentic-control-plane-startup-runtime",
     ]);
     expect(controlPlaneShards).toEqual(

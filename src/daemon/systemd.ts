@@ -831,7 +831,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   // OpenClaw-managed keys (identified by inlineManagedKeys) are excluded: a stale
   // file copy would override the fresh inline Environment= value because systemd's
   // EnvironmentFile takes precedence over inline Environment= directives.
-  let existing: Record<string, string> = {};
+  const existing: Record<string, string> = {};
   const legacyNodeEnvFilePath = resolveLegacyNodeSystemdEnvironmentFilePath({
     stateDir: params.stateDir,
     environment: params.environment,

@@ -7,6 +7,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   buildConfiguredModelCatalog,
+  legacyModelKey,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
@@ -458,10 +459,40 @@ export async function createModelSelectionState(params: {
       return defaultThinkingLevel;
     }
     const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    if (agentThinkingDefault) {
+      defaultThinkingLevel = agentThinkingDefault;
+      return defaultThinkingLevel;
+    }
+    const configuredModels = cfg.agents?.defaults?.models;
+    const canonicalKey = modelKey(provider, model);
+    const legacyKey = legacyModelKey(provider, model);
+    const configuredModelThinkingDefault =
+      configuredModels?.[canonicalKey]?.params?.thinking ??
+      (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+    if (
+      configuredModelThinkingDefault === false ||
+      configuredModelThinkingDefault === "disabled" ||
+      configuredModelThinkingDefault === "none"
+    ) {
+      defaultThinkingLevel = "off";
+      return defaultThinkingLevel;
+    }
+    if (
+      configuredModelThinkingDefault === "off" ||
+      configuredModelThinkingDefault === "minimal" ||
+      configuredModelThinkingDefault === "low" ||
+      configuredModelThinkingDefault === "medium" ||
+      configuredModelThinkingDefault === "high" ||
+      configuredModelThinkingDefault === "xhigh" ||
+      configuredModelThinkingDefault === "adaptive" ||
+      configuredModelThinkingDefault === "max"
+    ) {
+      defaultThinkingLevel = configuredModelThinkingDefault;
+      return defaultThinkingLevel;
+    }
     const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
-    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
-    if (explicitThinkingDefault) {
-      defaultThinkingLevel = explicitThinkingDefault;
+    if (configuredThinkingDefault) {
+      defaultThinkingLevel = configuredThinkingDefault;
       return defaultThinkingLevel;
     }
     const catalogForThinking = await resolveThinkingCatalog();

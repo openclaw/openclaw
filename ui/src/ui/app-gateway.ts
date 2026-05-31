@@ -31,6 +31,7 @@ import {
   type SessionOperationEventPayload,
 } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -101,6 +102,7 @@ type GatewayHost = {
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
+  chatError?: string | null;
   onboarding?: boolean;
   eventLogBuffer: EventLogEntry[];
   eventLog: EventLogEntry[];
@@ -589,6 +591,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   clearSessionsChangedReloadTimer(host);
   host.lastError = null;
   host.lastErrorCode = null;
+  host.chatError = null;
   host.hello = null;
   host.connected = false;
   if (reconnectReason === "seq-gap") {
@@ -624,8 +627,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.connected = true;
       host.lastError = null;
       host.lastErrorCode = null;
+      host.chatError = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
+        preserveCurrent: true,
+      });
       void loadControlUiBootstrapConfig(
         host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
         { applyIdentity: false },

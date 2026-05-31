@@ -176,6 +176,18 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 
+  it("matches runtime slash aliases across command list surfaces", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const payload = {
+      commands: [{ name: "voicecall" }, { nativeName: "phone" }, { textAliases: ["/pair"] }],
+    };
+
+    expect(runtimeSmoke.isCommandVisible(payload, "/voicecall")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/phone")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/pair")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/missing")).toBe(false);
+  });
+
   it("rejects loose runtime output limit env values instead of parsing prefixes", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",

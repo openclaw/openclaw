@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
 const randomMocks = vi.hoisted(() => ({
@@ -206,12 +205,11 @@ describe("retryAsync", () => {
     vi.useFakeTimers();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
-    const scheduledDelayMs = resolveTimerTimeoutMs(MAX_SAFE_TIMEOUT_DELAY_MS, 0, 0);
     try {
       const promise = retryAsync(fn, 2, 3_000_000_000);
-      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
       await expect(promise).resolves.toBe("ok");
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), scheduledDelayMs);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
       vi.clearAllTimers();
@@ -228,14 +226,13 @@ describe("retryAsync", () => {
       .mockRejectedValueOnce(new Error("boom-1"))
       .mockRejectedValueOnce(new Error("boom-2"))
       .mockResolvedValueOnce("ok");
-    const scheduledDelayMs = resolveTimerTimeoutMs(MAX_SAFE_TIMEOUT_DELAY_MS, 0, 0);
     try {
       const promise = retryAsync(fn, 3, Number.MAX_VALUE);
-      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
-      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
       await expect(promise).resolves.toBe("ok");
-      expect(timeoutSpy).toHaveBeenNthCalledWith(1, expect.any(Function), scheduledDelayMs);
-      expect(timeoutSpy).toHaveBeenNthCalledWith(2, expect.any(Function), scheduledDelayMs);
+      expect(timeoutSpy).toHaveBeenNthCalledWith(1, expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(timeoutSpy).toHaveBeenNthCalledWith(2, expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
       vi.clearAllTimers();
@@ -319,8 +316,8 @@ describe("resolveRetryConfig", () => {
       },
       expected: {
         attempts: 3,
-        minDelayMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-        maxDelayMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+        minDelayMs: MAX_TIMER_TIMEOUT_MS,
+        maxDelayMs: MAX_TIMER_TIMEOUT_MS,
         jitter: 0,
       },
     },

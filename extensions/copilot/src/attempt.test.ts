@@ -92,11 +92,8 @@ function flushAsync() {
   // resolveCopilotWorkspaceBootstrapContext, createSession, etc.).
   // Each chained `then` is one tick; tests rely on this to observe
   // `sdk.sessions[0]` being populated before they emit deltas.
-  /* oxlint-disable unicorn/no-useless-promise-resolve-reject -- inner Promise.resolve()s force additional microtask ticks; ordering of sdk.sessions[0] population depends on this. */
-  return Promise.resolve()
-    .then(() => Promise.resolve())
-    .then(() => Promise.resolve());
-  /* oxlint-enable unicorn/no-useless-promise-resolve-reject */
+  const tick = () => Promise.resolve();
+  return tick().then(tick).then(tick);
 }
 
 function getPromptErrorCode(result: AgentHarnessAttemptResult): string | undefined {

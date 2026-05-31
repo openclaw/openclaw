@@ -58,7 +58,6 @@ async function listTarOutputLines<T>(input: {
     let outputChars = 0;
     let stderr = "";
     let settled = false;
-    let watchdog: ReturnType<typeof setTimeout>;
 
     const finish = (result: { ok: true; values: T[] } | { ok: false; reason: string }): void => {
       if (settled) {
@@ -110,7 +109,7 @@ async function listTarOutputLines<T>(input: {
       }
     };
 
-    watchdog = setTimeout(() => {
+    const watchdog: ReturnType<typeof setTimeout> = setTimeout(() => {
       stopChild();
       finish({ ok: false, reason: `${input.label} timed out` });
     }, 30_000);
@@ -274,7 +273,6 @@ export async function validateTarUncompressedBudget(
     let totalBytes = 0;
     let stderr = "";
     let settled = false;
-    let watchdog: ReturnType<typeof setTimeout>;
     const finish = (result: { ok: true } | { ok: false; reason: string }): void => {
       if (settled) {
         return;
@@ -283,7 +281,7 @@ export async function validateTarUncompressedBudget(
       clearTimeout(watchdog);
       resolve(result);
     };
-    watchdog = setTimeout(() => {
+    const watchdog: ReturnType<typeof setTimeout> = setTimeout(() => {
       try {
         child.kill("SIGKILL");
       } catch {
@@ -388,7 +386,6 @@ async function unpackTar(tarBuffer: Buffer, destDir: string): Promise<void> {
     );
     let stderrOut = "";
     let settled = false;
-    let watchdog: ReturnType<typeof setTimeout>;
     const fail = (error: Error): void => {
       if (settled) {
         return;
@@ -405,7 +402,7 @@ async function unpackTar(tarBuffer: Buffer, destDir: string): Promise<void> {
       clearTimeout(watchdog);
       resolve();
     };
-    watchdog = setTimeout(() => {
+    const watchdog: ReturnType<typeof setTimeout> = setTimeout(() => {
       try {
         child.kill("SIGKILL");
       } catch {

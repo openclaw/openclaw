@@ -43,7 +43,7 @@ import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/r
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -398,12 +398,13 @@ function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
 }
 
 function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
-  if (isSessionWriteLockTimeoutError(error)) {
+  if (isSessionWriteLockAcquireError(error)) {
     return true;
   }
   const message = summarizeDeliveryError(error);
   return (
-    /\bSessionWriteLockTimeoutError\b/.test(message) || /\bsession file locked\b/i.test(message)
+    /\bSessionWriteLock(?:Timeout|Stale)Error\b/.test(message) ||
+    /\bsession file lock(?:ed| stale)\b/i.test(message)
   );
 }
 

@@ -1521,12 +1521,12 @@ async function startNativeHookRelayPermissionApprovalWithBudget(params: {
     );
     return "defer";
   }
-  let approval!: Promise<NativeHookRelayPermissionApprovalResult>;
-  approval = nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
-    if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
-      pendingPermissionApprovals.delete(params.approvalKey);
-    }
-  });
+  const approval: Promise<NativeHookRelayPermissionApprovalResult> =
+    nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
+      if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
+        pendingPermissionApprovals.delete(params.approvalKey);
+      }
+    });
   pendingPermissionApprovals.set(params.approvalKey, approval);
   return approval;
 }

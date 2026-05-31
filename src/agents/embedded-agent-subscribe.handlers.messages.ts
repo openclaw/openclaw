@@ -813,8 +813,8 @@ export function handleMessageEnd(
   const parsedText = trimmedText
     ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
     : null;
-  let cleanedText = parsedText?.text ?? "";
-  let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+  const cleanedText = parsedText?.text ?? "";
+  const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
