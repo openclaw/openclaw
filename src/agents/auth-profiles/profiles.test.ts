@@ -458,6 +458,7 @@ describe("promoteAuthProfileInOrder", () => {
         agentDir,
         provider: "openai",
         profileId: newProfileId,
+        createIfMissing: true,
       });
 
       expect(updated?.order?.["openai"]).toEqual([newProfileId, staleProfileId]);
@@ -511,6 +512,7 @@ describe("promoteAuthProfileInOrder", () => {
         agentDir,
         provider: "openai",
         profileId: newProfileId,
+        createIfMissing: true,
       });
 
       expect(updated?.order?.["openai"]).toEqual([newProfileId, oldProfileId]);
@@ -518,6 +520,48 @@ describe("promoteAuthProfileInOrder", () => {
         newProfileId,
         oldProfileId,
       ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps implicit round-robin when relogin has no existing order by default", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-order-implicit-"));
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const newProfileId = "openai:new-login";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [newProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "new-access",
+              refresh: "new-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const updated = await promoteAuthProfileInOrder({
+        agentDir,
+        provider: "openai",
+        profileId: newProfileId,
+      });
+
+      expect(updated?.order?.["openai"]).toBeUndefined();
+      expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toBeUndefined();
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

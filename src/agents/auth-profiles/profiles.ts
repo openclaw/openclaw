@@ -91,6 +91,7 @@ export async function promoteAuthProfileInOrder(params: {
   agentDir?: string;
   provider: string;
   profileId: string;
+  createIfMissing?: boolean;
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   return await updateAuthProfileStoreWithLock({
@@ -104,10 +105,19 @@ export async function promoteAuthProfileInOrder(params: {
         findProviderAuthStateKey(store.order, providerKey) ??
         findNormalizedProviderKey(store.order, providerKey) ??
         normalizeProviderId(providerKey);
-      const existing =
-        store.order?.[orderKey] && store.order[orderKey].length > 0
-          ? store.order[orderKey]
-          : listProfilesForProvider(store, providerKey);
+      const existing = store.order?.[orderKey];
+      if (!existing || existing.length === 0) {
+        if (!params.createIfMissing) {
+          return false;
+        }
+        const providerProfiles = listProfilesForProvider(store, providerKey);
+        const next = dedupeProfileIds([
+          params.profileId,
+          ...providerProfiles.filter((profileId) => profileId !== params.profileId),
+        ]);
+        store.order = { ...store.order, [orderKey]: next };
+        return true;
+      }
       const next = dedupeProfileIds([
         params.profileId,
         ...existing.filter((profileId) => profileId !== params.profileId),

@@ -30,6 +30,7 @@ import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
@@ -411,6 +412,7 @@ async function pickProviderTokenMethod(params: {
 async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
   profiles?: ProviderAuthResult["profiles"];
+  config: OpenClawConfig;
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
@@ -434,6 +436,7 @@ async function persistProviderAuthResult(params: {
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
+      createIfMissing: hasConfiguredProfileForProvider(params.config, profile.credential.provider),
     });
   }
 
@@ -499,6 +502,13 @@ async function persistProviderAuthResult(params: {
   }
 }
 
+function hasConfiguredProfileForProvider(cfg: OpenClawConfig, provider: string): boolean {
+  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
+  return Object.values(cfg.auth?.profiles ?? {}).some(
+    (profile) => resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+  );
+}
+
 async function runProviderAuthMethod(params: {
   config: OpenClawConfig;
   agentDir: string;
@@ -547,6 +557,7 @@ async function runProviderAuthMethod(params: {
   await persistProviderAuthResult({
     result,
     profiles,
+    config: params.config,
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,
