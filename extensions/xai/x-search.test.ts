@@ -62,6 +62,43 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
   return mockFetch;
 }
 
+function installFxTwitterPostFetch() {
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: () =>
+        Promise.resolve({
+          code: 200,
+          status: {
+            type: "status",
+            id: "1580661436132757506",
+            url: "https://twitter.com/Twitter/status/1580661436132757506",
+            text: "a hit Tweet",
+            created_at: "Thu Oct 13 20:47:08 +0000 2022",
+            created_timestamp: 1665694028,
+            author: { name: "Twitter", screen_name: "Twitter" },
+            likes: 43852,
+            reposts: 2422,
+            quotes: 12,
+            replies: 4675,
+            views: 100000,
+            media: {
+              photos: [{ type: "photo", url: "https://pbs.twimg.com/media/example.jpg" }],
+            },
+            raw_text: "raw-only-injection",
+            extra_payload: {
+              prompt: "raw-only-prompt-injection",
+            },
+          },
+        }),
+    } as Response),
+  );
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+  return mockFetch;
+}
+
 function firstFetchCall(mockFetch: ReturnType<typeof installXSearchFetch>) {
   const [call] = mockFetch.mock.calls;
   if (!call) {
@@ -244,39 +281,7 @@ describe("xai x_search tool", () => {
   });
 
   it("reads an exact X post URL through key-free FxTwitter without an xAI key", async () => {
-    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        json: () =>
-          Promise.resolve({
-            code: 200,
-            status: {
-              type: "status",
-              id: "1580661436132757506",
-              url: "https://twitter.com/Twitter/status/1580661436132757506",
-              text: "a hit Tweet",
-              created_at: "Thu Oct 13 20:47:08 +0000 2022",
-              created_timestamp: 1665694028,
-              author: { name: "Twitter", screen_name: "Twitter" },
-              likes: 43852,
-              reposts: 2422,
-              quotes: 12,
-              replies: 4675,
-              views: 100000,
-              media: {
-                photos: [{ type: "photo", url: "https://pbs.twimg.com/media/example.jpg" }],
-              },
-              raw_text: "raw-only-injection",
-              extra_payload: {
-                prompt: "raw-only-prompt-injection",
-              },
-            },
-          }),
-      } as Response),
-    );
-    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const mockFetch = installFxTwitterPostFetch();
     const tool = createXSearchTool({ config: {} });
 
     const result = await tool?.execute?.("x-search:fxtwitter", {
@@ -294,6 +299,30 @@ describe("xai x_search tool", () => {
     expect(details.post).toBeUndefined();
     expect(JSON.stringify(details)).not.toContain("raw-only-injection");
     expect(JSON.stringify(details)).not.toContain("raw-only-prompt-injection");
+  });
+
+  it("bypasses stale xAI auth resolution for exact FxTwitter post URLs", async () => {
+    installFxTwitterPostFetch();
+    const resolveApiKeyForProvider = vi.fn(async () => {
+      throw new Error("stale xAI OAuth profile");
+    });
+    const tool = createXSearchTool({
+      config: {},
+      auth: {
+        hasAuthForProvider: (providerId) => providerId === "xai",
+        resolveApiKeyForProvider,
+      },
+    });
+
+    const result = await tool?.execute?.("x-search:fxtwitter-stale-auth", {
+      query: "https://x.com/Twitter/status/1580661436132757506",
+    });
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      provider: "fxtwitter",
+      statusId: "1580661436132757506",
+    });
   });
 
   it("keeps generic x_search on the xAI missing-key path", async () => {

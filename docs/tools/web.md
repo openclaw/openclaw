@@ -353,18 +353,20 @@ broader `x_search` prompt.
 
 ## x_search
 
-`x_search` queries X (formerly Twitter) posts using xAI and returns
-AI-synthesized answers with citations. It accepts natural-language queries and
-optional structured filters. OpenClaw only enables the built-in xAI `x_search`
-tool on the request that serves this tool call.
+`x_search` handles two X (formerly Twitter) lookup modes. Exact public post
+URLs and numeric status IDs are read through the key-free FxTwitter API and
+return sanitized wrapped post content, citations, source metadata, engagement
+counts, and media summary metadata. Broader natural-language X searches use xAI
+and return AI-synthesized answers with citations when xAI auth is configured.
+If xAI auth is missing, broader searches return a missing-key tool result while
+exact post reads still work.
 
 <Note>
-  xAI documents `x_search` as supporting keyword search, semantic search, user
-  search, and thread fetch. For per-post engagement stats such as reposts,
-  replies, bookmarks, or views, prefer a targeted lookup for the exact post URL
-  or status ID. Broad keyword searches may find the right post but return less
-  complete per-post metadata. A good pattern is: locate the post first, then
-  run a second `x_search` query focused on that exact post.
+  For per-post engagement stats such as reposts, replies, bookmarks, or views,
+  prefer the exact post URL or status ID so OpenClaw can use the key-free
+  FxTwitter path. xAI-backed broad keyword searches may find the right post but
+  return less complete per-post metadata. A good pattern is: locate the post
+  first, then run a second `x_search` query focused on that exact post.
 </Note>
 
 ### x_search config
@@ -404,7 +406,7 @@ legacy `tools.web.search.grok.baseUrl`, and finally the public xAI endpoint.
 
 | Parameter                    | Description                                            |
 | ---------------------------- | ------------------------------------------------------ |
-| `query`                      | Search query (required)                                |
+| `query`                      | Search query, exact post URL, or numeric status ID     |
 | `allowed_x_handles`          | Restrict results to specific X handles                 |
 | `excluded_x_handles`         | Exclude specific X handles                             |
 | `from_date`                  | Only include posts on or after this date (YYYY-MM-DD)  |

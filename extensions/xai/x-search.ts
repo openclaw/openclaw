@@ -152,12 +152,6 @@ export function createXSearchTool(options?: {
   });
 
   return createXSearchToolDefinition(async (_toolCallId: string, args: Record<string, unknown>) => {
-    const apiKey = await resolveXSearchApiKey({
-      sourceConfig: options?.config,
-      runtimeConfig: runtimeConfig ?? undefined,
-      auth: options?.auth,
-    });
-
     const query = readStringParam(args, "query", { required: true });
     const exactPostRef = extractFxTwitterPostReference(query);
     if (exactPostRef) {
@@ -186,6 +180,12 @@ export function createXSearchTool(options?: {
       );
       return jsonResult(payload);
     }
+
+    const apiKey = await resolveXSearchApiKey({
+      sourceConfig: options?.config,
+      runtimeConfig: runtimeConfig ?? undefined,
+      auth: options?.auth,
+    });
 
     if (!xaiSearchEnabled || !apiKey) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
