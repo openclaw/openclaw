@@ -5,6 +5,7 @@ import {
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
+  markAuthProfileBlockedUntil,
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
@@ -38,10 +39,10 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
     version: 1,
     profiles: {
       "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-test" },
-      "openai:default": { type: "api_key", provider: "openai", key: "sk-test-2" },
-      "openai-codex:default": {
+      "openai:api-key": { type: "api_key", provider: "openai", key: "sk-test-2" },
+      "openai:default": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "codex-access-token",
         refresh: "codex-refresh-token",
         expires: 4_102_444_800_000,
@@ -122,12 +123,12 @@ describe("isProfileInCooldown", () => {
 
   it("returns true when blockedUntil is in the future", () => {
     const store = makeStore({
-      "openai-codex:default": {
+      "openai:default": {
         blockedUntil: Date.now() + 60_000,
         blockedReason: "subscription_limit",
       },
     });
-    expect(isProfileInCooldown(store, "openai-codex:default")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default")).toBe(true);
   });
 
   it("returns false when cooldownUntil has passed", () => {
@@ -400,7 +401,7 @@ describe("clearExpiredCooldowns", () => {
   it("clears expired blockedUntil and resets errorCount", () => {
     const lastFailureAt = Date.now() - 120_000;
     const store = makeStore({
-      "openai-codex:default": {
+      "openai:default": {
         blockedUntil: Date.now() - 1_000,
         blockedReason: "subscription_limit",
         blockedSource: "codex_rate_limits",
@@ -412,7 +413,7 @@ describe("clearExpiredCooldowns", () => {
 
     expect(clearExpiredCooldowns(store)).toBe(true);
 
-    const stats = store.usageStats?.["openai-codex:default"];
+    const stats = store.usageStats?.["openai:default"];
     expect(stats?.blockedUntil).toBeUndefined();
     expect(stats?.blockedReason).toBeUndefined();
     expect(stats?.blockedSource).toBeUndefined();
@@ -784,6 +785,62 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
   }
 });
 
+describe("markAuthProfileBlockedUntil", () => {
+  it("keeps a later active blocked-until timestamp", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T18:00:00.000Z"));
+    const laterBlockedUntil = Date.parse("2031-01-01T00:00:00.000Z");
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: laterBlockedUntil,
+      },
+    });
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
+        source: "codex_rate_limits",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(laterBlockedUntil);
+  });
+
+  it("ignores blocked-until updates when the process clock is invalid", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const store = makeStore({});
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
+        source: "codex_rate_limits",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(store.usageStats).toEqual({});
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+
+  it("ignores blocked-until updates outside the valid Date range", async () => {
+    const store = makeStore({});
+
+    await markAuthProfileBlockedUntil({
+      store,
+      profileId: "openai:default",
+      blockedUntil: Number.MAX_SAFE_INTEGER,
+      source: "codex_rate_limits",
+    });
+
+    expect(store.usageStats).toEqual({});
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+});
+
 describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   function mockWhamResponse(status: number, body?: unknown): void {
     fetchMock.mockResolvedValueOnce(
@@ -814,7 +871,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     try {
       await markAuthProfileFailure({
         store: params.store,
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         reason: params.reason ?? "rate_limit",
       });
     } finally {
@@ -884,7 +941,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(headers["ChatGPT-Account-Id"]).toBe("acct_test_123");
     expect(headers.originator).toBe("openclaw");
     expect(headers["User-Agent"]).toMatch(/^openclaw\//);
-    const stats = store.usageStats?.["openai-codex:default"];
+    const stats = store.usageStats?.["openai:default"];
     if (exactBlocked) {
       expect(stats?.blockedUntil).toBe(now + expectedMs);
       expect(stats?.blockedReason).toBe("subscription_limit");
@@ -901,7 +958,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now });
 
-    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 43_200_000);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 43_200_000);
   });
 
   it("maps HTTP 403 to a 24h cooldown", async () => {
@@ -911,7 +968,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now });
 
-    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 86_400_000);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 86_400_000);
   });
 
   it("maps other HTTP errors to a 5m cooldown", async () => {
@@ -921,14 +978,14 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now });
 
-    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 300_000);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
   });
 
   it("preserves a longer existing cooldown via max semantics", async () => {
     const now = 1_700_000_000_000;
     const existingCooldownUntil = now + 6 * 60 * 60 * 1000;
     const store = makeStore({
-      "openai-codex:default": {
+      "openai:default": {
         cooldownUntil: existingCooldownUntil,
         cooldownReason: "rate_limit",
         errorCount: 2,
@@ -944,7 +1001,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now, useLock: true });
 
-    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(existingCooldownUntil);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(existingCooldownUntil);
   });
 
   it("falls back to a 30s cooldown when the WHAM probe fails", async () => {
@@ -954,7 +1011,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now, reason: "unknown" });
 
-    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + 30_000);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 30_000);
   });
 
   it.each([
@@ -972,7 +1029,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now });
 
-    const stats = store.usageStats?.["openai-codex:default"];
+    const stats = store.usageStats?.["openai:default"];
     expect(stats?.blockedUntil).toBeUndefined();
     expect(stats?.cooldownUntil).toBe(now + 30_000);
     expect(stats?.cooldownReason).toBe("rate_limit");

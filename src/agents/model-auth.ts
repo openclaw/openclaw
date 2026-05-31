@@ -1,4 +1,9 @@
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
@@ -15,11 +20,6 @@ import {
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
@@ -63,14 +63,18 @@ export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 export type RuntimeProviderAuthLookup = {
-  envApiKey: Pick<EnvApiKeyLookupOptions, "aliasMap" | "candidateMap" | "authEvidenceMap">;
+  envApiKey: Pick<
+    EnvApiKeyLookupOptions,
+    "aliasMap" | "candidateMap" | "authEvidenceMap" | "skipSetupProviderFallback"
+  >;
+  setupProviderFallbackRefs?: readonly string[];
   syntheticAuthProviderRefs?: readonly string[];
   syntheticAuthProviderRefsComplete?: boolean;
 };
 
 const log = createSubsystemLogger("model-auth");
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
 function directOpenAIPlatformModelRequiresApiKey(params: {
   provider: string;
@@ -157,11 +161,49 @@ export function createRuntimeProviderAuthLookup(params: {
       aliasMap: authLookupMaps.aliasMap,
       candidateMap: authLookupMaps.envCandidateMap,
       authEvidenceMap: authLookupMaps.authEvidenceMap,
+      skipSetupProviderFallback: true,
     },
+    setupProviderFallbackRefs: authLookupMaps.setupProviderFallbackRefs,
     syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
       ? syntheticAuthProviderRefs.refs
       : undefined,
     syntheticAuthProviderRefsComplete: syntheticAuthProviderRefs?.complete,
+  };
+}
+
+function runtimeLookupAllowsSetupProviderFallback(params: {
+  provider: string;
+  runtimeLookup?: RuntimeProviderAuthLookup;
+}): boolean {
+  const refs = params.runtimeLookup?.setupProviderFallbackRefs;
+  if (!refs?.length) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const aliasTarget = params.runtimeLookup?.envApiKey.aliasMap?.[normalizedProvider];
+  return refs.includes(normalizedProvider) || (aliasTarget ? refs.includes(aliasTarget) : false);
+}
+
+function resolveRuntimeEnvApiKeyLookupOptions(params: {
+  provider: string;
+  runtimeLookup?: RuntimeProviderAuthLookup;
+}):
+  | Pick<
+      EnvApiKeyLookupOptions,
+      "aliasMap" | "candidateMap" | "authEvidenceMap" | "skipSetupProviderFallback"
+    >
+  | undefined {
+  const envApiKey = params.runtimeLookup?.envApiKey;
+  if (!envApiKey) {
+    return undefined;
+  }
+  const skipSetupProviderFallback =
+    envApiKey.skipSetupProviderFallback === true
+      ? !runtimeLookupAllowsSetupProviderFallback(params)
+      : envApiKey.skipSetupProviderFallback;
+  return {
+    ...envApiKey,
+    ...(skipSetupProviderFallback !== undefined ? { skipSetupProviderFallback } : {}),
   };
 }
 
@@ -491,7 +533,10 @@ export function hasRuntimeAvailableProviderAuth(params: {
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
-    ...params.runtimeLookup?.envApiKey,
+    ...resolveRuntimeEnvApiKeyLookupOptions({
+      provider,
+      runtimeLookup: params.runtimeLookup,
+    }),
   });
   if (
     envAuth &&

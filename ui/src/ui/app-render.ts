@@ -6,6 +6,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
@@ -26,6 +27,11 @@ import {
 import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
+import {
+  resolveChatAgentFilterId,
+  resolveChatAgentFilterOptions,
+  resolvePreferredSessionForAgent,
+} from "./chat/session-controls.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -135,6 +141,7 @@ import {
 import { captureSessionToWorkboard, getWorkboardState } from "./controllers/workboard.ts";
 import { getCronJobPayload } from "./cron-payload.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
+import { formatTimeMs } from "./format.ts";
 import { formatRelativeTimestamp } from "./format.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
@@ -154,7 +161,9 @@ import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.t
 import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
+  isSessionKeyTiedToAgent,
   isSubagentSessionKey,
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
@@ -251,7 +260,40 @@ function isSidebarSessionBusy(state: AppViewState) {
   );
 }
 
+function resolveSidebarDefaultAgentId(state: AppViewState): string {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  return normalizeAgentId(
+    state.agentsList?.defaultId ?? snapshot?.sessionDefaults?.defaultAgentId ?? "main",
+  );
+}
+
+function resolveSidebarSelectedAgentId(state: AppViewState): string {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const sessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
+  const fallbackAgentId =
+    sessionKey === "global" || sessionKey === "unknown"
+      ? (state.assistantAgentId ?? resolveSidebarDefaultAgentId(state))
+      : resolveSidebarDefaultAgentId(state);
+  return normalizeAgentId(fallbackAgentId);
+}
+
+function isSidebarSessionForSelectedAgent(
+  state: AppViewState,
+  row: GatewaySessionRow,
+  selectedAgentId: string,
+): boolean {
+  return isSessionKeyTiedToAgent(row.key, selectedAgentId, resolveSidebarDefaultAgentId(state));
+}
+
 function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+  const selectedAgentId = resolveSidebarSelectedAgentId(state);
+  const shouldFilterByAgent =
+    normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
   return (state.sessionsResult?.sessions ?? [])
     .filter(
       (row) =>
@@ -261,7 +303,8 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         row.kind !== "cron" &&
         !isCronSessionKey(row.key) &&
         !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy,
+        !row.spawnedBy &&
+        (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 5);
@@ -305,8 +348,28 @@ function renderSidebarSessions(state: AppViewState) {
       ${collapsed || recent.length === 0
         ? nothing
         : html`
-            <div class="sidebar-recent-sessions" aria-label=${t("overview.cards.recentSessions")}>
-              <div class="sidebar-recent-sessions__label">${t("usage.sessions.recentShort")}</div>
+            <div
+              class="sidebar-recent-sessions ${state.settings.recentSessionsCollapsed
+                ? "sidebar-recent-sessions--collapsed"
+                : ""}"
+              aria-label=${t("overview.cards.recentSessions")}
+            >
+              <button
+                class="sidebar-recent-sessions__label"
+                type="button"
+                aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
+                @click=${() => {
+                  state.applySettings({
+                    ...state.settings,
+                    recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
+                  });
+                }}
+              >
+                <span class="sidebar-recent-sessions__label-text"
+                  >${t("usage.sessions.recentShort")}</span
+                >
+                <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
+              </button>
               <div class="sidebar-recent-sessions__list">
                 ${recent.map((row) => renderSidebarRecentSession(state, row))}
               </div>
@@ -373,14 +436,17 @@ const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyL
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
-function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
-  if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
-    return null;
-  }
-  return new Date(nextRunAtMs).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
+  return (
+    formatTimeMs(
+      nextRunAtMs,
+      {
+        hour: "numeric",
+        minute: "2-digit",
+      },
+      "",
+    ) || null
+  );
 }
 
 function resolveDreamingNextCycle(
@@ -967,10 +1033,16 @@ export function renderApp(state: AppViewState) {
   const configuredDreaming = resolveConfiguredDreaming(configValue);
   const dreamingOn = state.dreamingStatus?.enabled ?? configuredDreaming.enabled;
   const dreamingNextCycle = resolveDreamingNextCycle(state.dreamingStatus);
+  const dreamingAgentOptions = resolveChatAgentFilterOptions(state);
+  const dreamingSelectedAgentId = resolveChatAgentFilterId(state, state.sessionKey);
+  const syncDreamingSelectedAgent = () => {
+    state.selectedAgentId = dreamingSelectedAgentId;
+  };
   const dreamingLoading = state.dreamingStatusLoading || state.dreamingModeSaving;
   const dreamingRefreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
   const refreshDreaming = () => {
     void (async () => {
+      syncDreamingSelectedAgent();
       await loadConfig(state);
       await Promise.all([
         loadDreamingStatus(state),
@@ -2886,6 +2958,7 @@ export function renderApp(state: AppViewState) {
                     state.setTab("sessions" as import("./navigation.ts").Tab);
                     void loadSessions(state, {
                       ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, state.sessionKey),
                     });
                   },
                   onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
@@ -2935,6 +3008,7 @@ export function renderApp(state: AppViewState) {
                   },
                   agentsList: state.agentsList,
                   currentAgentId: resolvedAgentId ?? "main",
+                  fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
                   onAgentChange: (agentId: string) => {
                     switchChatSession(state, buildAgentMainSessionKey({ agentId }));
                   },
@@ -3023,6 +3097,8 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "dreams"
           ? renderDreaming({
               active: dreamingOn,
+              selectedAgentId: dreamingSelectedAgentId,
+              agentOptions: dreamingAgentOptions,
               shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
               groundedSignalCount: state.dreamingStatus?.groundedSignalCount ?? 0,
               totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
@@ -3055,7 +3131,16 @@ export function renderApp(state: AppViewState) {
               wikiMemoryPalaceError: state.wikiMemoryPalaceError,
               wikiMemoryPalace: state.wikiMemoryPalace,
               onRefresh: refreshDreaming,
-              onRefreshDiary: () => loadDreamDiary(state),
+              onSelectAgent: (agentId: string) => {
+                state.selectedAgentId = agentId;
+                switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
+                void loadDreamingStatus(state);
+                void loadDreamDiary(state);
+              },
+              onRefreshDiary: () => {
+                syncDreamingSelectedAgent();
+                void loadDreamDiary(state);
+              },
               onRefreshImports: () => {
                 void (async () => {
                   await loadConfig(state);
@@ -3070,14 +3155,29 @@ export function renderApp(state: AppViewState) {
               },
               onOpenConfig: () => openConfigFile(state),
               onOpenWikiPage: (lookup: string) => openWikiPage(lookup),
-              onBackfillDiary: () => backfillDreamDiary(state),
+              onBackfillDiary: () => {
+                syncDreamingSelectedAgent();
+                void backfillDreamDiary(state);
+              },
               onCopyDreamingArchivePath: () => {
                 void copyDreamingArchivePath(state);
               },
-              onDedupeDreamDiary: () => dedupeDreamDiary(state),
-              onResetDiary: () => resetDreamDiary(state),
-              onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
-              onRepairDreamingArtifacts: () => repairDreamingArtifacts(state),
+              onDedupeDreamDiary: () => {
+                syncDreamingSelectedAgent();
+                void dedupeDreamDiary(state);
+              },
+              onResetDiary: () => {
+                syncDreamingSelectedAgent();
+                void resetDreamDiary(state);
+              },
+              onResetGroundedShortTerm: () => {
+                syncDreamingSelectedAgent();
+                void resetGroundedShortTerm(state);
+              },
+              onRepairDreamingArtifacts: () => {
+                syncDreamingSelectedAgent();
+                void repairDreamingArtifacts(state);
+              },
               onRequestUpdate: requestHostUpdate,
             })
           : nothing}

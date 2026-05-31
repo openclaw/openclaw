@@ -153,7 +153,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelSwitchPromises: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
@@ -235,7 +235,7 @@ describe("refreshChat", () => {
       "sessions list payload",
     );
     expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
-    expect(sessionsListPayload).not.toHaveProperty("agentId");
+    expect(sessionsListPayload.agentId).toBe("main");
     expect(sessionsListPayload.includeGlobal).toBe(true);
     expect(sessionsListPayload.includeUnknown).toBe(true);
     expect(sessionsListPayload.limit).toBe(50);
@@ -302,6 +302,28 @@ describe("refreshChat", () => {
     expect(sessionsListPayload.includeGlobal).toBe(true);
   });
 
+  it("scopes agent session refresh rows before the list limit", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:work:dashboard",
+      agentsList: { defaultId: "main", mainKey: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "agent direct sessions list payload",
+    );
+    expect(sessionsListPayload.agentId).toBe("work");
+    expect(sessionsListPayload.limit).toBe(50);
+    expect(sessionsListPayload.includeGlobal).toBe(true);
+  });
+
   it("uses hello default for global chat refresh before agents list loads", async () => {
     const request = vi.fn(() => new Promise<unknown>(() => undefined));
     const host = makeHost({
@@ -331,6 +353,33 @@ describe("refreshChat", () => {
       "hello-default global sessions list payload",
     );
     expect(sessionsListPayload.agentId).toBe("ops");
+  });
+
+  it("keeps unknown chat refresh session rows unscoped", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "unknown",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "unknown",
+      limit: 100,
+      maxChars: 4000,
+    });
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "unknown sessions list payload",
+    );
+    expect(sessionsListPayload).not.toHaveProperty("agentId");
+    expect(sessionsListPayload.includeUnknown).toBe(true);
   });
 
   it("can wait for history without waiting for secondary metadata refreshes", async () => {
@@ -672,7 +721,7 @@ describe("refreshChat", () => {
         "sessions list payload",
       );
       expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
-      expect(sessionsListPayload).not.toHaveProperty("agentId");
+      expect(sessionsListPayload.agentId).toBe("main");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
       expect(sessionsListPayload.limit).toBe(50);

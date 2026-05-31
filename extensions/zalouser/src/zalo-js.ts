@@ -5,8 +5,10 @@ import path from "node:path";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   asFiniteNumberInRange,
+  isFutureDateTimestampMs,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
+  resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
@@ -847,7 +849,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
   if (!cached) {
     return null;
   }
-  if (cached.expiresAt <= Date.now()) {
+  if (!isFutureDateTimestampMs(cached.expiresAt)) {
     groupContextCache.delete(key);
     return null;
   }
@@ -859,7 +861,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
 
 function trimGroupContextCache(now: number): void {
   for (const [key, value] of groupContextCache) {
-    if (value.expiresAt > now) {
+    if (isFutureDateTimestampMs(value.expiresAt, { nowMs: now })) {
       continue;
     }
     groupContextCache.delete(key);
@@ -879,9 +881,13 @@ function writeCachedGroupContext(profile: string, context: ZaloGroupContext): vo
   if (groupContextCache.has(key)) {
     groupContextCache.delete(key);
   }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_CONTEXT_CACHE_TTL_MS, { nowMs: now });
+  if (expiresAt === undefined) {
+    return;
+  }
   groupContextCache.set(key, {
     value: context,
-    expiresAt: now + GROUP_CONTEXT_CACHE_TTL_MS,
+    expiresAt,
   });
   trimGroupContextCache(now);
 }
@@ -979,6 +985,9 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
 
 export const testing = {
   toInboundMessage,
+  readCachedGroupContext,
+  writeCachedGroupContext,
+  clearCachedGroupContext,
 };
 export { testing as __testing };
 

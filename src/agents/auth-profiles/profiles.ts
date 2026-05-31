@@ -1,7 +1,10 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { findNormalizedProviderKey, normalizeProviderId } from "../provider-id.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,

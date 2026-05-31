@@ -17,6 +17,7 @@ import {
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const CHATGPT_PREFERENCE_SIGNAL_RE =
@@ -746,7 +747,7 @@ export async function importChatGptConversations(params: {
   let updatedCount = 0;
   let skippedCount = 0;
   let runId: string | undefined;
-  const nowIso = new Date(params.nowMs ?? Date.now()).toISOString();
+  const nowIso = resolveMemoryWikiTimestamp(params.nowMs);
 
   let importRunRecord: ChatGptImportRunRecord | undefined;
   let importRunDir = "";

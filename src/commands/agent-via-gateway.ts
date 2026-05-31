@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   GATEWAY_CLIENT_MODES,
@@ -27,7 +28,6 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 type AgentGatewayResult = {
@@ -171,7 +171,7 @@ function formatPayloadForLog(payload: {
     lines.push(parts.text.trimEnd());
   }
   for (const url of parts.mediaUrls) {
-    lines.push(`MEDIA:${url}`);
+    lines.push(`Attachment: ${url}`);
   }
   return lines.join("\n").trimEnd();
 }

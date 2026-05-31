@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check)"
+summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search ClawHub or install skills from ClawHub, Git, or local directories
@@ -53,6 +53,14 @@ openclaw skills info <name> --agent <id>
 openclaw skills check
 openclaw skills check --agent <id>
 openclaw skills check --json
+openclaw skills workshop propose-create --name "qa-check" --description "QA checklist" --proposal ./PROPOSAL.md
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id> --reason "Not reusable"
+openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
 `search`, `update`, and `verify` use ClawHub directly. `install <slug>` installs
@@ -115,6 +123,76 @@ Notes:
 - `list`, `info`, and `check` write their rendered output to stdout. With
   `--json`, that means the machine-readable payload stays on stdout for pipes
   and scripts.
+
+## Skill Workshop proposals
+
+`openclaw skills workshop` manages pending skill proposals in the selected
+workspace. Proposals are durable OpenClaw state under
+`<OPENCLAW_STATE_DIR>/skill-workshop/proposals/`; they are not active skills
+until applied. The default state directory is `~/.openclaw`. Proposal bodies
+honor `skills.workshop.maxSkillBytes`, and proposal descriptions are capped at
+160 bytes because they can appear in discovery and listing output.
+
+Create a proposal from a draft markdown file:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal ./PROPOSAL.md
+```
+
+Or create a proposal from a full draft skill directory:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal-dir ./qa-check-proposal
+```
+
+Update an existing workspace skill through the same pending path:
+
+```bash
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+```
+
+Revise a pending proposal before approval:
+
+```bash
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+```
+
+The supplied draft is stored as `PROPOSAL.md` with proposal-only frontmatter:
+
+```markdown
+---
+name: qa-check
+description: Repeatable QA checklist
+status: proposal
+version: v1
+date: "2026-05-30T00:00:00.000Z"
+---
+```
+
+Applying a proposal writes the active `SKILL.md` into the workspace `skills/`
+root, strips `status`, proposal `version`, and proposal `date` from the
+frontmatter, scans the draft, writes rollback metadata, and refuses stale
+updates when the target skill changed after the proposal was created.
+
+When `--proposal-dir` is used, the directory must contain `PROPOSAL.md`.
+Support files can be included under `assets/`, `examples/`, `references/`,
+`scripts/`, or `templates/`. OpenClaw stores support files with the proposal,
+scans them, verifies their hashes before apply, and writes them beside the
+active `SKILL.md` only after the proposal is applied.
+
+Agents can create, revise, list, and inspect pending proposals through the
+`skill_workshop` tool when the user asks for reusable work to be captured.
+Autonomous proposal capture from durable conversation signals is off by
+default and is enabled with `skills.workshop.autonomous.enabled`. If the user
+explicitly asks to approve/use/apply, reject, or quarantine a specific
+proposal, `skill_workshop` can also perform that proposal lifecycle action
+through the same Skill Workshop safeguards.
 
 ## Related
 

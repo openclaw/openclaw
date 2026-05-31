@@ -1,10 +1,10 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { ConnectPairingRequiredReason } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { resolveOsSummary } from "../infra/os-summary.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
-import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusChannelsTableRows,

@@ -1,6 +1,7 @@
 #!/usr/bin/env -S pnpm tsx
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
@@ -150,62 +151,63 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): LinuxOptions {
+export function parseArgs(argv: string[]): LinuxOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--vm":
-        options.vmName = ensureValue(argv, i, arg);
+        options.vmName = ensureValue(args, i, arg);
         options.vmNameExplicit = true;
         i++;
         break;
       case "--snapshot-hint":
-        options.snapshotHint = ensureValue(argv, i, arg);
+        options.snapshotHint = ensureValue(args, i, arg);
         i++;
         break;
       case "--mode":
-        options.mode = parseMode(ensureValue(argv, i, arg));
+        options.mode = parseMode(ensureValue(args, i, arg));
         i++;
         break;
       case "--provider":
-        options.provider = parseProvider(ensureValue(argv, i, arg));
+        options.provider = parseProvider(ensureValue(args, i, arg));
         i++;
         break;
       case "--model":
-        options.modelId = ensureValue(argv, i, arg);
+        options.modelId = ensureValue(args, i, arg);
         i++;
         break;
       case "--api-key-env":
       case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(argv, i, arg);
+        options.apiKeyEnv = ensureValue(args, i, arg);
         i++;
         break;
       case "--install-url":
-        options.installUrl = ensureValue(argv, i, arg);
+        options.installUrl = ensureValue(args, i, arg);
         i++;
         break;
       case "--host-port":
-        options.hostPort = Number(ensureValue(argv, i, arg));
+        options.hostPort = Number(ensureValue(args, i, arg));
         options.hostPortExplicit = true;
         i++;
         break;
       case "--host-ip":
-        options.hostIp = ensureValue(argv, i, arg);
+        options.hostIp = ensureValue(args, i, arg);
         i++;
         break;
       case "--latest-version":
-        options.latestVersion = ensureValue(argv, i, arg);
+        options.latestVersion = ensureValue(args, i, arg);
         i++;
         break;
       case "--install-version":
-        options.installVersion = ensureValue(argv, i, arg);
+        options.installVersion = ensureValue(args, i, arg);
         i++;
         break;
       case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(argv, i, arg);
+        options.targetPackageSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--keep-server":
@@ -223,6 +225,10 @@ function parseArgs(argv: string[]): LinuxOptions {
     }
   }
   return options;
+}
+
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 class LinuxSmoke extends SmokeRunController<LinuxOptions> {
@@ -811,6 +817,8 @@ fi`,
   }
 }
 
-const options = parseArgs(process.argv.slice(2));
-await mkdir(repoRoot, { recursive: true });
-await new LinuxSmoke(options).run();
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  const options = parseArgs(process.argv.slice(2));
+  await mkdir(repoRoot, { recursive: true });
+  await new LinuxSmoke(options).run();
+}

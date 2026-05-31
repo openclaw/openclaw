@@ -14,6 +14,15 @@ import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
 
+type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js");
+
+let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
+
+function loadDoctorStateMigrations(): Promise<DoctorStateMigrationsModule> {
+  doctorStateMigrationsPromise ??= import("./doctor-state-migrations.js");
+  return doctorStateMigrationsPromise;
+}
+
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
@@ -107,7 +116,7 @@ export async function runDoctorConfigPreflight(
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   if (options.migrateState !== false) {
-    const { autoMigrateLegacyStateDir } = await import("./doctor-state-migrations.js");
+    const { autoMigrateLegacyStateDir } = await loadDoctorStateMigrations();
     const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
     noteStateMigrationResult(stateDirResult);
   }
@@ -157,7 +166,7 @@ export async function runDoctorConfigPreflight(
   const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
   if (options.migrateState !== false) {
     const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } =
-      await import("./doctor-state-migrations.js");
+      await loadDoctorStateMigrations();
     const stateResult = snapshot.valid
       ? await autoMigrateLegacyState({ cfg: baseConfig, env: process.env })
       : await autoMigrateLegacyTaskStateSidecars({ env: process.env });

@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
@@ -40,10 +40,12 @@ type SetupFlowChoice = WizardFlow | "import";
 type AuthChoiceModule = typeof import("../commands/auth-choice.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
 type ModelPickerModule = typeof import("../commands/model-picker.js");
+type OnboardConfigModule = typeof import("../commands/onboard-config.js");
 
 let authChoiceModulePromise: Promise<AuthChoiceModule> | undefined;
 let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
 let modelPickerModulePromise: Promise<ModelPickerModule> | undefined;
+let onboardConfigModulePromise: Promise<OnboardConfigModule> | undefined;
 
 function loadAuthChoiceModule(): Promise<AuthChoiceModule> {
   authChoiceModulePromise ??= import("../commands/auth-choice.js");
@@ -58,6 +60,11 @@ function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
 function loadModelPickerModule(): Promise<ModelPickerModule> {
   modelPickerModulePromise ??= import("../commands/model-picker.js");
   return modelPickerModulePromise;
+}
+
+function loadOnboardConfigModule(): Promise<OnboardConfigModule> {
+  onboardConfigModulePromise ??= import("../commands/onboard-config.js");
+  return onboardConfigModulePromise;
 }
 
 async function writeWizardConfigFile(
@@ -605,7 +612,7 @@ export async function runSetupWizard(
 
   if (mode === "remote") {
     const { promptRemoteGatewayConfig } = await import("../commands/onboard-remote.js");
-    const { applySkipBootstrapConfig } = await import("../commands/onboard-config.js");
+    const { applySkipBootstrapConfig } = await loadOnboardConfigModule();
     const { logConfigUpdated } = await loadConfigLoggingModule();
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter, {
       secretInputMode: opts.secretInputMode,
@@ -634,7 +641,7 @@ export async function runSetupWizard(
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
-    await import("../commands/onboard-config.js");
+    await loadOnboardConfigModule();
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);

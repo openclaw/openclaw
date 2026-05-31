@@ -311,6 +311,32 @@ describe("gateway lock", () => {
     expect(lock).toBeNull();
   });
 
+  it("falls back instead of throwing when lock payload clock is outside Date range", async () => {
+    const env = await makeEnv();
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00Z"));
+    const lock = expectGatewayLock(
+      await acquireGatewayLock({
+        env,
+        allowInTests: true,
+        timeoutMs: 30,
+        pollIntervalMs: 2,
+        now: () => 8_640_000_000_000_001,
+        sleep: async () => {},
+        lockDir: resolveTestLockDir(),
+      }),
+    );
+
+    try {
+      const payload = JSON.parse(await fs.readFile(lock.lockPath, "utf8")) as {
+        createdAt?: string;
+      };
+      expect(payload.createdAt).toBe("2026-05-30T12:00:00.000Z");
+    } finally {
+      dateNowSpy.mockRestore();
+      await lock.release();
+    }
+  });
+
   it("wraps unexpected fs errors as GatewayLockError", async () => {
     const env = await makeEnv();
     const openSpy = vi.spyOn(fs, "open").mockRejectedValueOnce(

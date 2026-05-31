@@ -2,6 +2,7 @@ import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
 import {
+  resolveExpiresAtMsFromDurationMs,
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -92,7 +93,10 @@ function parseDeviceCodeResponse(
 ): DeviceCodeResponse {
   const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
   const intervalMs = nonNegativeSecondsToSafeMilliseconds(value.interval);
-  const expiresAt = expiresInMs === undefined ? undefined : issuedAt + expiresInMs;
+  const expiresAt =
+    expiresInMs === undefined
+      ? undefined
+      : resolveExpiresAtMsFromDurationMs(expiresInMs, { nowMs: issuedAt });
 
   if (
     typeof value.device_code !== "string" ||
@@ -103,7 +107,6 @@ function parseDeviceCodeResponse(
     !value.verification_uri ||
     expiresInMs === undefined ||
     expiresAt === undefined ||
-    !Number.isSafeInteger(expiresAt) ||
     intervalMs === undefined
   ) {
     throw new Error("GitHub device code response missing fields");

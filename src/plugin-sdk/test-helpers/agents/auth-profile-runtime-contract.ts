@@ -10,12 +10,12 @@ export const AUTH_PROFILE_RUNTIME_CONTRACT = {
   runId: "run-auth-contract",
   workspacePrompt: "continue with the bound Codex profile",
   openAiProvider: "openai",
-  openAiCodexProvider: "openai-codex",
+  openAiCodexProvider: "openai",
   codexCliProvider: "codex-cli",
   codexHarnessProvider: "codex",
   claudeCliProvider: "claude-cli",
   openAiProfileId: "openai:work",
-  openAiCodexProfileId: "openai-codex:work",
+  openAiCodexProfileId: "openai:work",
   anthropicProfileId: "anthropic:work",
 } as const;
 

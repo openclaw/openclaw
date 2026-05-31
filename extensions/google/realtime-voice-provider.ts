@@ -16,6 +16,10 @@ import type {
   ThinkingConfig,
   TurnCoverage,
 } from "@google/genai";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceAudioFormat,
@@ -855,8 +859,19 @@ async function createGoogleRealtimeBrowserSession(
 
   const model = req.model ?? config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
   const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
-  const expiresAtMs = Date.now() + GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS;
-  const newSessionExpiresAtMs = Date.now() + GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS;
+  const nowMs = Date.now();
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS, {
+    nowMs,
+  });
+  const newSessionExpiresAtMs = resolveExpiresAtMsFromDurationMs(
+    GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS,
+    { nowMs },
+  );
+  const expireTime = timestampMsToIsoString(expiresAtMs);
+  const newSessionExpireTime = timestampMsToIsoString(newSessionExpiresAtMs);
+  if (expiresAtMs === undefined || !expireTime || !newSessionExpireTime) {
+    throw new Error("Google realtime browser session expiry is outside the supported Date range");
+  }
   const ai = createGoogleGenAI({
     apiKey,
     httpOptions: {
@@ -866,8 +881,8 @@ async function createGoogleRealtimeBrowserSession(
   const token = await ai.authTokens.create({
     config: {
       uses: 1,
-      expireTime: new Date(expiresAtMs).toISOString(),
-      newSessionExpireTime: new Date(newSessionExpiresAtMs).toISOString(),
+      expireTime,
+      newSessionExpireTime,
       liveConnectConstraints: {
         model,
         config: buildGoogleLiveConnectConfig({

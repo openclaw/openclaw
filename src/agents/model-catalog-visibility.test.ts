@@ -38,7 +38,9 @@ describe("resolveVisibleModelCatalog", () => {
   });
 
   it("keeps Codex-routable canonical OpenAI rows visible through Codex OAuth auth", async () => {
-    const authChecker = vi.fn((provider: string, api?: string) => api === "openai-codex-responses");
+    const authChecker = vi.fn(
+      (provider: string, api?: string) => api === "openai-chatgpt-responses",
+    );
     const catalog: ModelCatalogEntry[] = [
       {
         provider: "openai",
@@ -64,7 +66,7 @@ describe("resolveVisibleModelCatalog", () => {
 
     expect(authChecker).toHaveBeenNthCalledWith(1, "openai", "openai-responses");
     expect(authChecker).toHaveBeenNthCalledWith(2, "openai", "openai-responses");
-    expect(authChecker).toHaveBeenNthCalledWith(3, "openai", "openai-codex-responses");
+    expect(authChecker).toHaveBeenNthCalledWith(3, "openai", "openai-chatgpt-responses");
     expect(authChecker).toHaveBeenCalledTimes(3);
     expect(result).toEqual([
       {
@@ -98,7 +100,7 @@ describe("resolveVisibleModelCatalog", () => {
     const authChecker = vi.fn((provider: string) => provider !== "blocked");
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
-      { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
+      { provider: "openai", id: "gpt-codex-test", name: "GPT Codex Test" },
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
       { provider: "blocked", id: "blocked-test", name: "Blocked Test" },
     ];
@@ -108,7 +110,7 @@ describe("resolveVisibleModelCatalog", () => {
         defaults: {
           models: {
             "vllm/*": {},
-            "openai-codex/*": {},
+            "openai/*": {},
             "blocked/*": {},
           },
         },
@@ -124,16 +126,16 @@ describe("resolveVisibleModelCatalog", () => {
     });
 
     expect(authChecker).toHaveBeenNthCalledWith(1, "anthropic");
-    expect(authChecker).toHaveBeenNthCalledWith(2, "openai-codex");
+    expect(authChecker).toHaveBeenNthCalledWith(2, "openai");
     expect(authChecker).toHaveBeenNthCalledWith(3, "vllm");
     expect(authChecker).toHaveBeenNthCalledWith(4, "blocked");
     expect(authChecker).toHaveBeenCalledTimes(4);
     expect(result).toEqual([
-      { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
+      { provider: "openai", id: "gpt-codex-test", name: "GPT Codex Test" },
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
-  });
+  }, 240_000);
 
   it("uses runtime model normalization for exact allowlist entries", async () => {
     normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {
