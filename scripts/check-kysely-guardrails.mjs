@@ -49,6 +49,7 @@ const rawSqliteAllowPathGroups = {
     "src/acp/event-ledger.ts",
     "src/agents/subagent-registry.store.ts",
     "src/cron/run-log.ts",
+    "src/cron/run-log/sqlite-store.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",
     "src/media/store.ts",
