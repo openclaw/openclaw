@@ -235,6 +235,20 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "partial answer that should not leak");
   });
 
+  it("preserves aborted-without-error behavior without adding a generic error payload", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: [],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("does not replay a stale previous assistant when an aborted run has no new text", () => {
     const payloads = buildPayloads({
       runAborted: true,

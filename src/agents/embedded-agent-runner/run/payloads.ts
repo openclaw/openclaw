@@ -25,6 +25,7 @@ import { extractAssistantTextForPhase } from "../../../shared/chat-message-conte
 import { parseInlineDirectives } from "../../../utils/directive-tags.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
@@ -299,12 +300,19 @@ export function buildEmbeddedRunPayloads(params: {
     assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
-        : formatUserFacingAssistantErrorText(assistantForPayload, {
-            cfg: params.config,
-            sessionKey: params.sessionKey,
-            provider: params.provider,
-            model: params.model,
-          })
+        : lastAssistantErrored
+          ? formatUserFacingAssistantErrorText(assistantForPayload, {
+              cfg: params.config,
+              sessionKey: params.sessionKey,
+              provider: params.provider,
+              model: params.model,
+            })
+          : formatAssistantErrorText(assistantForPayload, {
+              cfg: params.config,
+              sessionKey: params.sessionKey,
+              provider: params.provider,
+              model: params.model,
+            })
       : undefined;
   const rawErrorMessage = lastAssistantNeedsErrorSurface
     ? normalizeOptionalString(assistantForPayload?.errorMessage)
