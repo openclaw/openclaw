@@ -92,6 +92,17 @@ export type TaskFlowUpdateResult =
       current?: TaskFlowRecord;
     };
 
+export type TaskFlowSyncResult =
+  | {
+      ok: true;
+      flow: TaskFlowRecord | null;
+    }
+  | {
+      ok: false;
+      reason: "persist_failed";
+      current: TaskFlowRecord;
+    };
+
 function cloneStructuredValue<T>(value: T | undefined): T | undefined {
   if (value === undefined) {
     return undefined;
@@ -643,7 +654,7 @@ export function requestFlowCancel(params: {
   });
 }
 
-export function syncFlowFromTask(
+export function syncFlowFromTaskResult(
   task: Pick<
     TaskRecord,
     | "parentFlowId"
@@ -658,17 +669,17 @@ export function syncFlowFromTask(
     | "terminalSummary"
     | "progressSummary"
   >,
-): TaskFlowRecord | null {
+): TaskFlowSyncResult {
   const flowId = task.parentFlowId?.trim();
   if (!flowId) {
-    return null;
+    return { ok: true, flow: null };
   }
   const flow = getTaskFlowById(flowId);
   if (!flow) {
-    return null;
+    return { ok: true, flow: null };
   }
   if (flow.syncMode !== "task_mirrored") {
-    return flow;
+    return { ok: true, flow };
   }
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
   const isTerminal = isTerminalTaskFlowStatus(terminalFlowStatus);
@@ -680,7 +691,7 @@ export function syncFlowFromTask(
     },
     isTerminal,
   );
-  return updateFlowRecordByIdUnchecked(flowId, {
+  const updated = updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
@@ -695,6 +706,21 @@ export function syncFlowFromTask(
         }
       : { endedAt: null }),
   });
+  if (!updated) {
+    return {
+      ok: false,
+      reason: "persist_failed",
+      current: flow,
+    };
+  }
+  return { ok: true, flow: updated };
+}
+
+export function syncFlowFromTask(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+): TaskFlowRecord | null {
+  const result = syncFlowFromTaskResult(task);
+  return result.ok ? result.flow : null;
 }
 
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {

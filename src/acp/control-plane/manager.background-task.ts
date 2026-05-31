@@ -122,7 +122,7 @@ export function createBackgroundTaskRecord(
   startedAt: number,
 ): void {
   try {
-    createRunningTaskRun({
+    const task = createRunningTaskRun({
       runtime: "acp",
       sourceId: context.runId,
       ownerKey: context.requesterSessionKey,
@@ -134,6 +134,11 @@ export function createBackgroundTaskRecord(
       task: context.task,
       startedAt,
     });
+    if (!task) {
+      logVerbose(
+        `acp-manager: failed creating background task for ${context.runId}: persist_failed`,
+      );
+    }
   } catch (error) {
     logVerbose(
       `acp-manager: failed creating background task for ${context.runId}: ${String(error)}`,

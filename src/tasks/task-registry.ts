@@ -30,7 +30,7 @@ import {
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
-  syncFlowFromTask,
+  syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
@@ -59,6 +59,7 @@ import type {
 import { resolveTaskCleanupAfter } from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/registry");
+const TASK_FLOW_SYNC_RETRY_DELAYS_MS = [1_000, 5_000, 25_000, 120_000, 600_000] as const;
 
 const taskRegistryProcessState = getTaskRegistryProcessState();
 const tasks = taskRegistryProcessState.tasks;
@@ -71,6 +72,7 @@ const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelive
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
+const taskFlowSyncRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 type TaskRegistryDeliveryRuntime = Pick<
   typeof import("./task-registry-delivery-runtime.js"),
   "sendMessage"
@@ -285,22 +287,13 @@ function persistTaskUpsert(task: TaskRecord, pendingDeliveryState?: TaskDelivery
     });
     return;
   }
-  if (store.upsertTask) {
-    if (deliveryState && !store.upsertDeliveryState) {
-      store.saveSnapshot({
-        tasks: new Map(tasks).set(task.taskId, task),
-        deliveryStates: new Map(taskDeliveryStates).set(task.taskId, deliveryState),
-      });
-      return;
-    }
+  if (!deliveryState && store.upsertTask) {
     store.upsertTask(task);
-    if (deliveryState && store.upsertDeliveryState) {
-      store.upsertDeliveryState(deliveryState);
-    }
     return;
   }
   // Snapshot fallback: project the pending upsert so the snapshot is correct
-  // even though we persist before mutating the in-memory `tasks` map.
+  // even though we persist before mutating memory. Delivery state must stay in
+  // the same write as its task; split upserts can leave a durable half-create.
   store.saveSnapshot({
     tasks: new Map(tasks).set(task.taskId, task),
     deliveryStates: deliveryState
@@ -396,6 +389,7 @@ function tryPersistTaskDeliveryStateUpsert(state: TaskDeliveryState): boolean {
 }
 
 function clearTaskRegistryMemory(): void {
+  clearTaskFlowSyncRetries();
   tasks.clear();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();
@@ -1052,6 +1046,66 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
   }
 }
 
+function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt = 0): void {
+  const taskId = task.taskId.trim();
+  if (!taskId || taskFlowSyncRetryTimers.has(taskId)) {
+    return;
+  }
+  const delayMs = TASK_FLOW_SYNC_RETRY_DELAYS_MS[attempt];
+  if (delayMs == null) {
+    log.warn("Exhausted parent flow sync retries from task", {
+      operation,
+      taskId,
+      flowId: task.parentFlowId,
+    });
+    return;
+  }
+  const retryTimer = setTimeout(() => {
+    taskFlowSyncRetryTimers.delete(taskId);
+    const current = tasks.get(taskId);
+    if (!current) {
+      return;
+    }
+    const flowId = current.parentFlowId?.trim();
+    if (!flowId || findLatestTaskForFlowId(flowId)?.taskId !== taskId) {
+      return;
+    }
+    const result = syncFlowFromTaskResult(current);
+    if (!result.ok) {
+      log.warn("Failed to retry parent flow sync from task", {
+        operation,
+        taskId,
+        flowId: current.parentFlowId,
+        reason: result.reason,
+      });
+      scheduleTaskFlowSyncRetry(current, operation, attempt + 1);
+    }
+  }, delayMs);
+  retryTimer.unref?.();
+  taskFlowSyncRetryTimers.set(taskId, retryTimer);
+}
+
+function syncFlowFromTaskAfterTaskMutation(task: TaskRecord, operation: string): void {
+  const result = syncFlowFromTaskResult(task);
+  if (result.ok) {
+    return;
+  }
+  log.warn("Failed to sync parent flow from task mutation", {
+    operation,
+    taskId: task.taskId,
+    flowId: task.parentFlowId,
+    reason: result.reason,
+  });
+  scheduleTaskFlowSyncRetry(task, operation);
+}
+
+function clearTaskFlowSyncRetries(): void {
+  for (const timer of taskFlowSyncRetryTimers.values()) {
+    clearTimeout(timer);
+  }
+  taskFlowSyncRetryTimers.clear();
+}
+
 function restoreTaskRegistryOnce() {
   if (restoreAttempted) {
     return;
@@ -1128,15 +1182,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     deleteParentFlowIdIndex(taskId, current);
     addParentFlowIdIndex(taskId, next);
   }
-  try {
-    syncFlowFromTask(next);
-  } catch (error) {
-    log.warn("Failed to sync parent flow from task update", {
-      taskId,
-      flowId: next.parentFlowId,
-      error,
-    });
-  }
+  syncFlowFromTaskAfterTaskMutation(next, "update");
   try {
     syncManagedFlowCancellationFromTask(next);
   } catch (error) {
@@ -1756,15 +1802,7 @@ export function createTaskRecord(params: {
   addOwnerKeyIndex(taskId, record);
   addParentFlowIdIndex(taskId, record);
   addRelatedSessionKeyIndex(taskId, record);
-  try {
-    syncFlowFromTask(record);
-  } catch (error) {
-    log.warn("Failed to sync parent flow from task create", {
-      taskId: record.taskId,
-      flowId: record.parentFlowId,
-      error,
-    });
-  }
+  syncFlowFromTaskAfterTaskMutation(record, "create");
   emitTaskRegistryObserverEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),

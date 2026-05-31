@@ -356,16 +356,17 @@ describe("task-registry store runtime", () => {
     expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);
   });
 
-  it("persists create requester origin with separate task and delivery store methods", () => {
+  it("persists create requester origin with one projected snapshot when only separate upserts exist", () => {
     const upsertTask = vi.fn();
     const upsertDeliveryState = vi.fn();
+    const saveSnapshot = vi.fn();
     configureTaskRegistryRuntime({
       store: {
         loadSnapshot: () => ({
           tasks: new Map(),
           deliveryStates: new Map(),
         }),
-        saveSnapshot: vi.fn(),
+        saveSnapshot,
         upsertTask,
         upsertDeliveryState,
       },
@@ -386,20 +387,18 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    expect(upsertTask).toHaveBeenCalledWith(expect.objectContaining({ taskId: created.taskId }));
-    expect(upsertDeliveryState).toHaveBeenCalledWith({
-      taskId: created.taskId,
-      requesterOrigin: {
-        channel: "test-channel",
-        to: "C1234567890",
-      },
+    expect(upsertTask).not.toHaveBeenCalled();
+    expect(upsertDeliveryState).not.toHaveBeenCalled();
+    expect(saveSnapshot).toHaveBeenCalledOnce();
+    const snapshot = saveSnapshot.mock.calls[0]?.[0] as {
+      tasks: ReadonlyMap<string, TaskRecord>;
+      deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
+    };
+    expect(snapshot.tasks.get(created.taskId)?.task).toBe("Separate store task");
+    expect(snapshot.deliveryStates.get(created.taskId)?.requesterOrigin).toEqual({
+      channel: "test-channel",
+      to: "C1234567890",
     });
-    const taskCallOrder = upsertTask.mock.invocationCallOrder[0];
-    const deliveryCallOrder = upsertDeliveryState.mock.invocationCallOrder[0];
-    if (taskCallOrder == null || deliveryCallOrder == null) {
-      throw new Error("Expected separate store upsert calls");
-    }
-    expect(taskCallOrder).toBeLessThan(deliveryCallOrder);
   });
 
   it("falls back to full snapshots when custom stores cannot upsert delivery state", () => {
