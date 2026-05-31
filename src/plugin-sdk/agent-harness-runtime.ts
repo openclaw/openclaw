@@ -70,6 +70,11 @@ export type {
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+export type {
+  ExecAutoReviewDecision,
+  ExecAutoReviewInput,
+  ExecAutoReviewer,
+} from "../infra/exec-auto-review.js";
 export type { NormalizedUsage } from "../agents/usage.js";
 export type {
   AgentToolResultMiddleware,
@@ -188,6 +193,88 @@ export type {
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
 export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/tool-schema-runtime.js";
+
+export async function reviewExecRequestWithConfiguredModel(params: {
+  cfg?: import("../config/types.openclaw.js").OpenClawConfig;
+  agentId?: string;
+  reviewer?: unknown;
+  input: import("../infra/exec-auto-review.js").ExecAutoReviewInput;
+}): Promise<import("../infra/exec-auto-review.js").ExecAutoReviewDecision> {
+  const { createModelExecAutoReviewer } = await import("../agents/exec-auto-reviewer.js");
+  const reviewer = createModelExecAutoReviewer({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    reviewer: params.reviewer as
+      | import("../agents/exec-auto-reviewer.js").ExecReviewerConfig
+      | undefined,
+  });
+  return reviewer(params.input);
+}
+
+export async function buildExecAutoReviewInputForShellCommand(params: {
+  command: string;
+  cwd?: string | null;
+  host: import("../infra/exec-auto-review.js").ExecAutoReviewHost;
+  envKeys?: readonly string[];
+  agent?: {
+    id?: string | null;
+    sessionKey?: string | null;
+  };
+}): Promise<import("../infra/exec-auto-review.js").ExecAutoReviewInput | undefined> {
+  const [
+    { commandRequiresSecurityAuditSuppressionApproval, evaluateShellAllowlist },
+    { detectPolicyInlineEval },
+  ] = await Promise.all([
+    import("../infra/exec-approvals.js"),
+    import("../infra/command-analysis/policy.js"),
+  ]);
+  const command = params.command.trim();
+  if (!command) {
+    return undefined;
+  }
+  const allowlistEval = evaluateShellAllowlist({
+    command,
+    allowlist: [],
+    safeBins: new Set<string>(),
+    cwd: params.cwd ?? undefined,
+    platform: process.platform,
+  });
+  const [segment] = allowlistEval.segments;
+  const boundSingleCommand =
+    allowlistEval.analysisOk &&
+    allowlistEval.segments.length === 1 &&
+    segment !== undefined &&
+    segment.raw.trim() === command;
+  if (!boundSingleCommand) {
+    return undefined;
+  }
+  if (
+    commandRequiresSecurityAuditSuppressionApproval({
+      command,
+      cwd: params.cwd ?? undefined,
+      segments: allowlistEval.segments,
+    })
+  ) {
+    return undefined;
+  }
+  const inlineEval = detectPolicyInlineEval(allowlistEval.segments) !== null;
+  const heredoc = segment.argv.some((token) => token.startsWith("<<"));
+  return {
+    command,
+    argv: segment.argv,
+    cwd: params.cwd ?? null,
+    envKeys: params.envKeys,
+    host: params.host,
+    reason: inlineEval ? "strict-inline-eval" : heredoc ? "heredoc" : "approval-required",
+    analysis: {
+      parsed: true,
+      allowlistMatched: false,
+      inlineEval,
+      ...(heredoc ? { heredoc } : {}),
+    },
+    agent: params.agent,
+  };
+}
 
 /** Detect prompt image references and load them through the same limits used by embedded runs. */
 export async function detectAndLoadAgentHarnessPromptImages(params: {

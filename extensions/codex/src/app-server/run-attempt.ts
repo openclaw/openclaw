@@ -129,6 +129,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
+  type OpenClawExecPolicyForCodexAppServer,
 } from "./config.js";
 import {
   projectContextEngineAssemblyForCodex,
@@ -1642,6 +1643,9 @@ export async function runCodexAppServerAttempt(
             threadId: thread.threadId,
             turnId,
             nativeHookRelay,
+            execPolicy,
+            execReviewerAgentId: sessionAgentId,
+            internalExecAutoReview: appServer.approvalsReviewer === "user",
             autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
             signal: runAbortController.signal,
           });
@@ -2786,6 +2790,9 @@ function handleApprovalRequest(params: {
   threadId: string;
   turnId: string;
   nativeHookRelay?: NativeHookRelayRegistrationHandle;
+  execPolicy?: Pick<OpenClawExecPolicyForCodexAppServer, "mode">;
+  execReviewerAgentId?: string;
+  internalExecAutoReview?: boolean;
   autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
@@ -2796,6 +2803,9 @@ function handleApprovalRequest(params: {
     threadId: params.threadId,
     turnId: params.turnId,
     nativeHookRelay: params.nativeHookRelay,
+    execPolicy: params.execPolicy,
+    execReviewerAgentId: params.execReviewerAgentId,
+    internalExecAutoReview: params.internalExecAutoReview,
     autoApprove: params.autoApprove,
     signal: params.signal,
   });

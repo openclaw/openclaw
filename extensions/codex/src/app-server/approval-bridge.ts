@@ -4,18 +4,22 @@
  */
 import {
   type AgentApprovalEventData,
+  buildExecAutoReviewInputForShellCommand,
   buildAgentHookContextChannelFields,
   formatApprovalDisplayPath,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
+  reviewExecRequestWithConfiguredModel,
   type EmbeddedRunAttemptParams,
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
+import type { OpenClawExecPolicyForCodexAppServer } from "./config.js";
 import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
@@ -72,6 +76,9 @@ export async function handleCodexAppServerApprovalRequest(params: {
     NativeHookRelayRegistrationHandle,
     "allowedEvents" | "generation" | "relayId"
   >;
+  execPolicy?: Pick<OpenClawExecPolicyForCodexAppServer, "mode">;
+  execReviewerAgentId?: string;
+  internalExecAutoReview?: boolean;
   autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
@@ -137,8 +144,29 @@ export async function handleCodexAppServerApprovalRequest(params: {
       });
       return buildApprovalResponse(params.method, context.requestParams, "approved-session");
     }
-    // Native hook policy did not decide; fall back to the OpenClaw approval
-    // route so user-facing runs still get an approval prompt.
+    const autoReviewOutcome = await runInternalExecAutoReviewForApprovalRequest({
+      enabled: params.internalExecAutoReview === true && params.execPolicy?.mode === "auto",
+      method: params.method,
+      requestParams,
+      paramsForRun: params.paramsForRun,
+      context,
+      agentId: params.execReviewerAgentId,
+      signal: params.signal,
+    });
+    if (autoReviewOutcome?.outcome === "approved-once") {
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "resolved",
+        kind: context.kind,
+        status: "approved",
+        title: context.title,
+        ...context.eventDetails,
+        ...approvalEventScope(params.method, autoReviewOutcome.outcome),
+        message: autoReviewOutcome.reason,
+      });
+      return buildApprovalResponse(params.method, context.requestParams, autoReviewOutcome.outcome);
+    }
+    // Native hook/model policy did not decide; fall back to the OpenClaw
+    // approval route so user-facing runs still get an approval prompt.
     const requestResult = await requestPluginApproval({
       paramsForRun: params.paramsForRun,
       title: context.title,
@@ -343,6 +371,161 @@ type ApprovalPolicyOutcome =
   | { outcome: "denied"; reason: string }
   | { outcome: "approved-once" | "approved-session" }
   | { outcome: "no-decision" };
+
+async function runInternalExecAutoReviewForApprovalRequest(params: {
+  enabled: boolean;
+  method: string;
+  requestParams: JsonObject | undefined;
+  paramsForRun: EmbeddedRunAttemptParams;
+  context: ApprovalContext;
+  agentId?: string;
+  signal?: AbortSignal;
+}): Promise<{ outcome: "approved-once"; reason: string } | undefined> {
+  if (!params.enabled || params.method !== "item/commandExecution/requestApproval") {
+    return undefined;
+  }
+  if (hasCommandApprovalCapabilityAmendments(params.requestParams)) {
+    return undefined;
+  }
+  const input = await buildAppServerExecAutoReviewInput({
+    requestParams: params.requestParams,
+    paramsForRun: params.paramsForRun,
+  });
+  if (!input) {
+    return undefined;
+  }
+  const decision = await waitForInternalExecAutoReviewDecision({
+    signal: params.signal,
+    promise: reviewExecRequestWithConfiguredModel({
+      cfg: params.paramsForRun.config,
+      agentId: params.agentId ?? params.paramsForRun.agentId,
+      reviewer: resolveExecReviewerConfig(params.paramsForRun, params.agentId),
+      input,
+    }),
+  });
+  if (decision.decision !== "allow-once") {
+    return undefined;
+  }
+  return {
+    outcome: "approved-once",
+    reason: `Codex app-server command approval granted by OpenClaw exec auto-reviewer: ${formatCodexDisplayText(
+      decision.rationale,
+    )}`,
+  };
+}
+
+async function waitForInternalExecAutoReviewDecision(params: {
+  signal?: AbortSignal;
+  promise: Promise<Awaited<ReturnType<typeof reviewExecRequestWithConfiguredModel>>>;
+}): Promise<Awaited<ReturnType<typeof reviewExecRequestWithConfiguredModel>>> {
+  if (!params.signal) {
+    return params.promise;
+  }
+  if (params.signal.aborted) {
+    throw toCodexAppServerApprovalCancellationError(params.signal.reason);
+  }
+  let onAbort: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    onAbort = () => reject(toCodexAppServerApprovalCancellationError(params.signal?.reason));
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([params.promise, abortPromise]);
+  } finally {
+    if (onAbort) {
+      params.signal.removeEventListener("abort", onAbort);
+    }
+  }
+}
+
+function toCodexAppServerApprovalCancellationError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return new Error(
+    typeof reason === "string" && reason.trim() ? reason : "Codex app-server approval cancelled.",
+  );
+}
+
+async function buildAppServerExecAutoReviewInput(params: {
+  requestParams: JsonObject | undefined;
+  paramsForRun: EmbeddedRunAttemptParams;
+}) {
+  const command = readString(params.requestParams, "command");
+  if (!command) {
+    return undefined;
+  }
+  return buildExecAutoReviewInputForShellCommand({
+    command,
+    cwd: readString(params.requestParams, "cwd") ?? params.paramsForRun.workspaceDir ?? null,
+    host: "codex-app-server",
+    agent: {
+      id: params.paramsForRun.agentId ?? null,
+      sessionKey: params.paramsForRun.sessionKey ?? null,
+    },
+  });
+}
+
+function hasCommandApprovalCapabilityAmendments(requestParams: JsonObject | undefined): boolean {
+  return (
+    hasNonEmptyJsonObject(requestParams?.additionalPermissions) ||
+    hasNonEmptyArray(requestParams?.proposedExecpolicyAmendment) ||
+    hasNonEmptyArray(requestParams?.proposedNetworkPolicyAmendments) ||
+    findAvailableCommandAmendmentDecision(requestParams) !== undefined ||
+    commandAcceptDecisionUnavailable(requestParams)
+  );
+}
+
+function commandAcceptDecisionUnavailable(requestParams: JsonObject | undefined): boolean {
+  const available = requestParams?.availableDecisions;
+  return Array.isArray(available) && !available.includes("accept");
+}
+
+function hasNonEmptyJsonObject(value: unknown): boolean {
+  return isJsonObject(value) && Object.keys(value).length > 0;
+}
+
+function hasNonEmptyArray(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function resolveExecReviewerConfig(
+  params: EmbeddedRunAttemptParams,
+  agentId?: string,
+): Record<string, unknown> | undefined {
+  const configRoot = readUnknownRecord(params.config);
+  const globalExec = readUnknownRecord(readUnknownRecord(configRoot?.tools)?.exec);
+  const agentExec = resolveAgentExecConfig(configRoot, agentId ?? params.agentId);
+  return readUnknownRecord(agentExec?.reviewer) ?? readUnknownRecord(globalExec?.reviewer);
+}
+
+function resolveAgentExecConfig(
+  configRoot: Record<string, unknown> | undefined,
+  agentId: string | undefined,
+): Record<string, unknown> | undefined {
+  const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+  if (!normalizedAgentId) {
+    return undefined;
+  }
+  const agentList = readUnknownRecord(configRoot?.agents)?.list;
+  if (!Array.isArray(agentList)) {
+    return undefined;
+  }
+  for (const entry of agentList) {
+    const record = readUnknownRecord(entry);
+    if (typeof record?.id !== "string" || normalizeAgentId(record.id) !== normalizedAgentId) {
+      continue;
+    }
+    return readUnknownRecord(readUnknownRecord(record.tools)?.exec);
+  }
+  return undefined;
+}
+
+function readUnknownRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 async function runOpenClawToolPolicyForApprovalRequest(params: {
   method: string;
