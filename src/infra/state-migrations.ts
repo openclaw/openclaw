@@ -2190,6 +2190,10 @@ async function migrateLegacySessions(
     }
   }
 
+  if (!targetReadable) {
+    return { changes, warnings };
+  }
+
   const entries = safeReadDir(detected.sessions.legacyDir);
   for (const entry of entries) {
     if (!entry.isFile()) {

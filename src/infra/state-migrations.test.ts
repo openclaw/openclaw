@@ -319,12 +319,13 @@ describe("state migrations", () => {
     // The user is warned that the target store was left untouched because it is unreadable.
     expect(result.warnings.some((w) => /unreadable|corrupt/i.test(w))).toBe(true);
 
-    // Legacy store is NOT deleted, so the data is still recoverable. The legacy
-    // sessions dir is preserved (renamed to a sessions.legacy-* backup because
-    // its sessions.json was intentionally not removed), keeping the data intact.
-    const backupDir = path.join(stateDir, "sessions.legacy-1234");
-    await expect(fs.readFile(path.join(backupDir, "sessions.json"), "utf8")).resolves.toContain(
-      "legacy-direct",
+    // Legacy store is NOT deleted or renamed, so a later explicit doctor --fix
+    // can retry the migration from the detector's normal legacy path.
+    await expect(
+      fs.readFile(path.join(stateDir, "sessions", "sessions.json"), "utf8"),
+    ).resolves.toContain("legacy-direct");
+    await expect(fs.readFile(path.join(stateDir, "sessions", "trace.jsonl"), "utf8")).resolves.toBe(
+      "{}\n",
     );
   });
 
