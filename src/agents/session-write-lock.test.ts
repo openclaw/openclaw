@@ -453,6 +453,48 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("retries when a stale lock report disappears before diagnostics", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const originalReadFile = fs.readFile.bind(fs);
+      let lockReads = 0;
+      vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+        if (path.basename(String(filePath)) === path.basename(lockPath)) {
+          lockReads += 1;
+          if (lockReads === 3) {
+            await fs.rm(String(filePath), { force: true });
+            await fs.rm(lockPath, { force: true });
+            throw Object.assign(new Error("lock disappeared"), { code: "ENOENT" });
+          }
+        }
+        return await originalReadFile(filePath, options as never);
+      }) as typeof fs.readFile);
+
+      try {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
+        await lock.release();
+        expect(lockReads).toBeGreaterThanOrEqual(3);
+        await expectPathMissing(lockPath);
+      } finally {
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -598,6 +640,14 @@ describe("acquireSessionWriteLock", () => {
       timeoutMs: Number.POSITIVE_INFINITY,
       staleMs: 30 * 60 * 1000,
     });
+  });
+
+  it("preserves one acquire timeout budget across retries", () => {
+    expect(testing.resolveRemainingAcquireTimeoutMs(500, 1_000, 1_125)).toBe(375);
+    expect(testing.resolveRemainingAcquireTimeoutMs(500, 1_000, 1_500)).toBe(0);
+    expect(testing.resolveRemainingAcquireTimeoutMs(Number.POSITIVE_INFINITY, 1_000, 9_000)).toBe(
+      Number.POSITIVE_INFINITY,
+    );
   });
 
   it("uses resolved stale policy when cleaning stale lock files", async () => {

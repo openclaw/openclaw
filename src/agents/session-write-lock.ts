@@ -626,6 +626,41 @@ function resolveOrphanLockPayloadGraceMs(timeoutMs: number): number {
   return ORPHAN_LOCK_PAYLOAD_GRACE_MS;
 }
 
+function resolveRemainingAcquireTimeoutMs(
+  timeoutMs: number,
+  startedAtMs: number,
+  nowMs: number,
+): number {
+  if (timeoutMs === Number.POSITIVE_INFINITY) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const elapsedMs = Math.max(0, nowMs - startedAtMs);
+  return Math.max(0, timeoutMs - elapsedMs);
+}
+
+async function lockFileExists(lockPath: string): Promise<boolean> {
+  try {
+    await fs.access(lockPath);
+    return true;
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return false;
+    }
+    return true;
+  }
+}
+
+async function shouldRetryStaleAcquireFailure(params: {
+  lockPath: string;
+  inspected: LockInspectionDetails;
+}): Promise<boolean> {
+  if (!(await lockFileExists(params.lockPath))) {
+    return true;
+  }
+  return !params.inspected.stale;
+}
+
 async function shouldRemoveLockDuringCleanup(
   lockPath: string,
   details: LockInspectionDetails,
@@ -845,12 +880,30 @@ export async function acquireSessionWriteLock(params: {
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
   const lockPath = `${normalizedSessionFile}.lock`;
   await fs.mkdir(sessionDir, { recursive: true });
+  const startedAtMs = Date.now();
 
   while (true) {
+    const remainingTimeoutMs = resolveRemainingAcquireTimeoutMs(timeoutMs, startedAtMs, Date.now());
+    if (remainingTimeoutMs <= 0) {
+      const payload = await readLockPayload(lockPath);
+      const nowMs = Date.now();
+      const heldByThisProcess = sessionLockHeldByThisProcess(normalizedSessionFile);
+      const inspected = inspectLockPayloadForSession({
+        payload,
+        staleMs,
+        nowMs,
+        heldByThisProcess,
+        reclaimLockWithoutStarttime: true,
+        readOwnerProcessArgs: readProcessArgsSync,
+        respectMaxHold: !heldByThisProcess,
+      });
+      const owner = describeLockOwnerForError({ payload, inspected });
+      throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath });
+    }
     try {
       const lock = await SESSION_LOCKS.acquire(sessionFile, {
         staleMs,
-        timeoutMs,
+        timeoutMs: remainingTimeoutMs,
         retry: { minTimeout: 50, maxTimeout: 1000, factor: 1 },
         staleRecovery: "remove-if-unchanged",
         allowReentrant,
@@ -928,6 +981,15 @@ export async function acquireSessionWriteLock(params: {
       });
       const owner = describeLockOwnerForError({ payload, inspected });
       if (isFileLockError(err, "file_lock_stale")) {
+        if (
+          resolveRemainingAcquireTimeoutMs(timeoutMs, startedAtMs, Date.now()) > 0 &&
+          (await shouldRetryStaleAcquireFailure({
+            lockPath: errorLockPath,
+            inspected,
+          }))
+        ) {
+          continue;
+        }
         throw new SessionWriteLockStaleError({
           owner,
           lockPath: errorLockPath,
@@ -945,6 +1007,7 @@ export const testing = {
   inspectLockPayloadForTest: inspectLockPayload,
   releaseAllLocksSync,
   runLockWatchdogCheck,
+  resolveRemainingAcquireTimeoutMs,
   setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
     resolveProcessStartTimeForLock = resolver ?? getProcessStartTime;
   },
