@@ -4658,6 +4658,7 @@ export async function runEmbeddedAttempt(
       const attemptTrajectoryTerminal = resolveAttemptTrajectoryTerminal({
         promptError,
         aborted,
+        externalAbort,
         timedOut,
         assistantTexts: terminalAssistantTexts,
         toolMetas: toolMetasNormalized,
