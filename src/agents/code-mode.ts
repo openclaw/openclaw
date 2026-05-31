@@ -19,6 +19,7 @@ import {
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
 import {
+  createCodeModeApiVirtualFiles,
   createCodeModeNamespaceRuntime,
   describeCodeModeNamespacesForPrompt,
   type CodeModeNamespaceRuntime,
@@ -835,7 +836,7 @@ function createCodeModeExecDescription(
 ): string {
   const namespacePrompt = describeCodeModeNamespacesForPrompt(ctx, catalog);
   return (
-    'Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. MCP tools are available only through the `MCP` namespace. Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
+    'Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. Read TypeScript-style declaration files with `API.list(prefix?)` and `API.read(path)`. MCP tools are available only through the `MCP` namespace. Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "")
   );
 }
@@ -858,10 +859,9 @@ async function runExec(params: {
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
   const catalog = runtime.all({ includeMcp: false });
-  const namespaceRuntime = await createCodeModeNamespaceRuntime(
-    params.ctx,
-    runtime.namespaceEntries(),
-  );
+  const namespaceCatalog = runtime.namespaceEntries();
+  const namespaceRuntime = await createCodeModeNamespaceRuntime(params.ctx, namespaceCatalog);
+  const apiFiles = createCodeModeApiVirtualFiles(namespaceCatalog);
   let source: string;
   try {
     source = await prepareSource({ code: params.code, language: params.language, config });
@@ -882,6 +882,7 @@ async function runExec(params: {
           source,
           config,
           catalog,
+          apiFiles,
           namespaces: namespaceRuntime.descriptors,
         },
         config.timeoutMs + 1000,
@@ -1123,7 +1124,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       code: Type.Optional(
         Type.String({
           description:
-            "JavaScript or TypeScript source to run. The `tools` object (search/describe/call), `ALL_TOOLS`, and registered namespace globals are available in scope; Node built-in modules are not.",
+            "JavaScript or TypeScript source to run. The `tools` object (search/describe/call), `ALL_TOOLS`, `API` virtual declaration files, and registered namespace globals are available in scope; Node built-in modules are not.",
         }),
       ),
       command: Type.Optional(

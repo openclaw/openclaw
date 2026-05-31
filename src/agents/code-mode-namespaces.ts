@@ -5,6 +5,7 @@ const NAMESPACE_PATH_KEY_SEPARATOR = "\u0000";
 const CODE_MODE_NAMESPACE_TOOL_CALL = Symbol.for("openclaw.codeMode.namespaceToolCall");
 const RESERVED_NAMESPACE_GLOBALS = new Set([
   "ALL_TOOLS",
+  "API",
   "Array",
   "Boolean",
   "Date",
@@ -552,6 +553,12 @@ type McpApiServerDoc = {
   tools: McpApiToolDoc[];
 };
 
+export type CodeModeApiVirtualFile = {
+  path: string;
+  description?: string;
+  content: string;
+};
+
 function buildMcpParamDocs(schema: unknown): McpApiParamDoc[] {
   const required = new Set(readRequiredKeys(schema));
   return orderedSchemaKeys(schema).map((key) => {
@@ -654,6 +661,13 @@ function renderMcpRootHeader(servers: readonly McpApiServerDoc[]): string {
   ].join("\n");
 }
 
+function renderMcpRootFile(servers: readonly McpApiServerDoc[]): string {
+  const references = servers.map(
+    (server) => `/// <reference path="./${server.identifier}.d.ts" />`,
+  );
+  return [...references, "", renderMcpRootHeader(servers)].join("\n");
+}
+
 function buildMcpApiResponse(params: {
   servers: readonly McpApiServerDoc[];
   server?: McpApiServerDoc;
@@ -738,9 +752,14 @@ function toolIdentifiersForServer(
   return created;
 }
 
-function createMcpNamespaceScope(
+type McpNamespaceModel = {
+  root: CodeModeNamespaceScope;
+  docs: McpApiServerDoc[];
+};
+
+function createMcpNamespaceModel(
   catalog: readonly CodeModeNamespaceCatalogEntry[],
-): CodeModeNamespaceScope | undefined {
+): McpNamespaceModel | undefined {
   const mcpEntries = catalog.filter((entry) => entry.source === "mcp" && entry.id && entry.mcp);
   if (mcpEntries.length === 0) {
     return undefined;
@@ -819,7 +838,37 @@ function createMcpNamespaceScope(
       buildMcpApiResponse({ servers: docs, server, args }),
     );
   }
-  return root;
+  return { root, docs };
+}
+
+function createMcpNamespaceScope(
+  catalog: readonly CodeModeNamespaceCatalogEntry[],
+): CodeModeNamespaceScope | undefined {
+  return createMcpNamespaceModel(catalog)?.root;
+}
+
+export function createCodeModeApiVirtualFiles(
+  catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
+): CodeModeApiVirtualFile[] {
+  const model = createMcpNamespaceModel(catalog);
+  if (!model) {
+    return [];
+  }
+  const files: CodeModeApiVirtualFile[] = [
+    {
+      path: "mcp/index.d.ts",
+      description: "Root MCP namespace declaration and server list.",
+      content: renderMcpRootFile(model.docs),
+    },
+  ];
+  for (const server of model.docs) {
+    files.push({
+      path: `mcp/${server.identifier}.d.ts`,
+      description: `MCP server declaration for ${server.serverName}.`,
+      content: renderMcpServerHeader(server, server.tools),
+    });
+  }
+  return files;
 }
 
 function createMcpNamespaceEntry(
@@ -866,7 +915,7 @@ function describeMcpNamespaceForPrompt(
   }
   return [
     "- MCP: MCP server tools grouped by server.",
-    `Use MCP.$api() or MCP.<server>.$api() to inspect TypeScript-style API headers; visible servers: ${servers.join(", ")}.`,
+    `Read API files such as mcp/index.d.ts and mcp/<server>.d.ts for TypeScript-style MCP headers; visible servers: ${servers.join(", ")}.`,
     "Call MCP tools as MCP.<server>.<tool>({ ...input }) with one object argument matching the header.",
   ];
 }
