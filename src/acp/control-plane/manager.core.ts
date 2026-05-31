@@ -12,26 +12,15 @@ import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
   AcpRuntimeHandle,
-  AcpRuntimeSessionMode,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
-import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
-import {
-  createRunningTaskRun,
-  completeTaskRunByRunId,
-  failTaskRunByRunId,
-  startTaskRunByRunId,
-} from "../../tasks/detached-task-runtime.js";
-import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
   formatAcpErrorChain,
@@ -40,12 +29,26 @@ import {
 } from "../runtime/errors.js";
 import type { AcpRuntimeErrorCode } from "../runtime/errors.js";
 import { clearAcpTurnActive, markAcpTurnActive } from "./active-turns.js";
+import {
+  appendBackgroundTaskProgressSummary,
+  createBackgroundTaskRecord,
+  markBackgroundTaskRunning,
+  markBackgroundTaskTerminal,
+  resolveBackgroundTaskContext,
+  resolveBackgroundTaskFailureStatus,
+  resolveBackgroundTaskTerminalResult,
+} from "./manager.background-task.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import {
   applyManagerRuntimeControls,
   resolveManagerRuntimeCapabilities,
 } from "./manager.runtime-controls.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
+import {
+  awaitTurnWithTimeout,
+  cleanupTimedOutTurn,
+  resolveTurnTimeoutMs,
+} from "./manager.turn-timeout.js";
 import {
   type AcpCloseSessionInput,
   type AcpCloseSessionResult,
@@ -92,82 +95,6 @@ import {
 import { SessionActorQueue } from "./session-actor-queue.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
-const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
-const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
-const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
-const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
-
-function summarizeBackgroundTaskText(text: string): string {
-  const normalized = normalizeText(text) ?? "ACP background task";
-  if (normalized.length <= ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH) {
-    return normalized;
-  }
-  return `${normalized.slice(0, ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH - 1)}…`;
-}
-
-function appendBackgroundTaskProgressSummary(current: string, chunk: string): string {
-  const normalizedChunk = chunk.replace(/\s+/g, " ");
-  if (!normalizedChunk) {
-    return current;
-  }
-  const chunkToAppend = current ? normalizedChunk : normalizedChunk.trimStart();
-  if (!chunkToAppend) {
-    return current;
-  }
-  const combined = `${current}${chunkToAppend}`.replace(/\s+/g, " ");
-  if (combined.length <= ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH) {
-    return combined;
-  }
-  return `${combined.slice(0, ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH - 1)}…`;
-}
-
-function resolveBackgroundTaskFailureStatus(error: AcpRuntimeError): "failed" | "timed_out" {
-  return /\btimed out\b/i.test(error.message) ? "timed_out" : "failed";
-}
-
-function resolveBackgroundTaskTerminalResult(progressSummary: string): {
-  terminalOutcome?: "blocked";
-  terminalSummary?: string;
-} {
-  const requiredCompletionResult = resolveRequiredCompletionTerminalResult(progressSummary);
-  if (requiredCompletionResult.terminalOutcome) {
-    return requiredCompletionResult;
-  }
-  const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return {};
-  }
-  const permissionDeniedMatch = normalized.match(
-    /\b(?:write failed:\s*)?permission denied(?: for (?<path>\S+))?\.?/i,
-  );
-  if (permissionDeniedMatch) {
-    const path = normalizeText(permissionDeniedMatch.groups?.path)?.replace(/[.,;:!?]+$/, "");
-    return {
-      terminalOutcome: "blocked",
-      terminalSummary: path ? `Permission denied for ${path}.` : "Permission denied.",
-    };
-  }
-  if (
-    /\bneed a writable session\b/i.test(normalized) ||
-    /\bfilesystem authorization\b/i.test(normalized) ||
-    /`?apply_patch`?/i.test(normalized)
-  ) {
-    return {
-      terminalOutcome: "blocked",
-      terminalSummary: "Writable session or apply_patch authorization required.",
-    };
-  }
-  return {};
-}
-
-type BackgroundTaskContext = {
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  childSessionKey: string;
-  runId: string;
-  label?: string;
-  task: string;
-};
 
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
@@ -745,7 +672,8 @@ export class AcpSessionManager {
         const actorKey = normalizeActorKey(sessionKey);
         const taskContext =
           input.mode === "prompt"
-            ? this.resolveBackgroundTaskContext({
+            ? resolveBackgroundTaskContext({
+                deps: this.deps,
                 cfg: input.cfg,
                 sessionKey,
                 requestId: input.requestId,
@@ -753,7 +681,7 @@ export class AcpSessionManager {
               })
             : null;
         if (taskContext) {
-          this.createBackgroundTaskRecord(taskContext, turnStartedAt);
+          createBackgroundTaskRecord(taskContext, turnStartedAt);
         }
         let taskProgressSummary = "";
         const initialResolution = this.resolveSession({
@@ -805,7 +733,7 @@ export class AcpSessionManager {
             errorCode: errorToRecord.code,
           });
           if (taskContext) {
-            this.markBackgroundTaskTerminal(taskContext.runId, {
+            markBackgroundTaskTerminal(taskContext.runId, {
               sessionKey,
               status: resolveBackgroundTaskFailureStatus(errorToRecord),
               endedAt: Date.now(),
@@ -942,7 +870,7 @@ export class AcpSessionManager {
                       );
                     }
                     if (taskContext) {
-                      this.markBackgroundTaskRunning(taskContext.runId, {
+                      markBackgroundTaskRunning(taskContext.runId, {
                         sessionKey,
                         lastEventAt: Date.now(),
                         progressSummary: taskProgressSummary || null,
@@ -951,12 +879,12 @@ export class AcpSessionManager {
                   },
                   onEvent: input.onEvent,
                 });
-                const turnTimeoutMs = this.resolveTurnTimeoutMs({
+                const turnTimeoutMs = resolveTurnTimeoutMs({
                   cfg: input.cfg,
                   meta,
                 });
                 const sessionMode = meta.mode;
-                const turnOutcome = await this.awaitTurnWithTimeout({
+                const turnOutcome = await awaitTurnWithTimeout({
                   sessionKey,
                   turnPromise,
                   timeoutMs: turnTimeoutMs + ACP_TURN_TIMEOUT_GRACE_MS,
@@ -967,10 +895,16 @@ export class AcpSessionManager {
                     if (!activeTurn) {
                       return;
                     }
-                    await this.cleanupTimedOutTurn({
+                    await cleanupTimedOutTurn({
                       sessionKey,
                       activeTurn,
                       mode: sessionMode,
+                      clearCachedRuntimeStateIfHandleMatches: (turn) => {
+                        this.clearCachedRuntimeStateIfHandleMatches({
+                          sessionKey,
+                          handle: turn.handle,
+                        });
+                      },
                     });
                   },
                 });
@@ -985,7 +919,7 @@ export class AcpSessionManager {
                 });
                 if (taskContext) {
                   const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
-                  this.markBackgroundTaskTerminal(taskContext.runId, {
+                  markBackgroundTaskTerminal(taskContext.runId, {
                     sessionKey,
                     status: "succeeded",
                     endedAt: Date.now(),
@@ -1090,200 +1024,6 @@ export class AcpSessionManager {
       },
       input.signal,
     );
-  }
-
-  private resolveTurnTimeoutMs(params: { cfg: OpenClawConfig; meta: SessionAcpMeta }): number {
-    const runtimeTimeoutSeconds = resolveRuntimeOptionsFromMeta(params.meta).timeoutSeconds;
-    if (
-      typeof runtimeTimeoutSeconds === "number" &&
-      Number.isFinite(runtimeTimeoutSeconds) &&
-      runtimeTimeoutSeconds > 0
-    ) {
-      return clampTimerTimeoutMs(Math.round(runtimeTimeoutSeconds * 1_000), 1_000) ?? 1_000;
-    }
-    return resolveAgentTimeoutMs({
-      cfg: params.cfg,
-      minMs: 1_000,
-    });
-  }
-
-  private async awaitTurnWithTimeout<T>(params: {
-    sessionKey: string;
-    turnPromise: Promise<T>;
-    timeoutMs: number;
-    timeoutLabelMs: number;
-    onTimeout: () => Promise<void>;
-  }): Promise<T> {
-    const observedTurnPromise: Promise<
-      | {
-          kind: "value";
-          value: T;
-        }
-      | {
-          kind: "error";
-          error: unknown;
-        }
-    > = params.turnPromise.then(
-      (value) => ({
-        kind: "value" as const,
-        value,
-      }),
-      (error) => ({
-        kind: "error" as const,
-        error,
-      }),
-    );
-
-    if (params.timeoutMs <= 0) {
-      const outcome = await observedTurnPromise;
-      if (outcome.kind === "error") {
-        throw outcome.error;
-      }
-      return outcome.value;
-    }
-
-    const timeoutMs = clampTimerTimeoutMs(params.timeoutMs, 1);
-    if (timeoutMs === undefined) {
-      const outcome = await observedTurnPromise;
-      if (outcome.kind === "error") {
-        throw outcome.error;
-      }
-      return outcome.value;
-    }
-
-    const timeoutToken = Symbol("acp-turn-timeout");
-    let timer: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
-      timer = setTimeout(() => resolve(timeoutToken), timeoutMs);
-      timer.unref?.();
-    });
-
-    try {
-      const outcome = await Promise.race([observedTurnPromise, timeoutPromise]);
-      if (outcome === timeoutToken) {
-        void observedTurnPromise.then((lateOutcome) => {
-          if (lateOutcome.kind === "error") {
-            logVerbose(
-              `acp-manager: detached late turn error after timeout for ${params.sessionKey}: ${String(lateOutcome.error)}`,
-            );
-          }
-        });
-        await params.onTimeout();
-        throw new AcpRuntimeError(
-          "ACP_TURN_FAILED",
-          `ACP turn timed out after ${Math.max(1, Math.round(params.timeoutLabelMs / 1_000))}s.`,
-        );
-      }
-      if (outcome.kind === "error") {
-        throw outcome.error;
-      }
-      return outcome.value;
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
-  }
-
-  private async cleanupTimedOutTurn(params: {
-    sessionKey: string;
-    activeTurn: ActiveTurnState;
-    mode: AcpRuntimeSessionMode;
-  }): Promise<void> {
-    params.activeTurn.abortController.abort();
-    if (!params.activeTurn.cancelPromise) {
-      params.activeTurn.cancelPromise = params.activeTurn.runtime.cancel({
-        handle: params.activeTurn.handle,
-        reason: ACP_TURN_TIMEOUT_REASON,
-      });
-    }
-    const cancelFinished = await this.awaitCleanupWithGrace({
-      sessionKey: params.sessionKey,
-      label: "cancel",
-      promise: params.activeTurn.cancelPromise,
-    });
-    if (params.mode !== "oneshot") {
-      return;
-    }
-    const closePromise = params.activeTurn.runtime.close({
-      handle: params.activeTurn.handle,
-      reason: ACP_TURN_TIMEOUT_REASON,
-    });
-    const closeFinished = await this.awaitCleanupWithGrace({
-      sessionKey: params.sessionKey,
-      label: "close",
-      promise: closePromise,
-    });
-    if (cancelFinished && closeFinished) {
-      this.clearCachedRuntimeStateIfHandleMatches({
-        sessionKey: params.sessionKey,
-        handle: params.activeTurn.handle,
-      });
-      return;
-    }
-    void Promise.allSettled([params.activeTurn.cancelPromise, closePromise]).then(() => {
-      this.clearCachedRuntimeStateIfHandleMatches({
-        sessionKey: params.sessionKey,
-        handle: params.activeTurn.handle,
-      });
-    });
-  }
-
-  private async awaitCleanupWithGrace(params: {
-    sessionKey: string;
-    label: "cancel" | "close";
-    promise: Promise<unknown>;
-  }): Promise<boolean> {
-    const observedCleanupPromise: Promise<
-      | {
-          kind: "done";
-        }
-      | {
-          kind: "error";
-          error: unknown;
-        }
-    > = params.promise.then(
-      () => ({
-        kind: "done" as const,
-      }),
-      (error) => ({
-        kind: "error" as const,
-        error,
-      }),
-    );
-    const timeoutToken = Symbol(`acp-timeout-${params.label}`);
-    let timer: NodeJS.Timeout | undefined;
-    const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
-      timer = setTimeout(() => resolve(timeoutToken), ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS);
-      timer.unref?.();
-    });
-
-    try {
-      const outcome = await Promise.race([observedCleanupPromise, timeoutPromise]);
-      if (outcome === timeoutToken) {
-        void observedCleanupPromise.then((lateOutcome) => {
-          if (lateOutcome.kind === "error") {
-            logVerbose(
-              `acp-manager: detached timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(lateOutcome.error)}`,
-            );
-          }
-        });
-        logVerbose(
-          `acp-manager: timed-out turn ${params.label} cleanup exceeded ${ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS}ms for ${params.sessionKey}`,
-        );
-        return false;
-      }
-      if (outcome.kind === "error") {
-        logVerbose(
-          `acp-manager: timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(outcome.error)}`,
-        );
-      }
-      return true;
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
   }
 
   async cancelSession(params: {
@@ -2276,119 +2016,5 @@ export class AcpSessionManager {
     const actualAcpxRecordId =
       normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId) ?? "";
     return actualAcpxRecordId === expectedAcpxRecordId;
-  }
-
-  private resolveBackgroundTaskContext(params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    requestId: string;
-    text: string;
-  }): BackgroundTaskContext | null {
-    const childEntry = this.deps.readSessionEntry({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-    })?.entry;
-    const requesterSessionKey =
-      normalizeText(childEntry?.spawnedBy) ?? normalizeText(childEntry?.parentSessionKey);
-    if (!requesterSessionKey) {
-      return null;
-    }
-    const parentEntry = this.deps.readSessionEntry({
-      cfg: params.cfg,
-      sessionKey: requesterSessionKey,
-    })?.entry;
-    return {
-      requesterSessionKey,
-      requesterOrigin: parentEntry?.deliveryContext ?? childEntry?.deliveryContext,
-      childSessionKey: params.sessionKey,
-      runId: params.requestId,
-      label: normalizeText(childEntry?.label),
-      task: summarizeBackgroundTaskText(params.text),
-    };
-  }
-
-  private createBackgroundTaskRecord(context: BackgroundTaskContext, startedAt: number): void {
-    try {
-      createRunningTaskRun({
-        runtime: "acp",
-        sourceId: context.runId,
-        ownerKey: context.requesterSessionKey,
-        scopeKind: "session",
-        requesterOrigin: context.requesterOrigin,
-        childSessionKey: context.childSessionKey,
-        runId: context.runId,
-        label: context.label,
-        task: context.task,
-        startedAt,
-      });
-    } catch (error) {
-      logVerbose(
-        `acp-manager: failed creating background task for ${context.runId}: ${String(error)}`,
-      );
-    }
-  }
-
-  private markBackgroundTaskRunning(
-    runId: string,
-    params: {
-      sessionKey?: string;
-      lastEventAt?: number;
-      progressSummary?: string | null;
-    },
-  ): void {
-    try {
-      startTaskRunByRunId({
-        runId,
-        runtime: "acp",
-        sessionKey: params.sessionKey,
-        lastEventAt: params.lastEventAt,
-        progressSummary: params.progressSummary,
-      });
-    } catch (error) {
-      logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
-    }
-  }
-
-  private markBackgroundTaskTerminal(
-    runId: string,
-    params: {
-      sessionKey?: string;
-      status: "succeeded" | "failed" | "timed_out";
-      endedAt: number;
-      lastEventAt?: number;
-      error?: string;
-      progressSummary?: string | null;
-      terminalSummary?: string | null;
-      terminalOutcome?: "succeeded" | "blocked" | null;
-    },
-  ): void {
-    try {
-      if (params.status === "succeeded") {
-        completeTaskRunByRunId({
-          runId,
-          runtime: "acp",
-          sessionKey: params.sessionKey,
-          endedAt: params.endedAt,
-          lastEventAt: params.lastEventAt,
-          progressSummary: params.progressSummary,
-          terminalSummary: params.terminalSummary,
-          terminalOutcome: params.terminalOutcome,
-        });
-        return;
-      }
-      failTaskRunByRunId({
-        runId,
-        runtime: "acp",
-        sessionKey: params.sessionKey,
-        status: params.status,
-        endedAt: params.endedAt,
-        lastEventAt: params.lastEventAt,
-        error: params.error,
-        progressSummary: params.progressSummary,
-        terminalSummary: params.terminalSummary,
-      });
-    } catch (error) {
-      logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
-    }
   }
 }
