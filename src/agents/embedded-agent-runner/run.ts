@@ -3316,7 +3316,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
-                modelId: activeErrorContext.model,
+                modelId,
               });
             }
             return {
@@ -3436,7 +3436,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
-                modelId: activeErrorContext.model,
+                modelId,
               });
             }
 
