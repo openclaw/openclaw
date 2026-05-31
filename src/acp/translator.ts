@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
-import path from "node:path";
 import type {
   Agent,
   AgentSideConnection,
@@ -31,7 +30,7 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
-import { readBool, readNonNegativeInteger, readNumber, readString } from "@openclaw/acp-core/meta";
+import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
 import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
@@ -86,17 +85,24 @@ import {
   type GatewaySessionPresentationRow,
   type SessionSnapshot,
 } from "./translator.presentation.js";
+import {
+  extractReplayChunks,
+  type GatewayChatContentBlock,
+  type GatewayTranscriptMessage,
+} from "./translator.replay.js";
+import {
+  ACP_LIST_SESSIONS_MAX_FETCH_LIMIT,
+  assertAbsoluteCwd,
+  decodeListSessionsCursor,
+  encodeListSessionsCursor,
+  resolveListSessionsPageSize,
+} from "./translator.session-list.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
-const ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE = 100;
-const ACP_LIST_SESSIONS_MAX_PAGE_SIZE = 100;
-const ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET = 10_000;
-const ACP_LIST_SESSIONS_MAX_FETCH_LIMIT =
-  ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET + ACP_LIST_SESSIONS_MAX_PAGE_SIZE + 1;
 
 let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
 let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
@@ -178,126 +184,8 @@ type AgentWaitResult = {
   error?: string;
 };
 
-type GatewayTranscriptMessage = {
-  role?: unknown;
-  content?: unknown;
-};
-
-type GatewayChatContentBlock = {
-  type?: string;
-  text?: string;
-  thinking?: string;
-};
-
-type ReplayChunk = {
-  sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk";
-  text: string;
-};
-
-type ListSessionsCursor = {
-  offset: number;
-  cwd?: string;
-};
-
-function encodeListSessionsCursor(cursor: ListSessionsCursor): string {
-  return Buffer.from(JSON.stringify({ v: 1, ...cursor }), "utf8").toString("base64url");
-}
-
-function decodeListSessionsCursor(value: string | null | undefined): ListSessionsCursor {
-  if (!value) {
-    return { offset: 0 };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-  } catch {
-    throw new Error("Invalid ACP session list cursor.");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Invalid ACP session list cursor.");
-  }
-  const record = parsed as Record<string, unknown>;
-  if (record.v !== 1) {
-    throw new Error("Unsupported ACP session list cursor.");
-  }
-  if (
-    typeof record.offset !== "number" ||
-    !Number.isInteger(record.offset) ||
-    record.offset < 0 ||
-    record.offset > ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET
-  ) {
-    throw new Error("Invalid ACP session list cursor offset.");
-  }
-  const cwd = normalizeOptionalString(record.cwd);
-  return {
-    offset: record.offset,
-    ...(cwd ? { cwd } : {}),
-  };
-}
-
-function assertAbsoluteCwd(cwd: string, method: string): void {
-  if (!path.isAbsolute(cwd)) {
-    throw new Error(`ACP ${method} requires an absolute cwd.`);
-  }
-}
-
-function resolveListSessionsPageSize(meta: Record<string, unknown> | null | undefined): number {
-  const requested = readNumber(meta, ["limit", "pageSize"]);
-  if (requested === undefined) {
-    return ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE;
-  }
-  return Math.min(ACP_LIST_SESSIONS_MAX_PAGE_SIZE, Math.max(1, Math.floor(requested)));
-}
-
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
-
-function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
-  const role = typeof message.role === "string" ? message.role : "";
-  if (role !== "user" && role !== "assistant") {
-    return [];
-  }
-  if (typeof message.content === "string") {
-    return message.content.length > 0
-      ? [
-          {
-            sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
-            text: message.content,
-          },
-        ]
-      : [];
-  }
-  if (!Array.isArray(message.content)) {
-    return [];
-  }
-
-  const replayChunks: ReplayChunk[] = [];
-  for (const block of message.content) {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
-      continue;
-    }
-    const typedBlock = block as GatewayChatContentBlock;
-    if (typedBlock.type === "text" && typeof typedBlock.text === "string" && typedBlock.text) {
-      replayChunks.push({
-        sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
-        text: typedBlock.text,
-      });
-      continue;
-    }
-    if (
-      role === "assistant" &&
-      typedBlock.type === "thinking" &&
-      typeof typedBlock.thinking === "string" &&
-      typedBlock.thinking
-    ) {
-      replayChunks.push({
-        sessionUpdate: "agent_thought_chunk",
-        text: typedBlock.thinking,
-      });
-    }
-  }
-  return replayChunks;
-}
 
 function buildSystemInputProvenance(originSessionId: string) {
   return {
