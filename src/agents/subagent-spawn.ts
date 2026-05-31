@@ -1485,13 +1485,16 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
-  const contextEnginePrepareResult = await prepareContextEngineSubagentSpawn({
-    cfg,
-    context: preparedSpawnContext,
-    requesterInternalKey,
-    childSessionKey,
-    runTimeoutSeconds,
-  });
+  const contextEnginePrepareResult =
+    params.lightContext && preparedSpawnContext.mode === "isolated"
+      ? ({ status: "ok", preparation: undefined } as const)
+      : await prepareContextEngineSubagentSpawn({
+          cfg,
+          context: preparedSpawnContext,
+          requesterInternalKey,
+          childSessionKey,
+          runTimeoutSeconds,
+        });
   if (contextEnginePrepareResult.status === "error") {
     await cleanupFailedSpawnBeforeAgentStart({
       childSessionKey,
