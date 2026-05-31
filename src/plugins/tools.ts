@@ -133,7 +133,7 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
           AnyAgentTool["execute"]
         >,
     );
-  const wrapped = new Proxy(tool, {
+  const wrapped = new Proxy<AnyAgentTool>(tool, {
     get(target, prop) {
       if (prop === "prepareArguments" && scopedPrepareArguments) {
         return scopedPrepareArguments;
@@ -162,7 +162,7 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
       }
       return Reflect.getOwnPropertyDescriptor(target, prop);
     },
-  }) as AnyAgentTool;
+  });
 
   copyPluginToolMeta(tool, wrapped);
   const nextScopedByKey = scopedByKey ?? new Map<string, AnyAgentTool>();
