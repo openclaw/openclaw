@@ -244,15 +244,14 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
   }
   const stopReason = result.stopReason?.trim();
   const timeoutPhase = result.timeoutPhase?.trim();
+  const livenessState = result.livenessState?.trim();
   const hasTerminalTimeoutMetadata =
     result.endedAt !== undefined ||
     message !== undefined ||
     result.aborted === true ||
-    result.livenessState !== undefined ||
+    (livenessState !== undefined && livenessState.length > 0) ||
     result.yielded === true ||
-    stopReason !== undefined ||
-    stopReason === "timeout" ||
-    stopReason === "timed_out" ||
+    (stopReason !== undefined && stopReason.length > 0) ||
     timeoutPhase === "preflight" ||
     timeoutPhase === "provider" ||
     timeoutPhase === "post_turn" ||
