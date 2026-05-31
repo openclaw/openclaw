@@ -66,6 +66,12 @@ const {
   resolveTelegramThreadSpec,
 } = await import("./bot/helpers.js");
 const { resolveTelegramGroupPromptSettings } = await import("./group-config-helpers.js");
+const {
+  beginTelegramReplyFence,
+  buildTelegramReplyFenceLaneKey,
+  endTelegramReplyFence,
+  resetTelegramReplyFenceForTests,
+} = await import("./telegram-reply-fence.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -234,6 +240,7 @@ describe("createTelegramBot", () => {
   });
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
+    resetTelegramReplyFenceForTests();
     clearAccountThrottlersForTest();
     throttlerSpy.mockReset();
     setTelegramBotRuntimeForTest(
@@ -385,7 +392,93 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    expect(
+      harness.sequentializeKey?.(makeForumGroupMessageCtx({ threadId: 99, text: "hello" })),
+    ).toBe("telegram:-1001234567890:topic:99");
+  });
+
+  it("lets active-run steering text bypass a busy Telegram topic lane", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    const events: string[] = [];
+    const topicGate = createDeferred();
+    const activeReplyFenceKey = "agent:main:telegram:group:-1001234567890:topic:99";
+
+    createTelegramBot({ token: "tok" });
+    const sequentializer = requireValue(
+      sequentializeSpy.mock.results[0]?.value as TelegramMiddleware | undefined,
+      "telegram sequentializer",
+    );
+
+    const busyMessage = makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }).message;
+    const steerMessage = makeForumGroupMessageCtx({ threadId: 99, text: "any update?" }).message;
+    const busyCtx = {
+      ...makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }),
+      message: { ...busyMessage, message_id: 101 },
+      update: { update_id: 101 },
+    };
+    const steerCtx = {
+      ...makeForumGroupMessageCtx({ threadId: 99, text: "any update?" }),
+      message: { ...steerMessage, message_id: 102 },
+      update: { update_id: 102 },
+    };
+    const mediaCtx = {
+      ...makeForumGroupMessageCtx({ threadId: 99, text: "caption" }),
+      message: {
+        ...steerMessage,
+        message_id: 103,
+        text: undefined,
+        caption: "caption",
+        photo: [{ file_id: "photo", file_unique_id: "photo-unique", width: 1, height: 1 }],
+      },
+      update: { update_id: 103 },
+    };
+    const scopedLaneKey = buildTelegramReplyFenceLaneKey({
+      accountId: "default",
+      sequentialKey: getTelegramSequentialKey(busyCtx),
+    });
+
+    const busyPromise = Promise.resolve(
+      sequentializer(busyCtx, async () => {
+        beginTelegramReplyFence({
+          key: activeReplyFenceKey,
+          supersede: true,
+          laneKey: scopedLaneKey,
+        });
+        events.push("busy:start");
+        await topicGate.promise;
+        events.push("busy:end");
+      }),
+    );
+
+    let steerPromise: Promise<void> | undefined;
+    try {
+      await flushTelegramTestMicrotasks();
+      expect(events).toEqual(["busy:start"]);
+      expect(harness.sequentializeKey?.(mediaCtx)).toBe(getTelegramSequentialKey(mediaCtx));
+
+      steerPromise = Promise.resolve(
+        sequentializer(steerCtx, async () => {
+          events.push("steer");
+        }),
+      );
+      await flushTelegramTestMicrotasks();
+
+      expect(events).toEqual(["busy:start", "steer"]);
+    } finally {
+      topicGate.resolve();
+      await Promise.all(steerPromise ? [busyPromise, steerPromise] : [busyPromise]);
+      endTelegramReplyFence(activeReplyFenceKey);
+    }
   });
 
   it("lets /status bypass a busy Telegram topic lane", async () => {

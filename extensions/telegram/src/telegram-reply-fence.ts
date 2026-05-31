@@ -164,6 +164,10 @@ export function supersedeTelegramReplyFenceLane(laneKey: string): boolean {
   return superseded;
 }
 
+export function hasActiveTelegramReplyFenceLane(laneKey: string): boolean {
+  return (telegramReplyFenceKeysByLane.get(laneKey)?.size ?? 0) > 0;
+}
+
 export function isTelegramReplyFenceSuperseded(params: {
   key: string;
   generation: number;
