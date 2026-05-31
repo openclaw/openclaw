@@ -85,6 +85,7 @@ export function createDraftStreamLoop(params: {
     timer = setTimeout(() => {
       startBackgroundFlush();
     }, delay);
+    timer.unref?.();
   };
 
   return {

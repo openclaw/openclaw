@@ -82,16 +82,16 @@ describe("exec foreground failures", () => {
     expect(supervisorMock.spawn).toHaveBeenCalledOnce();
     expect((supervisorMock.spawn.mock.calls[0]?.[0] as SpawnInput | undefined)?.timeoutMs).toBe(50);
     expect(result.content[0]?.type).toBe("text");
-    expect((result.content[0] as { text?: string }).text).toMatch(/timed out/i);
-    expect((result.content[0] as { text?: string }).text).toMatch(/re-run with a higher timeout/i);
     const details = result.details as {
       status?: string;
       exitCode?: number | null;
       aggregated?: string;
       durationMs?: number;
+      timedOut?: boolean;
     };
     expect(details.status).toBe("failed");
     expect(details.exitCode).toBeNull();
+    expect(details.timedOut).toBe(true);
     expect(details.aggregated).toBe("");
     expect(details.durationMs).toBeTypeOf("number");
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
