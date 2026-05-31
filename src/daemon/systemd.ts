@@ -1109,6 +1109,32 @@ export async function readSystemdServiceRuntime(
   try {
     await assertSystemdAvailable(env);
   } catch (err) {
+    // When running under a system-level systemd unit (not user-level),
+    // systemctl --user is unavailable but the gateway may be healthy.
+    // Probe system-level systemctl directly to check the unit status.
+    // See: https://github.com/openclaw/openclaw/issues/85094
+    const serviceName = resolveSystemdServiceName(env);
+    const unitName = `${serviceName}.service`;
+    const systemRes = await execFileUtf8("systemctl", [
+      "show",
+      unitName,
+      "--no-page",
+      "--property",
+      "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
+    ]).catch(() => null);
+    if (systemRes && systemRes.exitCode === 0) {
+      const parsed = parseSystemdShow(systemRes.stdout || "");
+      const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
+      const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+      return {
+        status,
+        state: parsed.activeState,
+        subState: parsed.subState,
+        pid: parsed.mainPid,
+        lastExitStatus: parsed.execMainStatus,
+        lastExitReason: parsed.execMainCode,
+      };
+    }
     return {
       status: "unknown",
       detail: formatErrorMessage(err),
