@@ -376,6 +376,7 @@ function summarizeServerCapabilities(capabilities: ServerCapabilities | undefine
       : undefined,
   };
 }
+// Safety net for hung MCP servers, not a tuning parameter.
 const DISPOSE_TIMEOUT_MS = 5_000;
 
 async function disposeSession(session: BundleMcpSession) {
@@ -385,7 +386,9 @@ async function disposeSession(session: BundleMcpSession) {
   await Promise.race([
     (async () => {
       if (session.transportType === "streamable-http") {
-        await (session.transport as StreamableHTTPClientTransport).terminateSession().catch(() => {});
+        await (session.transport as StreamableHTTPClientTransport)
+          .terminateSession()
+          .catch(() => {});
       }
       await session.transport.close().catch(() => {});
       await session.client.close().catch(() => {});
@@ -398,7 +401,9 @@ async function disposeSession(session: BundleMcpSession) {
       timer.unref?.();
     }),
   ]).finally(() => {
-    if (timer) { clearTimeout(timer); }
+    if (timer) {
+      clearTimeout(timer);
+    }
   });
   if (timedOut) {
     // Force-close transport and client so a hung terminateSession() DELETE

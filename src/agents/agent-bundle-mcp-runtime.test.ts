@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1838,6 +1839,99 @@ process.stdin.on("end", () => {
       expect(elapsed).toBeLessThan(8_000);
 
       await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  );
+
+  it(
+    "force-closes streamable-http transport when DELETE hangs past the timeout",
+    { timeout: 15_000 },
+    async () => {
+      const sessionId = "test-session-" + Date.now();
+      const server = http.createServer((req, res) => {
+        if (req.method === "GET") {
+          res.writeHead(405).end();
+          return;
+        }
+        if (req.method === "DELETE") {
+          // Never respond — simulates a hung terminateSession() DELETE.
+          return;
+        }
+        if (req.method !== "POST") {
+          res.writeHead(405).end();
+          return;
+        }
+        let body = "";
+        req.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        req.on("end", () => {
+          const message = JSON.parse(body);
+          res.setHeader("content-type", "application/json");
+          res.setHeader("mcp-session-id", sessionId);
+          if (message.method === "initialize") {
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "hanging-delete-server", version: "1.0.0" },
+                },
+              }),
+            );
+          } else if (message.method === "notifications/initialized") {
+            res.writeHead(202).end();
+          } else if (message.method === "tools/list") {
+            res.writeHead(200).end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: {
+                  tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
+                },
+              }),
+            );
+          } else {
+            res.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
+          }
+        });
+      });
+
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const addr = server.address() as { port: number };
+
+      try {
+        const runtime = await getOrCreateSessionMcpRuntime({
+          sessionId: "session-streamable-http-dispose",
+          sessionKey: "agent:test:session-streamable-http-dispose",
+          workspaceDir: "/workspace",
+          cfg: {
+            mcp: {
+              servers: {
+                hangingDelete: {
+                  url: `http://127.0.0.1:${addr.port}/mcp`,
+                  transport: "streamable-http",
+                },
+              },
+            },
+          },
+        });
+
+        const catalog = await runtime.getCatalog();
+        expect(catalog.tools).toHaveLength(1);
+
+        const start = Date.now();
+        await runtime.dispose();
+        const elapsed = Date.now() - start;
+
+        // The timeout fires at 5s and force-closes transport + client,
+        // so disposal must complete well before 8s even when the DELETE
+        // request never receives a response.
+        expect(elapsed).toBeLessThan(8_000);
+      } finally {
+        server.close();
+      }
     },
   );
 });
