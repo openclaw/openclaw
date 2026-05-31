@@ -215,6 +215,10 @@ describe("ci workflow guards", () => {
 
   it("keeps network CodeQL off unrelated source-only refactors", () => {
     const workflow = readCriticalQualityWorkflow();
+    const networkConfig = readFileSync(
+      ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
+      "utf8",
+    );
     const networkSelector = workflow.slice(
       workflow.indexOf(".github/codeql/codeql-network-runtime-boundary-critical-quality.yml"),
       workflow.indexOf("network-runtime-boundary:"),
@@ -233,5 +237,9 @@ describe("ci workflow guards", () => {
     expect(networkSelector).toContain("src/infra/net/*");
     expect(networkSelector).toContain("src/infra/ssh-tunnel.ts");
     expect(networkSelector).toContain("packages/net-policy/src/*");
+    expect(networkConfig).not.toContain("\n  - src\n");
+    expect(networkConfig).not.toContain("\n  - extensions\n");
+    expect(networkConfig).toContain("\n  - src/infra/net\n");
+    expect(networkConfig).toContain("\n  - packages/net-policy/src\n");
   });
 });
