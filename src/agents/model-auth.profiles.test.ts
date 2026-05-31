@@ -1660,6 +1660,40 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     });
   });
 
+  it("keeps env-first precedence ahead of per-entry profile references", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "sk-env-first" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openai",
+        credentialPrecedence: "env-first",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-completions" as const,
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "openai:key-b",
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "openai:key-b": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-profile-key",
+            },
+          },
+        },
+      });
+
+      expect(resolved.apiKey).toBe("sk-env-first");
+      expect(resolved.source).toContain("OPENAI_API_KEY");
+    });
+  });
+
   it("does not bleed auth.order canonical provider profiles into a per-entry provider", async () => {
     // auth.order.openrouter should not be selected when resolving openrouter-minimax
     // that has its own per-entry apiKey = "openrouter:key-b" profile reference.

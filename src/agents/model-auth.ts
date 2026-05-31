@@ -1030,6 +1030,29 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
+  if (params.credentialPrecedence === "env-first") {
+    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+    if (envResolved) {
+      const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
+        ? "oauth"
+        : "api-key";
+      if (
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: resolvedMode,
+        })
+      ) {
+        return resolveApiKeyForProvider({ ...params, credentialPrecedence: "profile-first" });
+      }
+      return {
+        apiKey: envResolved.apiKey,
+        source: envResolved.source,
+        mode: resolvedMode,
+      };
+    }
+  }
+
   // Resolve stored profile-id references before literal apiKey fallbacks.
   // Matched profile references are terminal so bad bindings cannot silently
   // fall through to a different credential or to the profile id as bearer text.
@@ -1086,29 +1109,6 @@ export async function resolveApiKeyForProvider(params: {
       };
     }
   }
-  if (params.credentialPrecedence === "env-first") {
-    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
-    if (envResolved) {
-      const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
-        ? "oauth"
-        : "api-key";
-      if (
-        !isAuthModeAllowedForModel({
-          provider,
-          modelApi: params.modelApi,
-          mode: resolvedMode,
-        })
-      ) {
-        return resolveApiKeyForProvider({ ...params, credentialPrecedence: "profile-first" });
-      }
-      return {
-        apiKey: envResolved.apiKey,
-        source: envResolved.source,
-        mode: resolvedMode,
-      };
-    }
-  }
-
   const providerConfig = resolveProviderConfig(cfg, provider);
   const configuredLocalKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (configuredLocalKey && isNonSecretApiKeyMarker(configuredLocalKey.apiKey)) {
