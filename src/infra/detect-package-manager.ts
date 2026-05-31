@@ -53,6 +53,18 @@ async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
 
 /** Detects the package manager that owns a package root from manifests, locks, and install layout. */
 export async function detectPackageManager(root: string): Promise<DetectedPackageManager | null> {
+  // 1. Lock files are the ground truth — they prove what package manager
+  //    was actually used to install.  Check them first so that an npm
+  //    global install of a pnpm-authored package (whose package.json
+  //    carries "packageManager": "pnpm") still reports "npm".
+  const entries = await fs.readdir(root).catch((): string[] => []);
+  for (const { files, manager } of LOCK_FILE_MANAGERS) {
+    if (files.some((f) => entries.includes(f))) {
+      return manager;
+    }
+  }
+
+  // 2. No lock file — fall back to the package.json declaration.
   const pm = (await readPackageManagerSpec(root))?.split("@")[0]?.trim();
   const files = await fs.readdir(root).catch((): string[] => []);
   const hasNpmShrinkwrap = files.includes("npm-shrinkwrap.json");
