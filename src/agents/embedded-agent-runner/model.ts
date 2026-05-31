@@ -1492,18 +1492,20 @@ export async function resolveModelAsync(
       runtimeHooks,
     });
   };
+  const providerRuntimeMetadataShouldWin = shouldCompareProviderRuntimeResolvedModel({
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
+    cfg,
+    agentDir: resolvedAgentDir,
+    workspaceDir,
+    runtimeHooks,
+  });
   let model =
-    explicitModel?.kind === "resolved" &&
-    !shouldCompareProviderRuntimeResolvedModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      agentDir: resolvedAgentDir,
-      workspaceDir,
-      runtimeHooks,
-    })
+    explicitModel?.kind === "resolved" && !providerRuntimeMetadataShouldWin
       ? explicitModel.model
-      : !explicitModel && options?.preferBundledStaticCatalogModel
+      : !explicitModel &&
+          options?.preferBundledStaticCatalogModel &&
+          !providerRuntimeMetadataShouldWin
         ? resolveStaticCatalogFallbackModel()
         : undefined;
   model ??= await resolveDynamicAttempt();
