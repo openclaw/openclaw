@@ -378,7 +378,7 @@ function readProviderCatalogOrder(
 ): { ok: true; order: ProviderCatalogOrder } | { ok: false; finding: HealthFinding } {
   let order: unknown;
   try {
-    order = (provider.catalog ?? provider.discovery ?? provider.staticCatalog)?.order ?? "late";
+    order = provider.staticCatalog?.order ?? "late";
   } catch (error) {
     return {
       ok: false,

@@ -811,6 +811,43 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 
+  it("validates static catalog rows when live catalog order access fails", async () => {
+    mocks.resolvePluginProviders.mockReturnValueOnce([
+      {
+        id: "mockplugin",
+        pluginId: "mockplugin",
+        label: "Mock",
+        auth: [],
+        get catalog() {
+          throw new Error("live catalog order failed");
+        },
+        staticCatalog: {
+          order: "simple",
+          run: async () => ({
+            providers: {
+              mockplugin: {
+                api: "openai-completions" as const,
+                baseUrl: "https://mockplugin.test/v1",
+                models: [{ id: " " }],
+              },
+            },
+          }),
+        },
+      },
+    ]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message: "Provider catalog mockplugin model row 0 has an invalid model id.",
+        requirement: "model id must be a non-empty trimmed string",
+      }),
+    );
+  });
+
   it("reports static catalog hook access failures without aborting doctor", async () => {
     mocks.resolvePluginProviders.mockReturnValueOnce([
       {
