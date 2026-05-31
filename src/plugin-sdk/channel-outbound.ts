@@ -77,7 +77,6 @@ export * from "../channels/streaming.js";
 export {
   classifyDurableSendRecoveryState,
   createChannelMessageAdapterFromOutbound,
-  createChannelIngressQueue,
   createDurableInboundReceiveJournal,
   createDurableInboundReceiveJournalFromQueue,
   createMessageReceiptFromOutboundResults,
