@@ -3,9 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  auditDrBackupDestinations,
+  classifyBackupDestinationPath,
   createKeyFile,
   decryptFile,
   encryptFile,
+  evaluateDestinationIndependence,
   hashFile,
   pruneEncryptedBackups,
   readEncryptedBackupHeader,
@@ -154,5 +157,94 @@ describe("openclaw-dr-backup encryption", () => {
     await expect(fs.access(path.join(root, "oldest.ocbackup.enc.json"))).rejects.toThrow();
     await expect(fs.access(path.join(root, "middle.ocbackup.enc"))).resolves.toBeUndefined();
     await expect(fs.access(path.join(root, "newest.ocbackup.enc"))).resolves.toBeUndefined();
+  });
+});
+
+describe("openclaw-dr-backup destination audit", () => {
+  it("classifies iCloud, CloudStorage providers, and external volumes independently", () => {
+    const homeDir = "/Users/example";
+
+    expect(
+      classifyBackupDestinationPath(
+        "/Users/example/Library/Mobile Documents/com~apple~CloudDocs/OpenClaw Backups",
+        { homeDir, platform: "darwin" },
+      ),
+    ).toMatchObject({
+      storageClass: "cloud-sync",
+      provider: "icloud",
+      independenceGroup: "cloud-sync:icloud",
+    });
+    expect(
+      classifyBackupDestinationPath(
+        "/Users/example/Library/CloudStorage/GoogleDrive-example/OpenClaw Backups",
+        { homeDir, platform: "darwin" },
+      ),
+    ).toMatchObject({
+      storageClass: "cloud-sync",
+      provider: "GoogleDrive-example",
+      independenceGroup: "cloud-sync:GoogleDrive-example",
+    });
+    expect(
+      classifyBackupDestinationPath("/Volumes/BackupDisk/OpenClaw Backups", {
+        homeDir,
+        platform: "darwin",
+      }),
+    ).toMatchObject({
+      storageClass: "external-volume",
+      provider: "BackupDisk",
+      independenceGroup: "volume:BackupDisk",
+    });
+  });
+
+  it("detects when a replica is independent from the primary destination", () => {
+    const homeDir = "/Users/example";
+    const result = evaluateDestinationIndependence(
+      "/Users/example/Library/Mobile Documents/com~apple~CloudDocs/OpenClaw Backups",
+      [
+        "/Users/example/Library/Mobile Documents/com~apple~CloudDocs/OpenClaw Backups Replica",
+        "/Users/example/Library/CloudStorage/Dropbox-Example/OpenClaw Backups",
+      ],
+      { homeDir, platform: "darwin" },
+    );
+
+    expect(result.hasReplica).toBe(true);
+    expect(result.hasIndependentReplica).toBe(true);
+    expect(result.independentReplicas).toHaveLength(1);
+    expect(result.independentReplicas[0]?.provider).toBe("Dropbox-Example");
+  });
+
+  it("audits encrypted backup replicas and fails when independent storage is required but absent", async () => {
+    const root = await makeTempDir("openclaw-dr-backup-audit-");
+    const primaryDir = path.join(root, "primary");
+    const replicaDir = path.join(root, "replica");
+    const fileName = "2026-05-31T00-00-00.000Z-openclaw-backup.tar.gz.abc.ocbackup.enc";
+
+    await fs.mkdir(primaryDir, { recursive: true });
+    await fs.mkdir(replicaDir, { recursive: true });
+    const encryptedBytes = "encrypted bytes\n";
+    for (const dir of [primaryDir, replicaDir]) {
+      const backupPath = path.join(dir, fileName);
+      await fs.writeFile(backupPath, encryptedBytes, "utf8");
+      await fs.writeFile(
+        `${backupPath}.json`,
+        `${JSON.stringify({
+          createdAt: "2026-05-31T00:00:00.000Z",
+          encryptedSha256: await hashFile(backupPath),
+        })}\n`,
+        "utf8",
+      );
+    }
+
+    const result = await auditDrBackupDestinations({
+      outputDir: primaryDir,
+      replicaDirs: [replicaDir],
+      requireIndependent: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.requirements.primaryHasBackup).toBe(true);
+    expect(result.requirements.replicaConfigured).toBe(true);
+    expect(result.requirements.independentReplicaMet).toBe(false);
+    expect(result.errors.map((entry) => entry.code)).toContain("independent_replica_missing");
   });
 });

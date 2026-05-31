@@ -21,6 +21,38 @@ openclaw backup create --only-config
 openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 ```
 
+## Encrypted disaster recovery helper
+
+For unattended disaster recovery, OpenClaw maintainers can wrap `openclaw backup`
+with the repository helper:
+
+```bash
+node scripts/openclaw-dr-backup.mjs init-key --key-file /secure/path/openclaw-dr-backup-key.json
+node scripts/openclaw-dr-backup.mjs run \
+  --output-dir /cloud/path/OpenClaw\ Backups \
+  --replica-dir /external/path/OpenClaw\ Backups \
+  --key-file /secure/path/openclaw-dr-backup-key.json \
+  --retention-count 14 \
+  --json
+node scripts/openclaw-dr-backup.mjs audit \
+  --output-dir /cloud/path/OpenClaw\ Backups \
+  --replica-dir /external/path/OpenClaw\ Backups \
+  --require-independent \
+  --json
+```
+
+The helper creates a verified backup with `--include-session-transcripts`,
+encrypts it with AES-256-GCM, decrypts it into a temporary restore drill,
+verifies the decrypted archive with `openclaw backup verify`, writes a JSON
+sidecar with hashes and coverage counts, copies the encrypted archive to any
+configured replica directories, and can prune old encrypted artifacts by count
+or age.
+
+Use `audit --require-independent` when a replica must live on a different cloud
+provider or external volume from the primary destination. The audit fails rather
+than marking DR healthy when the only replica is another directory on the same
+provider or local storage group.
+
 ## Notes
 
 - The archive includes a `manifest.json` file with the resolved source paths and archive layout.

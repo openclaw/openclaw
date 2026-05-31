@@ -17,7 +17,8 @@ function usage() {
   return [
     "Usage:",
     "  node scripts/openclaw-dr-backup.mjs init-key --key-file <path>",
-    "  node scripts/openclaw-dr-backup.mjs run --output-dir <dir> --key-file <path> [--repo-root <dir>] [--replica-dir <dir>...] [--retention-count <n>] [--retention-days <n>] [--include-workspace] [--json]",
+    "  node scripts/openclaw-dr-backup.mjs run --output-dir <dir> --key-file <path> [--repo-root <dir>] [--replica-dir <dir>...] [--retention-count <n>] [--retention-days <n>] [--include-workspace] [--require-independent] [--json]",
+    "  node scripts/openclaw-dr-backup.mjs audit --output-dir <dir> [--replica-dir <dir>...] [--require-independent] [--json]",
     "  node scripts/openclaw-dr-backup.mjs prune --output-dir <dir> [--replica-dir <dir>...] [--retention-count <n>] [--retention-days <n>] [--json]",
     "  node scripts/openclaw-dr-backup.mjs decrypt --input <file> --output <file> --key-file <path> [--json]",
   ].join("\n");
@@ -39,7 +40,12 @@ function parseOptions(argv) {
     if (!key) {
       throw new Error("Empty option name.");
     }
-    if (key === "json" || key === "include-workspace" || key === "init-key") {
+    if (
+      key === "json" ||
+      key === "include-workspace" ||
+      key === "init-key" ||
+      key === "require-independent"
+    ) {
       options[key] = true;
       continue;
     }
@@ -197,6 +203,97 @@ function isEncryptedBackupFileName(fileName) {
   return fileName.endsWith(".ocbackup.enc");
 }
 
+function isPathWithin(parentPath, childPath) {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return (
+    relative === "" ||
+    (Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function firstRelativeSegment(parentPath, childPath) {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return undefined;
+  }
+  return relative.split(path.sep).find(Boolean);
+}
+
+export function classifyBackupDestinationPath(destinationPath, options = {}) {
+  const resolvedPath = path.resolve(destinationPath);
+  const platform = options.platform ?? process.platform;
+  const homeDir = path.resolve(options.homeDir ?? os.homedir());
+
+  if (platform === "darwin") {
+    const iCloudRoot = path.join(homeDir, "Library", "Mobile Documents", "com~apple~CloudDocs");
+    if (isPathWithin(iCloudRoot, resolvedPath)) {
+      return {
+        path: resolvedPath,
+        storageClass: "cloud-sync",
+        provider: "icloud",
+        independenceGroup: "cloud-sync:icloud",
+      };
+    }
+
+    const cloudStorageRoot = path.join(homeDir, "Library", "CloudStorage");
+    if (isPathWithin(cloudStorageRoot, resolvedPath)) {
+      const provider = firstRelativeSegment(cloudStorageRoot, resolvedPath) ?? "unknown-provider";
+      return {
+        path: resolvedPath,
+        storageClass: "cloud-sync",
+        provider,
+        independenceGroup: `cloud-sync:${provider}`,
+      };
+    }
+
+    const volumesRoot = "/Volumes";
+    if (isPathWithin(volumesRoot, resolvedPath)) {
+      const volume = firstRelativeSegment(volumesRoot, resolvedPath) ?? "unknown-volume";
+      if (volume !== "Macintosh HD") {
+        return {
+          path: resolvedPath,
+          storageClass: "external-volume",
+          provider: volume,
+          independenceGroup: `volume:${volume}`,
+        };
+      }
+    }
+  }
+
+  if (isPathWithin(homeDir, resolvedPath)) {
+    return {
+      path: resolvedPath,
+      storageClass: "local",
+      provider: "local-home",
+      independenceGroup: `local-home:${homeDir}`,
+    };
+  }
+
+  return {
+    path: resolvedPath,
+    storageClass: "local",
+    provider: "local-filesystem",
+    independenceGroup: `local-filesystem:${path.parse(resolvedPath).root}`,
+  };
+}
+
+export function evaluateDestinationIndependence(outputDir, replicaDirs, options = {}) {
+  const primary = classifyBackupDestinationPath(outputDir, options);
+  const replicas = [...new Set(replicaDirs.map((entry) => path.resolve(entry)))]
+    .filter((entry) => path.resolve(entry) !== path.resolve(outputDir))
+    .map((entry) => classifyBackupDestinationPath(entry, options));
+  const independentReplicas = replicas.filter(
+    (entry) => entry.independenceGroup !== primary.independenceGroup,
+  );
+  return {
+    primary,
+    replicas,
+    hasReplica: replicas.length > 0,
+    hasIndependentReplica: independentReplicas.length > 0,
+    independentReplicas,
+  };
+}
+
 async function readEncryptedBackupEntries(outputDir) {
   let entries;
   try {
@@ -239,6 +336,180 @@ async function readEncryptedBackupEntries(outputDir) {
     }
     return right.fileName.localeCompare(left.fileName);
   });
+}
+
+async function readBackupSidecar(sidecarPath) {
+  try {
+    return JSON.parse(await fsp.readFile(sidecarPath, "utf8"));
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function summarizeBackupDestination(outputDir, role) {
+  const resolvedDir = path.resolve(outputDir);
+  const exists = await pathExists(resolvedDir);
+  const backups = await readEncryptedBackupEntries(resolvedDir);
+  const latest = backups[0];
+  const issues = [];
+  let latestCreatedAt;
+  let latestHashVerified = false;
+  let latestSidecarSha256;
+
+  if (!exists) {
+    issues.push({
+      severity: "error",
+      code: `${role}_destination_missing`,
+      message: `${role} DR backup destination does not exist.`,
+    });
+  }
+
+  if (!latest) {
+    issues.push({
+      severity: "error",
+      code: `${role}_backup_missing`,
+      message: `${role} DR backup destination has no encrypted backups.`,
+    });
+  } else {
+    const sidecar = await readBackupSidecar(latest.sidecarPath);
+    if (sidecar?.error) {
+      issues.push({
+        severity: "error",
+        code: `${role}_sidecar_unreadable`,
+        message: `${role} DR backup sidecar is missing or unreadable.`,
+      });
+    } else {
+      latestCreatedAt = sidecar.createdAt;
+      if (typeof sidecar.encryptedSha256 === "string") {
+        latestSidecarSha256 = sidecar.encryptedSha256;
+        latestHashVerified = (await hashFile(latest.filePath)) === sidecar.encryptedSha256;
+        if (!latestHashVerified) {
+          issues.push({
+            severity: "error",
+            code: `${role}_hash_mismatch`,
+            message: `${role} DR backup encrypted hash does not match its sidecar.`,
+          });
+        }
+      } else {
+        issues.push({
+          severity: "error",
+          code: `${role}_hash_missing`,
+          message: `${role} DR backup sidecar has no encrypted hash.`,
+        });
+      }
+    }
+  }
+
+  return {
+    role,
+    outputDir: resolvedDir,
+    classification: classifyBackupDestinationPath(resolvedDir),
+    exists,
+    backupCount: backups.length,
+    latestEncryptedArchive: latest?.fileName,
+    latestCreatedAt,
+    latestHashVerified,
+    latestSidecarSha256,
+    issues,
+  };
+}
+
+export async function auditDrBackupDestinations(params) {
+  const outputDir = path.resolve(params.outputDir);
+  const replicaDirs = [
+    ...new Set((params.replicaDirs ?? []).map((entry) => path.resolve(entry))),
+  ].filter((entry) => entry !== outputDir);
+  const primary = await summarizeBackupDestination(outputDir, "primary");
+  const replicas = [];
+  for (const replicaDir of replicaDirs) {
+    replicas.push(await summarizeBackupDestination(replicaDir, "replica"));
+  }
+
+  const issues = [...primary.issues, ...replicas.flatMap((entry) => entry.issues)];
+  if (replicas.length === 0) {
+    issues.push({
+      severity: params.requireIndependent ? "error" : "warning",
+      code: "replica_not_configured",
+      message: "No DR backup replica destination is configured.",
+    });
+  }
+
+  for (const replica of replicas) {
+    if (
+      primary.latestEncryptedArchive &&
+      replica.latestEncryptedArchive &&
+      replica.latestEncryptedArchive !== primary.latestEncryptedArchive
+    ) {
+      issues.push({
+        severity: "error",
+        code: "replica_latest_backup_mismatch",
+        message: "A DR backup replica does not contain the latest primary encrypted backup.",
+        primaryLatest: primary.latestEncryptedArchive,
+        replicaLatest: replica.latestEncryptedArchive,
+        replicaDir: replica.outputDir,
+      });
+    }
+    if (
+      primary.latestSidecarSha256 &&
+      replica.latestSidecarSha256 &&
+      replica.latestSidecarSha256 !== primary.latestSidecarSha256
+    ) {
+      issues.push({
+        severity: "error",
+        code: "replica_latest_hash_mismatch",
+        message: "A DR backup replica latest encrypted hash does not match the primary.",
+        primaryLatest: primary.latestEncryptedArchive,
+        replicaLatest: replica.latestEncryptedArchive,
+        replicaDir: replica.outputDir,
+      });
+    }
+  }
+
+  const populatedReplicas = replicas.filter((entry) => entry.backupCount > 0);
+  const independentReplicas = populatedReplicas.filter(
+    (entry) => entry.classification.independenceGroup !== primary.classification.independenceGroup,
+  );
+  if (params.requireIndependent && independentReplicas.length === 0) {
+    issues.push({
+      severity: "error",
+      code: "independent_replica_missing",
+      message:
+        "No populated DR backup replica is on an independent storage provider or external volume.",
+      primaryGroup: primary.classification.independenceGroup,
+      replicaGroups: replicas.map((entry) => entry.classification.independenceGroup),
+    });
+  } else if (
+    !params.requireIndependent &&
+    replicas.length > 0 &&
+    independentReplicas.length === 0
+  ) {
+    issues.push({
+      severity: "warning",
+      code: "independent_replica_missing",
+      message:
+        "Configured DR backup replicas are on the same storage group as the primary destination.",
+      primaryGroup: primary.classification.independenceGroup,
+      replicaGroups: replicas.map((entry) => entry.classification.independenceGroup),
+    });
+  }
+
+  const errors = issues.filter((entry) => entry.severity === "error");
+  const warnings = issues.filter((entry) => entry.severity !== "error");
+  return {
+    ok: errors.length === 0,
+    checkedAt: new Date().toISOString(),
+    requirements: {
+      primaryHasBackup: primary.backupCount > 0,
+      replicaConfigured: replicas.length > 0,
+      independentReplicaRequired: Boolean(params.requireIndependent),
+      independentReplicaMet: independentReplicas.length > 0,
+    },
+    destinations: [primary, ...replicas],
+    errors,
+    warnings,
+  };
 }
 
 export async function pruneEncryptedBackups(params) {
@@ -509,6 +780,12 @@ export async function runDrBackup(params) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir = path.resolve(params.outputDir);
   const replicaDirs = (params.replicaDirs ?? []).map((entry) => path.resolve(entry));
+  const destinationIndependence = evaluateDestinationIndependence(outputDir, replicaDirs);
+  if (params.requireIndependentReplica && !destinationIndependence.hasIndependentReplica) {
+    throw new Error(
+      "At least one --replica-dir must be on an independent storage provider or external volume when --require-independent is set.",
+    );
+  }
   const key = await readKeyFile(path.resolve(params.keyFile));
   await fsp.mkdir(outputDir, { recursive: true });
   const tmpRoot = await fsp.mkdtemp(
@@ -586,6 +863,7 @@ export async function runDrBackup(params) {
         sessionTranscriptSnapshotCount: drillResult.sessionTranscriptSnapshotCount ?? 0,
         entryCount: drillResult.entryCount,
       },
+      destinationIndependence,
     };
     await fsp.writeFile(sidecarPath, `${JSON.stringify(summary, null, 2)}\n`, {
       flag: "wx",
@@ -670,6 +948,7 @@ async function main(argv = process.argv.slice(2)) {
       includeWorkspace: Boolean(options["include-workspace"]),
       retentionCount: readPositiveIntegerOption(options, "retention-count"),
       retentionDays: readPositiveIntegerOption(options, "retention-days"),
+      requireIndependentReplica: Boolean(options["require-independent"]),
       tmpDir:
         typeof options["tmp-dir"] === "string" ? resolvePathOption(options["tmp-dir"]) : undefined,
     });
@@ -680,6 +959,35 @@ async function main(argv = process.argv.slice(2)) {
       console.log(
         `Restore drill verified ${result.restoreDrill.sessionTranscriptSnapshotCount} session transcript snapshots.`,
       );
+    }
+    return;
+  }
+  if (command === "audit") {
+    const result = await auditDrBackupDestinations({
+      outputDir: resolvePathOption(requireStringOption(options, "output-dir")),
+      replicaDirs: readStringListOption(options, "replica-dir").map((entry) =>
+        resolvePathOption(entry),
+      ),
+      requireIndependent: Boolean(options["require-independent"]),
+    });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      const status = result.ok ? "OK" : "FAILED";
+      console.log(`OpenClaw DR backup audit: ${status}`);
+      console.log(
+        `Primary backups: ${result.destinations[0]?.backupCount ?? 0}; replicas: ${
+          result.destinations.length - 1
+        }; independent replica: ${
+          result.requirements.independentReplicaMet ? "present" : "missing"
+        }.`,
+      );
+      for (const issue of [...result.errors, ...result.warnings]) {
+        console.log(`${issue.severity.toUpperCase()}: ${issue.code}: ${issue.message}`);
+      }
+    }
+    if (!result.ok) {
+      process.exitCode = 1;
     }
     return;
   }
