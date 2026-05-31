@@ -102,11 +102,11 @@ vi.mock("../tool-display.ts", () => ({
   formatToolDetail: () => undefined,
   resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
     name,
-    label: name,
+    label: name === "skill_workshop" ? "Skill Workshop" : name,
     icon: "zap",
     detail:
-      args && typeof args === "object" && "detail" in args
-        ? String((args as { detail: unknown }).detail)
+      args && typeof args === "object" && ("detail" in args || "action" in args)
+        ? String((args as { detail?: unknown; action?: unknown }).detail ?? args.action)
         : undefined,
   }),
 }));
@@ -1024,6 +1024,41 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       "with Example Deck",
     );
+  });
+
+  it("keeps live tool stream display labels primary for action-based tool calls", () => {
+    const container = document.createElement("div");
+    const message = {
+      id: "assistant-live-tool-stream",
+      role: "assistant",
+      toolCallId: "call-live-tool-stream",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-live-tool-stream",
+          name: "skill_workshop",
+          arguments: { action: "create" },
+        },
+        {
+          type: "toolresult",
+          id: "call-live-tool-stream",
+          name: "skill_workshop",
+          text: "Created pending skill proposal.",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => false,
+    });
+
+    const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Skill Workshop",
+    );
+    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("create");
+    expect(summary.textContent).not.toContain("output");
   });
 
   it("renders expanded tool output rows and their json content", () => {
