@@ -1369,9 +1369,14 @@ export function isRawAssistantErrorPassthrough(params: {
   }
   const parsedMessage = parseApiErrorInfo(rawError)?.message?.trim();
   const leadingStatusRest = extractLeadingHttpStatus(rawError)?.rest?.trim();
+  const hasRawDerivedProviderPrefix =
+    friendlyError.startsWith("LLM request rejected:") ||
+    friendlyError.startsWith("LLM error") ||
+    friendlyError.startsWith("HTTP ");
   return (
     friendlyError === rawError ||
     (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
+    Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
     Boolean(parsedMessage && friendlyError.includes(parsedMessage)) ||
     Boolean(leadingStatusRest && friendlyError.includes(leadingStatusRest))
   );

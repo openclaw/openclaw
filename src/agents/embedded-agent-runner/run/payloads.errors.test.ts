@@ -191,6 +191,26 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "LLM request rejected");
   });
 
+  it("suppresses escaped structured provider error messages in user-facing reply payloads", () => {
+    const rawError =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET\\nCANARY_69737"}}';
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "SECRET");
+    expectNoPayloadTextContaining(payloads, "CANARY_69737");
+    expectNoPayloadTextContaining(payloads, "LLM request rejected");
+  });
+
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({

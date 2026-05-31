@@ -5,6 +5,7 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
@@ -115,6 +116,13 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("uses generic user-facing copy for escaped structured provider messages", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
+    expect(formatUserFacingAssistantErrorText(msg)).toBe("LLM request failed.");
   });
   it("sanitizes Codex error-prefixed JSON payloads", () => {
     const msg = makeAssistantError(
