@@ -1,14 +1,10 @@
+import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type ExecFileCallback = (
-  error: ExecFileException | null,
-  stdout: string,
-  stderr: string,
-) => void;
+type ExecFileCallback = (error: ExecFileException | null, stdout: string, stderr: string) => void;
 type ExecFileMock = (
   command: string,
   args: string[],
@@ -18,6 +14,7 @@ type ExecFileMock = (
 
 const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
 const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
+const isWSL2SyncMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
@@ -54,6 +51,10 @@ vi.mock("./exec-file.js", () => {
     },
   };
 });
+
+vi.mock("../infra/wsl.js", () => ({
+  isWSL2Sync: isWSL2SyncMock,
+}));
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
@@ -183,6 +184,8 @@ const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
 beforeEach(() => {
   existsSyncMock.mockReset();
   existsSyncMock.mockReturnValue(false);
+  isWSL2SyncMock.mockReset();
+  isWSL2SyncMock.mockReturnValue(false);
 });
 
 describe("systemd availability", () => {
@@ -1680,6 +1683,60 @@ describe("systemd service control", () => {
         env: { USER: "", LOGNAME: "" },
       }),
     ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus");
+  });
+
+  it("does not report missing systemctl when WSL user D-Bus socket is missing", async () => {
+    vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
+      throw new Error("no user info");
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      cb(
+        createExecFileError("Failed to connect to bus: No such file or directory", {
+          stderr: "Failed to connect to bus: No such file or directory",
+        }),
+        "",
+        "",
+      );
+    });
+
+    await expect(
+      stopSystemdService({
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        env: { USER: "", LOGNAME: "" },
+      }),
+    ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus");
+  });
+
+  it("emits WSL-specific D-Bus guidance when the user bus socket is missing", async () => {
+    isWSL2SyncMock.mockReturnValue(true);
+    vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
+      throw new Error("no user info");
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      cb(
+        createExecFileError("Failed to connect to bus: No such file or directory", {
+          stderr: "Failed to connect to bus: No such file or directory",
+        }),
+        "",
+        "",
+      );
+    });
+
+    const thrown = await stopSystemdService({
+      stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      env: { USER: "", LOGNAME: "" },
+    }).then(
+      () => {
+        throw new Error("expected stopSystemdService to reject");
+      },
+      (err: unknown) => err,
+    );
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(message).toContain("systemd user D-Bus unavailable on WSL2");
+    expect(message).toContain("Failed to connect to bus: No such file or directory");
+    expect(message).toContain("/etc/wsl.conf");
+    expect(message).toContain("wsl --shutdown");
+    expect(message).not.toContain("systemctl not available");
   });
 
   it("targets the sudo caller's user scope when SUDO_USER is set", async () => {

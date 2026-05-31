@@ -37,11 +37,14 @@ export function classifySystemdUnavailableDetail(detail?: string): SystemdUnavai
   if (!normalized) {
     return null;
   }
-  if (isSystemctlMissingDetail(normalized)) {
-    return "missing_systemctl";
-  }
+  // WSL2 reports a missing user D-Bus socket as "No such file or directory",
+  // which overlaps the broad missing-systemctl matcher. Prefer the bus-specific
+  // classifier so users get the repair hint for the actual broken subsystem.
   if (isSystemdUserBusUnavailableDetail(normalized)) {
     return "user_bus_unavailable";
+  }
+  if (isSystemctlMissingDetail(normalized)) {
+    return "missing_systemctl";
   }
   if (
     normalized.includes("systemctl --user unavailable") ||

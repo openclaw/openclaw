@@ -27,6 +27,9 @@ describe("classifySystemdUnavailableDetail", () => {
         "systemctl --user unavailable: Failed to connect to bus: Permission denied",
       ),
     ).toBe("user_bus_unavailable");
+    expect(
+      classifySystemdUnavailableDetail("Failed to connect to bus: No such file or directory"),
+    ).toBe("user_bus_unavailable");
   });
 
   it("classifies generic systemd-unavailable details", () => {
