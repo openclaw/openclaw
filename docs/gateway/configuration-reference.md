@@ -583,7 +583,8 @@ See [Inferred commitments](/concepts/commitments).
 - `tailscale.serviceName`: optional Tailscale Service name for Serve mode, such
   as `svc:openclaw`. When set, OpenClaw passes it to `tailscale serve
 --service` so the Control UI can be exposed through a named Service instead
-  of the device hostname.
+  of the device hostname. The value must use Tailscale's `svc:<dns-label>`
+  Service name format; startup reports the derived Service URL.
 - `tailscale.preserveFunnel`: when `true` and `tailscale.mode = "serve"`, OpenClaw
   checks `tailscale funnel status` before re-applying Serve at startup and skips
   it if an externally configured Funnel route already covers the gateway port.

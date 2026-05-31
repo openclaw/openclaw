@@ -8,6 +8,12 @@ import {
   hasTailscaleFunnelRouteForPort,
 } from "../infra/tailscale.js";
 
+function serviceHostnameFromTailnetHost(serviceName: string, tailnetHost: string): string {
+  const bareServiceName = serviceName.replace(/^svc:/, "");
+  const tailnetSuffix = tailnetHost.split(".").slice(1).join(".");
+  return tailnetSuffix ? `${bareServiceName}.${tailnetSuffix}` : bareServiceName;
+}
+
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
   resetOnExit?: boolean;
@@ -51,8 +57,9 @@ export async function startGatewayTailscaleExposure(params: {
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
       const serviceLabel = serviceName ? ` for ${serviceName}` : "";
+      const publicHost = serviceName ? serviceHostnameFromTailnetHost(serviceName, host) : host;
       params.logTailscale.info(
-        `${params.tailscaleMode} enabled${serviceLabel}: https://${host}${uiPath} (WS via wss://${host})`,
+        `${params.tailscaleMode} enabled${serviceLabel}: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
       );
     } else {
       params.logTailscale.info(`${params.tailscaleMode} enabled`);

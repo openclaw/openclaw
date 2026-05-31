@@ -105,6 +105,7 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
 
   it("passes serviceName through to Tailscale Serve setup and cleanup", async () => {
     const logTailscale = createLogger();
+    mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
 
     const cleanup = await startGatewayTailscaleExposure({
       tailscaleMode: "serve",
@@ -115,6 +116,9 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     });
 
     expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789, undefined, "svc:openclaw");
+    expect(logTailscale.info).toHaveBeenCalledWith(
+      "serve enabled for svc:openclaw: https://openclaw.tailnet.ts.net/ (WS via wss://openclaw.tailnet.ts.net)",
+    );
 
     await cleanup?.();
 

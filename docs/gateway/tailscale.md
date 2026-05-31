@@ -79,6 +79,9 @@ device hostname, set `gateway.tailscale.serviceName` to the Service name:
 }
 ```
 
+With the example above, startup reports the Service URL as
+`https://openclaw.<tailnet-name>.ts.net/` instead of the device hostname.
+
 ### Tailnet-only (bind to Tailnet IP)
 
 Use this when you want the Gateway to listen directly on the Tailnet IP (no Serve/Funnel).
@@ -127,8 +130,8 @@ openclaw gateway --tailscale funnel --auth password
 - Tailscale Serve/Funnel requires the `tailscale` CLI to be installed and logged in.
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password` to avoid public exposure.
 - `gateway.tailscale.serviceName` applies only to Serve mode and is passed to
-  `tailscale serve --service=<name>`. Use the Service name format expected by
-  Tailscale, for example `svc:openclaw`.
+  `tailscale serve --service=<name>`. The value must use Tailscale's
+  `svc:<dns-label>` Service name format, for example `svc:openclaw`.
 - Set `gateway.tailscale.resetOnExit` if you want OpenClaw to undo `tailscale serve`
   or `tailscale funnel` configuration on shutdown.
 - Set `gateway.tailscale.preserveFunnel: true` to keep an externally configured
