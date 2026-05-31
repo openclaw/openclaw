@@ -8,6 +8,7 @@ import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
@@ -146,6 +147,37 @@ function splitNormalizedModelRef(model: string | undefined):
   };
 }
 
+function resolveDefaultModelMigrationMatch(params: {
+  previousPrimary: string | undefined;
+  selectedModel: string;
+  defaultModelMigration: ProviderAuthDefaultModelMigration | undefined;
+}):
+  | {
+      previousPrimary: string;
+      selectedModel: string;
+    }
+  | undefined {
+  const migration = params.defaultModelMigration;
+  if (!migration || !params.previousPrimary) {
+    return undefined;
+  }
+  const previous = splitNormalizedModelRef(params.previousPrimary);
+  const selected = splitNormalizedModelRef(params.selectedModel);
+  const shouldMatchModelId = migration.whenModelIdMatchesDefault !== false;
+  if (
+    !previous ||
+    !selected ||
+    !migration.fromProviderIds.includes(previous.provider) ||
+    (shouldMatchModelId && previous.modelId !== selected.modelId)
+  ) {
+    return undefined;
+  }
+  return {
+    previousPrimary: normalizeAgentModelRefForConfig(params.previousPrimary),
+    selectedModel: normalizeAgentModelRefForConfig(params.selectedModel),
+  };
+}
+
 function shouldPreserveExistingDefaultPrimary(params: {
   previousPrimary: string | undefined;
   selectedModel: string;
@@ -158,20 +190,82 @@ function shouldPreserveExistingDefaultPrimary(params: {
   if (params.previousPrimary === params.selectedModel) {
     return true;
   }
-  const previous = splitNormalizedModelRef(params.previousPrimary);
-  const selected = splitNormalizedModelRef(params.selectedModel);
-  const migration = params.defaultModelMigration;
-  const shouldMatchModelId = migration?.whenModelIdMatchesDefault !== false;
-  if (
-    migration &&
-    previous &&
-    selected &&
-    migration.fromProviderIds.includes(previous.provider) &&
-    (!shouldMatchModelId || previous.modelId === selected.modelId)
-  ) {
+  if (resolveDefaultModelMigrationMatch(params)) {
     return false;
   }
   return true;
+}
+
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeModelMetadataValue(existing: unknown, incoming: unknown): unknown {
+  if (!isConfigRecord(existing) || !isConfigRecord(incoming)) {
+    return incoming;
+  }
+  return { ...existing, ...incoming };
+}
+
+function mergeLegacyDefaultModelEntryMetadata(params: {
+  canonicalEntry: AgentModelEntryConfig | undefined;
+  legacyEntry: AgentModelEntryConfig;
+}): AgentModelEntryConfig {
+  const next: AgentModelEntryConfig = { ...(params.canonicalEntry ?? {}) };
+  if (params.legacyEntry.params !== undefined) {
+    next.params = mergeModelMetadataValue(next.params, params.legacyEntry.params) as
+      | AgentModelEntryConfig["params"]
+      | undefined;
+  }
+  if (params.legacyEntry.agentRuntime !== undefined) {
+    next.agentRuntime = mergeModelMetadataValue(
+      next.agentRuntime,
+      params.legacyEntry.agentRuntime,
+    ) as AgentModelEntryConfig["agentRuntime"];
+  }
+  if (params.legacyEntry.streaming !== undefined) {
+    next.streaming = params.legacyEntry.streaming;
+  }
+  return next;
+}
+
+function migrateLegacyDefaultModelEntryMetadata(params: {
+  config: OpenClawConfig;
+  configBeforeProviderAuth: OpenClawConfig;
+  migrationMatch:
+    | {
+        previousPrimary: string;
+        selectedModel: string;
+      }
+    | undefined;
+}): OpenClawConfig {
+  if (!params.migrationMatch) {
+    return params.config;
+  }
+  const legacyEntry =
+    params.configBeforeProviderAuth.agents?.defaults?.models?.[
+      params.migrationMatch.previousPrimary
+    ];
+  if (!legacyEntry) {
+    return params.config;
+  }
+  const models = params.config.agents?.defaults?.models ?? {};
+  return {
+    ...params.config,
+    agents: {
+      ...params.config.agents,
+      defaults: {
+        ...params.config.agents?.defaults,
+        models: {
+          ...models,
+          [params.migrationMatch.selectedModel]: mergeLegacyDefaultModelEntryMetadata({
+            canonicalEntry: models[params.migrationMatch.selectedModel],
+            legacyEntry,
+          }),
+        },
+      },
+    },
+  };
 }
 
 async function noteDefaultModelResult(params: {
@@ -217,6 +311,11 @@ async function applyDefaultModelFromAuthChoice(params: {
 }): Promise<OpenClawConfig> {
   const defaultModelBaseConfig = params.configBeforeProviderAuth ?? params.config;
   const previousPrimary = resolveConfiguredDefaultModelPrimary(defaultModelBaseConfig);
+  const migrationMatch = resolveDefaultModelMigrationMatch({
+    previousPrimary,
+    selectedModel: params.selectedModel,
+    defaultModelMigration: params.defaultModelMigration,
+  });
   const preserveExistingPrimary = shouldPreserveExistingDefaultPrimary({
     previousPrimary,
     selectedModel: params.selectedModel,
@@ -229,7 +328,11 @@ async function applyDefaultModelFromAuthChoice(params: {
     previousPrimary !== params.selectedModel;
   const defaultModelConfig = preserveExistingPrimary
     ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
-    : params.config;
+    : migrateLegacyDefaultModelEntryMetadata({
+        config: params.config,
+        configBeforeProviderAuth: defaultModelBaseConfig,
+        migrationMatch,
+      });
   let nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
     preserveExistingPrimary,
   });

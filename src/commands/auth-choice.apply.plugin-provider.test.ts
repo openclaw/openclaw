@@ -107,6 +107,7 @@ const EXISTING_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_DEFAULT_MODEL = "openai/gpt-5.5";
 const LEGACY_CODEX_DEFAULT_MODEL = "codex/gpt-5.5";
+const LEGACY_OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.5";
 
 function buildProvider(): ProviderPlugin {
   return {
@@ -536,6 +537,54 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       `Default model set to ${OPENAI_DEFAULT_MODEL}`,
       "Model configured",
     );
+  });
+
+  it("carries legacy Codex model metadata into the canonical OpenAI model entry", async () => {
+    const provider = buildOpenAIProviderWithDefaultModelPatch();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: LEGACY_OPENAI_CODEX_DEFAULT_MODEL },
+              models: {
+                [LEGACY_OPENAI_CODEX_DEFAULT_MODEL]: {
+                  alias: "Legacy OpenAI Codex",
+                  params: { maxTokens: 12_000, reasoning: "high" },
+                  agentRuntime: { id: "codex-cli" },
+                  streaming: false,
+                },
+              },
+            },
+          },
+        },
+        preserveExistingDefaultModel: true,
+      }),
+    );
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: OPENAI_DEFAULT_MODEL,
+    });
+    expect(result?.config.agents?.defaults?.models).toEqual({
+      [LEGACY_OPENAI_CODEX_DEFAULT_MODEL]: {
+        alias: "Legacy OpenAI Codex",
+        params: { maxTokens: 12_000, reasoning: "high" },
+        agentRuntime: { id: "codex-cli" },
+        streaming: false,
+      },
+      [OPENAI_DEFAULT_MODEL]: {
+        alias: "GPT",
+        params: { maxTokens: 12_000, reasoning: "high" },
+        agentRuntime: { id: "codex-cli" },
+        streaming: false,
+      },
+    });
   });
 
   it("keeps a Codex default during direct OpenAI API-key setup", async () => {
