@@ -432,6 +432,40 @@ describe("doctor stale plugin config helpers", () => {
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
 
+  it("keeps Codex entry diagnostics when OpenAI wildcard policy falls back to Codex", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+            agentRuntime: { id: "pi" },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/*": { agentRuntime: { id: "default" } },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          codex: {},
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([
+      {
+        pluginId: "codex",
+        pathLabel: "plugins.entries.codex",
+        surface: "entries",
+      },
+    ]);
+  });
+
   it("still reports an explicitly enabled missing Codex plugin entry as stale", () => {
     const cfg = {
       models: {
