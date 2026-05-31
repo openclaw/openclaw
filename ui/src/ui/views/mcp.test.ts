@@ -81,6 +81,42 @@ describe("renderMcp", () => {
     expect(buttonByText(container, "Save & Publish").disabled).toBe(true);
   });
 
+  it("disables save actions while offline or saving", () => {
+    const container = document.createElement("div");
+
+    render(renderMcp(createProps({ connected: false })), container);
+    expect(buttonByText(container, "Save").disabled).toBe(true);
+    expect(buttonByText(container, "Save & Publish").disabled).toBe(true);
+
+    render(renderMcp(createProps({ configSaving: true })), container);
+    expect(buttonByText(container, "Save").disabled).toBe(true);
+    expect(buttonByText(container, "Save & Publish").disabled).toBe(true);
+  });
+
+  it("quotes MCP server names in command snippets", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMcp(
+        createProps({
+          configObject: {
+            mcp: {
+              servers: {
+                "docs; echo unsafe": {
+                  url: "https://mcp.example.com/mcp",
+                },
+              },
+            },
+          },
+        }),
+      ),
+      container,
+    );
+
+    const text = container.querySelector(".mcp-server-list")?.textContent ?? "";
+    expect(text).toContain("openclaw mcp probe 'docs; echo unsafe'");
+  });
+
   it("redacts sensitive URL values in server summaries", () => {
     const container = document.createElement("div");
 

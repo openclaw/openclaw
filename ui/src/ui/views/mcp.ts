@@ -59,9 +59,14 @@ function summarizeServer(name: string, value: unknown): McpServerRow {
   };
 }
 
+function quoteShellArg(value: string): string {
+  return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function renderServerRow(props: McpViewProps, server: McpServerRow) {
-  const probeCommand = `openclaw mcp probe ${server.name}`;
-  const loginCommand = `openclaw mcp login ${server.name}`;
+  const quotedName = quoteShellArg(server.name);
+  const probeCommand = `openclaw mcp probe ${quotedName}`;
+  const loginCommand = `openclaw mcp login ${quotedName}`;
   return html`
     <article class="mcp-server-row">
       <div class="mcp-server-row__main">
@@ -101,6 +106,8 @@ export function renderMcp(props: McpViewProps) {
   const enabledCount = rows.filter((row) => row.enabled).length;
   const oauthCount = rows.filter((row) => row.auth === "oauth").length;
   const filteredCount = rows.filter((row) => row.toolFilter).length;
+  const saveDisabled =
+    !props.configDirty || !props.connected || props.configApplying || props.configSaving;
   return html`
     <section class="mcp-page">
       <div class="mcp-page__summary">
@@ -147,11 +154,7 @@ export function renderMcp(props: McpViewProps) {
             </div>
           </div>
           <div class="mcp-server-list__actions">
-            <button
-              class="btn btn--sm"
-              ?disabled=${!props.configDirty}
-              @click=${props.onSaveConfig}
-            >
+            <button class="btn btn--sm" ?disabled=${saveDisabled} @click=${props.onSaveConfig}>
               Save
             </button>
             <button
