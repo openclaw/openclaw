@@ -61,10 +61,7 @@ export function imageFileExtensionForMimeType(
   return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || fallback : fallback;
 }
 
-export function sniffImageMimeType(
-  buffer: Buffer,
-  fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
-): ImageMimeTypeDetection {
+function sniffKnownImageMimeType(buffer: Buffer): ImageMimeTypeDetection | undefined {
   if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
     return { mimeType: "image/jpeg", extension: "jpg" };
   }
@@ -84,10 +81,27 @@ export function sniffImageMimeType(
   ) {
     return { mimeType: "image/webp", extension: "webp" };
   }
+  return undefined;
+}
+
+export function sniffImageMimeType(
+  buffer: Buffer,
+  fallbackMimeType = DEFAULT_IMAGE_MIME_TYPE,
+): ImageMimeTypeDetection {
+  const detected = sniffKnownImageMimeType(buffer);
+  if (detected) {
+    return detected;
+  }
   return {
     mimeType: fallbackMimeType,
     extension: imageFileExtensionForMimeType(fallbackMimeType),
   };
+}
+
+function normalizeImageHeaderMimeType(value: string | undefined): string | undefined {
+  const mimeType = normalizeOptionalString(value);
+  const normalized = normalizeOptionalLowercaseString(mimeType)?.split(";")[0]?.trim();
+  return normalized?.startsWith("image/") ? mimeType : undefined;
 }
 
 export function toImageDataUrl(params: {
@@ -210,14 +224,20 @@ async function generatedImageAssetFromOpenAiCompatibleUrlEntry(
   const download = await options.downloadUrl({ url, entry, index });
   const defaultMimeType =
     normalizeOptionalString(options.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
-  const explicitMimeType = normalizeOptionalString(download.mimeType);
-  const detected = sniffImageMimeType(download.buffer, explicitMimeType ?? defaultMimeType);
-  const mimeType = explicitMimeType ?? detected.mimeType;
+  if (download.buffer.length === 0) {
+    throw new Error("OpenAI-compatible image URL download returned an empty image");
+  }
+  const explicitMimeType = normalizeImageHeaderMimeType(download.mimeType);
+  const detected = sniffKnownImageMimeType(download.buffer);
+  if (!detected && !explicitMimeType) {
+    throw new Error("OpenAI-compatible image URL download did not return an image");
+  }
+  const mimeType = detected?.mimeType ?? explicitMimeType ?? defaultMimeType;
   const prefix = normalizeOptionalString(options.fileNamePrefix) ?? DEFAULT_IMAGE_FILE_PREFIX;
   const image: GeneratedImageAsset = {
     buffer: download.buffer,
     mimeType,
-    fileName: `${prefix}-${index + 1}.${detected.extension ?? imageFileExtensionForMimeType(mimeType)}`,
+    fileName: `${prefix}-${index + 1}.${detected?.extension ?? imageFileExtensionForMimeType(mimeType)}`,
   };
   const revisedPrompt = normalizeOptionalString(entry.revised_prompt);
   if (revisedPrompt) {

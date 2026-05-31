@@ -12,6 +12,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import {
   ensureAuthProfileStore,
   isProviderApiKeyConfigured,
@@ -21,12 +22,15 @@ import {
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
   fetchWithTimeoutGuarded,
   postJsonRequest,
   postMultipartRequest,
   resolveProviderHttpRequestConfig,
+  resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
@@ -73,6 +77,28 @@ const OPENAI_IMAGE_MODELS = [
   "gpt-image-1-mini",
 ] as const;
 const log = createSubsystemLogger("image-generation/openai");
+
+function resolveGeneratedImageMaxBytes(cfg: OpenClawConfig): number {
+  const configured = cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return MAX_IMAGE_BYTES;
+}
+
+function hasSameUrlOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
+}
+
+function createSameOriginDownloadHeaders(headers: Headers): Headers {
+  const downloadHeaders = new Headers(headers);
+  downloadHeaders.delete("Content-Type");
+  return downloadHeaders;
+}
 
 const AZURE_HOSTNAME_SUFFIXES = [
   ".openai.azure.com",
@@ -934,7 +960,16 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         allowTransparentDefaultReroute: publicOpenAIBaseUrl,
       });
       const count = resolveOpenAIImageCount(req.count);
-      const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs, { isAzure });
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: isEdit ? "OpenAI image edit" : "OpenAI image generation",
+      });
+      const defaultTimeoutMs = isAzure
+        ? DEFAULT_AZURE_OPENAI_IMAGE_TIMEOUT_MS
+        : DEFAULT_OPENAI_IMAGE_TIMEOUT_MS;
+      const resolveTimeoutMs = () =>
+        resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs });
+      const timeoutMs = resolveTimeoutMs();
       const sizeResolution = resolveOpenAIImageRequestSize({
         model,
         requestedSize: req.size,
@@ -1018,22 +1053,30 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             malformedResponseError: isEdit
               ? "OpenAI image edit response malformed"
               : "OpenAI image generation response malformed",
-            downloadUrl: async ({ url }) => {
+            downloadUrl: async ({ url: imageUrl }) => {
+              const useProviderTransport = hasSameUrlOrigin(url, imageUrl);
               const download = await fetchWithTimeoutGuarded(
-                url,
-                { method: "GET" },
-                timeoutMs,
+                imageUrl,
+                {
+                  method: "GET",
+                  ...(useProviderTransport
+                    ? { headers: createSameOriginDownloadHeaders(headers) }
+                    : {}),
+                },
+                resolveTimeoutMs(),
                 fetch,
                 {
-                  ...(req.ssrfPolicy || allowPrivateNetwork
+                  ...(req.ssrfPolicy || (useProviderTransport && allowPrivateNetwork)
                     ? {
                         ssrfPolicy: {
                           ...req.ssrfPolicy,
-                          ...(allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+                          ...(useProviderTransport && allowPrivateNetwork
+                            ? { allowPrivateNetwork: true }
+                            : {}),
                         },
                       }
                     : {}),
-                  ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+                  ...(useProviderTransport && dispatcherPolicy ? { dispatcherPolicy } : {}),
                   auditContext: "openai-image-download",
                 },
               );
@@ -1043,7 +1086,14 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
                   "OpenAI image URL download failed",
                 );
                 return {
-                  buffer: Buffer.from(await download.response.arrayBuffer()),
+                  buffer: await readResponseWithLimit(
+                    download.response,
+                    resolveGeneratedImageMaxBytes(req.cfg),
+                    {
+                      onOverflow: ({ maxBytes }) =>
+                        new Error(`OpenAI image URL download exceeded ${maxBytes} bytes`),
+                    },
+                  ),
                   mimeType: download.response.headers.get("content-type") ?? undefined,
                 };
               } finally {

@@ -272,8 +272,7 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(timeoutMs).toBe(123);
     expect(fetchFn).toBe(fetch);
     expect(guardedOptions).toEqual({
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true, allowPrivateNetwork: true },
-      dispatcherPolicy: { request: { allowPrivateNetwork: true } },
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       auditContext: "sample-image-download",
     });
     expect(result.images).toEqual([
@@ -283,6 +282,62 @@ describe("OpenAI-compatible image provider helper", () => {
         fileName: "image-1.png",
       },
     ]);
+    expect(requestRelease).toHaveBeenCalledOnce();
+    expect(downloadRelease).toHaveBeenCalledOnce();
+  });
+
+  it("keeps provider transport policy for same-origin URL image responses", async () => {
+    const requestRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ url: "http://127.0.0.1:8080/generated.png" }],
+        }),
+      },
+      release: requestRelease,
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValue({
+      response: new Response(pngBytes, { headers: { "content-type": "image/png" } }),
+      release: downloadRelease,
+    });
+    const provider = createProvider();
+
+    await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "draw a square",
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      cfg: {
+        models: {
+          providers: {
+            sample: {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              request: { allowPrivateNetwork: true },
+            },
+          },
+        },
+      },
+    } as never);
+
+    const downloadCall = fetchWithTimeoutGuardedMock.mock.calls[0] as [
+      string,
+      RequestInit,
+      number | undefined,
+      typeof fetch,
+      Record<string, unknown>,
+    ];
+    expect(downloadCall[1].method).toBe("GET");
+    expect(downloadCall[1].headers).toBeInstanceOf(Headers);
+    expect(new Headers(downloadCall[1].headers).get("Authorization")).toBe("Bearer provider-key");
+    expect(new Headers(downloadCall[1].headers).has("Content-Type")).toBe(false);
+    const guardedOptions = downloadCall[4];
+    expect(guardedOptions).toEqual({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true, allowPrivateNetwork: true },
+      dispatcherPolicy: { request: { allowPrivateNetwork: true } },
+      auditContext: "sample-image-download",
+    });
     expect(requestRelease).toHaveBeenCalledOnce();
     expect(downloadRelease).toHaveBeenCalledOnce();
   });
