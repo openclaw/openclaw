@@ -462,7 +462,21 @@ export async function collectProviderCatalogProjectionFindings(
   findings.push(...grouped.findings);
   for (const order of PROVIDER_CATALOG_ORDERS) {
     for (const provider of grouped.byOrder[order]) {
-      if (typeof provider.staticCatalog?.run !== "function") {
+      let staticCatalogRun: unknown;
+      try {
+        staticCatalogRun = provider.staticCatalog?.run;
+      } catch (error) {
+        findings.push(
+          providerCatalogProjectionFinding({
+            providerId: provider.id,
+            pluginId: provider.pluginId,
+            message: `Provider catalog ${provider.id} static catalog hook cannot be read during doctor validation.`,
+            error,
+          }),
+        );
+        continue;
+      }
+      if (typeof staticCatalogRun !== "function") {
         continue;
       }
       let result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;

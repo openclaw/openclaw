@@ -811,6 +811,35 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 
+  it("reports static catalog hook access failures without aborting doctor", async () => {
+    mocks.resolvePluginProviders.mockReturnValueOnce([
+      {
+        id: "mockplugin",
+        pluginId: "mockplugin",
+        label: "Mock",
+        auth: [],
+        staticCatalog: {
+          order: "simple",
+          get run() {
+            throw new Error("run getter failed");
+          },
+        },
+      },
+    ]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message:
+          "Provider catalog mockplugin static catalog hook cannot be read during doctor validation.",
+        requirement: "run getter failed",
+      }),
+    );
+  });
+
   it("reports revoked provider catalog result proxies without crashing doctor", async () => {
     const { proxy, revoke } = Proxy.revocable(
       {
