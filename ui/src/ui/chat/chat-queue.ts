@@ -84,14 +84,18 @@ export function renderChatQueue(props: ChatQueueProps) {
                       </button>
                     `
                   : nothing}
-                <button
-                  class="btn chat-queue__remove"
-                  type="button"
-                  aria-label="Remove queued message"
-                  @click=${() => props.onQueueRemove(item.id)}
-                >
-                  ${icons.x}
-                </button>
+                ${item.sendState !== "sending"
+                  ? html`
+                      <button
+                        class="btn chat-queue__remove"
+                        type="button"
+                        aria-label="Remove queued message"
+                        @click=${() => props.onQueueRemove(item.id)}
+                      >
+                        ${icons.x}
+                      </button>
+                    `
+                  : nothing}
               </div>
             </div>
           `;

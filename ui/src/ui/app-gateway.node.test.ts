@@ -122,6 +122,8 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
   chatQueue: import("./ui-types.ts").ChatQueueItem[];
   chatQueueBySession: Record<string, import("./ui-types.ts").ChatQueueItem[]>;
+  chatRunId: string | null;
+  chatSending: boolean;
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
@@ -520,6 +522,86 @@ describe("connectGateway", () => {
     secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
     expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("marks old client pending requests retryable when reconnecting to the same gateway", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = requireGatewayClient();
+    connectGateway(host);
+
+    expect(firstClient.stop).toHaveBeenCalledWith({ retryablePending: true });
+  });
+
+  it("does not mark old client pending requests retryable after gateway scope changes", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = requireGatewayClient();
+    host.chatQueue = [
+      {
+        id: "pending-send",
+        text: "send during gateway switch",
+        createdAt: 1,
+        sendRunId: "run-gateway-switch",
+        sendState: "sending",
+        sessionKey: "main",
+      },
+    ];
+    host.chatSending = true;
+    host.settings = {
+      ...host.settings,
+      gatewayUrl: "ws://127.0.0.1:18790",
+    };
+    connectGateway(host);
+    const secondClient = requireGatewayClient(1);
+    secondClient.emitHello();
+    await Promise.resolve();
+
+    expect(firstClient.stop).toHaveBeenCalledWith({ retryablePending: false });
+    expect(secondClient.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "send during gateway switch" }),
+    );
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "sending",
+      sendRunId: "run-gateway-switch",
+    });
+  });
+
+  it("does not flush queued follow-up sends after gateway scope changes", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = requireGatewayClient();
+    host.chatRunId = "old-run";
+    host.chatQueue = [
+      {
+        id: "queued-follow-up",
+        text: "do not send to another gateway",
+        createdAt: 1,
+        sessionKey: "main",
+      },
+    ];
+    host.settings = {
+      ...host.settings,
+      gatewayUrl: "ws://127.0.0.1:18790",
+    };
+    connectGateway(host);
+    const secondClient = requireGatewayClient(1);
+    secondClient.emitHello();
+    await Promise.resolve();
+
+    expect(firstClient.stop).toHaveBeenCalledWith({ retryablePending: false });
+    expect(secondClient.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "do not send to another gateway" }),
+    );
+    expect(host.chatQueue[0]).toMatchObject({
+      id: "queued-follow-up",
+      text: "do not send to another gateway",
+    });
   });
 
   it("routes exec approval requested events with command spans", () => {
@@ -969,6 +1051,63 @@ describe("connectGateway", () => {
     expect(host.pendingAbort).toBeNull();
   });
 
+  it("replays in-flight queued chat sends when hello arrives before stale close", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = requireGatewayClient();
+    firstClient.emitHello();
+    await Promise.resolve();
+
+    host.chatQueue = [
+      {
+        id: "pending-send",
+        text: "send during reconnect",
+        createdAt: 1,
+        sendRunId: "run-fast-reconnect",
+        sendState: "sending",
+        sessionKey: "main",
+      },
+    ];
+    host.chatSending = true;
+
+    connectGateway(host);
+    const secondClient = requireGatewayClient(1);
+    secondClient.request.mockImplementation(async (method: string) => {
+      if (method === "chat.send") {
+        return { runId: "run-fast-reconnect", status: "started" };
+      }
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
+      if (method === "models.authStatus") {
+        return { ts: 0, providers: [] };
+      }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
+      }
+      return {};
+    });
+
+    secondClient.emitHello();
+
+    await vi.waitFor(() => {
+      expect(secondClient.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "send during reconnect",
+        deliver: false,
+        idempotencyKey: "run-fast-reconnect",
+        attachments: undefined,
+      });
+    });
+
+    firstClient.emitClose({ code: 1001, reason: "going away" });
+    await Promise.resolve();
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toBe("run-fast-reconnect");
+  });
+
   it("retries reconnectable queued chat sends after reconnect hello", async () => {
     const host = createHost();
     host.chatQueue = [
@@ -1036,6 +1175,59 @@ describe("connectGateway", () => {
       expect(host.chatQueueBySession.main).toBeUndefined();
       expect(host.chatMessages).toStrictEqual([]);
       expect(host.chatRunId).toBeNull();
+    });
+  });
+
+  it("flushes active-session queued follow-up sends after ordinary reconnect hello", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = requireGatewayClient();
+    firstClient.emitHello();
+    await Promise.resolve();
+
+    host.chatRunId = "old-run";
+    host.chatQueue = [
+      {
+        id: "queued-follow-up",
+        text: "send after interrupted run",
+        createdAt: 1,
+        sessionKey: "main",
+      },
+    ];
+
+    connectGateway(host);
+    const secondClient = requireGatewayClient(1);
+    secondClient.request.mockImplementation(async (method: string) => {
+      if (method === "chat.send") {
+        return { runId: "run-follow-up", status: "started" };
+      }
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
+      if (method === "models.authStatus") {
+        return { ts: 0, providers: [] };
+      }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
+      }
+      return {};
+    });
+
+    secondClient.emitHello();
+
+    await vi.waitFor(() => {
+      expect(secondClient.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "send after interrupted run",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe("run-follow-up");
     });
   });
 
