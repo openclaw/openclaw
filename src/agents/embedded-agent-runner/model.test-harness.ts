@@ -16,8 +16,8 @@ export const makeModel = (id: string): ModelDefinitionConfig => ({
 export const OPENAI_CODEX_TEMPLATE_MODEL = {
   id: "gpt-5.3-codex",
   name: "GPT-5.3 Codex",
-  provider: "openai-codex",
-  api: "openai-codex-responses",
+  provider: "openai",
+  api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api",
   reasoning: true,
   input: ["text", "image"] as const,
@@ -43,7 +43,7 @@ function mockTemplateModel(
 export function mockOpenAICodexTemplateModel(discoverModelsMock: DiscoverModelsMock): void {
   mockTemplateModel(
     discoverModelsMock,
-    "openai-codex",
+    "openai",
     OPENAI_CODEX_TEMPLATE_MODEL.id,
     OPENAI_CODEX_TEMPLATE_MODEL,
   );
@@ -62,9 +62,9 @@ export function buildOpenAICodexForwardCompatExpectation(
   const isGpt54Mini = id === "gpt-5.4-mini";
   const isSpark = id === "gpt-5.3-codex-spark";
   return {
-    provider: "openai-codex",
+    provider: "openai",
     id,
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     baseUrl: "https://chatgpt.com/backend-api",
     reasoning: true,
     input: isSpark ? ["text"] : ["text", "image"],

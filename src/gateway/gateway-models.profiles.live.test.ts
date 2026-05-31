@@ -611,7 +611,7 @@ function shouldSkipEmptyResponseForLiveModel(params: {
     params.provider === "google-antigravity" ||
     params.provider === "minimax" ||
     params.provider === "minimax-portal" ||
-    params.provider === "openai-codex" ||
+    params.provider === "openai" ||
     params.provider === "zai"
   );
 }
@@ -1418,7 +1418,7 @@ describe("shouldSkipEmptyResponseForLiveModel", () => {
     { provider: "minimax", allowNotFoundSkip: true, expected: true },
     { provider: "minimax-portal", allowNotFoundSkip: true, expected: true },
     { provider: "zai", allowNotFoundSkip: true, expected: true },
-    { provider: "openai-codex", allowNotFoundSkip: true, expected: true },
+    { provider: "openai", allowNotFoundSkip: true, expected: true },
     { provider: "xai", allowNotFoundSkip: true, expected: false },
   ])(
     "returns $expected for $provider (allowNotFoundSkip=$allowNotFoundSkip)",
@@ -1780,19 +1780,17 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
         },
         codexProfile: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: 1,
         },
       },
       order: {
-        openai: ["openaiProfile"],
-        "openai-codex": ["codexProfile"],
+        openai: ["codexProfile", "openaiProfile"],
       },
       lastGood: {
-        openai: "openaiProfile",
-        "openai-codex": "codexProfile",
+        openai: "codexProfile",
       },
       usageStats: {
         openaiProfile: { lastUsed: 1 },
@@ -3017,7 +3015,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
               if (
                 (model.provider === "openai" && model.api === "openai-responses") ||
-                (model.provider === "openai-codex" && model.api === "openai-codex-responses")
+                (model.provider === "openai" && model.api === "openai-chatgpt-responses")
               ) {
                 logProgress(`${progressLabel}: tool-only regression`);
                 const runId2 = randomUUID();
@@ -3201,38 +3199,32 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             break;
           }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
-          if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
+          if (model.provider === "openai" && isRefreshTokenReused(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
             break;
           }
-          if (model.provider === "openai-codex" && isAccountIdExtractionError(message)) {
+          if (model.provider === "openai" && isAccountIdExtractionError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex account id extraction)`);
             break;
           }
-          if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
+          if (model.provider === "openai" && isChatGPTUsageLimitErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
             break;
           }
-          if (model.provider === "openai-codex" && isInstructionsRequiredError(message)) {
+          if (model.provider === "openai" && isInstructionsRequiredError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (instructions required)`);
             break;
           }
-          if (
-            (model.provider === "openai" || model.provider === "openai-codex") &&
-            isOpenAIReasoningSequenceError(message)
-          ) {
+          if (model.provider === "openai" && isOpenAIReasoningSequenceError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (openai reasoning sequence error)`);
             break;
           }
-          if (
-            (model.provider === "openai" || model.provider === "openai-codex") &&
-            isToolNonceRefusal(message)
-          ) {
+          if (model.provider === "openai" && isToolNonceRefusal(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;

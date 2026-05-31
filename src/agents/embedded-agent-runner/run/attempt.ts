@@ -1885,7 +1885,7 @@ export async function runEmbeddedAttempt(
         missingToolResultText:
           params.model.api === "openai-responses" ||
           params.model.api === "azure-openai-responses" ||
-          params.model.api === "openai-codex-responses"
+          params.model.api === "openai-chatgpt-responses"
             ? "aborted"
             : undefined,
         allowedToolNames: replayAllowedToolNames,
@@ -2564,7 +2564,7 @@ export async function runEmbeddedAttempt(
       const isOpenAIResponsesApi =
         params.model.api === "openai-responses" ||
         params.model.api === "azure-openai-responses" ||
-        params.model.api === "openai-codex-responses";
+        params.model.api === "openai-chatgpt-responses";
 
       const replayToolCallIdSanitizerDecision = {
         sanitizeToolCallIds: transcriptPolicy.sanitizeToolCallIds,

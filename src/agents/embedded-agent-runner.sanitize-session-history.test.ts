@@ -734,7 +734,7 @@ describe("sanitizeSessionHistory", () => {
     expect(JSON.stringify(result)).not.toContain("missing tool result");
   });
 
-  it("synthesizes Codex-style aborted tool results for openai-codex-responses", async () => {
+  it("synthesizes Codex-style aborted tool results for openai-chatgpt-responses", async () => {
     const messages: AgentMessage[] = [
       makeAssistantMessage(
         [
@@ -749,8 +749,8 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeSessionHistory({
       messages,
-      modelApi: "openai-codex-responses",
-      provider: "openai-codex",
+      modelApi: "openai-chatgpt-responses",
+      provider: "openai",
       sessionManager: mockSessionManager,
       sessionId: TEST_SESSION_ID,
     });

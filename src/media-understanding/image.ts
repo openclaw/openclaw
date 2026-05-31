@@ -48,7 +48,7 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
   if (
     model.api !== "openai-responses" &&
     model.api !== "azure-openai-responses" &&
-    model.api !== "openai-codex-responses"
+    model.api !== "openai-chatgpt-responses"
   ) {
     return false;
   }

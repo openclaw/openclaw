@@ -152,7 +152,7 @@ export function describeOpenAICodexProviderAuthContract(
 
     async function expectStableFallbackProfile(params: { access: string; profileId: string }) {
       const { default: openAIPlugin } = await load();
-      const provider = requireProvider(await registerProviders(openAIPlugin), "openai-codex");
+      const provider = requireProvider(await registerProviders(openAIPlugin), "openai");
       loginOpenAICodexOAuthMock.mockResolvedValueOnce({
         refresh: "refresh-token",
         access: params.access,
@@ -171,7 +171,7 @@ export function describeOpenAICodexProviderAuthContract(
 
     async function getProvider() {
       const { default: openAIPlugin } = await load();
-      return requireProvider(await registerProviders(openAIPlugin), "openai-codex");
+      return requireProvider(await registerProviders(openAIPlugin), "openai");
     }
 
     it("keeps OAuth auth results provider-owned", async () => {

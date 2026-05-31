@@ -7,6 +7,7 @@ import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type { ProviderAuthContext } from "./types.js";
 
 const OPENAI_CODEX_PROVIDER_ID = "openai";
+const OPENAI_CODEX_LEGACY_PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_OAUTH_METHOD_ID = "oauth";
 
 type OpenAICodexOAuthBridgeContext = ProviderAuthContext & {
@@ -44,7 +45,8 @@ function isOAuthCredential(value: unknown): value is OAuthCredentials {
   const record = value as Record<string, unknown>;
   return (
     record.type === "oauth" &&
-    record.provider === OPENAI_CODEX_PROVIDER_ID &&
+    (record.provider === OPENAI_CODEX_PROVIDER_ID ||
+      record.provider === OPENAI_CODEX_LEGACY_PROVIDER_ID) &&
     typeof record.access === "string" &&
     typeof record.refresh === "string" &&
     typeof record.expires === "number"

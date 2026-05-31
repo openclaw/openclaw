@@ -2247,7 +2247,7 @@ describe("chat session controls", () => {
       ts: Date.now(),
       providers: [
         {
-          provider: "openai-codex",
+          provider: "openai",
           displayName: "Codex",
           status: "ok",
           profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
@@ -2512,7 +2512,7 @@ describe("chat session controls", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionsResult = createSessionsListResult({
       defaultsModel: "gpt-5.5",
-      defaultsProvider: "openai-codex",
+      defaultsProvider: "openai",
       defaultsThinkingLevels: [
         { id: "off", label: "off" },
         { id: "adaptive", label: "adaptive" },
@@ -2603,12 +2603,12 @@ describe("chat session controls", () => {
   it("always renders full thinking labels", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       thinkingDefault: "high",
     });
     state.sessionsResult = createSessionsListResult({
       defaultsModel: "gpt-5.5",
-      defaultsProvider: "openai-codex",
+      defaultsProvider: "openai",
       defaultsThinkingDefault: "high",
       defaultsThinkingLevels: [
         { id: "off", label: "off" },

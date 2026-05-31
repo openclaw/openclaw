@@ -369,7 +369,7 @@ function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
   provider: string;
   modelId: string;
 }): boolean {
-  if (params.provider !== "openai" && params.provider !== "openai-codex") {
+  if (params.provider !== "openai") {
     return false;
   }
   return /^gpt-5(?:[.-]|$)/i.test(params.modelId);

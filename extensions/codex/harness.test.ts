@@ -11,8 +11,8 @@ describe("Codex agent harness supports()", () => {
     });
   });
 
-  it("supports openai-codex as the primary OpenClaw routing id", () => {
-    expect(harness.supports({ provider: "openai-codex", requestedRuntime: "codex" })).toEqual({
+  it("supports openai as the primary OpenClaw routing id", () => {
+    expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
       supported: true,
       priority: 100,
     });

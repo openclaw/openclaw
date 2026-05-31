@@ -2,7 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export const OPENAI_PROVIDER_ID = "openai";
-export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+export const OPENAI_CODEX_PROVIDER_ID = OPENAI_PROVIDER_ID;
 
 function isOfficialOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
@@ -27,17 +27,9 @@ function openAIProviderUsesCustomBaseUrl(config: OpenClawConfig | undefined): bo
   return !isOfficialOpenAIBaseUrl(config?.models?.providers?.openai?.baseUrl);
 }
 
-function hasProviderConfig(config: OpenClawConfig | undefined, provider: string): boolean {
-  return Boolean(config?.models?.providers?.[provider]);
-}
-
 export function isOpenAIProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
-  return normalized === OPENAI_PROVIDER_ID || normalized === OPENAI_CODEX_PROVIDER_ID;
-}
-
-export function isOpenAICodexProvider(provider: string | undefined): boolean {
-  return normalizeProviderId(provider ?? "") === OPENAI_CODEX_PROVIDER_ID;
+  return normalized === OPENAI_PROVIDER_ID;
 }
 
 export function openAIProviderUsesCodexRuntimeByDefault(params: {
@@ -67,9 +59,6 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
   config?: OpenClawConfig;
 }): boolean {
   const provider = parseModelRefProvider(params.model);
-  if (provider === OPENAI_CODEX_PROVIDER_ID) {
-    return true;
-  }
   return provider === OPENAI_PROVIDER_ID && !openAIProviderUsesCustomBaseUrl(params.config);
 }
 
@@ -82,12 +71,7 @@ export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
   if (!isOpenAIProvider(params.provider)) {
     return [params.provider];
   }
-  return openAIProviderUsesCodexRuntimeByDefault({
-    provider: params.provider,
-    config: params.config,
-  })
-    ? [OPENAI_CODEX_PROVIDER_ID, OPENAI_PROVIDER_ID]
-    : [OPENAI_PROVIDER_ID];
+  return [OPENAI_PROVIDER_ID];
 }
 
 export function resolveOpenAIRuntimeProvider(params: {
@@ -119,15 +103,5 @@ export function resolveContextConfigProviderForRuntime(params: {
   runtimeId?: string;
   config?: OpenClawConfig;
 }): string {
-  if (!isOpenAIProvider(params.provider)) {
-    return params.provider;
-  }
-  if (
-    params.runtimeId === "codex" &&
-    !hasProviderConfig(params.config, OPENAI_PROVIDER_ID) &&
-    hasProviderConfig(params.config, OPENAI_CODEX_PROVIDER_ID)
-  ) {
-    return OPENAI_CODEX_PROVIDER_ID;
-  }
-  return OPENAI_PROVIDER_ID;
+  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
 }

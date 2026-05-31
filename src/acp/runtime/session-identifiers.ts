@@ -15,7 +15,7 @@ const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>(
       `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
   ],
   [
-    "openai-codex",
+    "openai",
     ({ agentSessionId }) =>
       `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
   ],

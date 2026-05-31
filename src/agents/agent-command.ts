@@ -113,7 +113,7 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";

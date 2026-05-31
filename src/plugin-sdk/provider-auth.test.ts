@@ -21,9 +21,9 @@ describe("provider auth profile helpers", () => {
     const fallbackStore: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "api_key",
-          provider: "openai-codex",
+          provider: "openai",
           key: "fallback-key",
         },
       },
@@ -71,16 +71,16 @@ describe("provider auth profile helpers", () => {
     const { listUsableProviderAuthProfileIds, resolveProviderAuthProfileApiKey } =
       await import("./provider-auth.js");
 
-    expect(listUsableProviderAuthProfileIds({ provider: "openai-codex" }).profileIds).toEqual([
-      "openai-codex:default",
+    expect(listUsableProviderAuthProfileIds({ provider: "openai" }).profileIds).toEqual([
+      "openai:default",
     ]);
-    await expect(resolveProviderAuthProfileApiKey({ provider: "openai-codex" })).resolves.toBe(
+    await expect(resolveProviderAuthProfileApiKey({ provider: "openai" })).resolves.toBe(
       "fallback-key",
     );
     expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw-agent",
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         store: fallbackStore,
       }),
     );
@@ -96,16 +96,16 @@ describe("provider auth profile helpers", () => {
     const externalStore: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: Date.now() + 60_000,
         },
       },
     };
-    const externalCli = { mode: "scoped", providerIds: ["openai-codex"] };
+    const externalCli = { mode: "scoped", providerIds: ["openai"] };
     const loadAuthProfileStoreForSecretsRuntime = vi.fn(
       (_agentDir?: string, options?: { externalCli?: unknown }) =>
         options?.externalCli ? externalStore : primaryStore,
@@ -142,10 +142,10 @@ describe("provider auth profile helpers", () => {
 
     const { isProviderAuthProfileConfigured } = await import("./provider-auth.js");
 
-    expect(isProviderAuthProfileConfigured({ provider: "openai-codex" })).toBe(false);
+    expect(isProviderAuthProfileConfigured({ provider: "openai" })).toBe(false);
     expect(
       isProviderAuthProfileConfigured({
-        provider: "openai-codex",
+        provider: "openai",
         includeExternalCliAuth: true,
       }),
     ).toBe(true);

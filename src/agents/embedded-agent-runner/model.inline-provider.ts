@@ -42,7 +42,7 @@ export function normalizeResolvedTransportApi(
     case "google-generative-ai":
     case "google-vertex":
     case "ollama":
-    case "openai-codex-responses":
+    case "openai-chatgpt-responses":
     case "openai-completions":
     case "openai-responses":
     case "azure-openai-responses":

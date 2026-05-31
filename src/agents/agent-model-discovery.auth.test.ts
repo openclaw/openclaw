@@ -107,9 +107,9 @@ describe("discoverAuthStorage", () => {
           provider: "anthropic",
           token: "sk-ant-runtime",
         },
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: Date.now() + 60_000,
@@ -125,7 +125,7 @@ describe("discoverAuthStorage", () => {
       type: "api_key",
       key: "sk-ant-runtime",
     });
-    const codexCredential = credentials["openai-codex"] as
+    const codexCredential = credentials["openai"] as
       | { type?: string; access?: string; refresh?: string }
       | undefined;
     expect(codexCredential?.type).toBe("oauth");
@@ -143,9 +143,9 @@ describe("discoverAuthStorage", () => {
           token: "sk-ant-runtime",
           expires: MAX_DATE_TIMESTAMP_MS + 1,
         },
-        "openai-codex:bad-oauth-expiry": {
+        "openai:bad-oauth-expiry": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: MAX_DATE_TIMESTAMP_MS + 1,
@@ -154,7 +154,7 @@ describe("discoverAuthStorage", () => {
     });
 
     expect(credentials.anthropic).toBeUndefined();
-    expect(credentials["openai-codex"]).toBeUndefined();
+    expect(credentials.openai).toBeUndefined();
   });
 
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
@@ -243,7 +243,7 @@ describe("discoverAuthStorage", () => {
     await withAgentDir(async (agentDir) => {
       await writeLegacyAuthJson(agentDir, {
         openrouter: { type: "api_key", key: "legacy-static-key" },
-        "openai-codex": {
+        openai: {
           type: "oauth",
           access: "oauth-access",
           refresh: "oauth-refresh",
@@ -255,7 +255,7 @@ describe("discoverAuthStorage", () => {
 
       const parsed = await readLegacyAuthJson(agentDir);
       expect(parsed.openrouter).toBeUndefined();
-      const codexEntry = parsed["openai-codex"] as { type?: string; access?: string } | undefined;
+      const codexEntry = parsed["openai"] as { type?: string; access?: string } | undefined;
       expect(codexEntry?.type).toBe("oauth");
       expect(codexEntry?.access).toBe("oauth-access");
     });

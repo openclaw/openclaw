@@ -78,7 +78,7 @@ const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
   new URL("../../dist/entry.mjs", import.meta.url),
 );
 
-const OPENAI_CODEX_PROVIDER = "openai-codex";
+const OPENAI_CODEX_PROVIDER = "openai";
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;

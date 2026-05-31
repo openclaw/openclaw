@@ -109,7 +109,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = normalizeOptionalLowercaseString(provider);
-  return normalized === "openai" || normalized === "openai-codex";
+  return normalized === "openai";
 }
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
@@ -425,7 +425,7 @@ export function createOpenClawCodingTools(options?: {
   emitBeforeToolCallDiagnostics?: boolean;
   /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
-   * Example: "anthropic", "openai", "google", "openai-codex".
+   * Example: "anthropic", "openai", "google", "openai".
    */
   modelProvider?: string;
   /** Model id for the current provider (used for model-specific tool gating). */

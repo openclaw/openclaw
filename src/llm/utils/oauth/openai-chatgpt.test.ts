@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type LoginOpenAICodexOAuth =
-  typeof import("../../../plugins/provider-openai-codex-oauth.js").loginOpenAICodexOAuth;
+  typeof import("../../../plugins/provider-openai-chatgpt-oauth.js").loginOpenAICodexOAuth;
 
 const mocks = vi.hoisted(() => ({
   loginOpenAICodexOAuth: vi.fn<LoginOpenAICodexOAuth>(),
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   refreshProviderOAuthCredentialWithPlugin: vi.fn(),
 }));
 
-vi.mock("../../../plugins/provider-openai-codex-oauth.js", () => ({
+vi.mock("../../../plugins/provider-openai-chatgpt-oauth.js", () => ({
   loginOpenAICodexOAuth: mocks.loginOpenAICodexOAuth,
 }));
 
@@ -23,12 +23,12 @@ vi.mock("../../../plugin-sdk/facade-runtime.js", () => ({
     mocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
-import { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-codex.js";
+import { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-chatgpt.js";
 
 function createCredential() {
   return {
     type: "oauth" as const,
-    provider: "openai-codex",
+    provider: "openai",
     access: "access-token",
     refresh: "refresh-token",
     expires: 1_700_000_000_000,

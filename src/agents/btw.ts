@@ -35,7 +35,7 @@ import {
   requireApiKey,
 } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { sanitizeImageBlocks } from "./tool-images.js";

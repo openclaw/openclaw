@@ -19,8 +19,7 @@ import { uniqueStrings } from "../shared/string-normalization.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-  openai: ["OPENAI_API_KEY"],
-  "openai-codex": ["CODEX_API_KEY", "OPENAI_API_KEY"],
+  openai: ["CODEX_API_KEY", "OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],

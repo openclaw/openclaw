@@ -41,7 +41,7 @@ import {
 } from "../utils/diagnostics.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
-import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-codex-jwt.js";
+import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   convertResponsesMessages,
@@ -59,7 +59,7 @@ const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
-const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
@@ -187,10 +187,10 @@ function formatRequestTimeoutError(timeoutMs: number, cause: unknown): Error {
 // ============================================================================
 
 export const streamOpenAICodexResponses: StreamFunction<
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   OpenAICodexResponsesOptions
 > = (
-  model: Model<"openai-codex-responses">,
+  model: Model<"openai-chatgpt-responses">,
   context: Context,
   options?: OpenAICodexResponsesOptions,
 ) => {
@@ -202,7 +202,7 @@ export const streamOpenAICodexResponses: StreamFunction<
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
-      api: "openai-codex-responses" as Api,
+      api: "openai-chatgpt-responses" as Api,
       provider: model.provider,
       model: model.id,
       usage: {
@@ -441,9 +441,9 @@ export const streamOpenAICodexResponses: StreamFunction<
 };
 
 export const streamSimpleOpenAICodexResponses: StreamFunction<
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   SimpleStreamOptions
-> = (model: Model<"openai-codex-responses">, context: Context, options?: SimpleStreamOptions) => {
+> = (model: Model<"openai-chatgpt-responses">, context: Context, options?: SimpleStreamOptions) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);
@@ -471,7 +471,7 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
 // ============================================================================
 
 function buildRequestBody(
-  model: Model<"openai-codex-responses">,
+  model: Model<"openai-chatgpt-responses">,
   context: Context,
   options?: OpenAICodexResponsesOptions,
 ): RequestBody {
@@ -524,7 +524,7 @@ function buildRequestBody(
 }
 
 function getServiceTierCostMultiplier(
-  model: Pick<Model<"openai-codex-responses">, "id">,
+  model: Pick<Model<"openai-chatgpt-responses">, "id">,
   serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
 ): number {
   switch (serviceTier) {
@@ -540,7 +540,7 @@ function getServiceTierCostMultiplier(
 function applyServiceTierPricing(
   usage: Usage,
   serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  model: Pick<Model<"openai-codex-responses">, "id">,
+  model: Pick<Model<"openai-chatgpt-responses">, "id">,
 ) {
   const multiplier = getServiceTierCostMultiplier(model, serviceTier);
   if (multiplier === 1) {
@@ -599,7 +599,7 @@ async function processStream(
   response: Response,
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
-  model: Model<"openai-codex-responses">,
+  model: Model<"openai-chatgpt-responses">,
   options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
   await processResponsesStream(mapCodexEvents(parseSSE(response)), output, stream, model, {
@@ -1415,7 +1415,7 @@ async function processWebSocketStream(
   headers: Headers,
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
-  model: Model<"openai-codex-responses">,
+  model: Model<"openai-chatgpt-responses">,
   onStart: () => void,
   options?: OpenAICodexResponsesOptions,
 ): Promise<void> {

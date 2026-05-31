@@ -59,7 +59,7 @@ const CORE_BUILT_IN_MODEL_APIS = new Set([
   "google-generative-ai",
   "google-vertex",
   "mistral-conversations",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "openai-completions",
   "openai-responses",
 ]);

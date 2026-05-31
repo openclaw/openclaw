@@ -15,7 +15,7 @@ const providerEndpointPlugins = vi.hoisted(() => [
   {
     providerEndpoints: [
       { endpointClass: "openai-public", hosts: ["api.openai.com"] },
-      { endpointClass: "openai-codex", hosts: ["chatgpt.com"] },
+      { endpointClass: "openai", hosts: ["chatgpt.com"] },
       { endpointClass: "azure-openai", hostSuffixes: [".openai.azure.com"] },
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
       { endpointClass: "cerebras-native", hosts: ["api.cerebras.ai"] },
@@ -198,9 +198,7 @@ describe("provider attribution", () => {
   });
 
   it("maps legacy OpenAI Codex attribution to canonical OpenAI policy", () => {
-    expect(
-      resolveProviderAttributionPolicy("openai-codex", { OPENCLAW_VERSION: "2026.3.22" }),
-    ).toEqual({
+    expect(resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
       provider: "openai",
       enabledByDefault: true,
       verification: "vendor-hidden-api-spec",
@@ -394,14 +392,14 @@ describe("provider attribution", () => {
 
     expectRecordFields(
       resolveProviderRequestPolicy({
-        provider: "openai-codex",
+        provider: "openai",
         api: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         transport: "stream",
         capability: "llm",
       }),
       {
-        endpointClass: "openai-codex",
+        endpointClass: "openai",
         attributionProvider: "openai",
         allowsHiddenAttribution: true,
       },
@@ -903,14 +901,14 @@ describe("provider attribution", () => {
     );
     expectRecordFields(
       resolveProviderRequestCapabilities({
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         capability: "llm",
         transport: "stream",
       }),
       {
-        endpointClass: "openai-codex",
+        endpointClass: "openai",
         attributionProvider: "openai",
         allowsOpenAIServiceTier: true,
         supportsOpenAIReasoningCompatPayload: true,
@@ -1302,15 +1300,15 @@ describe("provider attribution", () => {
       {
         name: "native OpenAI Codex responses",
         input: {
-          provider: "openai-codex",
-          api: "openai-codex-responses",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
           capability: "llm" as const,
           transport: "stream" as const,
         },
         expected: {
           knownProviderFamily: "openai-family",
-          endpointClass: "openai-codex",
+          endpointClass: "openai",
           isKnownNativeEndpoint: true,
           allowsOpenAIServiceTier: true,
           supportsOpenAIReasoningCompatPayload: true,

@@ -147,7 +147,7 @@ function resolveConfiguredTextVerbosity(params: {
 }): "low" | "medium" | "high" | undefined {
   const provider = params.provider?.trim();
   const model = params.model?.trim();
-  if (!provider || !model || (provider !== "openai" && provider !== "openai-codex")) {
+  if (!provider || !model || provider !== "openai") {
     return undefined;
   }
   return resolveOpenAITextVerbosity(

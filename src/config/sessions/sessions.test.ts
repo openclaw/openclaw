@@ -933,14 +933,14 @@ describe("session store writer queue", () => {
       store[key] = {
         sessionId: "sess-acp",
         updatedAt: Date.now(),
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.4",
       };
     });
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.acp).toEqual(acp);
-    expect(store[key]?.modelProvider).toBe("openai-codex");
+    expect(store[key]?.modelProvider).toBe("openai");
     expect(store[key]?.model).toBe("gpt-5.4");
   });
 

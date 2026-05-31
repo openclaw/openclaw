@@ -50,6 +50,10 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+const LEGACY_CHATGPT_PROVIDER_ID = ["openai", "codex"].join("-");
+const LEGACY_CHATGPT_RESPONSES_API = `${LEGACY_CHATGPT_PROVIDER_ID}-responses`;
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -66,14 +70,79 @@ type AllowedValuesCollection = {
 };
 type JsonSchemaLike = Record<string, unknown>;
 
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+function normalizeLegacyOpenAIProviderForValidation(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.models) || !isRecord(raw.models.providers)) {
     return raw;
   }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
+  let providersChanged = false;
+  const providers = { ...raw.models.providers };
+  const normalizeProviderConfig = (providerConfig: unknown): unknown => {
+    if (!isRecord(providerConfig)) {
+      return providerConfig;
+    }
+    let providerChanged = false;
+    const nextProvider = { ...providerConfig };
+    if (nextProvider.api === LEGACY_CHATGPT_RESPONSES_API) {
+      nextProvider.api = OPENAI_CHATGPT_RESPONSES_API;
+      providerChanged = true;
+    }
+    if (Array.isArray(nextProvider.models)) {
+      const nextModels = nextProvider.models.map((model) => {
+        if (!isRecord(model) || model.api !== LEGACY_CHATGPT_RESPONSES_API) {
+          return model;
+        }
+        providerChanged = true;
+        return { ...model, api: OPENAI_CHATGPT_RESPONSES_API };
+      });
+      if (providerChanged) {
+        nextProvider.models = nextModels;
+      }
+    }
+    return providerChanged ? nextProvider : providerConfig;
+  };
+
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    const normalizedProvider = normalizeLowercaseStringOrEmpty(providerId);
+    const normalizedConfig = normalizeProviderConfig(providerConfig);
+    if (normalizedProvider !== LEGACY_CHATGPT_PROVIDER_ID) {
+      if (normalizedConfig !== providerConfig) {
+        providers[providerId] = normalizedConfig;
+        providersChanged = true;
+      }
+      continue;
+    }
+    if (!Object.hasOwn(providers, OPENAI_PROVIDER_ID)) {
+      providers[OPENAI_PROVIDER_ID] = normalizedConfig;
+    }
+    delete providers[providerId];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return raw;
+  }
   return {
     ...raw,
+    models: {
+      ...raw.models,
+      providers,
+    },
+  };
+}
+
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  const normalizedRaw = normalizeLegacyOpenAIProviderForValidation(raw);
+  if (
+    !isRecord(normalizedRaw) ||
+    !isRecord(normalizedRaw.commands) ||
+    !Object.hasOwn(normalizedRaw.commands, "modelsWrite")
+  ) {
+    return normalizedRaw;
+  }
+  const commands = { ...normalizedRaw.commands };
+  delete commands.modelsWrite;
+  return {
+    ...normalizedRaw,
     commands,
   };
 }

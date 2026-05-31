@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import { loggingState } from "../../logging/state.js";
+import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
+import { loggingState } from "../../../logging/state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+} from "../../../test-utils/openclaw-test-state.js";
 import {
   legacyOAuthSidecarInternalTestUtils,
   legacyOAuthSidecarTestUtils,

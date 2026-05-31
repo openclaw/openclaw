@@ -702,7 +702,7 @@ describe("loadPluginManifestRegistry", () => {
       id: "openai",
       enabledByDefault: true,
       enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
-      providers: ["openai", "openai-codex"],
+      providers: ["openai", "openai"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
@@ -757,7 +757,7 @@ describe("loadPluginManifestRegistry", () => {
       syntheticAuthRefs: ["openai-cli"],
       nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
-        "openai-codex": "openai",
+        openai: "openai",
       },
       providerAuthChoices: [
         {
@@ -822,7 +822,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
-      "openai-codex": "openai",
+      openai: "openai",
     });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
     expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
@@ -1759,11 +1759,11 @@ describe("loadPluginManifestRegistry", () => {
       },
       imageGenerationProviderMetadata: {
         openai: {
-          aliases: ["openai-codex"],
+          aliases: ["openai"],
           authProviders: ["openai"],
           authSignals: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               providerBaseUrl: {
                 provider: "openai",
                 defaultBaseUrl: "https://api.openai.com/v1",
@@ -1817,7 +1817,7 @@ describe("loadPluginManifestRegistry", () => {
           optional: true,
           authSignals: [
             {
-              provider: "openai-codex",
+              provider: "openai",
             },
           ],
           configSignals: [
@@ -1840,11 +1840,11 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.imageGenerationProviderMetadata).toEqual({
       openai: {
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         authProviders: ["openai"],
         authSignals: [
           {
-            provider: "openai-codex",
+            provider: "openai",
             providerBaseUrl: {
               provider: "openai",
               defaultBaseUrl: "https://api.openai.com/v1",
@@ -1892,7 +1892,7 @@ describe("loadPluginManifestRegistry", () => {
         optional: true,
         authSignals: [
           {
-            provider: "openai-codex",
+            provider: "openai",
           },
         ],
         configSignals: [
@@ -2143,9 +2143,9 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "openai",
-      providers: ["openai", "openai-codex"],
+      providers: ["openai", "openai"],
       speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai", "openai-codex"],
+      mediaUnderstandingProviders: ["openai", "openai"],
       imageGenerationProviders: ["openai"],
       configSchema: { type: "object" },
     });

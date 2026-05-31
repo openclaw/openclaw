@@ -11,20 +11,20 @@ import {
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
+import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
   createOAuthLoginCancelledError,
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
-} from "./openai-codex-oauth-abort.runtime.js";
-import { oauthErrorHtml, oauthSuccessHtml } from "./openai-codex-oauth-page.runtime.js";
+} from "./openai-chatgpt-oauth-abort.runtime.js";
+import { oauthErrorHtml, oauthSuccessHtml } from "./openai-chatgpt-oauth-page.runtime.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
   OAuthPrompt,
   OAuthProviderInterface,
-} from "./openai-codex-oauth-types.runtime.js";
-import { generatePKCE } from "./openai-codex-pkce.runtime.js";
+} from "./openai-chatgpt-oauth-types.runtime.js";
+import { generatePKCE } from "./openai-chatgpt-pkce.runtime.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
@@ -175,7 +175,7 @@ async function postTokenForm(
     },
     timeoutMs,
     signal: options.signal,
-    auditContext: "openai-codex-oauth-token",
+    auditContext: "openai-chatgpt-oauth-token",
   });
   try {
     const responseBody = await response.arrayBuffer();
@@ -573,7 +573,7 @@ export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAu
 }
 
 export const openaiCodexOAuthProvider: OAuthProviderInterface = {
-  id: "openai-codex",
+  id: "openai",
   name: "ChatGPT Plus/Pro (Codex Subscription)",
   usesCallbackServer: true,
 

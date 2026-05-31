@@ -76,11 +76,9 @@ function shouldApplyOpenAIAttributionHeaders(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-}): "openai" | "openai-codex" | undefined {
+}): "openai" | undefined {
   const attributionProvider = resolveOpenAIRequestCapabilities(model).attributionProvider;
-  return attributionProvider === "openai" || attributionProvider === "openai-codex"
-    ? attributionProvider
-    : undefined;
+  return attributionProvider === "openai" ? attributionProvider : undefined;
 }
 
 function shouldUseCodexNativeTransport(model: {
@@ -90,10 +88,10 @@ function shouldUseCodexNativeTransport(model: {
   compat?: unknown;
 }): boolean {
   const api = readStringValue(model.api);
-  if (api !== "openai-codex-responses") {
+  if (api !== "openai-chatgpt-responses") {
     return false;
   }
-  return resolveOpenAIRequestCapabilities(model).endpointClass === "openai-codex";
+  return resolveOpenAIRequestCapabilities(model).endpointClass === "openai";
 }
 
 function shouldApplyOpenAIServiceTier(model: {
@@ -530,9 +528,9 @@ export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined):
   return (model, context, options) => {
     if (
       (model.api !== "openai-responses" &&
-        model.api !== "openai-codex-responses" &&
+        model.api !== "openai-chatgpt-responses" &&
         model.api !== "azure-openai-responses") ||
-      (model.provider !== "openai" && model.provider !== "openai-codex")
+      model.provider !== "openai"
     ) {
       return underlying(model, context, options);
     }
@@ -577,12 +575,12 @@ export function createOpenAITextVerbosityWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
+    if (model.api !== "openai-responses" && model.api !== "openai-chatgpt-responses") {
       return underlying(model, context, options);
     }
     const resolvedVerbosity = resolveOpenAITextVerbosityForModel(model, verbosity);
     const shouldOverrideExistingVerbosity =
-      model.api === "openai-codex-responses" || resolvedVerbosity !== verbosity;
+      model.api === "openai-chatgpt-responses" || resolvedVerbosity !== verbosity;
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,

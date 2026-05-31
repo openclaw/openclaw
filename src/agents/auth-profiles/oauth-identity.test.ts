@@ -319,7 +319,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
   };
   const refreshed = {
     type: "oauth",
-    provider: "openai-codex",
+    provider: "openai",
     access: "fresh-access",
     refresh: "fresh-refresh",
     expires: 2_000,
@@ -337,7 +337,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "matching older oauth credential",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -350,7 +350,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "non-finite existing expiry",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: Number.NaN,
@@ -363,7 +363,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "out-of-range existing expiry",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: MAX_DATE_TIMESTAMP_MS + 1,
@@ -380,7 +380,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       },
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -393,7 +393,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "identity upgrade",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -405,7 +405,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "api key override",
       existing: {
         type: "api_key",
-        provider: "openai-codex",
+        provider: "openai",
         key: "operator-key",
       },
       shouldMirror: false,
@@ -428,7 +428,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "identity mismatch",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,
@@ -441,7 +441,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "strictly fresher existing credential",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "main-fresh",
         refresh: "main-fresh-refresh",
         expires: 3_000,
@@ -469,7 +469,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       shouldMirrorRefreshedOAuthCredential({
         existing: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "main-identity-access",
           refresh: "main-identity-refresh",
           expires: 1_000,
@@ -477,7 +477,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
         },
         refreshed: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "fresh-access",
           refresh: "fresh-refresh",
           expires: 2_000,

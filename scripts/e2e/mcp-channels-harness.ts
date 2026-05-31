@@ -300,6 +300,7 @@ function isRetryableGatewayConnectError(error: Error): boolean {
   return (
     message.includes("gateway ws open timeout") ||
     message.includes("gateway connect timeout") ||
+    message.includes("closed before open") ||
     message.includes("gateway closed") ||
     message.includes("econnrefused") ||
     message.includes("socket hang up")

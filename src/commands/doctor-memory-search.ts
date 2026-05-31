@@ -667,6 +667,9 @@ async function hasApiKeyForProvider(
 }
 
 function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
+  if (provider === "openai") {
+    return "OPENAI_API_KEY";
+  }
   const metadata = resolveMemoryEmbeddingProviderDoctorMetadata(provider);
   return metadata?.envVars[0] ?? `${provider.toUpperCase()}_API_KEY`;
 }

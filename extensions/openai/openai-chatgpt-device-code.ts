@@ -2,8 +2,8 @@ import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import { resolveCodexAccessTokenExpiry } from "./openai-codex-auth-identity.js";
-import { trimNonEmptyString } from "./openai-codex-shared.js";
+import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
+import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
 
 const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
 const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";

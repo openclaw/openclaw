@@ -929,11 +929,11 @@ describe("test-projects args", () => {
   });
 
   it("routes direct OpenAI provider extension file targets to the OpenAI provider config", () => {
-    expect(buildVitestRunPlans(["extensions/openai/openai-codex-provider.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["extensions/openai/openai-chatgpt-provider.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.extension-provider-openai.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/openai/openai-codex-provider.test.ts"],
+        includePatterns: ["extensions/openai/openai-chatgpt-provider.test.ts"],
         watchMode: false,
       },
     ]);

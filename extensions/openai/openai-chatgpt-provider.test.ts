@@ -3,11 +3,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./openai-codex-provider.runtime.js", () => ({
+vi.mock("./openai-chatgpt-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
 }));
 
-vi.mock("./openai-codex-device-code.js", () => ({
+vi.mock("./openai-chatgpt-device-code.js", () => ({
   loginOpenAICodexDeviceCode: loginOpenAICodexDeviceCodeMock,
 }));
 
@@ -28,23 +28,14 @@ describe("OpenAI provider Codex transport hooks", () => {
 
     expect(provider.id).toBe("openai");
     expect(provider.aliases).toBeUndefined();
-    expect(provider.hookAliases).toEqual([
-      "openai-codex",
-      "azure-openai",
-      "azure-openai-responses",
-    ]);
+    expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
     expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code", "api-key"]);
     expect(provider.auth?.map((method) => method.wizard?.choiceId)).toEqual([
       "openai",
       "openai-device-code",
       "openai-api-key",
     ]);
-    expect(provider.oauthProfileIdRepairs).toEqual([
-      {
-        legacyProfileId: "openai-codex:default",
-        promptLabel: "OpenAI",
-      },
-    ]);
+    expect(provider.oauthProfileIdRepairs).toBeUndefined();
   });
 
   it("stores device-code logins as OpenAI OAuth profiles", async () => {
@@ -85,14 +76,14 @@ describe("OpenAI provider Codex transport hooks", () => {
     const model = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-5.4",
-      providerConfig: { api: "openai-codex-responses" },
+      providerConfig: { api: "openai-chatgpt-responses" },
       modelRegistry: { find: () => null },
     } as never);
 
     expect(model).toMatchObject({
       provider: "openai",
       id: "gpt-5.4",
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
@@ -103,7 +94,7 @@ describe("OpenAI provider Codex transport hooks", () => {
     const model = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-5.5",
-      providerConfig: { api: "openai-codex-responses" },
+      providerConfig: { api: "openai-chatgpt-responses" },
       modelRegistry: {
         find: () => ({
           provider: "openai",
@@ -123,7 +114,7 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(model).toMatchObject({
       provider: "openai",
       id: "gpt-5.5",
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
@@ -134,7 +125,7 @@ describe("OpenAI provider Codex transport hooks", () => {
     const model = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-5.4",
-      providerConfig: { api: "openai-codex-responses" },
+      providerConfig: { api: "openai-chatgpt-responses" },
       modelRegistry: {
         find: () => ({
           provider: "openai",
@@ -154,7 +145,7 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(model).toMatchObject({
       provider: "openai",
       id: "gpt-5.4",
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });

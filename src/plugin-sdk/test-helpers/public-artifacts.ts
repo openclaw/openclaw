@@ -19,7 +19,7 @@ const EXTRA_GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES = assertUniqueValues(
     "index.js",
     "login-qr-api.js",
     "onboard.js",
-    "openai-codex-catalog.js",
+    "openai-chatgpt-catalog.js",
     "provider-catalog.js",
     "session-key-api.js",
     "setup-api.js",

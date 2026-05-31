@@ -97,7 +97,7 @@ function setOwningProviderManifestPlugins() {
     }),
     createManifestProviderPlugin({
       id: "openai",
-      providerIds: ["openai", "openai-codex"],
+      providerIds: ["openai", "openai"],
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -121,7 +121,7 @@ function setOwningProviderManifestPluginsWithWorkspace() {
     }),
     createManifestProviderPlugin({
       id: "openai",
-      providerIds: ["openai", "openai-codex"],
+      providerIds: ["openai", "openai"],
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -611,12 +611,12 @@ describe("resolvePluginProviders", () => {
     const plugins = [
       createManifestProviderPlugin({
         id: "openai",
-        providerIds: ["openai", "openai-codex"],
+        providerIds: ["openai", "openai"],
       }),
     ];
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(createMetadataSnapshotFixture(plugins));
 
-    expectOwningPluginIds("openai-codex", ["openai"]);
+    expectOwningPluginIds("openai", ["openai"]);
 
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith({
@@ -703,14 +703,14 @@ describe("resolvePluginProviders", () => {
         id: "openai",
         providerIds: ["openai"],
         providerAuthAliases: {
-          "openai-codex": "openai",
+          openai: "openai",
         },
       }),
     ]);
 
     expectOwningPluginIds("openai", ["openai"]);
-    expectOwningPluginIds("openai-codex", ["openai"]);
-    expectModelOwningPluginIds("openai-codex/gpt-5.5", ["openai"]);
+    expectOwningPluginIds("openai", ["openai"]);
+    expectModelOwningPluginIds("openai/gpt-5.5", ["openai"]);
   });
 
   it("reflects provider ownership manifest changes on the next lookup", () => {
@@ -1216,7 +1216,7 @@ describe("resolvePluginProviders", () => {
 
     resolvePluginProviders({
       config: {},
-      providerRefs: ["openai-codex"],
+      providerRefs: ["openai"],
       activate: true,
     });
 
@@ -1634,7 +1634,7 @@ describe("resolvePluginProviders", () => {
       expectedPluginIds: ["minimax"],
     },
     {
-      provider: "openai-codex",
+      provider: "openai",
       expectedPluginIds: ["openai"],
     },
     {
@@ -1778,7 +1778,7 @@ describe("resolvePluginProviders", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "openai",
-        providerIds: ["openai", "openai-codex"],
+        providerIds: ["openai", "openai"],
         modelSupport: {
           modelPrefixes: ["gpt-", "o1", "o3", "o4"],
         },

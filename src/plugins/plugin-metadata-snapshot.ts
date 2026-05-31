@@ -455,6 +455,9 @@ export function isPluginMetadataSnapshotCompatible(params: {
 function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: string): void {
   const existing = owners.get(ownedId);
   if (existing) {
+    if (existing.includes(pluginId)) {
+      return;
+    }
     existing.push(pluginId);
     return;
   }

@@ -91,7 +91,7 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
   resolveContextConfigProviderForRuntime,
   resolveSelectedOpenAIRuntimeProvider,
-} from "../openai-codex-routing.js";
+} from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -783,11 +783,11 @@ export async function runEmbeddedAgent(
       const pluginHarnessNeedsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
         provider === OPENAI_PROVIDER_ID &&
-        effectiveModel.api === "openai-codex-responses";
+        effectiveModel.api === "openai-chatgpt-responses";
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
         !pluginHarnessOwnsTransport &&
         provider === OPENAI_PROVIDER_ID &&
-        effectiveModel.api === "openai-codex-responses";
+        effectiveModel.api === "openai-chatgpt-responses";
       let piExternalCliAuthScope = pluginHarnessOwnsTransport
         ? { ignoreAutoPreferredProfile: false }
         : openClawNativeCodexResponsesNeedsAuthBootstrap

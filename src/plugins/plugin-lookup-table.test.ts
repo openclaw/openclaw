@@ -187,7 +187,7 @@ describe("loadPluginLookUpTable", () => {
         origin: "bundled",
         providers: ["openai"],
         providerAuthAliases: {
-          "openai-codex": "openai",
+          openai: "openai",
         },
         modelCatalog: {
           aliases: {
@@ -247,11 +247,11 @@ describe("loadPluginLookUpTable", () => {
       expect(table.metrics[metricName]).toBeGreaterThanOrEqual(0);
     }
     expect(table.byPluginId.get("telegram")?.id).toBe("telegram");
-    expect(table.normalizePluginId("openai-codex")).toBe("openai");
+    expect(table.normalizePluginId("openai")).toBe("openai");
     expect(table.owners.channels.get("telegram")).toEqual(["telegram"]);
     expect(table.owners.channelConfigs.get("telegram")).toEqual(["telegram"]);
     expect(table.owners.providers.get("openai")).toEqual(["openai"]);
-    expect(table.owners.providers.get("openai-codex")).toEqual(["openai"]);
+    expect(table.owners.providers.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("azure-openai-responses")).toEqual(["openai"]);
     expect(table.owners.cliBackends.get("codex-cli")).toBeUndefined();
