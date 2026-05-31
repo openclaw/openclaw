@@ -184,7 +184,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
@@ -203,7 +203,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed.",
+      text: "LLM request failed: provider rejected the request schema or tool payload.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET");

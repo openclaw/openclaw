@@ -72,6 +72,8 @@ export {
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
+const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
+  "LLM request failed: provider rejected the request schema or tool payload.";
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
@@ -1333,7 +1335,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "schema") {
-    return "LLM request failed: provider rejected the request schema or tool payload.";
+    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
 
   if (providerRuntimeFailureKind === "replay_invalid") {
@@ -1387,8 +1389,15 @@ export function formatUserFacingAssistantErrorText(
 ): string {
   const friendlyError = formatAssistantErrorText(msg, opts);
   const rawError = msg.errorMessage?.trim();
-  const safeFriendlyError = isRawAssistantErrorPassthrough({ friendlyError, rawError })
-    ? undefined
+  const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
+  const parsedErrorType = parseApiErrorInfo(rawError ?? "")?.type?.toLowerCase() ?? "";
+  const rawProviderSchemaError =
+    friendlyError?.startsWith("LLM request rejected:") ||
+    parsedErrorType.includes("invalid_request");
+  const safeFriendlyError = rawPassthrough
+    ? rawProviderSchemaError
+      ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
+      : undefined
     : friendlyError;
   return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
 }

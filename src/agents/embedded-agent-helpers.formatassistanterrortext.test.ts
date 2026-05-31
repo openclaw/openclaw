@@ -122,7 +122,9 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"SECRET\\nCANARY","type":"invalid_request_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error invalid_request_error: SECRET\nCANARY");
-    expect(formatUserFacingAssistantErrorText(msg)).toBe("LLM request failed.");
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
   });
   it("sanitizes Codex error-prefixed JSON payloads", () => {
     const msg = makeAssistantError(
@@ -551,6 +553,9 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
     );
   });
 });
