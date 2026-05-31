@@ -58,8 +58,8 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
-import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   findOpenAIStrictToolSchemaDiagnostics,
   normalizeOpenAIStrictToolParameters,
@@ -1158,7 +1158,6 @@ function convertResponsesMessages(
           let msgId = resolveReplayableResponsesMessageId({
             replayResponsesItemIds: shouldReplayResponsesItemIds,
             textSignatureId: textSignature?.id,
-            textSignaturePhase: textSignature?.phase,
             fallbackId: `msg_${msgIndex}`,
             fallbackOrdinal: textFallbackOrdinal,
             previousReplayItemWasReasoning,

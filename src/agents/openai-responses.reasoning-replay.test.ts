@@ -246,11 +246,11 @@ describe("openai-responses reasoning replay", () => {
       resolveReplayableResponsesMessageId({
         replayResponsesItemIds: true,
         textSignatureId: "msg_commentary",
-        textSignaturePhase: "commentary",
         fallbackId: "msg_0",
+        fallbackOrdinal: 0,
         previousReplayItemWasReasoning: false,
       }),
-    ).toBe("msg_commentary");
+    ).toBeUndefined();
 
     expect(
       resolveReplayableResponsesMessageId({
@@ -272,7 +272,7 @@ describe("openai-responses reasoning replay", () => {
   });
 
   it.each(["commentary", "final_answer"] as const)(
-    "replays assistant message phase metadata for %s",
+    "replays assistant message id and phase metadata for %s when paired with reasoning",
     async (phase) => {
       const assistantWithText = buildAssistantMessage({
         stopReason: "stop",
@@ -300,6 +300,34 @@ describe("openai-responses reasoning replay", () => {
         (item) => item.id === `msg_${phase}`,
       );
       expect(replayedMessage?.phase).toBe(phase);
+    },
+  );
+
+  it.each(["commentary", "final_answer"] as const)(
+    "omits phase-tagged assistant message id for %s when reasoning is absent",
+    async (phase) => {
+      const assistantWithText = buildAssistantMessage({
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "hello",
+            textSignature: JSON.stringify({ v: 1, id: `msg_${phase}`, phase }),
+          },
+        ],
+      });
+
+      const { input } = await runAbortedOpenAIResponsesStream({
+        messages: [
+          { role: "user", content: "Hi", timestamp: Date.now() },
+          assistantWithText,
+          { role: "user", content: "Ok", timestamp: Date.now() },
+        ],
+      });
+
+      const [replayedMessage] = extractInputMessages(input);
+      expect(replayedMessage).toMatchObject({ phase });
+      expect(replayedMessage).not.toHaveProperty("id");
     },
   );
 

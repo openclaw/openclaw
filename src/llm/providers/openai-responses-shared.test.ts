@@ -127,7 +127,7 @@ describe("convertResponsesTools", () => {
 describe("convertResponsesMessages", () => {
   const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
 
-  it("preserves phase-tagged assistant replay ids without reasoning", () => {
+  it("omits phase-tagged assistant replay ids without reasoning", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
       {
@@ -177,9 +177,19 @@ describe("convertResponsesMessages", () => {
           item.phase === "commentary",
       ),
     ).toMatchObject({
-      id: "msg_commentary",
       phase: "commentary",
     });
+    expect(
+      input.find(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          "role" in item &&
+          item.role === "assistant" &&
+          "phase" in item &&
+          item.phase === "commentary",
+      ),
+    ).not.toHaveProperty("id");
   });
 
   it("omits raw signed assistant ids when the paired reasoning item is absent", () => {

@@ -80,15 +80,14 @@ function parseTextSignature(
 
 function resolveReplayableResponsesMessageId(params: {
   textSignatureId?: string;
-  textSignaturePhase?: TextSignatureV1["phase"];
   fallbackId: string;
+  fallbackOrdinal: number;
   previousReplayItemWasReasoning: boolean;
 }): string | undefined {
   if (!params.textSignatureId) {
-    return params.fallbackId;
-  }
-  if (params.textSignaturePhase) {
-    return params.textSignatureId;
+    return params.fallbackOrdinal === 0
+      ? params.fallbackId
+      : `${params.fallbackId}_${params.fallbackOrdinal}`;
   }
   return params.previousReplayItemWasReasoning ? params.textSignatureId : undefined;
 }
@@ -255,19 +254,14 @@ export function convertResponsesMessages<TApi extends Api>(
         } else if (block.type === "text") {
           const textBlock = block;
           const parsedSignature = parseTextSignature(textBlock.textSignature);
-          let msgId = parsedSignature?.id;
-          if (!msgId) {
-            // Reasoning-dropped/model-switch replay strips textSignature, which can
-            // leave several text blocks in one assistant turn without ids. msgIndex
-            // is per-message, so disambiguate fallbacks to avoid duplicate item ids
-            // (issue #88019).
-            msgId =
-              textFallbackOrdinal === 0
-                ? `msg_${msgIndex}`
-                : `msg_${msgIndex}_${textFallbackOrdinal}`;
+          let msgId = resolveReplayableResponsesMessageId({
+            textSignatureId: parsedSignature?.id,
+            fallbackId: `msg_${msgIndex}`,
+            fallbackOrdinal: textFallbackOrdinal,
+            previousReplayItemWasReasoning,
+          });
+          if (!parsedSignature?.id) {
             textFallbackOrdinal += 1;
-          } else if (!parsedSignature?.phase && !previousReplayItemWasReasoning) {
-            msgId = undefined;
           }
           if (msgId && msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
