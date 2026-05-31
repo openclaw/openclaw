@@ -873,7 +873,7 @@ describe("plugin registry facade", () => {
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
   });
 
-  it("derives a fresh registry without dropping persisted install records", async () => {
+  it("derives a fresh registry without persisted install records when caller disables persisted reads", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);
@@ -899,10 +899,7 @@ describe("plugin registry facade", () => {
 
     expect(result.source).toBe("derived");
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
-    expectInstallRecord(result.snapshot.installRecords, "persisted", {
-      source: "npm",
-      spec: "persisted-plugin@1.0.0",
-    });
+    expect(result.snapshot.installRecords).not.toHaveProperty("persisted");
   });
 
   it("exposes explicit persisted registry inspect and refresh operations", async () => {
