@@ -265,12 +265,12 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
+  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const walMaintenance = configureSqliteWalMaintenance(db, {
     databaseLabel: `openclaw-agent:${agentId}`,
     databasePath: pathname,
   });
   db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   db.exec("PRAGMA foreign_keys = ON;");
   try {
     ensureAgentSchema(db, agentId, pathname);

@@ -892,7 +892,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
 }
 
 function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
-  return options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
+  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
 
 /** Open or return a cached shared state database after schema and migration checks. */
@@ -915,12 +915,12 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
+  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const walMaintenance = configureSqliteWalMaintenance(db, {
     databaseLabel: "openclaw-state",
     databasePath: pathname,
   });
   db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   db.exec("PRAGMA foreign_keys = ON;");
   try {
     ensureSchema(db, pathname);
