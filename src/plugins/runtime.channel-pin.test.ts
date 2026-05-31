@@ -196,4 +196,31 @@ describe("channel registry pinning", () => {
     const adapter = await loadChannelOutboundAdapter("telegram");
     expect(adapter).toBe(outboundAdapter);
   });
+
+  it("loadChannelOutboundAdapter falls back to active registry when pinned setup entry cannot send", async () => {
+    const outboundAdapter = { sendText: async () => ({ messageId: "1" }) };
+    const startup = createEmptyPluginRegistry();
+    startup.channels = [
+      {
+        pluginId: "telegram",
+        plugin: { id: "telegram", meta: {} },
+        source: "setup",
+      },
+    ] as never;
+    const replacement = createEmptyPluginRegistry();
+    replacement.channels = [
+      {
+        pluginId: "telegram",
+        plugin: { id: "telegram", meta: {}, outbound: outboundAdapter },
+        source: "runtime",
+      },
+    ] as never;
+
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+    setActivePluginRegistry(replacement);
+
+    const adapter = await loadChannelOutboundAdapter("telegram");
+    expect(adapter).toBe(outboundAdapter);
+  });
 });
