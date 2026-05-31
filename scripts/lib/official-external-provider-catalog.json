@@ -153,6 +153,62 @@
           "minHostVersion": ">=2026.5.26"
         }
       }
+    },
+    {
+      "name": "@acedatacloud/openclaw-provider",
+      "description": "Ace Data Cloud unified provider plugin (chat + web search via a single OpenAI-compatible endpoint)",
+      "source": "external",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "acedatacloud",
+          "label": "Ace Data Cloud"
+        },
+        "providers": [
+          {
+            "id": "acedatacloud",
+            "name": "Ace Data Cloud",
+            "docs": "/providers/acedatacloud",
+            "categories": ["cloud", "llm"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "acedatacloud-api-key",
+                "choiceLabel": "Ace Data Cloud API key",
+                "choiceHint": "One key for 60+ LLMs plus Google web search.",
+                "groupId": "acedatacloud",
+                "groupLabel": "Ace Data Cloud",
+                "groupHint": "API key",
+                "optionKey": "acedatacloudApiKey",
+                "cliFlag": "--acedata-api-key",
+                "cliOption": "--acedata-api-key <key>",
+                "cliDescription": "Ace Data Cloud API key (https://platform.acedata.cloud)",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "webSearchProviders": [
+          {
+            "id": "acedatacloud",
+            "label": "Ace Data Cloud (Google SERP)",
+            "hint": "Google search, images, news, videos, maps, places via Ace Data Cloud.",
+            "onboardingScopes": ["text-inference"],
+            "requiresCredential": true,
+            "credentialLabel": "Ace Data Cloud API key",
+            "envVars": ["ACEDATA_API_KEY", "ACEDATACLOUD_API_KEY"],
+            "placeholder": "ace-...",
+            "signupUrl": "https://platform.acedata.cloud",
+            "docsUrl": "https://docs.acedata.cloud/serp/google",
+            "credentialPath": "acedatacloud.webSearch.apiKey"
+          }
+        ],
+        "install": {
+          "npmSpec": "@acedatacloud/openclaw-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.4.2"
+        }
+      }
     }
   ]
 }
