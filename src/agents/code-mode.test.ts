@@ -784,8 +784,8 @@ describe("Code Mode", () => {
         type: "object",
         properties: {
           owner: { type: "string" },
-          repo: { type: "string" },
-          title: { type: "string" },
+          repo: { type: "string", description: "Repository name" },
+          title: { type: "string", description: "Issue title\nShown in tracker" },
           body: { type: "string", default: "" },
         },
         required: ["owner", "repo", "title"],
@@ -807,16 +807,42 @@ describe("Code Mode", () => {
       execTool: codeModeTools[0],
       waitTool: codeModeTools[1],
       code: `
-        const created = await MCP.github.createIssue("openclaw", "openclaw", "Ship it");
+        const rootApi = await MCP.$api();
+        const api = await MCP.github.$api("createIssue", { schema: true });
+        const created = await MCP.github.createIssue({
+          owner: "openclaw",
+          repo: "openclaw",
+          title: "Ship it",
+        });
         const createdPayload = JSON.parse(created.content[0].text);
+        const searchHits = await tools.search("github create issue", { limit: 5 });
+        const allHasMcp = ALL_TOOLS.some((tool) => tool.source === "mcp");
         let directCall;
+        let directDescribe;
         try {
-          await tools.github__create_issue({ owner: "x", repo: "y", title: "blocked" });
+          await tools.describe("github__create_issue");
+          directDescribe = "unexpected";
+        } catch (error) {
+          directDescribe = error.message;
+        }
+        try {
+          await tools.call("github__create_issue", { owner: "x", repo: "y", title: "blocked" });
           directCall = "unexpected";
         } catch (error) {
           directCall = error.message;
         }
-        return { createdPayload, createdDetails: created.details, directCall, hasMcp: "MCP" in namespaces };
+        return {
+          apiHeader: api.header,
+          apiSchemaTitle: api.schemas.createIssue.type,
+          rootServers: rootApi.servers,
+          createdPayload,
+          createdDetails: created.details,
+          searchHits,
+          allHasMcp,
+          directDescribe,
+          directCall,
+          hasMcp: "MCP" in namespaces,
+        };
       `,
     });
 
@@ -842,9 +868,19 @@ describe("Code Mode", () => {
           body: "",
         },
       },
-      directCall: "MCP tools are available in code mode only through the MCP namespace.",
+      searchHits: [],
+      allHasMcp: false,
+      directDescribe: "Unknown tool id: github__create_issue",
+      directCall: "Unknown tool id: github__create_issue",
       hasMcp: true,
+      apiSchemaTitle: "object",
+      apiHeader: expect.stringContaining("function createIssue("),
+      rootServers: [{ identifier: "github", serverName: "github", toolCount: 1 }],
     });
+    const value = details.value as { apiHeader: string };
+    expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
+    expect(value.apiHeader).not.toContain("@param title Issue title\n");
+    expect(value.apiHeader).toContain("title: string;");
     expect(githubCreate.execute).toHaveBeenCalledTimes(1);
   });
 
@@ -888,9 +924,10 @@ describe("Code Mode", () => {
       execTool: codeModeTools[0],
       waitTool: codeModeTools[1],
       code: `
-        const resource = await MCP.docs.resources.read("memo://one");
-        const prompt = await MCP.docs.prompts.get("brief", { topic: "mcp" });
-        return { resource: resource.details, prompt: prompt.details };
+        const api = await MCP.docs.$api();
+        const resource = await MCP.docs.resources.read({ uri: "memo://one" });
+        const prompt = await MCP.docs.prompts.get({ name: "brief", arguments: { topic: "mcp" } });
+        return { header: api.header, resource: resource.details, prompt: prompt.details };
       `,
     });
 
@@ -906,6 +943,7 @@ describe("Code Mode", () => {
         toolName: "prompts_get",
         input: { name: "brief", arguments: { topic: "mcp" } },
       },
+      header: expect.stringContaining("namespace resources"),
     });
   });
 
@@ -933,7 +971,7 @@ describe("Code Mode", () => {
     const details = await runUntilCompleted({
       execTool: codeModeTools[0],
       waitTool: codeModeTools[1],
-      code: 'return (await MCP.constructor2.prototype2("safe")).details;',
+      code: 'return (await MCP.constructor2.prototype2({ value: "safe" })).details;',
     });
 
     expect(details.status).toBe("completed");
@@ -1640,6 +1678,58 @@ describe("Code Mode", () => {
     expect(String(details.error)).toContain("output limit exceeded");
     expect(details.code).toBe("output_limit_exceeded");
     expect(testing.activeRuns.size).toBe(beforeRunCount);
+  });
+
+  it("enforces output limits before auto-draining namespace calls", async () => {
+    registerTestNamespace({
+      id: "tickets",
+      pluginId: "fake-code-mode",
+      globalName: "Tickets",
+      requiredToolNames: ["fake_list_issues"],
+      createScope: () => ({
+        list: createCodeModeNamespaceTool("fake_list_issues", ([input]) => input),
+      }),
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: true,
+          maxOutputBytes: 1024,
+        },
+      },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const tools = createCodeModeTools(ctx);
+    const listIssues = pluginToolWithExecute("fake_list_issues", "List issues", async () =>
+      jsonResult({ ok: true }),
+    );
+    applyCodeModeCatalog({
+      tools: [...tools, listIssues],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await tools[0].execute("code-call-large-namespace", {
+        code: 'text("x".repeat(2048)); await Tickets.list({ state: "open" }); return 1;',
+      }),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(String(details.error)).toContain("output limit exceeded");
+    expect(details.code).toBe("output_limit_exceeded");
+    expect(listIssues.execute).not.toHaveBeenCalled();
   });
 
   it("preserves guest output when a run fails", async () => {

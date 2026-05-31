@@ -39,6 +39,9 @@ const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
 type ToolSearchMode = "code" | "tools";
 type CatalogSource = "openclaw" | "mcp" | "client";
 type CatalogTool = AnyAgentTool | ToolDefinition;
+type CatalogVisibilityOptions = {
+  includeMcp?: boolean;
+};
 
 type ReusableCatalogSnapshot = {
   entries: ToolSearchCatalogEntry[];
@@ -1012,9 +1015,22 @@ function scoreEntry(entry: ToolSearchCatalogEntry, terms: string[]): number {
   return score;
 }
 
-function findEntry(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {
+function visibleCatalogEntries(
+  catalog: ToolSearchCatalogSession,
+  options?: CatalogVisibilityOptions,
+): ToolSearchCatalogEntry[] {
+  return options?.includeMcp === false
+    ? catalog.entries.filter((entry) => entry.source !== "mcp")
+    : catalog.entries;
+}
+
+function findEntry(
+  catalog: ToolSearchCatalogSession,
+  id: string,
+  options?: CatalogVisibilityOptions,
+): ToolSearchCatalogEntry {
   const needle = id.trim();
-  const entry = catalog.entries.find(
+  const entry = visibleCatalogEntries(catalog, options).find(
     (candidate) => candidate.id === needle || candidate.name === needle,
   );
   if (!entry) {
@@ -1105,12 +1121,12 @@ export class ToolSearchRuntime {
     private readonly config: ToolSearchConfig,
   ) {}
 
-  search = async (query: string, options?: { limit?: number }) => {
+  search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.searchCount += 1;
     const limit = readLimit(options?.limit, this.config);
     const terms = tokenize(query);
-    return catalog.entries
+    return visibleCatalogEntries(catalog, options)
       .map((entry) => ({ entry, score: scoreEntry(entry, terms) }))
       .filter((hit) => hit.score > 0)
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
@@ -1118,9 +1134,9 @@ export class ToolSearchRuntime {
       .map((hit) => compactEntry(hit.entry));
   };
 
-  all = () => {
+  all = (options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    return catalog.entries.map((entry) => compactEntry(entry));
+    return visibleCatalogEntries(catalog, options).map((entry) => compactEntry(entry));
   };
 
   namespaceEntries = () => {
@@ -1132,10 +1148,10 @@ export class ToolSearchRuntime {
     );
   };
 
-  describe = async (id: string) => {
+  describe = async (id: string, options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
-    return describeEntry(findEntry(catalog, id));
+    return describeEntry(findEntry(catalog, id, options));
   };
 
   call = async (
