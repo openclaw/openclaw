@@ -51,8 +51,13 @@ export function migrateLegacyNotifyFallback(params: {
         : null;
     const completionMode = normalizeOptionalLowercaseString(completionDestination?.mode);
     const completionTo = normalizeOptionalString(completionDestination?.to);
+    const validWebhookTo = to ? normalizeHttpWebhookUrl(to) : undefined;
+    const validCompletionTo = completionTo ? normalizeHttpWebhookUrl(completionTo) : undefined;
 
-    if ((mode === "webhook" && to) || (completionMode === "webhook" && completionTo)) {
+    if (
+      (mode === "webhook" && validWebhookTo) ||
+      (completionMode === "webhook" && validCompletionTo)
+    ) {
       delete raw.notify;
       changed = true;
       continue;
@@ -68,7 +73,7 @@ export function migrateLegacyNotifyFallback(params: {
       raw.delivery = {
         ...delivery,
         mode: "webhook",
-        to: mode === "none" ? params.legacyWebhook : (to ?? params.legacyWebhook),
+        to: mode === "none" ? params.legacyWebhook : (validWebhookTo ?? params.legacyWebhook),
       };
       delete raw.notify;
       changed = true;

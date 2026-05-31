@@ -615,6 +615,56 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(delivery.to).toBe("https://example.invalid/cron-finished");
   });
 
+  it("migrates invalid legacy notify webhook delivery jobs to cron.webhook", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "notify-invalid-webhook",
+              name: "Notify invalid webhook",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "every", everyMs: 60_000 },
+              payload: {
+                kind: "systemEvent",
+                text: "Status",
+              },
+              delivery: { mode: "webhook", to: "ftp://example.invalid/cron" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "https://example.invalid/cron-finished",
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.notify).toBeUndefined();
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.to).toBe("https://example.invalid/cron-finished");
+  });
+
   it("repairs legacy root delivery threadId hints into delivery", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [
