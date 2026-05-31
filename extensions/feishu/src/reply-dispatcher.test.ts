@@ -403,6 +403,83 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("keeps oversized auto mode plain final text on the chunked message path", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text: "0123456789abcdefghij" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "first message send params", {
+      text: "0123456789",
+    });
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "second message send params",
+      {
+        text: "abcdefghij",
+      },
+      1,
+    );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps oversized auto mode markdown final text on the chunked card path", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
+
+    const { options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
+    await options.deliver({ text: "```ts\nconst x = 1\n```\ntail" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendStructuredCardFeishuMock, "first card send params", {
+      text: "```ts\nx\n```",
+    });
+    expectMockArgFields(
+      sendStructuredCardFeishuMock,
+      "second card send params",
+      {
+        text: "tail",
+      },
+      1,
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("discards partial streaming preview before oversized final text fallback", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkTextWithMode.mockReturnValue(["final text", " overflow"]);
+
+    const { result, options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
+    result.replyOptions.onPartialReply?.({ text: "partial" });
+    await options.deliver({ text: "final text overflow" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].discard).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "first message send params", {
+      text: "final text",
+    });
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "second message send params",
+      {
+        text: " overflow",
+      },
+      1,
+    );
+  });
+
   it("keeps auto mode plain tool text on the message path when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "tool summary" }, { kind: "tool" });
