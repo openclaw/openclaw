@@ -147,6 +147,10 @@ const LEGACY_DELIVERY_QUEUE_DIRS = [
   { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
   { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
 ] as const;
+type LegacyDeliveryQueueFile = {
+  sourcePath: string;
+  status: "pending" | "failed";
+};
 
 class LegacyPluginStateSidecarConflictError extends Error {
   constructor(readonly conflictedKeys: string[]) {
@@ -826,10 +830,18 @@ function resolveLegacyDeliveryQueuePath(stateDir: string, dirName: string): stri
   return path.join(stateDir, dirName);
 }
 
-function listLegacyDeliveryQueueFiles(queueDir: string): string[] {
-  return safeReadDir(queueDir)
+function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile[] {
+  const pending = safeReadDir(queueDir)
     .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => path.join(queueDir, entry.name));
+    .map((entry) => ({ sourcePath: path.join(queueDir, entry.name), status: "pending" as const }));
+  const failedDir = path.join(queueDir, "failed");
+  const failed = safeReadDir(failedDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => ({
+      sourcePath: path.join(failedDir, entry.name),
+      status: "failed" as const,
+    }));
+  return [...pending, ...failed];
 }
 
 function readLegacyDeliveryQueueEntry(sourcePath: string): Record<string, unknown> | null {
@@ -874,6 +886,7 @@ function legacyQueueMetadata(entry: Record<string, unknown>): {
 function buildLegacyDeliveryQueueRow(params: {
   queueName: string;
   id: string;
+  status: "pending" | "failed";
   entry: Record<string, unknown>;
   now: number;
 }): SqliteBindRow {
@@ -884,7 +897,7 @@ function buildLegacyDeliveryQueueRow(params: {
   return {
     queue_name: params.queueName,
     id: params.id,
-    status: "pending",
+    status: params.status,
     entry_kind: meta.entryKind,
     session_key: meta.sessionKey,
     channel: meta.channel,
@@ -903,7 +916,7 @@ function buildLegacyDeliveryQueueRow(params: {
     entry_json: JSON.stringify({ ...params.entry, id: params.id, enqueuedAt, retryCount }),
     enqueued_at: enqueuedAt,
     updated_at: params.now,
-    failed_at: null,
+    failed_at: params.status === "failed" ? params.now : null,
   };
 }
 
@@ -985,8 +998,9 @@ async function migrateLegacyDeliveryQueues(params: {
           );
           const now = Date.now();
           for (const file of files) {
-            const entry = readLegacyDeliveryQueueEntry(file);
-            const id = typeof entry?.id === "string" ? entry.id : path.basename(file, ".json");
+            const entry = readLegacyDeliveryQueueEntry(file.sourcePath);
+            const id =
+              typeof entry?.id === "string" ? entry.id : path.basename(file.sourcePath, ".json");
             if (!entry || !id) {
               skipped++;
               continue;
@@ -994,6 +1008,7 @@ async function migrateLegacyDeliveryQueues(params: {
             const row = buildLegacyDeliveryQueueRow({
               queueName: queue.queueName,
               id,
+              status: file.status,
               entry,
               now,
             });

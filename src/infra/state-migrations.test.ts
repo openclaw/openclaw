@@ -287,7 +287,9 @@ describe("state migrations", () => {
     const env = createEnv(stateDir);
     const cfg = createConfig();
     await fs.mkdir(path.join(stateDir, "delivery-queue"), { recursive: true });
+    await fs.mkdir(path.join(stateDir, "delivery-queue", "failed"), { recursive: true });
     await fs.mkdir(path.join(stateDir, "session-delivery-queue"), { recursive: true });
+    await fs.mkdir(path.join(stateDir, "session-delivery-queue", "failed"), { recursive: true });
     await fs.writeFile(
       path.join(stateDir, "delivery-queue", "outbound-1.json"),
       JSON.stringify({
@@ -314,6 +316,32 @@ describe("state migrations", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(stateDir, "delivery-queue", "failed", "outbound-failed.json"),
+      JSON.stringify({
+        id: "outbound-failed",
+        enqueuedAt: 30,
+        retryCount: 3,
+        channel: "telegram",
+        to: "456",
+        lastError: "permanent",
+        payloads: [{ text: "nope" }],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(stateDir, "session-delivery-queue", "failed", "session-failed.json"),
+      JSON.stringify({
+        id: "session-failed",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "failed resume",
+        lastError: "expired",
+        retryCount: 3,
+        enqueuedAt: 40,
+      }),
+      "utf8",
+    );
 
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     expect(detected.deliveryQueues.hasLegacy).toBe(true);
@@ -322,26 +350,50 @@ describe("state migrations", () => {
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain(
-      "Migrated 1 outbound delivery queue entry → shared SQLite state",
+      "Migrated 2 outbound delivery queue entries → shared SQLite state",
     );
     expect(result.changes).toContain(
-      "Migrated 1 session delivery queue entry → shared SQLite state",
+      "Migrated 2 session delivery queue entries → shared SQLite state",
     );
     const { db } = openOpenClawStateDatabase({ env });
     const rows = db
       .prepare(
-        "SELECT queue_name, id, channel, target, retry_count FROM delivery_queue_entries ORDER BY queue_name, id",
+        "SELECT queue_name, id, status, channel, target, retry_count FROM delivery_queue_entries ORDER BY queue_name, id",
       )
       .all();
     expect(rows).toEqual([
       {
         queue_name: "outbound",
         id: "outbound-1",
+        status: "pending",
         channel: "telegram",
         target: "123",
         retry_count: 2,
       },
-      { queue_name: "session", id: "session-1", channel: null, target: null, retry_count: 0 },
+      {
+        queue_name: "outbound",
+        id: "outbound-failed",
+        status: "failed",
+        channel: "telegram",
+        target: "456",
+        retry_count: 3,
+      },
+      {
+        queue_name: "session",
+        id: "session-1",
+        status: "pending",
+        channel: null,
+        target: null,
+        retry_count: 0,
+      },
+      {
+        queue_name: "session",
+        id: "session-failed",
+        status: "failed",
+        channel: null,
+        target: null,
+        retry_count: 3,
+      },
     ]);
     await expectMissingPath(path.join(stateDir, "delivery-queue"));
     await expectMissingPath(path.join(stateDir, "session-delivery-queue"));
