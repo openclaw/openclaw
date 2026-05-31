@@ -108,6 +108,31 @@ async function writeLegacyCronArraySnapshot(storePath: string, jobs: CronJob[]) 
   await fs.writeFile(storePath, JSON.stringify(jobs, null, 2), "utf-8");
 }
 
+function insertCronJobRow(storePath: string, job: CronJob) {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db.prepare(
+      `INSERT INTO cron_jobs (
+        store_key, job_id, name, enabled, created_at_ms, schedule_kind,
+        session_target, wake_mode, payload_kind, payload_message, job_json, state_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      path.resolve(storePath),
+      job.id,
+      job.name,
+      job.enabled ? 1 : 0,
+      job.createdAtMs,
+      job.schedule.kind,
+      job.sessionTarget,
+      job.wakeMode,
+      job.payload.kind,
+      "message" in job.payload ? job.payload.message : null,
+      JSON.stringify(job),
+      JSON.stringify(job.state),
+      job.updatedAtMs,
+    );
+  });
+}
+
 async function expectDueIsolatedManualRunProgresses(storePath: string, now: number) {
   const state = createOkIsolatedCronState({ storePath, now, summary: "done" });
 
@@ -217,7 +242,6 @@ describe("cron service ops seam coverage", () => {
 
   it("migrates legacy notify fallback before scheduler startup", async () => {
     const { storePath } = await makeStorePath();
-    const storeKey = path.resolve(storePath);
     const now = Date.parse("2026-05-20T09:00:00.000Z");
     const legacyJob = {
       id: "legacy-notify",
@@ -233,28 +257,7 @@ describe("cron service ops seam coverage", () => {
       notify: true,
       state: { nextRunAtMs: now + 3_600_000 },
     } as CronJob & { notify: true };
-    runOpenClawStateWriteTransaction(({ db }) => {
-      db.prepare(
-        `INSERT INTO cron_jobs (
-          store_key, job_id, name, enabled, created_at_ms, schedule_kind,
-          session_target, wake_mode, payload_kind, payload_message, job_json, state_json, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        storeKey,
-        legacyJob.id,
-        legacyJob.name,
-        1,
-        legacyJob.createdAtMs,
-        "every",
-        "isolated",
-        "next-heartbeat",
-        "agentTurn",
-        null,
-        JSON.stringify(legacyJob),
-        JSON.stringify(legacyJob.state),
-        legacyJob.updatedAtMs,
-      );
-    });
+    insertCronJobRow(storePath, legacyJob);
     const state = createCronServiceState({
       storePath,
       cronEnabled: true,
@@ -285,6 +288,58 @@ describe("cron service ops seam coverage", () => {
     expect(logger.info).toHaveBeenCalledWith(
       { storePath },
       "cron: migrated legacy notify fallback jobs before scheduler startup",
+    );
+  });
+
+  it("keeps legacy notify fallback retryable when cron.webhook is invalid", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-05-20T09:00:00.000Z");
+    const legacyJob = {
+      id: "legacy-notify-invalid-config",
+      name: "legacy notify invalid config",
+      enabled: true,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: "every", everyMs: 3_600_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do work" },
+      notify: true,
+      state: { nextRunAtMs: now + 3_600_000 },
+    } as CronJob & { notify: true };
+    insertCronJobRow(storePath, legacyJob);
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { webhook: "ftp://example.invalid/cron" },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await start(state);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+
+    const loaded = await loadCronStore(storePath);
+    const persisted = loaded.jobs[0] as CronJob & { notify?: unknown };
+    expect(persisted.notify).toBe(true);
+    expect(persisted.delivery?.completionDestination).toBeUndefined();
+    expect(logger.info).not.toHaveBeenCalledWith(
+      { storePath },
+      "cron: migrated legacy notify fallback jobs before scheduler startup",
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        storePath,
+        warnings: [
+          'Cron job "legacy notify invalid config" still uses legacy notify fallback, but cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically.',
+        ],
+      },
+      "cron: legacy notify fallback jobs need cron.webhook before migration",
     );
   });
 

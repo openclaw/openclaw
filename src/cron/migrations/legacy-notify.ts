@@ -15,6 +15,18 @@ export function migrateLegacyNotifyFallback(params: {
 }): LegacyNotifyMigrationOutcome {
   let changed = false;
   const warnings: string[] = [];
+  const configuredLegacyWebhook = normalizeOptionalString(params.legacyWebhook);
+  const legacyWebhook = configuredLegacyWebhook
+    ? normalizeHttpWebhookUrl(configuredLegacyWebhook)
+    : undefined;
+
+  const warnMissingLegacyWebhook = (jobName: string) => {
+    warnings.push(
+      configuredLegacyWebhook
+        ? `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically.`
+        : `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
+    );
+  };
 
   for (const raw of params.jobs) {
     if (!("notify" in raw)) {
@@ -64,30 +76,28 @@ export function migrateLegacyNotifyFallback(params: {
     }
 
     if ((mode === undefined && !hasLegacyChatDelivery) || mode === "none" || mode === "webhook") {
-      if (!params.legacyWebhook) {
-        warnings.push(
-          `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
-        );
+      if (!legacyWebhook) {
+        warnMissingLegacyWebhook(jobName);
         continue;
       }
       raw.delivery = {
         ...delivery,
         mode: "webhook",
-        to: mode === "none" ? params.legacyWebhook : (validWebhookTo ?? params.legacyWebhook),
+        to: mode === "none" ? legacyWebhook : (validWebhookTo ?? legacyWebhook),
       };
       delete raw.notify;
       changed = true;
       continue;
     }
 
-    if (params.legacyWebhook) {
+    if (legacyWebhook) {
       raw.delivery = {
         ...delivery,
         ...(hasLegacyChatDelivery ? { mode: "announce" } : {}),
         completionDestination: {
           ...completionDestination,
           mode: "webhook",
-          to: params.legacyWebhook,
+          to: legacyWebhook,
         },
       };
       delete raw.notify;
@@ -95,9 +105,7 @@ export function migrateLegacyNotifyFallback(params: {
       continue;
     }
 
-    warnings.push(
-      `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
-    );
+    warnMissingLegacyWebhook(jobName);
   }
 
   return { changed, warnings };

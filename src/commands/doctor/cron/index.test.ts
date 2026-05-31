@@ -665,6 +665,37 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(delivery.to).toBe("https://example.invalid/cron-finished");
   });
 
+  it("keeps notify fallback when cron.webhook is invalid", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        id: "notify-invalid-config",
+        jobId: undefined,
+        delivery: undefined,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "ftp://example.invalid/cron-finished",
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    expect(job.notify).toBe(true);
+    expect(job.delivery).toBeUndefined();
+    expectNoteContaining(
+      "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
+      "Doctor warnings",
+    );
+  });
+
   it("repairs legacy root delivery threadId hints into delivery", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [
