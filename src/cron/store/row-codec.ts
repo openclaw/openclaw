@@ -13,6 +13,7 @@ import type {
   CronCompletionDestination,
   CronFailureAlert,
   CronJob,
+  CronMessageChannel,
   CronJobState,
   CronPayload,
   CronSchedule,
@@ -112,6 +113,14 @@ function optionalStringArrayFromRecord(
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? value
     : undefined;
+}
+
+function optionalThreadIdFromRecord(
+  record: Record<string, unknown>,
+  key: string,
+): string | number | undefined {
+  const value = record[key];
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
 }
 
 function parseExternalContentSource(
@@ -451,9 +460,17 @@ function payloadFromRow(row: CronJobRow, fallback: unknown): CronPayload | null 
   return null;
 }
 
+function cronDeliveryModeFromValue(value: unknown): CronDelivery["mode"] | undefined {
+  return value === "none" || value === "announce" || value === "webhook" ? value : undefined;
+}
+
+function cronFailureDeliveryModeFromValue(value: unknown): "announce" | "webhook" | undefined {
+  return value === "announce" || value === "webhook" ? value : undefined;
+}
+
 function completionDestinationFromFallback(params: {
   fallback: unknown;
-  mode: CronDelivery["mode"] | null;
+  mode: CronDelivery["mode"] | undefined;
 }): CronCompletionDestination | undefined {
   if (params.mode !== "announce") {
     return undefined;
@@ -473,13 +490,122 @@ function completionDestinationFromFallback(params: {
   };
 }
 
-function deliveryFromRow(row: CronJobRow, fallback?: unknown): CronDelivery | undefined {
-  const mode = row.delivery_mode as CronDelivery["mode"] | null;
-  const completionDestination = completionDestinationFromFallback({ fallback, mode });
-  if (!row.delivery_mode && !completionDestination) {
+function failureDestinationFromFallback(
+  fallback: unknown,
+): CronDelivery["failureDestination"] | undefined {
+  if (!isRecord(fallback)) {
+    return undefined;
+  }
+  const raw = fallback.failureDestination;
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const mode = cronFailureDeliveryModeFromValue(raw.mode);
+  const channel = optionalStringFromRecord(raw, "channel") as CronMessageChannel | undefined;
+  const to = optionalStringFromRecord(raw, "to");
+  const accountId = optionalStringFromRecord(raw, "accountId");
+  if (!mode && !channel && !to && !accountId) {
     return undefined;
   }
   return {
+    ...(mode ? { mode } : {}),
+    ...(channel ? { channel } : {}),
+    ...(to ? { to } : {}),
+    ...(accountId ? { accountId } : {}),
+  };
+}
+
+function fallbackDeliveryFromRecord(fallback: unknown): CronDelivery | undefined {
+  if (!isRecord(fallback)) {
+    return undefined;
+  }
+  const mode = cronDeliveryModeFromValue(fallback.mode);
+  const channel = optionalStringFromRecord(fallback, "channel") as CronMessageChannel | undefined;
+  const to = optionalStringFromRecord(fallback, "to");
+  const threadId = optionalThreadIdFromRecord(fallback, "threadId");
+  const accountId = optionalStringFromRecord(fallback, "accountId");
+  const bestEffort = optionalBooleanFromRecord(fallback, "bestEffort");
+  const completionDestination = completionDestinationFromFallback({
+    fallback,
+    mode: mode ?? "announce",
+  });
+  const failureDestination = failureDestinationFromFallback(fallback);
+  if (
+    !mode &&
+    !channel &&
+    !to &&
+    threadId == null &&
+    !accountId &&
+    bestEffort == null &&
+    !completionDestination &&
+    !failureDestination
+  ) {
+    return undefined;
+  }
+  return {
+    mode: mode ?? "announce",
+    ...(channel ? { channel } : {}),
+    ...(to ? { to } : {}),
+    ...(threadId != null ? { threadId } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(bestEffort != null ? { bestEffort } : {}),
+    ...(completionDestination ? { completionDestination } : {}),
+    ...(failureDestination ? { failureDestination } : {}),
+  };
+}
+
+function deliveryFromRow(row: CronJobRow, fallback?: unknown): CronDelivery | undefined {
+  const fallbackDelivery = fallbackDeliveryFromRecord(fallback);
+  const rowMode = cronDeliveryModeFromValue(row.delivery_mode);
+  const mode = rowMode ?? fallbackDelivery?.mode;
+  const hasDeliveryColumns =
+    Boolean(
+      row.delivery_channel ||
+      row.delivery_to ||
+      row.delivery_thread_id ||
+      row.delivery_account_id ||
+      row.failure_delivery_channel ||
+      row.failure_delivery_to ||
+      row.failure_delivery_mode ||
+      row.failure_delivery_account_id,
+    ) || row.delivery_best_effort != null;
+  const completionDestination =
+    mode === "announce" ? fallbackDelivery?.completionDestination : undefined;
+  const failureDestination =
+    row.failure_delivery_channel ||
+    row.failure_delivery_to ||
+    row.failure_delivery_mode ||
+    row.failure_delivery_account_id
+      ? {
+          ...(row.failure_delivery_channel
+            ? { channel: row.failure_delivery_channel as CronDelivery["channel"] }
+            : {}),
+          ...(row.failure_delivery_to ? { to: row.failure_delivery_to } : {}),
+          ...(row.failure_delivery_mode
+            ? { mode: row.failure_delivery_mode as "announce" | "webhook" }
+            : {}),
+          ...(row.failure_delivery_account_id
+            ? { accountId: row.failure_delivery_account_id }
+            : {}),
+        }
+      : fallbackDelivery?.failureDestination;
+  if (!mode && !hasDeliveryColumns && !fallbackDelivery) {
+    return undefined;
+  }
+  const fallbackDeliveryFields =
+    rowMode === "none" || rowMode === "webhook"
+      ? {}
+      : {
+          ...(fallbackDelivery?.channel ? { channel: fallbackDelivery.channel } : {}),
+          ...(fallbackDelivery?.to ? { to: fallbackDelivery.to } : {}),
+          ...(fallbackDelivery?.threadId != null ? { threadId: fallbackDelivery.threadId } : {}),
+          ...(fallbackDelivery?.accountId ? { accountId: fallbackDelivery.accountId } : {}),
+          ...(fallbackDelivery?.bestEffort != null
+            ? { bestEffort: fallbackDelivery.bestEffort }
+            : {}),
+        };
+  return {
+    ...fallbackDeliveryFields,
     mode: mode ?? "announce",
     ...(row.delivery_channel ? { channel: row.delivery_channel as CronDelivery["channel"] } : {}),
     ...(row.delivery_to ? { to: row.delivery_to } : {}),
@@ -489,25 +615,7 @@ function deliveryFromRow(row: CronJobRow, fallback?: unknown): CronDelivery | un
       ? { bestEffort: integerToBoolean(row.delivery_best_effort) }
       : {}),
     ...(completionDestination ? { completionDestination } : {}),
-    ...(row.failure_delivery_channel ||
-    row.failure_delivery_to ||
-    row.failure_delivery_mode ||
-    row.failure_delivery_account_id
-      ? {
-          failureDestination: {
-            ...(row.failure_delivery_channel
-              ? { channel: row.failure_delivery_channel as CronDelivery["channel"] }
-              : {}),
-            ...(row.failure_delivery_to ? { to: row.failure_delivery_to } : {}),
-            ...(row.failure_delivery_mode
-              ? { mode: row.failure_delivery_mode as "announce" | "webhook" }
-              : {}),
-            ...(row.failure_delivery_account_id
-              ? { accountId: row.failure_delivery_account_id }
-              : {}),
-          },
-        }
-      : {}),
+    ...(failureDestination ? { failureDestination } : {}),
   };
 }
 

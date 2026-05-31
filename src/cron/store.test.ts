@@ -555,6 +555,100 @@ describe("cron store", () => {
     });
   });
 
+  it("falls back to modeless job_json delivery for early SQLite cron rows", async () => {
+    const { storePath } = await makeStorePath();
+    const storeKey = path.resolve(storePath);
+    const job = makeStore("early-sqlite-delivery-job", true).jobs[0];
+    job.delivery = {
+      to: "telegram:chat-1",
+      threadId: "topic-9",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/cron",
+      },
+    } as CronStoreFile["jobs"][number]["delivery"];
+
+    runOpenClawStateWriteTransaction(({ db }) => {
+      db.prepare(
+        `INSERT INTO cron_jobs (
+          store_key, job_id, name, enabled, created_at_ms, schedule_kind,
+          session_target, wake_mode, payload_kind, payload_message, job_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        storeKey,
+        job.id,
+        job.name,
+        1,
+        job.createdAtMs,
+        "every",
+        job.sessionTarget,
+        job.wakeMode,
+        "systemEvent",
+        null,
+        JSON.stringify(job),
+        job.updatedAtMs,
+      );
+    });
+
+    expect((await loadCronStore(storePath)).jobs[0]?.delivery).toEqual({
+      mode: "announce",
+      to: "telegram:chat-1",
+      threadId: "topic-9",
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/cron",
+      },
+    });
+  });
+
+  it("drops fallback completion destinations when SQLite stores non-announce delivery mode", async () => {
+    const { storePath } = await makeStorePath();
+    const storeKey = path.resolve(storePath);
+    const job = makeStore("sqlite-webhook-delivery-job", true).jobs[0];
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      threadId: "topic-9",
+      accountId: "bot-1",
+      bestEffort: true,
+      completionDestination: {
+        mode: "webhook",
+        to: "https://example.invalid/legacy-completion",
+      },
+    };
+
+    runOpenClawStateWriteTransaction(({ db }) => {
+      db.prepare(
+        `INSERT INTO cron_jobs (
+          store_key, job_id, name, enabled, created_at_ms, schedule_kind,
+          session_target, wake_mode, payload_kind, payload_message,
+          delivery_mode, delivery_to, job_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        storeKey,
+        job.id,
+        job.name,
+        1,
+        job.createdAtMs,
+        "every",
+        job.sessionTarget,
+        job.wakeMode,
+        "systemEvent",
+        null,
+        "webhook",
+        "https://example.invalid/direct-webhook",
+        JSON.stringify(job),
+        job.updatedAtMs,
+      );
+    });
+
+    expect((await loadCronStore(storePath)).jobs[0]?.delivery).toEqual({
+      mode: "webhook",
+      to: "https://example.invalid/direct-webhook",
+    });
+  });
+
   it("drops stale split runtime nextRunAtMs when doctor imports edited legacy config", async () => {
     const { storePath } = await makeStorePath();
     const payload = makeStore("job-restart-drift", true);

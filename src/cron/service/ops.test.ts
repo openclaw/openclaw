@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
@@ -216,25 +217,43 @@ describe("cron service ops seam coverage", () => {
 
   it("migrates legacy notify fallback before scheduler startup", async () => {
     const { storePath } = await makeStorePath();
+    const storeKey = path.resolve(storePath);
     const now = Date.parse("2026-05-20T09:00:00.000Z");
-    await writeCronStoreSnapshot({
-      storePath,
-      jobs: [
-        {
-          id: "legacy-notify",
-          name: "legacy notify",
-          enabled: true,
-          createdAtMs: now - 60_000,
-          updatedAtMs: now - 60_000,
-          schedule: { kind: "every", everyMs: 3_600_000 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "do work" },
-          delivery: { to: "telegram:chat-1" },
-          notify: true,
-          state: { nextRunAtMs: now + 3_600_000 },
-        } as CronJob & { notify: true },
-      ],
+    const legacyJob = {
+      id: "legacy-notify",
+      name: "legacy notify",
+      enabled: true,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: "every", everyMs: 3_600_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do work" },
+      delivery: { to: "telegram:chat-1" },
+      notify: true,
+      state: { nextRunAtMs: now + 3_600_000 },
+    } as CronJob & { notify: true };
+    runOpenClawStateWriteTransaction(({ db }) => {
+      db.prepare(
+        `INSERT INTO cron_jobs (
+          store_key, job_id, name, enabled, created_at_ms, schedule_kind,
+          session_target, wake_mode, payload_kind, payload_message, job_json, state_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        storeKey,
+        legacyJob.id,
+        legacyJob.name,
+        1,
+        legacyJob.createdAtMs,
+        "every",
+        "isolated",
+        "next-heartbeat",
+        "agentTurn",
+        null,
+        JSON.stringify(legacyJob),
+        JSON.stringify(legacyJob.state),
+        legacyJob.updatedAtMs,
+      );
     });
     const state = createCronServiceState({
       storePath,
