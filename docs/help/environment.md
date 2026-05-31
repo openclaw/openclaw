@@ -104,6 +104,14 @@ Env var equivalents:
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
 
+## Exec shell snapshots
+
+`OPENCLAW_EXEC_SHELL_SNAPSHOT=1` is an opt-in gateway exec optimization for bash and zsh. Set it in the Gateway
+process environment; per-call `exec.env` values cannot enable it or redirect its cache directory. When enabled,
+OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into
+`$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each `exec` command. Secret-looking
+variables are excluded from the snapshot. Sandbox and node exec do not use it.
+
 ## Runtime-injected env vars
 
 OpenClaw also injects context markers into spawned child processes:

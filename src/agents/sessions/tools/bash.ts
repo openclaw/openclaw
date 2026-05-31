@@ -7,8 +7,8 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.js"
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { getBashShellConfig, getShellEnv, killProcessTree } from "../../shell-utils.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
-import { getShellConfig, getShellEnv, killProcessTree } from "../../utils/shell.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
@@ -48,7 +48,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
   return {
     exec: (command, cwd, { onData, signal, timeout, env }) => {
       return new Promise((resolve, reject) => {
-        const { shell, args } = getShellConfig(options?.shellPath);
+        const { shell, args } = getBashShellConfig(options?.shellPath);
         if (!existsSync(cwd)) {
           reject(
             new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`),
