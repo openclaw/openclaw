@@ -1251,10 +1251,13 @@ class GatewaySession(
     tls: GatewayTlsParams?,
   ): Boolean {
     if (isLocalCleartextGatewayHost(endpoint.host)) return true
+    // Retrying a stored device token alongside a shared token is only safe for
+    // remote gateways when an existing TLS pin already identifies the endpoint.
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }
 
+/** Decides whether auth failures should stop reconnect churn until the user changes credentials. */
 internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   error: GatewaySession.ErrorShape,
   hasBootstrapToken: Boolean,
@@ -1287,6 +1290,7 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
     else -> false
   }
 
+/** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
 internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,
@@ -1296,6 +1300,7 @@ internal fun buildGatewayWebSocketUrl(
   return "$scheme://${formatGatewayAuthority(host, port)}"
 }
 
+/** Formats host/port for gateway URLs, including IPv6 bracket wrapping. */
 internal fun formatGatewayAuthority(
   host: String,
   port: Int,
@@ -1346,6 +1351,7 @@ private fun parseJsonOrNull(payload: String): JsonElement? {
   }
 }
 
+/** Keeps invoke-result ack waits inside the gateway-supported timeout window. */
 internal fun resolveInvokeResultAckTimeoutMs(invokeTimeoutMs: Long?): Long {
   val normalized = invokeTimeoutMs?.takeIf { it > 0L } ?: 15_000L
   return normalized.coerceIn(15_000L, 120_000L)
