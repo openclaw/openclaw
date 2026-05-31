@@ -6,6 +6,7 @@ type ThinkingLevel = "high" | "medium" | "low" | "off";
 
 function expectResolvedThinkingPlan(input: {
   expected: ThinkingLevel;
+  expectedOverride?: ThinkingLevel | null;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
   requesterAgentConfig?: unknown;
@@ -29,7 +30,8 @@ function expectResolvedThinkingPlan(input: {
 
   expect(plan).toEqual({
     status: "ok",
-    thinkingOverride: input.expected,
+    thinkingOverride:
+      input.expectedOverride === null ? undefined : (input.expectedOverride ?? input.expected),
     initialSessionPatch: { thinkingLevel: input.expected },
   });
 }
@@ -72,6 +74,7 @@ describe("sessions_spawn thinking defaults", () => {
       } as OpenClawConfig,
       callerThinkingRaw: "medium",
       expected: "medium",
+      expectedOverride: null,
     });
   });
 
@@ -90,6 +93,7 @@ describe("sessions_spawn thinking defaults", () => {
       } as OpenClawConfig,
       callerThinkingRaw: "off",
       expected: "off",
+      expectedOverride: null,
     });
   });
 

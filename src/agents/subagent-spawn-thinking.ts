@@ -26,9 +26,26 @@ export function resolveSubagentThinkingOverride(params: {
     readString(targetSubagents ?? {}, "thinking") ??
     readString(defaultSubagents ?? {}, "thinking");
 
-  const thinkingCandidateRaw =
-    params.thinkingOverrideRaw || resolvedThinkingDefaultRaw || params.callerThinkingRaw;
-  if (!thinkingCandidateRaw) {
+  const overrideCandidateRaw = params.thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+  if (overrideCandidateRaw) {
+    const normalizedThinking = normalizeThinkLevel(overrideCandidateRaw);
+    if (!normalizedThinking) {
+      return {
+        status: "error" as const,
+        thinkingCandidateRaw: overrideCandidateRaw,
+      };
+    }
+
+    return {
+      status: "ok" as const,
+      thinkingOverride: normalizedThinking,
+      initialSessionPatch: {
+        thinkingLevel: normalizedThinking,
+      },
+    };
+  }
+
+  if (!params.callerThinkingRaw) {
     return {
       status: "ok" as const,
       thinkingOverride: undefined,
@@ -36,17 +53,18 @@ export function resolveSubagentThinkingOverride(params: {
     };
   }
 
-  const normalizedThinking = normalizeThinkLevel(thinkingCandidateRaw);
+  const normalizedThinking = normalizeThinkLevel(params.callerThinkingRaw);
   if (!normalizedThinking) {
     return {
-      status: "error" as const,
-      thinkingCandidateRaw,
+      status: "ok" as const,
+      thinkingOverride: undefined,
+      initialSessionPatch: {},
     };
   }
 
   return {
     status: "ok" as const,
-    thinkingOverride: normalizedThinking,
+    thinkingOverride: undefined,
     initialSessionPatch: {
       thinkingLevel: normalizedThinking,
     },
