@@ -22,7 +22,7 @@ import {
   dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
-import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
@@ -2491,15 +2491,16 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
         ${state.tab === "workboard"
-          ? renderLazyView(lazyWorkboard, (m) =>
-              m.renderWorkboard({
+          ? renderLazyView(lazyWorkboard, (m) => {
+              const auth =
+                (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                null;
+              return m.renderWorkboard({
                 host: state,
                 client: state.client,
                 connected: state.connected,
-                canWrite: hasOperatorWriteAccess(
-                  (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
-                    null,
-                ),
+                canWrite: hasOperatorWriteAccess(auth),
+                canModelOverride: hasOperatorAdminAccess(auth),
                 pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
                   enabledByDefault: false,
                 }),
@@ -2510,8 +2511,8 @@ export function renderApp(state: AppViewState) {
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
                 onRequestUpdate: requestHostUpdate,
-              }),
-            )
+              });
+            })
           : nothing}
         ${renderUsageTab(state)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}

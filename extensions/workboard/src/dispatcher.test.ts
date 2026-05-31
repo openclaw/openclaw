@@ -57,7 +57,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     );
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: `workboard-default-${first.id}`,
+      sessionKey: `agent:codex-main:subagent:workboard-default-${first.id}`,
       lane: `workboard:default:${first.id}`,
       deliver: false,
     });
@@ -66,7 +66,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(run.mock.calls[0]?.[0]?.message).not.toContain("ownerId and token");
     await expect(store.get(first.id)).resolves.toMatchObject({
       status: "running",
-      sessionKey: `workboard-default-${first.id}`,
+      sessionKey: `agent:codex-main:subagent:workboard-default-${first.id}`,
       runId: "run-first",
       execution: { status: "running", runId: "run-first" },
       metadata: {
@@ -95,6 +95,11 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(result.startFailures).toEqual([
       expect.objectContaining({ cardId: card.id, error: "model unavailable" }),
     ]);
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: `subagent:workboard-default-${card.id}`,
+      }),
+    );
     await expect(store.get(card.id)).resolves.toMatchObject({
       status: "blocked",
       metadata: {

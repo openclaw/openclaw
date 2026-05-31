@@ -45,12 +45,24 @@ function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";
 }
 
+function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
+  const sanitized = (value ?? fallback)
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return (sanitized || fallback).slice(0, 96);
+}
+
 function cardIsArchived(card: WorkboardCard): boolean {
   return Boolean(card.metadata?.archivedAt);
 }
 
 function buildSessionKey(card: WorkboardCard): string {
-  return `workboard-${cardBoardId(card)}-${card.id}`.replace(/[^a-zA-Z0-9:_-]/g, "-");
+  const boardId = sanitizeSessionSegment(cardBoardId(card), "default");
+  const cardId = sanitizeSessionSegment(card.id, "card");
+  const suffix = `subagent:workboard-${boardId}-${cardId}`;
+  return card.agentId ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}` : suffix;
 }
 
 function buildExecution(params: {
