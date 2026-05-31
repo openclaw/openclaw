@@ -1138,45 +1138,50 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (
-      state.chatStream?.trim() &&
-      !isSilentReplyStream(state.chatStream) &&
-      !isHeartbeatAckStream(state.chatStream)
-    ) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
-    }
-    reconcileTerminalRun("done", "done");
-  } else if (payload.state === "aborted") {
-    const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
-    } else {
-      const streamedText = state.chatStream ?? "";
-      if (
-        streamedText.trim() &&
-        !isSilentReplyStream(streamedText) &&
-        !isHeartbeatAckStream(streamedText)
-      ) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
+    const visibleFinalMessage =
+      finalMessage && !shouldHideAssistantChatMessage(finalMessage) ? finalMessage : null;
+    const streamedText = state.chatStream ?? "";
+    const fallbackMessage =
+      !visibleFinalMessage &&
+      streamedText.trim() &&
+      !isSilentReplyStream(streamedText) &&
+      !isHeartbeatAckStream(streamedText)
+        ? {
             role: "assistant",
             content: [{ type: "text", text: streamedText }],
             timestamp: Date.now(),
-          },
-        ];
-      }
+          }
+        : null;
+    reconcileTerminalRun("done", "done");
+    if (visibleFinalMessage) {
+      state.chatMessages = [...state.chatMessages, visibleFinalMessage];
+    } else if (fallbackMessage) {
+      state.chatMessages = [...state.chatMessages, fallbackMessage];
     }
+  } else if (payload.state === "aborted") {
+    const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
+    const visibleAbortedMessage =
+      normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)
+        ? normalizedMessage
+        : null;
+    const streamedText = state.chatStream ?? "";
+    const fallbackMessage =
+      !visibleAbortedMessage &&
+      streamedText.trim() &&
+      !isSilentReplyStream(streamedText) &&
+      !isHeartbeatAckStream(streamedText)
+        ? {
+            role: "assistant",
+            content: [{ type: "text", text: streamedText }],
+            timestamp: Date.now(),
+          }
+        : null;
     reconcileTerminalRun("interrupted", "killed");
+    if (visibleAbortedMessage) {
+      state.chatMessages = [...state.chatMessages, visibleAbortedMessage];
+    } else if (fallbackMessage) {
+      state.chatMessages = [...state.chatMessages, fallbackMessage];
+    }
   } else if (payload.state === "error") {
     const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
     if (errorMessage) {

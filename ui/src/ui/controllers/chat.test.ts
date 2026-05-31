@@ -82,6 +82,28 @@ function createActiveStreamingState() {
   });
 }
 
+function trackChatMessagesAssignments(state: ChatState) {
+  let chatMessages = state.chatMessages;
+  const assignments: Array<{
+    chatRunId: string | null;
+    chatStream: string | null;
+    messages: unknown[];
+  }> = [];
+  Object.defineProperty(state, "chatMessages", {
+    configurable: true,
+    get: () => chatMessages,
+    set: (messages: unknown[]) => {
+      assignments.push({
+        chatRunId: state.chatRunId,
+        chatStream: state.chatStream,
+        messages,
+      });
+      chatMessages = messages;
+    },
+  });
+  return assignments;
+}
+
 function createOtherRunSilentFinalPayload(text: string): ChatEventPayload {
   return {
     runId: "run-announce",
@@ -733,7 +755,10 @@ describe("handleChatEvent", () => {
       sessionKey: "main",
       state: "final",
     };
+    const assignments = trackChatMessagesAssignments(state);
+
     expect(handleChatEvent(state, payload)).toBe("final");
+    expect(assignments).toMatchObject([{ chatRunId: null, chatStream: null }]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
@@ -799,7 +824,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
-  it("appends final payload message from own run before clearing stream state", () => {
+  it("appends final payload message from own run after clearing stream state", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -816,7 +841,10 @@ describe("handleChatEvent", () => {
         timestamp: 101,
       },
     };
+    const assignments = trackChatMessagesAssignments(state);
+
     expect(handleChatEvent(state, payload)).toBe("final");
+    expect(assignments).toMatchObject([{ chatRunId: null, chatStream: null }]);
     expect(state.chatMessages).toEqual([payload.message]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
@@ -847,8 +875,10 @@ describe("handleChatEvent", () => {
       state: "aborted",
       message: partialMessage,
     };
+    const assignments = trackChatMessagesAssignments(state);
 
     expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(assignments).toMatchObject([{ chatRunId: null, chatStream: null }]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
