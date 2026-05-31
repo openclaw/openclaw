@@ -81,9 +81,6 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
-  if (!host.pendingGatewayUrl) {
-    restoreChatComposerState(host, { preserveCurrent: true });
-  }
   const bootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
   );
@@ -93,6 +90,9 @@ export function handleConnected(host: LifecycleHost) {
   void bootstrapReady.finally(() => {
     if (host.connectGeneration !== connectGeneration) {
       return;
+    }
+    if (!host.pendingGatewayUrl) {
+      restoreChatComposerState(host, { preserveCurrent: true });
     }
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   });
