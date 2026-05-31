@@ -127,6 +127,7 @@ function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget
   return target.resolutionSource === "normalized";
 }
 
+/** Resolves cron delivery config into a concrete channel target and optional thread/account. */
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
@@ -275,6 +276,8 @@ export async function resolveDeliveryTarget(
     effectiveAllowFrom = allowFromOverride;
 
     if (toCandidate && allowFromOverride.length > 0) {
+      // Implicit delivery must stay within channel allow-from policy; if the
+      // remembered target is outside that set, fall back to the first allowed peer.
       const currentTargetResolution = await resolveOutboundTargetWithRuntime({
         channel,
         to: toCandidate,
