@@ -1,5 +1,6 @@
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
+import { icons } from "../icons.ts";
 
 export type FilePreviewModalFile = {
   path: string;
@@ -162,7 +163,7 @@ export class OpenClawFilePreviewModal extends LitElement {
 
     .item {
       display: grid;
-      grid-template-columns: 10px 1fr auto;
+      grid-template-columns: 16px 1fr auto;
       gap: 12px;
       align-items: center;
       padding: 12px 14px;
@@ -172,7 +173,12 @@ export class OpenClawFilePreviewModal extends LitElement {
       color: var(--text);
       cursor: pointer;
       font: inherit;
+      outline: none;
       text-align: left;
+    }
+
+    .item:focus-visible {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
     }
 
     .item:hover {
@@ -187,12 +193,29 @@ export class OpenClawFilePreviewModal extends LitElement {
       color: var(--text-strong);
     }
 
-    .item-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 40%, transparent);
+    .item-icon {
+      width: 16px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      opacity: 0.85;
+    }
+
+    .item.is-active .item-icon {
+      color: var(--accent);
+      opacity: 1;
+    }
+
+    .item-icon svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.5px;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     .item-name {
@@ -391,9 +414,11 @@ export class OpenClawFilePreviewModal extends LitElement {
                   (file) => html`
                     <button
                       class="item ${file.path === activeFile?.path ? "is-active" : ""}"
+                      @pointerdown=${this.preventItemPointerFocus}
+                      @mousedown=${this.preventItemPointerFocus}
                       @click=${() => this.emitSelect(file.path)}
                     >
-                      <span class="item-dot"></span>
+                      <span class="item-icon">${iconForFile(file.path)}</span>
                       <span class="item-name">${file.path}</span>
                       <span class="item-meta">${file.size}</span>
                     </button>
@@ -480,6 +505,10 @@ export class OpenClawFilePreviewModal extends LitElement {
     );
   };
 
+  private preventItemPointerFocus = (event: Event) => {
+    event.preventDefault();
+  };
+
   private handleKeydown = (event: KeyboardEvent) => {
     switch (event.key) {
       case "Escape":
@@ -540,6 +569,7 @@ export class OpenClawFilePreviewModal extends LitElement {
         detail: path,
       }),
     );
+    this.focusModal();
   }
 
   private emitClose = () => {
@@ -570,6 +600,44 @@ function fileKind(path: string): string {
 
 if (!customElements.get("openclaw-file-preview-modal")) {
   customElements.define("openclaw-file-preview-modal", OpenClawFilePreviewModal);
+}
+
+const CODE_EXTENSIONS = new Set([
+  "ts",
+  "tsx",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "py",
+  "sh",
+  "bash",
+  "zsh",
+  "rb",
+  "go",
+  "rs",
+  "java",
+  "kt",
+  "swift",
+  "c",
+  "cc",
+  "cpp",
+  "h",
+  "hpp",
+  "json",
+  "yaml",
+  "yml",
+  "toml",
+  "xml",
+  "html",
+  "css",
+  "scss",
+  "sql",
+]);
+
+function iconForFile(path: string) {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return CODE_EXTENSIONS.has(ext) ? icons.fileCode : icons.fileText;
 }
 
 declare global {
