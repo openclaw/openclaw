@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-30 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-31 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,10 +17,10 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 6      | 41     | 47      | 0      | 47        |
-| Windows platform          | 66     | 26     | 92      | 0      | 92        |
-| WSL                       | 11     | 4      | 15      | 0      | 15        |
-| Azure                     | 10     | 3      | 13      | 0      | 13        |
+| MS Teams (channel plugin) | 6      | 39     | 45      | 0      | 45        |
+| Windows platform          | 67     | 27     | 94      | 0      | 94        |
+| WSL                       | 11     | 5      | 16      | 0      | 16        |
+| Azure                     | 9      | 3      | 12      | 0      | 12        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
 | **Total**                 | **93** | **74** | **167** | **0**  | **167**   |
 
@@ -64,21 +64,19 @@
 | [ ]       | P0       | #55485 | Config: plumb opt-in SSRF policy for web fetch, citation redirects, and remote media                             | L    |             |
 | [ ]       | P1       | #87169 | Support separate Teams Graph tenant                                                                              | S    |             |
 | [ ]       | P1       | #82253 | feat(slack): support per-channel replyToMode                                                                     | XL   |             |
+| [ ]       | P1       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                 | S    |             |
+| [ ]       | P1       | #77921 | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                         | XS   |             |
 | [ ]       | P1       | #75043 | Add provider-aware automatic TTS emotion mapping                                                                 | XL   |             |
-| [ ]       | P2       | #88308 | Gateway rust migration 3615782505429617554                                                                       |      |             |
-| [ ]       | P2       | #88115 | docs: add inline code comments                                                                                   | XL   |             |
 | [ ]       | P2       | #88103 | Update Teams CLI install command                                                                                 | XS   |             |
-| [ ]       | P2       | #85845 | fix(msteams): route file.download.info links via graph shares                                                    | XS   |             |
-| [ ]       | P2       | #85478 | fix(slack): soften benign search no-result progress                                                              | L    |             |
-| [ ]       | P2       | #85058 | fix(plugins): force native require for own dist chunks via jiti nativeModules                                    |      |             |
+| [ ]       | P2       | #85845 | fix(msteams): route file.download.info links via graph shares                                                    | XS   | @vincentkoc |
+| [ ]       | P2       | #85478 | fix(slack): soften benign search no-result progress                                                              | L    | @vincentkoc |
+| [ ]       | P2       | #85058 | fix(plugins): force native require for own dist chunks via jiti nativeModules                                    |      | @vincentkoc |
 | [ ]       | P2       | #84560 | feat(cli): support --dm-policy and --dm-allowlist in channels add                                                |      |             |
 | [ ]       | P2       | #84206 | fix(agents): cleanup parent agent directory during deletion                                                      |      |             |
 | [ ]       | P2       | #82354 | fix(msteams): emit message:sent hook on reply delivery                                                           | M    |             |
 | [ ]       | P2       | #79609 | Show session cleanup dry-run counts by label                                                                     | L    |             |
-| [ ]       | P2       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                 | S    |             |
 | [ ]       | P2       | #78839 | [codex] Add Teams member-info action gate                                                                        | S    |             |
 | [ ]       | P2       | #78172 | feat(tts): add skipEmojiSymbols option to prevent TTS from reading emoji/symbols                                 | M    |             |
-| [ ]       | P2       | #77921 | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                         | XS   |             |
 | [ ]       | P2       | #76560 | feat(plugins): allow community plugins to use openKeyedStore with man…                                           | L    | @vincentkoc |
 | [ ]       | P2       | #70287 | fix(msteams): drop unsupported $search on msteams:search (AI-assisted)                                           | M    |             |
 | [ ]       | P2       | #69428 | fix(msteams): paginate thread replies and keep recent context                                                    | S    |             |
@@ -100,7 +98,9 @@
 
 | Resolved? | Priority | #      | Title                                                                                                                                                   | Labels                                                                                                                                                                      | Assignee              |
 | --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| [ ]       | P0       | #48780 | [Bug]: [Windows] exec() and read() commands corrupted with </arg_value>> suffix                                                                         | `bug` `bug:behavior` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-security-review` `clawsweeper:source-repro` +4                                                     | @vincentkoc           |
+| [ ]       | P1       | #88373 | Windows post-onboarding provider switch path is not discoverable                                                                                        | `P3` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:needs-live-repro` `impact:auth-provider` `issue-rating: 🐚 platinum hermit`                     |                       |
+| [ ]       | P1       | #88372 | Windows provider switch leaves stale model/provider config and session cache                                                                            | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:session-state` +2        |                       |
+| [ ]       | P1       | #88371 | Windows QuickStart defaults first chat to paid Anthropic model without credit warning                                                                   | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:auth-provider` +1        |                       |
 | [ ]       | P1       | #87993 | [Bug]: Windows — openclaw update 期间 Scheduled Task PT3M 重复触发器重新拉起 gateway 导致竞态                                                           | `P2` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `impact:crash-loop` `issue-rating: 🦞 diamond lobster`                            | @vincentkoc           |
 | [ ]       | P1       | #87156 | [Bug]: Windows doctor update leaves Startup-folder gateway fallback stale and does not install Scheduled Task                                           | `P2` `clawsweeper:needs-live-repro` `impact:crash-loop` `issue-rating: 🐚 platinum hermit`                                                                                  | @vincentkoc           |
 | [ ]       | P1       | #87136 | compaction: absolute token thresholds break when switching models with different context windows                                                        | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:session-state` +2        |                       |
@@ -117,9 +117,9 @@
 | [ ]       | P1       | #83277 | WhatsApp channel: "web login provider is not available" on Windows despite wacli installed and authenticated                                            | `bug` `bug:behavior` `P2` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` +1                                                           |                       |
 | [ ]       | P1       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                         | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `impact:crash-loop`                                                   |                       |
 | [ ]       | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  | `bug` `bug:crash` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +2                                                        |                       |
-| [ ]       | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |                                                                                                                                                                             |                       |
-| [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          | `bug` `regression`                                                                                                                                                          |                       |
-| [ ]       | P1       | #76884 | [Bug]: OpenClaw on native Windows getting notably slower and slower with each new version???                                                            | `bug` `stale` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +3                                                            |                       |
+| [ ]       | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       | `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` +3                       |                       |
+| [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          | `bug` `stale` `regression`                                                                                                                                                  |                       |
+| [ ]       | P1       | #76884 | [Bug]: OpenClaw on native Windows getting notably slower and slower with each new version???                                                            | `bug` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `impact:auth-provider` +2                                             |                       |
 | [ ]       | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                              | `bug` `stale` `regression`                                                                                                                                                  |                       |
 | [ ]       | P1       | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format)                                                 | `P1` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `impact:data-loss` `impact:auth-provider` +1                                      |                       |
 | [ ]       | P1       | #71717 | exec tool returns EPERM on Windows, all commands fail                                                                                                   | `bug` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` +2                         |                       |
@@ -137,7 +137,6 @@
 | [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                      | `P1` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `issue-rating: 🦞 diamond lobster`                                                |                       |
 | [ ]       | P1       | #44559 | [Bug]: Windows： Gateway 关闭 PowerShell 窗口后断连                                                                                                     | `bug` `bug:behavior` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` +4                                                |                       |
 | [ ]       | P1       | #40540 | [Bug]: `openclaw update` command fails with EBUSY error on Windows                                                                                      | `bug` `bug:behavior` `P1` `clawsweeper:source-repro` `impact:crash-loop` `issue-rating: 🦞 diamond lobster`                                                                 |                       |
-| [ ]       | P2       | #88143 | EPERM on Windows during skills update - movePathWithCopyFallback only catches EXDEV                                                                     | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:source-repro` `issue-rating: 🦞 diamond lobster` `impact:other`                         |                       |
 | [ ]       | P2       | #85262 | Windows: lstat bottleneck causes 2-3x slower performance vs Mac (59% of CPU time)                                                                       | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:linked-pr-open` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit`                                             |                       |
 | [ ]       | P2       | #84644 | [Bug]: Windows node-host connects but reports no commands                                                                                               | `bug` `P1` `clawsweeper:needs-info` `issue-rating: 🦐 gold shrimp`                                                                                                          |                       |
 | [ ]       | P2       | #84600 | Bug: Windows heartbeat cmd window not hidden - 'findstr /I /C:"Running"' stays visible                                                                  | `P2` `clawsweeper:source-repro` `issue-rating: 🦞 diamond lobster`                                                                                                          |                       |
@@ -147,9 +146,9 @@
 | [ ]       | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                           | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` +1 |                       |
 | [ ]       | P2       | #79099 | Windows gateway probe still reports unreachable while gateway health is OK on 2026.5.6                                                                  |                                                                                                                                                                             |                       |
 | [ ]       | P2       | #78640 | fix(memory): EPERM on Windows persists after 64187 retry — needs copyFile/unlink fallback (was in closed PR 71611)                                      |                                                                                                                                                                             |                       |
-| [ ]       | P2       | #78435 | [Bug]: `channels.slack.start-account` phase blocks event loop 5+ minutes while a model_call is in flight (Windows, 2026.5.4)                            |                                                                                                                                                                             |                       |
-| [ ]       | P2       | #77730 | [Bug]: file-transfer plugin nodeHostCommands not advertised by Windows node host on live handshake (2026.5.3-1)                                         |                                                                                                                                                                             |                       |
-| [ ]       | P2       | #76702 | Windows + Feishu DM becomes very slow after upgrade to 2026.5.2; latency appears in agent/session processing, likely amplified by large session context | `stale` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` +2                       |                       |
+| [ ]       | P2       | #78435 | [Bug]: `channels.slack.start-account` phase blocks event loop 5+ minutes while a model_call is in flight (Windows, 2026.5.4)                            | `stale`                                                                                                                                                                     |                       |
+| [ ]       | P2       | #77730 | [Bug]: file-transfer plugin nodeHostCommands not advertised by Windows node host on live handshake (2026.5.3-1)                                         | `stale` `P2` `clawsweeper:needs-info` `issue-rating: 🦐 gold shrimp` `impact:other`                                                                                         |                       |
+| [ ]       | P2       | #76702 | Windows + Feishu DM becomes very slow after upgrade to 2026.5.2; latency appears in agent/session processing, likely amplified by large session context | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `impact:session-state` +1        |                       |
 | [ ]       | P2       | #76553 | [Bug]: Windows: Claude Code not detected by OpenClaw, Gateway in restart loop after PATH workaround                                                     | `bug` `stale` `bug:behavior`                                                                                                                                                |                       |
 | [ ]       | P2       | #73859 | [Bug]: Built-in plugins (minimax, google, talk-voice) fail with RangeError: Maximum call stack size exceeded on Windows                                 | `stale`                                                                                                                                                                     |                       |
 | [ ]       | P2       | #72922 | [Bug]: Sluggish response time and unstable Web GUI and CLI on Windows Server 2022                                                                       | `bug` `stale`                                                                                                                                                               |                       |
@@ -178,15 +177,15 @@
 
 | Resolved? | Priority | #      | Title                                                                                     | Size | Assignee    |
 | --------- | -------- | ------ | ----------------------------------------------------------------------------------------- | ---- | ----------- |
-| [ ]       | P0       | #85264 | fix(infra): add global realpath cache to eliminate redundant lstat on Windows             | M    |             |
-| [ ]       | P0       | #81443 | fix: resolve QMD Windows shims and guard image URL downloads                              | M    |             |
-| [ ]       | P0       | #68819 | fix: resolve Windows .cmd shims to underlying .exe before spawn                           | M    |             |
-| [ ]       | P0       | #68149 | feat(daemon): use PowerShell Register-ScheduledTask for Windows auto-start                | M    |             |
-| [ ]       | P0       | #63651 | fix: remove duplicate restart message on Windows (schtasks)                               | S    |             |
-| [ ]       | P1       | #88163 | fix(cli): harden Windows node pairing and approvals                                       | L    |             |
+| [ ]       | P0       | #88163 | fix(cli): harden Windows node pairing and approvals                                       | XL   | @vincentkoc |
+| [ ]       | P0       | #85264 | fix(infra): scope Windows path realpath caches                                            | M    | @vincentkoc |
+| [ ]       | P0       | #81443 | fix: resolve QMD Windows shims and guard image URL downloads                              | L    | @vincentkoc |
+| [ ]       | P0       | #68819 | fix: resolve Windows .cmd shims to underlying .exe before spawn                           | M    | @vincentkoc |
+| [ ]       | P0       | #68149 | feat(daemon): use PowerShell Register-ScheduledTask for Windows auto-start                | M    | @vincentkoc |
+| [ ]       | P1       | #88361 | fix(daemon): clean stale Windows startup fallback                                         | S    | @vincentkoc |
 | [ ]       | P1       | #69059 | fix: retry sqlite-vec load without .dll suffix on Windows                                 | S    |             |
 | [ ]       | P2       | #88311 | fix(windows): repair doctor update fallback migration                                     | M    | @vincentkoc |
-| [ ]       | P2       | #88292 | fix(update): guard Windows task autostart during package updates                          | M    | @vincentkoc |
+| [ ]       | P2       | #88292 | fix(update): guard Windows task autostart during package updates                          | L    | @vincentkoc |
 | [ ]       | P2       | #88114 | fix(windows): disable scheduled task before stop to prevent PT3M re-trigger during update | XS   |             |
 | [ ]       | P2       | #87937 | fix(browser): read Windows Chrome version from build dir in doctor                        | S    |             |
 | [ ]       | P2       | #87344 | fix(browser): read Chrome version from PE metadata on Windows                             | XS   |             |
@@ -201,9 +200,10 @@
 | [ ]       | P2       | #68725 | feat(amazon-bedrock-mantle): add known context windows for open-weight Mantle models      | S    |             |
 | [ ]       | P2       | #67655 | fix(exec): fail closed on Windows shell wrappers in allowlist mode                        | XS   |             |
 | [ ]       | P2       | #64110 | feat: Deleting scheduled tasks also clears tasks in the queue.                            | L    |             |
+| [ ]       | P2       | #63651 | fix: remove duplicate restart message on Windows (schtasks)                               | S    | @vincentkoc |
 | [ ]       | P2       | #59705 | [codex] improve parallels windows smoke logging                                           | M    |             |
 | [ ]       | P2       | #59013 | fix: tolerate EPERM in session write-lock on Windows                                      | S    |             |
-| [ ]       | P2       | #51486 | fix(daemon): query Windows task runtime directly                                          | S    |             |
+| [ ]       | P2       | #51486 | fix(daemon): query Windows task runtime directly                                          | M    | @vincentkoc |
 
 ---
 
@@ -211,19 +211,19 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #      | Title                                                                                                                                           | Labels                                                                                                                                                | Assignee |
-| --------- | -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [ ]       | P1       | #86752 | [Bug]: 2026.5.22 Docker/WSL2 gateway event-loop starvation, 284s provider-auth prewarm, slow Telegram turn, and local RPC timeouts              | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `impact:message-loss` `impact:auth-provider` +2 |          |
-| [ ]       | P1       | #86048 | WSL2 GPU-PV driver lockup: nvidia-smi hangs after llama-server D-state crash                                                                    |                                                                                                                                                       |          |
-| [ ]       | P1       | #85537 | Build fails resolving protobufjs google/protobuf descriptor on WSL source checkout                                                              | `maintainer` `P2` `clawsweeper:needs-live-repro` `impact:crash-loop` `issue-rating: 🐚 platinum hermit`                                               |          |
-| [ ]       | P1       | #84610 | [Bug]: Gateway loops with SIGTERM every ~90s after upgrade 2026.4.23→2026.5.18 (WSL2). Inbound msg received but cli watchdog kills mid-response | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `impact:message-loss` `impact:crash-loop` +1          |          |
-| [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                     | `bug` `bug:crash` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +2                                  |          |
-| [ ]       | P1       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                                                               | `bug` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-info` +3         |          |
-| [ ]       | P2       | #88080 | WSL2: clipboard fails on execFile                                                                                                               | `P2` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit` `impact:other`       |          |
-| [ ]       | P2       | #86314 | [Bug] openclaw-weixin channel not registered in gateway runtime - invalid channels.start channel on WSL2                                        |                                                                                                                                                       | @sliverp |
-| [ ]       | P2       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                                                  | `bug` `bug:behavior`                                                                                                                                  |          |
-| [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                          | `stale`                                                                                                                                               |          |
-| [ ]       | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                                                          | `stale`                                                                                                                                               |          |
+| Resolved? | Priority | #      | Title                                                                                                                                           | Labels                                                                                                                                                | Assignee              |
+| --------- | -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| [ ]       | P1       | #86752 | [Bug]: 2026.5.22 Docker/WSL2 gateway event-loop starvation, 284s provider-auth prewarm, slow Telegram turn, and local RPC timeouts              | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `impact:message-loss` `impact:auth-provider` +2 | @vincentkoc           |
+| [ ]       | P1       | #86048 | WSL2 GPU-PV driver lockup: nvidia-smi hangs after llama-server D-state crash                                                                    |                                                                                                                                                       |                       |
+| [ ]       | P1       | #85537 | Build fails resolving protobufjs google/protobuf descriptor on WSL source checkout                                                              | `maintainer` `P2` `clawsweeper:needs-live-repro` `impact:crash-loop` `issue-rating: 🐚 platinum hermit`                                               | @vincentkoc           |
+| [ ]       | P1       | #84610 | [Bug]: Gateway loops with SIGTERM every ~90s after upgrade 2026.4.23→2026.5.18 (WSL2). Inbound msg received but cli watchdog kills mid-response | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `impact:message-loss` `impact:crash-loop` +1          |                       |
+| [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                     | `bug` `bug:crash` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +2                                  |                       |
+| [ ]       | P1       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                                                               | `bug` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-info` +3         |                       |
+| [ ]       | P2       | #88080 | WSL2: clipboard fails on execFile                                                                                                               | `P2` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit` `impact:other`       | @vincentkoc           |
+| [ ]       | P2       | #86314 | [Bug] openclaw-weixin channel not registered in gateway runtime - invalid channels.start channel on WSL2                                        |                                                                                                                                                       | @vincentkoc, @sliverp |
+| [ ]       | P2       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                                                  | `bug` `bug:behavior`                                                                                                                                  |                       |
+| [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                          | `stale`                                                                                                                                               |                       |
+| [ ]       | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                                                          | `stale`                                                                                                                                               |                       |
 
 ### Feature Requests
 
@@ -233,12 +233,13 @@ _No currently open items found._
 
 ## 6. WSL (Windows Subsystem for Linux) — PRs
 
-| Resolved? | Priority | #      | Title                                                                            | Size | Assignee |
-| --------- | -------- | ------ | -------------------------------------------------------------------------------- | ---- | -------- |
-| [ ]       | P2       | #88089 | fix(clipboard): use shell-based clip.exe on WSL2                                 | XS   |          |
-| [ ]       | P2       | #85711 | docs: add WSL build troubleshooting to CONTRIBUTING.md                           | XS   |          |
-| [ ]       | P2       | #68400 | daemon/systemd: distinguish WSL user D-Bus socket missing from missing systemctl | S    |          |
-| [ ]       | P2       | #58853 | feat(doctor): add WSL environment diagnostics check [AI-assisted]                | L    |          |
+| Resolved? | Priority | #      | Title                                                                            | Size | Assignee    |
+| --------- | -------- | ------ | -------------------------------------------------------------------------------- | ---- | ----------- |
+| [ ]       | P0       | #88365 | fix(infra): bridge WSL clipboard through shell                                   | XS   | @vincentkoc |
+| [ ]       | P0       | #88089 | fix(clipboard): use shell-based clip.exe on WSL2                                 | XS   | @vincentkoc |
+| [ ]       | P2       | #85711 | docs: add WSL build troubleshooting to CONTRIBUTING.md                           | XS   |             |
+| [ ]       | P2       | #68400 | daemon/systemd: distinguish WSL user D-Bus socket missing from missing systemctl | S    | @vincentkoc |
+| [ ]       | P2       | #58853 | feat(doctor): add WSL environment diagnostics check [AI-assisted]                | L    | @vincentkoc |
 
 ---
 
@@ -248,7 +249,6 @@ _No currently open items found._
 
 | Resolved? | Priority | #      | Title                                                                                                                                | Labels                                                                                                                                                           | Assignee |
 | --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [ ]       | P1       | #88019 | [Bug]: Azure Responses session replay keeps msg id without required reasoning after fallback                                         | `P1` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `impact:session-state` `impact:auth-provider` +1                       |          |
 | [ ]       | P1       | #87737 | DeepSeek V4 thinking wrapper ignores thinkingFormat compat override, breaks Azure Foundry deployments                                | `P1` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `impact:auth-provider` `issue-rating: 🦞 diamond lobster`              |          |
 | [ ]       | P1       | #84109 | Azure AI Foundry Responses API: `type: "message"` missing from input items causes 400 error                                          | `P2` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `impact:auth-provider` `issue-rating: 🦞 diamond lobster`              |          |
 | [ ]       | P1       | #60546 | [Bug]: microsoft-foundry provider selects Claude deployments but routes them through OpenAI Foundry endpoints                        | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:auth-provider` `issue-rating: 🦞 diamond lobster`               |          |
@@ -311,13 +311,14 @@ _No currently open items found._
 | MS Teams (channel plugin) | pr    | P0       | #55828 | feat(msteams): add native plugin interactivity parity                                                                                     |
 | MS Teams (channel plugin) | pr    | P0       | #55485 | Config: plumb opt-in SSRF policy for web fetch, citation redirects, and remote media                                                      |
 | Windows platform          | issue | P0       | #57775 | Windows headless node host supports exec approvals via CLI, but nodes describe / Control UI do not advertise system.execApprovals.get/set |
-| Windows platform          | issue | P0       | #48780 | [Bug]: [Windows] exec() and read() commands corrupted with </arg_value>> suffix                                                           |
 | Windows platform          | issue | P0       | #75    | Linux/Windows Clawdbot Apps                                                                                                               |
-| Windows platform          | pr    | P0       | #85264 | fix(infra): add global realpath cache to eliminate redundant lstat on Windows                                                             |
+| Windows platform          | pr    | P0       | #88163 | fix(cli): harden Windows node pairing and approvals                                                                                       |
+| Windows platform          | pr    | P0       | #85264 | fix(infra): scope Windows path realpath caches                                                                                            |
 | Windows platform          | pr    | P0       | #81443 | fix: resolve QMD Windows shims and guard image URL downloads                                                                              |
 | Windows platform          | pr    | P0       | #68819 | fix: resolve Windows .cmd shims to underlying .exe before spawn                                                                           |
 | Windows platform          | pr    | P0       | #68149 | feat(daemon): use PowerShell Register-ScheduledTask for Windows auto-start                                                                |
-| Windows platform          | pr    | P0       | #63651 | fix: remove duplicate restart message on Windows (schtasks)                                                                               |
+| WSL                       | pr    | P0       | #88365 | fix(infra): bridge WSL clipboard through shell                                                                                            |
+| WSL                       | pr    | P0       | #88089 | fix(clipboard): use shell-based clip.exe on WSL2                                                                                          |
 | Azure                     | pr    | P0       | #55395 | fix: centralize plugin command auth requirements                                                                                          |
 
 ## Appendix: High-Priority Bugs / Regressions
@@ -330,7 +331,12 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                      |
 | MS Teams (channel plugin) | pr    | P1       | #87169 | Support separate Teams Graph tenant                                                                                                                     |
 | MS Teams (channel plugin) | pr    | P1       | #82253 | feat(slack): support per-channel replyToMode                                                                                                            |
+| MS Teams (channel plugin) | pr    | P1       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                                                        |
+| MS Teams (channel plugin) | pr    | P1       | #77921 | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                                                                |
 | MS Teams (channel plugin) | pr    | P1       | #75043 | Add provider-aware automatic TTS emotion mapping                                                                                                        |
+| Windows platform          | issue | P1       | #88373 | Windows post-onboarding provider switch path is not discoverable                                                                                        |
+| Windows platform          | issue | P1       | #88372 | Windows provider switch leaves stale model/provider config and session cache                                                                            |
+| Windows platform          | issue | P1       | #88371 | Windows QuickStart defaults first chat to paid Anthropic model without credit warning                                                                   |
 | Windows platform          | issue | P1       | #87993 | [Bug]: Windows — openclaw update 期间 Scheduled Task PT3M 重复触发器重新拉起 gateway 导致竞态                                                           |
 | Windows platform          | issue | P1       | #87156 | [Bug]: Windows doctor update leaves Startup-folder gateway fallback stale and does not install Scheduled Task                                           |
 | Windows platform          | issue | P1       | #87136 | compaction: absolute token thresholds break when switching models with different context windows                                                        |
@@ -367,7 +373,7 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                      |
 | Windows platform          | issue | P1       | #44559 | [Bug]: Windows： Gateway 关闭 PowerShell 窗口后断连                                                                                                     |
 | Windows platform          | issue | P1       | #40540 | [Bug]: `openclaw update` command fails with EBUSY error on Windows                                                                                      |
-| Windows platform          | pr    | P1       | #88163 | fix(cli): harden Windows node pairing and approvals                                                                                                     |
+| Windows platform          | pr    | P1       | #88361 | fix(daemon): clean stale Windows startup fallback                                                                                                       |
 | Windows platform          | pr    | P1       | #69059 | fix: retry sqlite-vec load without .dll suffix on Windows                                                                                               |
 | WSL                       | issue | P1       | #86752 | [Bug]: 2026.5.22 Docker/WSL2 gateway event-loop starvation, 284s provider-auth prewarm, slow Telegram turn, and local RPC timeouts                      |
 | WSL                       | issue | P1       | #86048 | WSL2 GPU-PV driver lockup: nvidia-smi hangs after llama-server D-state crash                                                                            |
@@ -375,7 +381,6 @@ _No currently open items found._
 | WSL                       | issue | P1       | #84610 | [Bug]: Gateway loops with SIGTERM every ~90s after upgrade 2026.4.23→2026.5.18 (WSL2). Inbound msg received but cli watchdog kills mid-response         |
 | WSL                       | issue | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                             |
 | WSL                       | issue | P1       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                                                                       |
-| Azure                     | issue | P1       | #88019 | [Bug]: Azure Responses session replay keeps msg id without required reasoning after fallback                                                            |
 | Azure                     | issue | P1       | #87737 | DeepSeek V4 thinking wrapper ignores thinkingFormat compat override, breaks Azure Foundry deployments                                                   |
 | Azure                     | issue | P1       | #84109 | Azure AI Foundry Responses API: `type: "message"` missing from input items causes 400 error                                                             |
 | Azure                     | issue | P1       | #60546 | [Bug]: microsoft-foundry provider selects Claude deployments but routes them through OpenAI Foundry endpoints                                           |
@@ -383,18 +388,29 @@ _No currently open items found._
 
 ## Appendix: Stale Items (Consider Closing)
 
-| Category                  | Type  | Priority | #      | Title                                                                                                                                                   |
-| ------------------------- | ----- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                                                    |
-| Windows platform          | issue | P1       | #76884 | [Bug]: OpenClaw on native Windows getting notably slower and slower with each new version???                                                            |
-| Windows platform          | issue | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                              |
-| Windows platform          | issue | P2       | #76702 | Windows + Feishu DM becomes very slow after upgrade to 2026.5.2; latency appears in agent/session processing, likely amplified by large session context |
-| Windows platform          | issue | P2       | #76553 | [Bug]: Windows: Claude Code not detected by OpenClaw, Gateway in restart loop after PATH workaround                                                     |
-| Windows platform          | issue | P2       | #73859 | [Bug]: Built-in plugins (minimax, google, talk-voice) fail with RangeError: Maximum call stack size exceeded on Windows                                 |
-| Windows platform          | issue | P2       | #72922 | [Bug]: Sluggish response time and unstable Web GUI and CLI on Windows Server 2022                                                                       |
-| Windows platform          | pr    | P2       | #74425 | fix: ensure CLI processes exit after command completion on Windows                                                                                      |
-| WSL                       | issue | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                                  |
-| WSL                       | issue | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                                                                  |
+| Category                  | Type  | Priority | #      | Title                                                                                                                        |
+| ------------------------- | ----- | -------- | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                         |
+| MS Teams (channel plugin) | pr    | P1       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                                             |
+| MS Teams (channel plugin) | pr    | P1       | #77921 | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                                     |
+| MS Teams (channel plugin) | pr    | P2       | #78839 | [codex] Add Teams member-info action gate                                                                                    |
+| MS Teams (channel plugin) | pr    | P2       | #76560 | feat(plugins): allow community plugins to use openKeyedStore with man…                                                       |
+| Windows platform          | issue | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable            |
+| Windows platform          | issue | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows               |
+| Windows platform          | issue | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                   |
+| Windows platform          | issue | P2       | #78435 | [Bug]: `channels.slack.start-account` phase blocks event loop 5+ minutes while a model_call is in flight (Windows, 2026.5.4) |
+| Windows platform          | issue | P2       | #77730 | [Bug]: file-transfer plugin nodeHostCommands not advertised by Windows node host on live handshake (2026.5.3-1)              |
+| Windows platform          | issue | P2       | #76553 | [Bug]: Windows: Claude Code not detected by OpenClaw, Gateway in restart loop after PATH workaround                          |
+| Windows platform          | issue | P2       | #73859 | [Bug]: Built-in plugins (minimax, google, talk-voice) fail with RangeError: Maximum call stack size exceeded on Windows      |
+| Windows platform          | issue | P2       | #72922 | [Bug]: Sluggish response time and unstable Web GUI and CLI on Windows Server 2022                                            |
+| Windows platform          | pr    | P0       | #68819 | fix: resolve Windows .cmd shims to underlying .exe before spawn                                                              |
+| Windows platform          | pr    | P0       | #68149 | feat(daemon): use PowerShell Register-ScheduledTask for Windows auto-start                                                   |
+| Windows platform          | pr    | P2       | #73889 | fix(cli): stabilize Windows scheduled-task restart health after ready                                                        |
+| Windows platform          | pr    | P2       | #63651 | fix: remove duplicate restart message on Windows (schtasks)                                                                  |
+| WSL                       | issue | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                       |
+| WSL                       | issue | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                                       |
+| WSL                       | pr    | P2       | #68400 | daemon/systemd: distinguish WSL user D-Bus socket missing from missing systemctl                                             |
+| WSL                       | pr    | P2       | #58853 | feat(doctor): add WSL environment diagnostics check [AI-assisted]                                                            |
 
 ## Audit Notes
 
