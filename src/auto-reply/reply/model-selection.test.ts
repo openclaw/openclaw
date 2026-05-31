@@ -145,6 +145,43 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalog).not.toHaveBeenCalled();
   });
 
+  it("keeps per-model disabled params.thinking ahead of global thinkingDefault", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+          models: {
+            "deepseek/deepseek-v4-pro": {
+              params: { thinking: false },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          deepseek: {
+            baseUrl: "https://api.deepseek.com/v1",
+            models: [makeConfiguredModel({ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" })],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "deepseek",
+      defaultModel: "deepseek-v4-pro",
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("off");
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
   it("uses the implicit model default when no global thinking default is configured", async () => {
     vi.mocked(loadModelCatalog).mockClear();
     const cfg = {
