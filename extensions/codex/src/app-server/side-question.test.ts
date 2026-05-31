@@ -845,6 +845,18 @@ describe("runCodexAppServerSideQuestion", () => {
   it("keeps Codex code-mode-only while disabling Guardian for provider-qualified local models", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    readCodexAppServerBindingMock.mockResolvedValue({
+      schemaVersion: 1,
+      threadId: "parent-thread",
+      sessionFile: "/tmp/session-1.jsonl",
+      cwd: "/tmp/workspace",
+      authProfileId: "openai:work",
+      model: "gpt-5.5",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    });
 
     await expect(
       runCodexAppServerSideQuestion(
@@ -868,6 +880,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.model).toBe("lmstudio/local-model");
     expect(forkParams).not.toHaveProperty("modelProvider");
     expect(forkParams?.approvalPolicy).toBe("on-request");
+    expect(forkParams?.sandbox).toBe("workspace-write");
     expect(forkParams?.approvalsReviewer).toBe("user");
     expect(config?.["features.code_mode"]).toBe(true);
     expect(config?.["features.code_mode_only"]).toBe(true);

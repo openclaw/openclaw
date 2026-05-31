@@ -23,6 +23,7 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import {
+  canUseCodexModelBackedApprovalsReviewerForModel,
   readCodexPluginConfig,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexAppServerRuntimeOptions,
@@ -200,13 +201,21 @@ export async function runCodexAppServerSideQuestion(
   try {
     const cwd = binding.cwd || params.workspaceDir || process.cwd();
     const sideRunParams = buildSideRunAttemptParams(params, { cwd, authProfileId });
-    const approvalPolicy = binding.approvalPolicy ?? appServer.approvalPolicy;
-    const sandbox = binding.sandbox ?? appServer.sandbox;
     const modelScopedAppServer = resolveCodexAppServerForModelProvider({
       appServer,
       provider: modelProvider ?? params.provider,
       model: params.model,
     });
+    const useModelScopedPolicy = !canUseCodexModelBackedApprovalsReviewerForModel({
+      modelProvider: modelProvider ?? params.provider,
+      model: params.model,
+    });
+    const approvalPolicy = useModelScopedPolicy
+      ? modelScopedAppServer.approvalPolicy
+      : (binding.approvalPolicy ?? modelScopedAppServer.approvalPolicy);
+    const sandbox = useModelScopedPolicy
+      ? modelScopedAppServer.sandbox
+      : (binding.sandbox ?? modelScopedAppServer.sandbox);
     const toolBridge = await createCodexSideToolBridge({
       params,
       cwd,
