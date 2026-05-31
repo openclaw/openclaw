@@ -9,7 +9,7 @@ import {
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
-import { AcpxRuntime, testing } from "./runtime.js";
+import { AcpxRuntime, testing, type AcpSessionStore } from "./runtime.js";
 
 type TestSessionStore = {
   load(sessionId: string): Promise<Record<string, unknown> | undefined>;
@@ -55,9 +55,7 @@ function makeRuntime(
   const runtime = new AcpxRuntime(
     {
       cwd: "/tmp",
-      sessionStore: baseStore as unknown as ConstructorParameters<
-        typeof AcpxRuntime
-      >[0]["sessionStore"],
+      sessionStore: baseStore as unknown as AcpSessionStore,
       agentRegistry: {
         resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
         list: () => ["codex", "openclaw"],

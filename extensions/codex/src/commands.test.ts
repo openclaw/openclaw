@@ -112,12 +112,12 @@ function inMemoryCodexPluginsIO(
 } {
   const store: CodexPluginsConfigBlock = {
     enabled: options.enabled,
-    plugins: JSON.parse(JSON.stringify(initial)),
+    plugins: structuredClone(initial),
   };
   return {
-    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
-    currentConfig: () => JSON.parse(JSON.stringify(store)),
-    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
+    current: () => structuredClone(store.plugins ?? {}),
+    currentConfig: () => structuredClone(store),
+    readConfig: () => Promise.resolve(structuredClone(store)),
     mutate: async (update) => {
       update(store);
     },

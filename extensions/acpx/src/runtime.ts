@@ -238,7 +238,7 @@ function createResetAwareSessionStore(
         ...record,
         openclawLeaseId: lease.leaseId,
         openclawGatewayInstanceId: lease.gatewayInstanceId,
-      } as AcpLoadedSessionRecord;
+      } as unknown as AcpLoadedSessionRecord;
     },
     async save(record: AcpSessionRecord): Promise<void> {
       let recordToSave = record;
@@ -273,7 +273,7 @@ function createResetAwareSessionStore(
           agentCommand: stableAgentCommand,
           openclawLeaseId: launch.leaseId,
           openclawGatewayInstanceId: launch.gatewayInstanceId,
-        } as AcpSessionRecord;
+        } as unknown as AcpSessionRecord;
       }
       await baseStore.save(recordToSave);
       if (sessionName) {
