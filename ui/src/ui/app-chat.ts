@@ -79,6 +79,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  sessionsError?: string | null;
   sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
@@ -957,8 +958,11 @@ async function flushChatQueue(host: ChatHost) {
   }
 }
 
-function isSelectedSessionKnownIdle(host: ChatHost, sessionKey: string): boolean {
-  const row = host.sessionsResult?.sessions.find((session) =>
+function isSelectedSessionKnownIdle(
+  sessionsResult: SessionsListResult,
+  sessionKey: string,
+): boolean {
+  const row = sessionsResult.sessions.find((session) =>
     areUiSessionKeysEquivalent(session.key, sessionKey),
   );
   return Boolean(row && !isSessionRunActive(row));
@@ -969,15 +973,22 @@ function flushChatQueueAfterIdleSessionReconciliation(
   sessionKey: string,
   historyRefresh: Promise<unknown>,
   sessionsRefresh: Promise<unknown>,
+  previousSessionsResult: SessionsListResult | null | undefined,
 ) {
   if (host.chatQueue.length === 0) {
     return;
   }
-  void Promise.allSettled([historyRefresh, sessionsRefresh]).then(() => {
+  void Promise.allSettled([historyRefresh, sessionsRefresh]).then((results) => {
+    const sessionsRefreshSettled = results[1];
+    const freshSessionsResult = host.sessionsResult;
     if (
+      sessionsRefreshSettled.status !== "fulfilled" ||
       host.chatQueue.length === 0 ||
       !areUiSessionKeysEquivalent(host.sessionKey, sessionKey) ||
-      !isSelectedSessionKnownIdle(host, sessionKey)
+      !freshSessionsResult ||
+      freshSessionsResult === previousSessionsResult ||
+      host.sessionsError ||
+      !isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
     ) {
       return;
     }
@@ -1361,6 +1372,7 @@ export async function refreshChat(
 ) {
   const refreshedSessionKey = host.sessionKey;
   const requestUpdate = () => host.requestUpdate?.();
+  const previousSessionsResult = host.sessionsResult;
   const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
@@ -1376,6 +1388,7 @@ export async function refreshChat(
     refreshedSessionKey,
     historyRefresh,
     sessionsRefresh,
+    previousSessionsResult,
   );
   const secondaryRefresh = Promise.allSettled([
     sessionsRefresh,

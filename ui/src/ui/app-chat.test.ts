@@ -149,6 +149,20 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatAvatarReason: null,
     chatSideResult: null,
     chatSideResultTerminalRuns: new Set<string>(),
+    sessionsLoading: false,
+    sessionsResult: null,
+    sessionsResultAgentId: null,
+    sessionsError: null,
+    sessionsFilterActive: "0",
+    sessionsFilterLimit: "50",
+    sessionsIncludeGlobal: true,
+    sessionsIncludeUnknown: true,
+    sessionsShowArchived: false,
+    sessionsExpandedCheckpointKey: null,
+    sessionsCheckpointItemsByKey: {},
+    sessionsCheckpointLoadingKey: null,
+    sessionsCheckpointBusyKey: null,
+    sessionsCheckpointErrorByKey: {},
     chatModelOverrides: {},
     chatModelSwitchPromises: {},
     chatModelsLoading: false,
@@ -465,6 +479,32 @@ describe("refreshChat", () => {
     expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     expect(host.chatQueue).toEqual(restoredQueue);
     expect(host.chatRunId).toBeNull();
+  });
+
+  it("keeps a restored queue when idle proof is stale after sessions refresh fails", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        throw new Error("sessions unavailable");
+      }
+      return {};
+    });
+    const restoredQueue = [{ id: "queued-1", text: "after reload", createdAt: 1 }];
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatQueue: restoredQueue,
+      sessionsResult: createSessionsResult([row("main", { hasActiveRun: false, status: "done" })]),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toEqual(restoredQueue);
+    expect(host.sessionsError).toContain("sessions unavailable");
   });
 });
 
