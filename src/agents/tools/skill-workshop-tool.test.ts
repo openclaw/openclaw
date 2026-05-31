@@ -170,6 +170,12 @@ describe("skill_workshop tool", () => {
         skillKey: "weather-planner",
       }),
     ]);
+    const punctuationOnly = await tool.execute("call-3b", {
+      action: "list",
+      status: "pending",
+      query: "!!!",
+    });
+    expect((punctuationOnly.details as { proposals: unknown[] }).proposals).toEqual([]);
 
     const inspected = await tool.execute("call-4", {
       action: "inspect",
