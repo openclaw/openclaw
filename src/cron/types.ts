@@ -242,6 +242,12 @@ export type CronJobState = {
   lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error for the last failed run's failure notification. */
   lastFailureNotificationDeliveryError?: string;
+  /** Number of deferred runs due to maintenance-window role gating. */
+  deferredMaintenanceRuns?: number;
+  /** Timestamp of the earliest deferred run due to maintenance gating. */
+  firstDeferredMaintenanceAtMs?: number;
+  /** Timestamp of the most recent deferred run due to maintenance gating. */
+  lastDeferredMaintenanceAtMs?: number;
 };
 
 export type CronJob = CronJobBase<
