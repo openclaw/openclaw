@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "./local-model-lean.js";
+import {
+  filterLocalModelLeanTools,
+  isLocalModelLeanEnabled,
+  shouldCatalogToolForLocalModelLean,
+} from "./local-model-lean.js";
 
 function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
@@ -161,5 +165,13 @@ describe("local model lean tool filtering", () => {
         sessionKey: "agent:gemma:main",
       }).map((tool) => tool.name),
     ).toEqual(["read", "exec"]);
+  });
+
+  it("keeps exec direct when Tool Search compacts lean local-model tools", () => {
+    expect(shouldCatalogToolForLocalModelLean({ name: "exec" } as AnyAgentTool)).toBe(false);
+    expect(shouldCatalogToolForLocalModelLean({ name: "read" } as AnyAgentTool)).toBe(true);
+    expect(shouldCatalogToolForLocalModelLean({ name: "fake_weather" } as AnyAgentTool)).toBe(
+      true,
+    );
   });
 });

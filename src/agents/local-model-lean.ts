@@ -4,6 +4,7 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
 const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_DIRECT_TOOL_NAMES = new Set(["exec"]);
 
 function resolveLocalModelLeanAgentId(params: {
   config?: OpenClawConfig;
@@ -48,4 +49,8 @@ export function filterLocalModelLeanTools(params: {
     return params.tools;
   }
   return params.tools.filter((tool) => !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(tool.name));
+}
+
+export function shouldCatalogToolForLocalModelLean(tool: AnyAgentTool): boolean {
+  return !LOCAL_MODEL_LEAN_DIRECT_TOOL_NAMES.has(tool.name);
 }

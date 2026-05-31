@@ -30,7 +30,7 @@ Treat them differently from normal config:
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
+`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. When Tool Search is enabled, OpenClaw also keeps `exec` directly visible instead of hiding it behind the catalog, so small coding models still have an obvious shell path for local workspace checks and simple live-data probes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
 
 ### Why these three tools
 
@@ -40,7 +40,7 @@ These three tools have the largest descriptions and the most parameter shapes in
 - The model picking the right tool vs. emitting malformed tool calls because there are too many similar-looking schemas.
 - The Chat Completions adapter staying inside the server's structured-output limits vs. tripping a 400 on tool-call payload size.
 
-Removing them does not silently rewire OpenClaw — it just makes the tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available.
+Removing them does not silently rewire OpenClaw — it just makes the tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available. With Tool Search on, most optional tools can move into the searchable catalog, but `exec` remains a direct tool in lean mode.
 
 ### When to turn it on
 

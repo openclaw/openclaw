@@ -153,6 +153,29 @@ describe("Tool Search", () => {
     expect(telemetry.callCount).toBe(1);
   });
 
+  it("keeps predicate-excluded tools visible while cataloging the rest", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const exec = fakeTool("exec", "Run shell command");
+    const weather = pluginTool("fake_weather", "Read fake weather");
+
+    const compacted = applyToolSearchCatalog({
+      tools: [codeTool, exec, weather],
+      config: {
+        tools: {
+          toolSearch: true,
+        },
+      } as never,
+      sessionId: "session-direct-exec",
+      shouldCatalogTool: (tool) => tool.name !== "exec",
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+      "exec",
+    ]);
+    expect(compacted.catalogToolCount).toBe(1);
+  });
+
   it("scopes catalogs by run id when attempts share a session", async () => {
     const runATool = pluginTool("fake_run_a", "Tool visible only to run A");
     const runBTool = pluginTool("fake_run_b", "Tool visible only to run B");

@@ -149,7 +149,11 @@ import { isTimeoutError } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "../../local-model-lean.js";
+import {
+  filterLocalModelLeanTools,
+  isLocalModelLeanEnabled,
+  shouldCatalogToolForLocalModelLean,
+} from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -1437,6 +1441,10 @@ export async function runEmbeddedAttempt(
             runtimeHandle: getProviderRuntimeHandle(),
           })
         : filteredBundledTools;
+    const localModelLeanEnabled = isLocalModelLeanEnabled({
+      config: params.config,
+      agentId: sessionAgentId,
+    });
     const projectedUncompactedEffectiveTools = filterLocalModelLeanTools({
       tools: [...tools, ...normalizedBundledTools],
       config: params.config,
@@ -1507,6 +1515,9 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           catalogRef: toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
+          shouldCatalogTool: localModelLeanEnabled
+            ? shouldCatalogToolForLocalModelLean
+            : undefined,
         });
     const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
@@ -2352,10 +2363,7 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
         messageProvider: params.messageProvider,
         messageChannel: params.messageChannel,
-        localModelLean: isLocalModelLeanEnabled({
-          config: params.config,
-          agentId: sessionAgentId,
-        }),
+        localModelLean: localModelLeanEnabled,
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,
       });

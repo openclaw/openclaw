@@ -315,7 +315,7 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Try lean mode.** If both probes pass but real agent turns fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) so the prompt shape is smaller and less brittle. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
+3. **Try lean mode.** If both probes pass but real agent turns fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) so the prompt shape is smaller and less brittle. When Tool Search is also on, lean mode keeps `exec` directly visible instead of cataloging it, which helps coding-tuned local models find the shell path without first inventing a domain-specific tool such as `weather`. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
 
 4. **Disable tools entirely as a last resort.** If lean mode is not enough, set `models.providers.<provider>.models[].compat.supportsTools: false` for that model entry. The agent will then operate without tool calls on that model.
 
@@ -340,7 +340,10 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
   fails on Gemma or another local model? Check the provider URL, model ref, auth
   marker, and server logs first; local `model run` does not include agent tools.
   If local `model run` succeeds but larger agent turns fail, reduce the agent
-  tool surface with `localModelLean` or `compat.supportsTools: false`.
+  tool surface with `localModelLean` first. With Tool Search enabled, lean mode
+  still leaves `exec` visible so the model can choose shell execution directly.
+  Use `compat.supportsTools: false` only when the model or server cannot handle
+  tool schemas at all.
 - Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an
   empty `tool_calls` array? Do not add a proxy that blindly converts assistant
   text into tool execution. Fix the server chat template/parser first. If the
