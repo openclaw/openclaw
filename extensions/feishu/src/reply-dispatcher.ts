@@ -493,6 +493,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           accountId,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
+        markVisibleReplySent();
         if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
           sentFallbackText = true;
           await sendChunkedTextReply({

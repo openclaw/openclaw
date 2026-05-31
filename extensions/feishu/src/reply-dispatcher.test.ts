@@ -119,7 +119,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   type TypingDispatcherOptions = {
     onReplyStart?: () => Promise<void> | void;
     onIdle?: () => Promise<void> | void;
-    deliver: (payload: { text: string }, meta: { kind: string }) => Promise<void> | void;
+    deliver: (
+      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
+      meta: { kind: string },
+    ) => Promise<void> | void;
   };
 
   beforeEach(() => {
@@ -1614,6 +1617,21 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("does not send no-visible-reply fallback after media-only output", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+
+    await options.deliver({ mediaUrl: "https://example.com/a.png" }, { kind: "block" });
+    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(result.getVisibleReplyState()).toEqual({
       visibleReplySent: true,
