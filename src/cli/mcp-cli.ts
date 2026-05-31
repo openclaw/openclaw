@@ -1,10 +1,10 @@
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { Command } from "commander";
 import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
@@ -308,6 +308,7 @@ async function collectMcpDoctorIssues(params: {
   const resolved = resolveMcpTransportConfig(name, server);
   if (server.enabled === false) {
     issues.push(issue("warning", "server is disabled"));
+    return issues;
   }
   if (!resolved) {
     issues.push(issue("error", "server transport is invalid"));

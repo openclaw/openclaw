@@ -389,6 +389,29 @@ describe("mcp cli", () => {
     });
   });
 
+  it("does not fail MCP doctor for disabled-only overrides", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "set", "docs", '{"enabled":false}']);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "doctor", "--json"]);
+
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        ok: true,
+        servers: [
+          {
+            name: "docs",
+            ok: true,
+            issues: [{ level: "warning", message: "server is disabled" }],
+          },
+        ],
+      });
+    });
+  });
+
   it("uses configured PATH when checking MCP stdio commands", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
