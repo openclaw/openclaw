@@ -2,7 +2,11 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import {
+  buildGuardedModelFetch,
+  resetManagedResponseFinalizersForTest,
+  setManagedResponseFinalizersForTest,
+} from "./provider-transport-fetch.js";
 
 type ProviderRequestPolicyConfigMockResult = {
   allowPrivateNetwork: boolean;
@@ -1406,6 +1410,148 @@ describe("buildGuardedModelFetch", () => {
       );
 
       expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+  });
+
+  describe("managed response abandoned-stream finalize (#67461)", () => {
+    const anthropicModel = {
+      id: "sonnet-4.6",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+    } as unknown as Model<"anthropic-messages">;
+
+    afterEach(() => {
+      resetManagedResponseFinalizersForTest();
+    });
+
+    it("registers a GC-driven finalizer that releases the undici slot even when the wrapped stream is abandoned mid-stream", async () => {
+      const release = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("data: chunk\n\n"));
+              // Intentionally never close — emulates the Anthropic SDK
+              // returning on `message_stop` without draining to `done`.
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        ),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release,
+      });
+
+      const registered: Array<{ target: object; finalize: () => Promise<void> }> = [];
+      setManagedResponseFinalizersForTest({
+        register(target, finalize) {
+          registered.push({ target, finalize });
+        },
+      });
+
+      const fetcher = buildGuardedModelFetch(anthropicModel);
+      const response = await fetcher("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+      });
+      // Consumer abandons the body — no drain, no cancel.
+      void response;
+
+      expect(registered).toHaveLength(1);
+      expect(release).not.toHaveBeenCalled();
+
+      // Simulate V8 collecting the abandoned wrapped body and firing the
+      // finalizer callback.
+      await registered[0]!.finalize();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("finalizer remains idempotent with the natural drain path", async () => {
+      const release = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release,
+      });
+
+      const registered: Array<{ finalize: () => Promise<void> }> = [];
+      setManagedResponseFinalizersForTest({
+        register(_target, finalize) {
+          registered.push({ finalize });
+        },
+      });
+
+      const fetcher = buildGuardedModelFetch(anthropicModel);
+      const response = await fetcher("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+      });
+      await response.text();
+
+      expect(release).toHaveBeenCalledTimes(1);
+      // GC fires later — must not double-release.
+      await registered[0]!.finalize();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("finalizer also covers the explicit cancel path without double-release", async () => {
+      const release = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("data: chunk\n\n"));
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release,
+      });
+
+      const registered: Array<{ finalize: () => Promise<void> }> = [];
+      setManagedResponseFinalizersForTest({
+        register(_target, finalize) {
+          registered.push({ finalize });
+        },
+      });
+
+      const fetcher = buildGuardedModelFetch(anthropicModel);
+      const response = await fetcher("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+      });
+      await response.body?.cancel("test-cancel");
+
+      expect(release).toHaveBeenCalledTimes(1);
+      await registered[0]!.finalize();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not register a finalizer when the response carries no body (no leak surface)", async () => {
+      const release = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, { status: 204 }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release,
+      });
+
+      const registered: Array<{ finalize: () => Promise<void> }> = [];
+      setManagedResponseFinalizersForTest({
+        register(_target, finalize) {
+          registered.push({ finalize });
+        },
+      });
+
+      const fetcher = buildGuardedModelFetch(anthropicModel);
+      const response = await fetcher("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+      });
+      void response;
+
+      expect(registered).toHaveLength(0);
+      // Early-release path runs synchronously inside buildManagedResponse.
+      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
     });
   });
 });

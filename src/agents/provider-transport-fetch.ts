@@ -370,6 +370,38 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
+// Safety net for #67461: the Anthropic SDK's SSE parser is observed to return
+// on `message_stop` without draining to `done` and without calling
+// `body.cancel()`, leaving the managed-response wrapper holding an undici
+// dispatcher slot forever (11.5k leaked sockets / 5h in the issue report).
+// FinalizationRegistry lets us reclaim the slot when the wrapped body becomes
+// GC-unreachable through the abandoned-stream path. The registry is module-
+// local and injectable via `setManagedResponseFinalizersForTest` so the
+// abandoned-path behavior is unit-testable without driving real GC.
+type ManagedResponseFinalizerRegistry = {
+  register(target: object, heldValue: () => Promise<void>): void;
+};
+
+const defaultManagedResponseFinalizers: ManagedResponseFinalizerRegistry =
+  typeof FinalizationRegistry === "function"
+    ? new FinalizationRegistry<() => Promise<void>>((finalize) => {
+        void finalize();
+      })
+    : { register: () => undefined };
+
+let currentManagedResponseFinalizers: ManagedResponseFinalizerRegistry =
+  defaultManagedResponseFinalizers;
+
+export function setManagedResponseFinalizersForTest(
+  registry: ManagedResponseFinalizerRegistry,
+): void {
+  currentManagedResponseFinalizers = registry;
+}
+
+export function resetManagedResponseFinalizersForTest(): void {
+  currentManagedResponseFinalizers = defaultManagedResponseFinalizers;
+}
+
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
@@ -424,6 +456,7 @@ function buildManagedResponse(
       }
     },
   });
+  currentManagedResponseFinalizers.register(wrappedBody, finalize);
   return new Response(wrappedBody, {
     status: response.status,
     statusText: response.statusText,
