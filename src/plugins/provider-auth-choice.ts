@@ -211,7 +211,7 @@ function mergeLegacyDefaultModelEntryMetadata(params: {
   canonicalEntry: AgentModelEntryConfig | undefined;
   legacyEntry: AgentModelEntryConfig;
 }): AgentModelEntryConfig {
-  const next: AgentModelEntryConfig = { ...(params.canonicalEntry ?? {}) };
+  const next: AgentModelEntryConfig = { ...params.canonicalEntry };
   if (params.legacyEntry.params !== undefined) {
     next.params = mergeModelMetadataValue(next.params, params.legacyEntry.params) as
       | AgentModelEntryConfig["params"]
