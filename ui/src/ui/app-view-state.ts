@@ -446,6 +446,8 @@ export type AppViewState = {
     skillWorkshopRevisionKey: string | null;
     skillWorkshopRevisionDraft: string;
     skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+    skillWorkshopChatHandoffActive?: boolean;
+    skillWorkshopChatHandoffTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

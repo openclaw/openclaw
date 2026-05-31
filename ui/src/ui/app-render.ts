@@ -502,6 +502,7 @@ const SKILL_WORKSHOP_CURRENT_CHAT_REVISIONS_KEY =
   "openclaw:control-ui:skill-workshop-current-chat-revisions:v1";
 const SKILL_WORKSHOP_REVISION_SESSIONS_KEY =
   "openclaw:control-ui:skill-workshop-revision-sessions:v1";
+const SKILL_WORKSHOP_CHAT_HANDOFF_MS = 900;
 const MAX_SKILL_WORKSHOP_REVIEWED_KEYS = 500;
 const MAX_SKILL_WORKSHOP_REVISION_SESSIONS = 200;
 const DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH = 360;
@@ -917,6 +918,7 @@ async function sendSkillWorkshopRevisionRequest(
   if (!sessionKey) {
     throw new Error(state.sessionsError ?? "Could not prepare a Skill Workshop session.");
   }
+  startSkillWorkshopChatHandoff(state);
   if (state.tab !== "chat") {
     state.setTab("chat" as Tab);
   }
@@ -926,6 +928,17 @@ async function sendSkillWorkshopRevisionRequest(
     await switchChatSession(state, sessionKey, { awaitInitialLoad: true });
   }
   await state.handleSendChat(message);
+}
+
+function startSkillWorkshopChatHandoff(state: AppViewState): void {
+  if (state.skillWorkshopChatHandoffTimer) {
+    globalThis.clearTimeout(state.skillWorkshopChatHandoffTimer);
+  }
+  state.skillWorkshopChatHandoffActive = true;
+  state.skillWorkshopChatHandoffTimer = globalThis.setTimeout(() => {
+    state.skillWorkshopChatHandoffActive = false;
+    state.skillWorkshopChatHandoffTimer = null;
+  }, SKILL_WORKSHOP_CHAT_HANDOFF_MS);
 }
 
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
@@ -2371,6 +2384,8 @@ export function renderApp(state: AppViewState) {
       <main
         class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
           ? "content--logs"
+          : ""} ${isChat && state.skillWorkshopChatHandoffActive
+          ? "content--chat-workshop-handoff"
           : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab ===
         "skillWorkshop"
           ? `content--skill-workshop ${state.skillWorkshopMode === "today" ? "content--skill-workshop-today" : ""}`

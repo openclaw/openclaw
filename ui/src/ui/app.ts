@@ -657,6 +657,8 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopRevisionKey: string | null = null;
   @state() skillWorkshopRevisionDraft = "";
   skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  @state() skillWorkshopChatHandoffActive = false;
+  skillWorkshopChatHandoffTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
