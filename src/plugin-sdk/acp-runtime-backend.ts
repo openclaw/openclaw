@@ -1,6 +1,6 @@
 // Lightweight ACP runtime backend helpers for startup-loaded plugins.
 
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { hasExplicitCommandContextText } from "../auto-reply/reply/context-text.js";
 import type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
@@ -40,20 +40,6 @@ function loadDispatchAcpRuntime() {
   return dispatchAcpRuntimePromise;
 }
 
-function hasExplicitCommandCandidate(ctx: PluginHookReplyDispatchEvent["ctx"]): boolean {
-  const commandBody = normalizeOptionalString(ctx.CommandBody);
-  if (commandBody) {
-    return true;
-  }
-
-  const normalized = normalizeOptionalString(ctx.BodyForCommands);
-  if (!normalized) {
-    return false;
-  }
-
-  return normalized.startsWith("!") || normalized.startsWith("/");
-}
-
 export async function tryDispatchAcpReplyHook(
   event: PluginHookReplyDispatchEvent,
   ctx: PluginHookReplyDispatchContext,
@@ -64,7 +50,7 @@ export async function tryDispatchAcpReplyHook(
   if (
     event.sendPolicy === "deny" &&
     !event.suppressUserDelivery &&
-    !hasExplicitCommandCandidate(event.ctx) &&
+    !hasExplicitCommandContextText(event.ctx) &&
     !event.isTailDispatch
   ) {
     return;
