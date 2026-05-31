@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
@@ -13,6 +14,7 @@ const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
+const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -20,6 +22,13 @@ const SIGNAL_EXIT_CODES = {
   SIGTERM: 143,
 };
 let forwardedSignalExitCode;
+
+class ForwardedSignalExitError extends Error {
+  constructor(exitCode) {
+    super(`forwarded signal requested exit ${exitCode}`);
+    this.exitCode = exitCode;
+  }
+}
 
 for (const signal of Object.keys(SIGNAL_EXIT_CODES)) {
   process.on(signal, () => {
@@ -91,9 +100,16 @@ function run(command, args, cwd, options = {}) {
       detached: useProcessGroup,
     });
     let timedOut = false;
+    let outputLimitExceeded = false;
     let stdout = "";
+    let stdoutBytes = 0;
     let settled = false;
     let timeout;
+    let forceKillTimeout;
+    const maxCapturedStdoutBytes = Math.max(
+      1,
+      options.maxCapturedStdoutBytes ?? DEFAULT_CAPTURED_STDOUT_MAX_BYTES,
+    );
     const finish = (error, value = "") => {
       if (settled) {
         return;
@@ -104,6 +120,10 @@ function run(command, args, cwd, options = {}) {
       }
       ACTIVE_CHILD_KILLERS.delete(killChild);
       if (forwardedSignalExitCode !== undefined && ACTIVE_CHILD_KILLERS.size === 0) {
+        if (options.deferForwardedSignalExit) {
+          reject(new ForwardedSignalExitError(forwardedSignalExitCode));
+          return;
+        }
         process.exit(forwardedSignalExitCode);
       }
       if (error) {
@@ -123,22 +143,37 @@ function run(command, args, cwd, options = {}) {
       }
       child.kill(signal);
     };
+    const terminateChild = () => {
+      killChild("SIGTERM");
+      forceKillTimeout = setTimeout(
+        () => killChild("SIGKILL"),
+        options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS,
+      );
+      forceKillTimeout.unref?.();
+    };
     ACTIVE_CHILD_KILLERS.add(killChild);
     timeout =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
-            killChild("SIGTERM");
-            setTimeout(
-              () => killChild("SIGKILL"),
-              options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS,
-            ).unref?.();
+            terminateChild();
           }, options.timeoutMs);
     timeout?.unref?.();
     if (options.captureStdout) {
       child.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
+        if (outputLimitExceeded) {
+          return;
+        }
+        const chunkText = String(chunk);
+        const chunkBytes = Buffer.byteLength(chunkText);
+        if (stdoutBytes + chunkBytes > maxCapturedStdoutBytes) {
+          outputLimitExceeded = true;
+          terminateChild();
+          return;
+        }
+        stdout += chunkText;
+        stdoutBytes += chunkBytes;
       });
     } else {
       child.stdout.pipe(process.stderr, { end: false });
@@ -148,6 +183,14 @@ function run(command, args, cwd, options = {}) {
     child.on("close", (status, signal) => {
       if (timedOut) {
         finish(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        return;
+      }
+      if (outputLimitExceeded) {
+        finish(
+          new Error(
+            `${command} ${args.join(" ")} exceeded captured stdout limit (${maxCapturedStdoutBytes} bytes)`,
+          ),
+        );
         return;
       }
       if (status === 0) {
@@ -172,7 +215,11 @@ export async function buildPackageArtifacts(sourceDir, options = {}) {
   for (const step of PACKAGE_ARTIFACT_BUILD_STEPS) {
     console.error(`==> ${step.label}`);
     await runImpl(step.command, step.args, sourceDir, {
-      env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      env: {
+        ...process.env,
+        OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      },
       timeoutMs: resolveTimeoutMs(
         "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
         DEFAULT_PACKAGE_BUILD_TIMEOUT_MS,
@@ -210,6 +257,32 @@ async function newestOpenClawTarball(outputDir, packOutput) {
   return path.join(outputDir, packed);
 }
 
+export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
+  const runCaptureImpl = options.runCaptureImpl ?? runCapture;
+  const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
+  const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
+  console.error("==> Packing OpenClaw package");
+  await prepareChangelog(sourceDir);
+  let packOutput = "";
+  try {
+    packOutput = await runCaptureImpl(
+      "npm",
+      ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
+      sourceDir,
+      {
+        deferForwardedSignalExit: true,
+        timeoutMs: resolveTimeoutMs(
+          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+        ),
+      },
+    );
+  } finally {
+    await restoreChangelog(sourceDir);
+  }
+  return await newestOpenClawTarball(outputDir, packOutput);
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const sourceDir = path.resolve(ROOT_DIR, options.sourceDir || ROOT_DIR);
@@ -242,19 +315,7 @@ async function main() {
     },
   );
 
-  console.error("==> Packing OpenClaw package");
-  const packOutput = await runCapture(
-    "npm",
-    ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
-    sourceDir,
-    {
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-        DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-      ),
-    },
-  );
-  let tarball = await newestOpenClawTarball(outputDir, packOutput);
+  let tarball = await packOpenClawPackageForDocker(sourceDir, outputDir);
 
   if (options.outputName) {
     const target = path.join(outputDir, options.outputName);
@@ -288,6 +349,6 @@ async function main() {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
   });
 }

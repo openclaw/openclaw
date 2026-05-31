@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
@@ -6,8 +8,7 @@ import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resol
 import { isLoopbackHost } from "../../gateway/net.js";
 import { type GatewayProbeCapability, type GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { colorize, theme } from "../../terminal/theme.js";
+import { parseStrictInteger } from "../../infra/parse-finite-number.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
 const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
@@ -63,8 +64,7 @@ function parseIntOrNull(value: unknown): number | null {
   if (!s) {
     return null;
   }
-  const n = Number.parseInt(s, 10);
-  return Number.isFinite(n) ? n : null;
+  return parseStrictInteger(s) ?? null;
 }
 
 export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {

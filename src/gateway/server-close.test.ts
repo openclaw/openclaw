@@ -44,16 +44,16 @@ vi.mock("../agents/harness/registry.js", () => ({
   disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
-    "../agents/pi-bundle-mcp-tools.js",
+vi.mock("../agents/agent-bundle-mcp-tools.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-bundle-mcp-tools.js")>(
+    "../agents/agent-bundle-mcp-tools.js",
   )),
   disposeAllSessionMcpRuntimes: mocks.disposeAllSessionMcpRuntimes,
 }));
 
-vi.mock("../agents/pi-bundle-lsp-runtime.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/pi-bundle-lsp-runtime.js")>(
-    "../agents/pi-bundle-lsp-runtime.js",
+vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-bundle-lsp-runtime.js")>(
+    "../agents/agent-bundle-lsp-runtime.js",
   )),
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
 }));
@@ -937,11 +937,12 @@ describe("createGatewayCloseHandler", () => {
   it("fails shutdown when http server close still hangs after force close", async () => {
     vi.useFakeTimers();
 
+    const closeAllConnections = vi.fn();
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         httpServer: {
           close: () => undefined,
-          closeAllConnections: vi.fn(),
+          closeAllConnections,
           closeIdleConnections: vi.fn(),
         } as never,
       }),
@@ -953,7 +954,13 @@ describe("createGatewayCloseHandler", () => {
     );
     await vi.advanceTimersByTimeAsync(HTTP_CLOSE_GRACE_MS + HTTP_CLOSE_FORCE_WAIT_MS);
     await closeExpectation;
-    expect(vi.getTimerCount()).toBe(0);
+
+    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("http-server close exceeded 1000ms"),
+      ),
+    ).toBe(true);
   });
 
   it("labels warnings for multiple HTTP servers with their index", async () => {

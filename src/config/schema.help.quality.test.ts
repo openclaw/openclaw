@@ -303,6 +303,7 @@ const TARGET_KEYS = [
   "tools.deny",
   "tools.exec",
   "tools.exec.host",
+  "tools.exec.mode",
   "tools.exec.security",
   "tools.exec.ask",
   "tools.exec.node",
@@ -394,6 +395,7 @@ const TARGET_KEYS = [
   "models.providers.*.contextWindow",
   "models.providers.*.contextTokens",
   "models.providers.*.maxTokens",
+  "models.providers.*.region",
   "models.providers.*.headers",
   "models.providers.*.models",
   "agents",
@@ -749,7 +751,7 @@ describe("config help copy quality", () => {
 
   it("documents cron run-log retention controls", () => {
     const runLog = FIELD_HELP["cron.runLog"];
-    expect(runLog.includes("cron/runs")).toBe(true);
+    expect(runLog.includes("SQLite")).toBe(true);
 
     const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
     expect(maxBytes.includes("2mb")).toBe(true);

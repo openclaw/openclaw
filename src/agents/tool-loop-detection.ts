@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
-import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeNullableString as nonEmptyStringField,
   normalizeOptionalString as normalizeRunId,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { stableStringify } from "./stable-stringify.js";
 

@@ -36,6 +36,9 @@ const hookMocks = vi.hoisted(() => ({
     runMessageSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
       async () => undefined,
     ),
+    runReplyPayloadSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
+      async (event) => ({ payload: (event as { payload?: unknown }).payload }),
+    ),
     runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
 }));
@@ -294,6 +297,10 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSending.mockClear();
     hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
+    hookMocks.runner.runReplyPayloadSending.mockClear();
+    hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => ({
+      payload: (event as { payload?: unknown }).payload,
+    }));
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -1272,6 +1279,56 @@ describe("deliverOutboundPayloads", () => {
     resolveMediaAccessSpy.mockRestore();
   });
 
+  it("scopes media access after reply payload hooks add local media", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValueOnce({
+      payload: {
+        text: "hook media",
+        mediaUrl: "file:///tmp/hook-added.png",
+      },
+    });
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m5", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:room:ops",
+        agentId: "main",
+        requesterSenderId: "sender-1",
+      },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room:example" },
+      },
+    });
+
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        mediaSources?: unknown;
+        requesterSenderId?: unknown;
+        sessionKey?: unknown;
+      },
+    ];
+    expect(mediaAccessOptions?.mediaSources).toEqual(["file:///tmp/hook-added.png"]);
+    expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
+    expect(mediaAccessOptions?.requesterSenderId).toBe("sender-1");
+    const sendOptions = requireMatrixSendCall(sendMatrix)[2] as Record<string, unknown>;
+    expect(sendOptions.mediaUrl).toBe("file:///tmp/hook-added.png");
+    expect(typeof sendOptions.mediaReadFile).toBe("function");
+    resolveMediaAccessSpy.mockRestore();
+  });
+
   it("chunks direct adapter text and preserves delivery overrides across sends", async () => {
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
       channel: "matrix" as const,
@@ -1551,6 +1608,66 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(requireMockCallArg(sendText, "sendText").text).toBe("visible");
+  });
+
+  it("runs reply payload hooks before the final message_sending policy pass", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending" || hookName === "message_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockImplementationOnce(async (event) => {
+      const payload = (event as { payload: { text?: string } }).payload;
+      return {
+        payload: {
+          ...payload,
+          text: `${payload.text} + payload-hook`,
+          replyToId: "hooked-reply",
+        },
+      };
+    });
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "redacted" });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix",
+      messageId: "sent",
+      roomId: "!room",
+    });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "secret", replyToId: "original-reply" }],
+      deps: { matrix: sendText },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room" },
+      },
+    });
+
+    expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "secret" }),
+        kind: "final",
+        channel: "matrix",
+      }),
+      expect.objectContaining({ channelId: "matrix", conversationId: "!room" }),
+    );
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "secret + payload-hook",
+        replyToId: "hooked-reply",
+      }),
+      expect.objectContaining({ channelId: "matrix", conversationId: "!room" }),
+    );
+    expect(requireMatrixSendCall(sendText)[1]).toBe("redacted");
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyPayloadSendingHook: expect.objectContaining({
+          kind: "final",
+          channel: "matrix",
+        }),
+      }),
+    );
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {
@@ -2116,7 +2233,7 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((r) => r.messageId)).toEqual(["m1", "m2"]);
   });
 
-  it("respects newline chunk mode for plugin text", async () => {
+  it("respects newline chunk mode for plugin text without splitting short messages", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     const cfg: OpenClawConfig = {
       channels: {
@@ -2132,14 +2249,40 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    const firstChunkCall = requireMatrixSendCall(sendMatrix);
+    expect(firstChunkCall?.[0]).toBe("!room:example");
+    expect(firstChunkCall?.[1]).toBe("Line one\n\nLine two");
+    expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
+  });
+
+  it("splits long plugin text on packed paragraph boundaries in newline mode", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
+    const cfg: OpenClawConfig = {
+      channels: {
+        matrix: { textChunkLimit: 14, chunkMode: "newline" },
+      } as OpenClawConfig["channels"],
+    };
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "Alpha\n\nBeta\n\nGamma" }],
+      deps: { matrix: sendMatrix },
+    });
+
     expect(sendMatrix).toHaveBeenCalledTimes(2);
     const firstChunkCall = requireMatrixSendCall(sendMatrix);
     expect(firstChunkCall?.[0]).toBe("!room:example");
-    expect(firstChunkCall?.[1]).toBe("Line one");
+    expect(firstChunkCall?.[1]).toBe("Alpha\n\nBeta");
     expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
     const secondChunkCall = sendMatrix.mock.calls[1];
     expect(secondChunkCall?.[0]).toBe("!room:example");
-    expect(secondChunkCall?.[1]).toBe("Line two");
+    expect(secondChunkCall?.[1]).toBe("Gamma");
     expect((secondChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
   });
 
@@ -2434,8 +2577,8 @@ describe("deliverOutboundPayloads", () => {
       { text: " ", mediaUrls: [] },
     ]);
     expect(normalized).toEqual([
-      { text: "hi", mediaUrls: [] },
-      { text: "", mediaUrls: ["https://x.test/a.jpg"] },
+      { text: "hi", mediaUrls: [], audioAsVoice: undefined },
+      { text: "", mediaUrls: ["https://x.test/a.jpg"], audioAsVoice: undefined },
     ]);
   });
 
@@ -2626,7 +2769,7 @@ describe("deliverOutboundPayloads", () => {
     const rawPayloads: DeliverOutboundPayload[] = [
       { text: "NO_REPLY" },
       { text: '{"action":"NO_REPLY"}' },
-      { text: "caption\nMEDIA:https://x.test/a.png" },
+      { text: "caption", mediaUrl: "https://x.test/a.png" },
       { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
     ];
 
@@ -2662,13 +2805,13 @@ describe("deliverOutboundPayloads", () => {
     expect(queuedDelivery?.payloads).toStrictEqual([
       { text: "NO_REPLY" },
       { text: '{"action":"NO_REPLY"}' },
-      { text: "caption\nMEDIA:https://x.test/a.png" },
+      { text: "caption", mediaUrl: "https://x.test/a.png" },
       { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
     ]);
     const renderedPlan = queuedDelivery?.renderedBatchPlan;
     expect(renderedPlan?.payloadCount).toBe(4);
     expect(renderedPlan?.textCount).toBe(4);
-    expect(renderedPlan?.mediaCount).toBe(1);
+    expect(renderedPlan?.mediaCount).toBe(2);
     const noReplyMediaItem = renderedPlan?.items?.find((item) => item.index === 3);
     expect(noReplyMediaItem?.kinds).toStrictEqual(["text", "media"]);
     expect(noReplyMediaItem?.text).toBe("NO_REPLY");
@@ -2946,6 +3089,203 @@ describe("deliverOutboundPayloads", () => {
     expect(sentCall?.[1]?.channelId).toBe("matrix");
   });
 
+  it("threads sessionKey into the message_sending hook context when session is provided", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "mx-1",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hello" }],
+      session: { key: "agent:tank:main" },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        channelId: "matrix",
+        sessionKey: "agent:tank:main",
+      }),
+    );
+  });
+
+  it("forwards session.key (canonical) into message_sending ctx and never falls back to policyKey", async () => {
+    // Contract test for OutboundSessionContext.key semantics:
+    // session.key MUST reach plugins via ctx.sessionKey, even when a
+    // different session.policyKey is also present. Delivery must not hand
+    // the policy key to plugins that correlate against agent_end.
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "mx-3",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hi" }],
+      session: {
+        key: "agent:tank:main",
+        policyKey: "agent:tank:discord:tank:direct:1594",
+      },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ sessionKey: "agent:tank:main" }),
+    );
+  });
+
+  it("omits sessionKey from the message_sending hook context when session is absent", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "mx-2",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hi" }],
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledTimes(1);
+    const ctx = hookMocks.runner.runMessageSending.mock.calls[0]?.[1] as {
+      sessionKey?: string;
+    };
+    expect(ctx?.sessionKey).toBeUndefined();
+    expect(ctx).not.toHaveProperty("sessionKey");
+  });
+
+  it("threads sessionKey into the message_sent hook context when session is provided", async () => {
+    // Contract test for `message_sent`: the documented JSDoc says the
+    // outbound delivery hooks mirror `OutboundSessionContext.key`. This
+    // test pins `message_sent` to that contract so it cannot diverge
+    // from `message_sending` unobserved.
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "mx-sent-1",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hello" }],
+      session: { key: "agent:tank:main" },
+    });
+
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "!room", content: "hello", success: true }),
+      expect.objectContaining({
+        channelId: "matrix",
+        sessionKey: "agent:tank:main",
+      }),
+    );
+  });
+
+  it("omits sessionKey from the message_sent hook context when session is absent", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "mx-sent-2",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hi" }],
+    });
+
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(1);
+    const sentCtx = hookMocks.runner.runMessageSent.mock.calls[0]?.[1] as {
+      sessionKey?: string;
+    };
+    expect(sentCtx?.sessionKey).toBeUndefined();
+  });
+
   it("short-circuits lower-priority message_sending hooks after cancel=true", async () => {
     const hookRegistry = createEmptyPluginRegistry();
     const high = vi.fn().mockResolvedValue({ cancel: true, content: "blocked" });
@@ -3150,10 +3490,13 @@ describe("deliverOutboundPayloads", () => {
       channel: "matrix",
       to: "!room:1",
       payloads: [{ text: "hello", delivery: { pin: true } }],
+      gatewayClientScopes: ["operator.write"],
     });
 
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
     expect(pinDeliveredMessage).toHaveBeenCalledTimes(1);
+    const pinCall = requireMockCallArg(pinDeliveredMessage, "pin delivered message");
+    expect(pinCall.gatewayClientScopes).toEqual(["operator.write"]);
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
       "Delivery pin requested, but channel failed to pin delivered message.",

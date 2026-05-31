@@ -321,6 +321,16 @@ describe("test-install-sh-docker", () => {
     expect(runner).toContain('bash -c "curl -fsSL \\"\\$1\\" | bash -s --');
     expect(runner).not.toContain('npm_install_global "install latest release tarball"');
   });
+
+  it("uses public npm latest as the non-root installer expectation", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(wrapper).toContain(
+      'public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"',
+    );
+    expect(wrapper).toContain('LATEST_VERSION="$public_latest_version"');
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION"');
+  });
 });
 
 describe("install-sh smoke runner", () => {
@@ -353,7 +363,7 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain('SKIP_NPM_GLOBAL="${OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL:-0}"');
     expect(script).toContain('NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"');
     expect(script).toContain("-e npm_config_cache=/npm-cache");
-    expect(script).toContain('"${NPM_CACHE_DOCKER_ARGS[@]}"');
+    expect(script).toContain('${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"}');
     expect(script).toContain("remove_owned_npm_cache");
     expect(script).toContain('sudo -n rm -rf "$NPM_CACHE_DIR"');
     expect(script).not.toMatch(
@@ -383,11 +393,17 @@ describe("install-sh smoke runner", () => {
     ]) {
       expect(script).toContain(envName);
     }
-    expect(script).toMatch(/Run installer smoke test[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u);
-    expect(script).toMatch(/Run update smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u);
-    expect(script).toMatch(/Run direct npm global smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u);
     expect(script).toMatch(
-      /Run installer npm freshness smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+      /Run installer smoke test[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
+    );
+    expect(script).toMatch(
+      /Run update smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
+    );
+    expect(script).toMatch(
+      /Run direct npm global smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
+    );
+    expect(script).toMatch(
+      /Run installer npm freshness smoke[\s\S]*\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\+"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"\}/u,
     );
   });
 });
@@ -475,6 +491,8 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("rockylinux:9@sha256:");
     expect(workflow).toContain("pnpm-workspace.yaml");
     expect(workflow).toContain("workspace.patchedDependencies");
+    expect(workflow).toContain('throw new Error(\\"missing patch for \\" + dep + \\": \\" + rel)');
+    expect(workflow).not.toContain("throw new Error(`missing patch");
     expect(workflow).not.toContain("pkg.pnpm?.patchedDependencies");
     expect(workflow).not.toContain("--cache-from");
     expect(workflow).not.toContain("--cache-to");

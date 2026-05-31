@@ -1,7 +1,8 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -225,8 +226,10 @@ export function registerCronSimpleCommands(cron: Command) {
       .option("--limit <n>", "Max entries (default 50)", "50")
       .action(async (opts) => {
         try {
-          const limitRaw = Number.parseInt(String(opts.limit ?? "50"), 10);
-          const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50;
+          const limit = parseStrictPositiveInteger(opts.limit ?? "50");
+          if (limit === undefined) {
+            throw new Error("Invalid --limit (must be a positive integer).");
+          }
           const id = String(opts.id);
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,

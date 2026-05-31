@@ -1,9 +1,10 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
@@ -29,9 +30,11 @@ const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
+const getCurrentPluginMetadataSnapshotMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
+let resolveOwningPluginIdsForProviderRef: typeof import("./providers.js").resolveOwningPluginIdsForProviderRef;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
@@ -54,6 +57,7 @@ function createManifestProviderPlugin(params: {
   setup?: PluginManifestRecord["setup"];
   contracts?: PluginManifestRecord["contracts"];
   modelCatalog?: PluginManifestRecord["modelCatalog"];
+  providerAuthAliases?: PluginManifestRecord["providerAuthAliases"];
   packageManifest?: OpenClawPackageManifest;
 }): PluginManifestRecord {
   return {
@@ -66,6 +70,7 @@ function createManifestProviderPlugin(params: {
     activation: params.activation,
     setup: params.setup,
     modelCatalog: params.modelCatalog,
+    providerAuthAliases: params.providerAuthAliases,
     packageManifest: params.packageManifest,
     contracts: params.contracts,
     skills: [],
@@ -92,7 +97,7 @@ function setOwningProviderManifestPlugins() {
     }),
     createManifestProviderPlugin({
       id: "openai",
-      providerIds: ["openai", "openai-codex"],
+      providerIds: ["openai", "openai"],
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -116,7 +121,7 @@ function setOwningProviderManifestPluginsWithWorkspace() {
     }),
     createManifestProviderPlugin({
       id: "openai",
-      providerIds: ["openai", "openai-codex"],
+      providerIds: ["openai", "openai"],
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -176,6 +181,45 @@ function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
     installRecords: {},
     plugins,
     diagnostics: [],
+  };
+}
+
+function createMetadataSnapshotFixture(
+  plugins: PluginManifestRecord[],
+): Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry" | "byPluginId"> {
+  const ownerMap = (entries: Array<[string, readonly string[]]>) => new Map(entries);
+  return {
+    manifestRegistry: {
+      plugins,
+      diagnostics: [],
+    },
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    owners: {
+      channels: ownerMap([]),
+      channelConfigs: ownerMap([]),
+      providers: ownerMap(
+        plugins.flatMap((plugin) =>
+          plugin.providers.map((providerId) => [providerId, [plugin.id]] as const),
+        ),
+      ),
+      modelCatalogProviders: ownerMap(
+        plugins.flatMap((plugin) =>
+          Object.keys(plugin.modelCatalog?.aliases ?? {}).map(
+            (providerId) => [providerId, [plugin.id]] as const,
+          ),
+        ),
+      ),
+      cliBackends: ownerMap(
+        plugins.flatMap((plugin) =>
+          [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
+            (backendId) => [backendId, [plugin.id]] as const,
+          ),
+        ),
+      ),
+      setupProviders: ownerMap([]),
+      commandAliases: ownerMap([]),
+      contracts: ownerMap([]),
+    },
   };
 }
 
@@ -242,10 +286,6 @@ function getLastRuntimeRegistryCall(): Record<string, unknown> {
     string,
     unknown
   >;
-}
-
-function cloneOptions<T>(value: T): T {
-  return structuredClone(value);
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -374,19 +414,6 @@ function getLastSetupLoadedPluginConfig() {
     | undefined;
 }
 
-function createBundledProviderCompatOptions(params?: { onlyPluginIds?: readonly string[] }) {
-  return {
-    config: {
-      plugins: {
-        allow: ["openrouter"],
-        bundledDiscovery: "compat" as const,
-      },
-    },
-    bundledProviderAllowlistCompat: true,
-    ...(params?.onlyPluginIds !== undefined ? { onlyPluginIds: params.onlyPluginIds } : {}),
-  };
-}
-
 function createAutoEnabledProviderConfig() {
   const rawConfig: OpenClawConfig = {
     plugins: {},
@@ -491,6 +518,10 @@ describe("resolvePluginProviders", () => {
         };
       },
     }));
+    vi.doMock("./current-plugin-metadata-snapshot.js", () => ({
+      getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
+        getCurrentPluginMetadataSnapshotMock(...args),
+    }));
     vi.doMock("./plugin-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
@@ -511,6 +542,7 @@ describe("resolvePluginProviders", () => {
     ({
       resolveActivatableProviderOwnerPluginIds,
       resolveOwningPluginIdsForProvider,
+      resolveOwningPluginIdsForProviderRef,
       resolveOwningPluginIdsForModelRef,
       resolveEnabledProviderPluginIds,
       resolveCatalogHookProviderPluginIds,
@@ -523,14 +555,14 @@ describe("resolvePluginProviders", () => {
     ({ setActivePluginRegistry } = await import("./runtime.js"));
   });
 
-  it("maps cli backend ids to owning plugin ids via manifests", () => {
+  it("does not treat cli backend ids as provider owners", () => {
     setOwningProviderManifestPlugins();
 
-    expectOwningPluginIds("claude-cli", ["anthropic"]);
+    expectOwningPluginIds("claude-cli");
     expectOwningPluginIds("codex-cli");
   });
 
-  it("maps setup-only cli backend ids to owning plugin ids via manifests", () => {
+  it("maps setup-only cli backend ids to explicit provider refs via manifests", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "setup-only-backend-owner",
@@ -539,7 +571,146 @@ describe("resolvePluginProviders", () => {
       }),
     ]);
 
-    expectOwningPluginIds("setup-only-cli", ["setup-only-backend-owner"]);
+    expectOwningPluginIds("setup-only-cli");
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "setup-only-cli" })).toEqual([
+      "setup-only-backend-owner",
+    ]);
+  });
+
+  it("maps explicit provider refs to provider or cli-backend owners", () => {
+    setOwningProviderManifestPlugins();
+
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "claude-cli" })).toEqual(["anthropic"]);
+  });
+
+  it("maps explicit cli-backend model refs to owning plugin ids", () => {
+    setOwningProviderManifestPlugins();
+
+    expectModelOwningPluginIds("claude-cli/claude-sonnet-4-6", ["anthropic"]);
+  });
+
+  it("maps manifest model catalog provider aliases to owning plugin ids", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "moonshot",
+        providerIds: ["moonshot"],
+        modelCatalog: {
+          aliases: {
+            moonshotai: { provider: "moonshot" },
+            "moonshot-ai": { provider: "moonshot" },
+          },
+        },
+      }),
+    ]);
+
+    expectOwningPluginIds("moonshotai", ["moonshot"]);
+    expectOwningPluginIds("moonshot-ai", ["moonshot"]);
+  });
+
+  it("uses the current metadata owner maps before loading plugin metadata", () => {
+    const plugins = [
+      createManifestProviderPlugin({
+        id: "openai",
+        providerIds: ["openai", "openai"],
+      }),
+    ];
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(createMetadataSnapshotFixture(plugins));
+
+    expectOwningPluginIds("openai", ["openai"]);
+
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      config: undefined,
+      env: undefined,
+      allowWorkspaceScopedSnapshot: true,
+    });
+  });
+
+  it("uses current metadata owner maps for cli backend provider refs", () => {
+    const plugins = [
+      createManifestProviderPlugin({
+        id: "anthropic",
+        providerIds: [],
+        cliBackends: ["claude-cli"],
+      }),
+    ];
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(createMetadataSnapshotFixture(plugins));
+
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "claude-cli" })).toEqual(["anthropic"]);
+
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps normalized case-variant owners from current metadata maps", () => {
+    const plugins = [
+      createManifestProviderPlugin({
+        id: "exact-owner",
+        providerIds: ["codex-cli"],
+        cliBackends: ["codex-cli"],
+      }),
+      createManifestProviderPlugin({
+        id: "case-owner",
+        providerIds: ["CODEX-CLI"],
+        cliBackends: ["CODEX-CLI"],
+      }),
+    ];
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(createMetadataSnapshotFixture(plugins));
+
+    expect(resolveOwningPluginIdsForProvider({ provider: "codex-cli" })).toEqual([
+      "case-owner",
+      "exact-owner",
+    ]);
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "codex-cli" })).toEqual([
+      "case-owner",
+      "exact-owner",
+    ]);
+  });
+
+  it("keeps explicit manifest registries ahead of current metadata owner maps", () => {
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(
+      createMetadataSnapshotFixture([
+        createManifestProviderPlugin({
+          id: "stale-owner",
+          providerIds: ["dynamic-provider"],
+          cliBackends: ["dynamic-cli"],
+        }),
+      ]),
+    );
+    const manifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createManifestProviderPlugin({
+          id: "fresh-owner",
+          providerIds: ["dynamic-provider"],
+          cliBackends: ["dynamic-cli"],
+        }),
+      ],
+    };
+
+    expect(
+      resolveOwningPluginIdsForProvider({ provider: "dynamic-provider", manifestRegistry }),
+    ).toEqual(["fresh-owner"]);
+    expect(
+      resolveOwningPluginIdsForProviderRef({ provider: "dynamic-cli", manifestRegistry }),
+    ).toEqual(["fresh-owner"]);
+
+    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("maps manifest provider auth aliases to the target provider owner", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "openai",
+        providerIds: ["openai"],
+        providerAuthAliases: {
+          openai: "openai",
+        },
+      }),
+    ]);
+
+    expectOwningPluginIds("openai", ["openai"]);
+    expectOwningPluginIds("openai", ["openai"]);
+    expectModelOwningPluginIds("openai/gpt-5.5", ["openai"]);
   });
 
   it("reflects provider ownership manifest changes on the next lookup", () => {
@@ -570,6 +741,8 @@ describe("resolvePluginProviders", () => {
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
     loadPluginMetadataSnapshotMock.mockReset();
+    getCurrentPluginMetadataSnapshotMock.mockReset();
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     const provider: ProviderPlugin = {
       id: "demo-provider",
       label: "Demo Provider",
@@ -647,6 +820,28 @@ describe("resolvePluginProviders", () => {
     ]);
   });
 
+  it("does not answer explicit registry lookups from current metadata snapshots", () => {
+    setOwningProviderManifestPlugins();
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(
+      createMetadataSnapshotFixture([
+        createManifestProviderPlugin({
+          id: "stale-owner",
+          providerIds: ["stale-provider"],
+        }),
+      ]),
+    );
+
+    expect(
+      resolveEnabledProviderPluginIds({
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        registry: createProviderRegistrySnapshotFixture(),
+      }),
+    ).toEqual([]);
+
+    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
   it("loads catalog augment hooks only for declarative runtime catalog manifests", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
@@ -704,7 +899,7 @@ describe("resolvePluginProviders", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("reuses declared external auth plugin ids for compat fallback filtering", () => {
+  it("keeps undeclared external auth provider fallback scoped to active external providers", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "declared-auth-owner",
@@ -770,7 +965,7 @@ describe("resolvePluginProviders", () => {
     expect(discovered).toEqual(["openrouter"]);
   });
 
-  it("returns all bundled provider plugins in explicit compat mode", () => {
+  it("filters bundled provider plugins through restrictive allowlists", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "kilocode",
@@ -796,13 +991,12 @@ describe("resolvePluginProviders", () => {
       config: {
         plugins: {
           allow: ["openrouter"],
-          bundledDiscovery: "compat",
         },
       },
       env: {} as NodeJS.ProcessEnv,
     });
 
-    expect(discovered).toEqual(["kilocode", "moonshot", "openrouter"]);
+    expect(discovered).toEqual(["openrouter"]);
   });
 
   it("treats explicit empty provider scopes as scoped-empty in provider helpers", () => {
@@ -821,53 +1015,6 @@ describe("resolvePluginProviders", () => {
       }),
     ).toStrictEqual([]);
   });
-
-  it.each([
-    {
-      name: "can augment restrictive allowlists for bundled provider compatibility",
-      options: createBundledProviderCompatOptions(),
-      expectedAllow: ["openrouter", "google", "kilocode", "moonshot"],
-      expectedEntries: {
-        google: { enabled: true },
-        kilocode: { enabled: true },
-        moonshot: { enabled: true },
-      },
-    },
-    {
-      name: "does not reintroduce the retired google auth plugin id into compat allowlists",
-      options: createBundledProviderCompatOptions(),
-      expectedAllow: ["google"],
-      unexpectedAllow: ["google-gemini-cli-auth"],
-    },
-    {
-      name: "does not inject non-bundled provider plugin ids into compat allowlists",
-      options: createBundledProviderCompatOptions(),
-      unexpectedAllow: ["workspace-provider"],
-    },
-    {
-      name: "scopes bundled provider compat expansion to the requested plugin ids",
-      options: createBundledProviderCompatOptions({
-        onlyPluginIds: ["moonshot"],
-      }),
-      expectedAllow: ["openrouter", "moonshot"],
-      unexpectedAllow: ["google", "kilocode"],
-      expectedOnlyPluginIds: ["moonshot"],
-    },
-  ] as const)(
-    "$name",
-    ({ options, expectedAllow, expectedEntries, expectedOnlyPluginIds, unexpectedAllow }) => {
-      resolvePluginProviders(
-        cloneOptions(options) as unknown as Parameters<typeof resolvePluginProviders>[0],
-      );
-
-      expectResolvedAllowlistState({
-        expectedAllow,
-        expectedEntries,
-        expectedOnlyPluginIds,
-        unexpectedAllow,
-      });
-    },
-  );
 
   it("can enable bundled provider plugins under Vitest when no explicit plugin config exists", () => {
     resolvePluginProviders({
@@ -937,42 +1084,10 @@ describe("resolvePluginProviders", () => {
   });
 
   it("loads only provider plugins on the provider runtime path", () => {
-    resolvePluginProviders({
-      bundledProviderAllowlistCompat: true,
-    });
+    resolvePluginProviders({});
 
     expectLastRuntimeRegistryLoad({
       onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
-  });
-
-  it("includes present bundled providers in bundled compat expansion", () => {
-    setManifestPlugins([
-      createManifestProviderPlugin({
-        id: "google",
-        providerIds: ["google"],
-      }),
-      createManifestProviderPlugin({
-        id: "codex",
-        providerIds: ["codex"],
-      }),
-    ]);
-
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-          bundledDiscovery: "compat",
-        },
-      },
-      bundledProviderAllowlistCompat: true,
-    });
-
-    expectResolvedAllowlistState({
-      expectedAllow: ["openrouter", "google", "codex"],
-    });
-    expectLastRuntimeRegistryLoad({
-      onlyPluginIds: ["codex", "google"],
     });
   });
 
@@ -995,108 +1110,6 @@ describe("resolvePluginProviders", () => {
       entries: {
         google: { enabled: true },
       },
-    });
-  });
-
-  it("excludes untrusted workspace provider plugins from setup discovery by default", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-          bundledDiscovery: "compat",
-          entries: {
-            google: { enabled: false },
-          },
-        },
-      },
-      mode: "setup",
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
-    expectPluginConfigState(getLastSetupLoadedPluginConfig(), {
-      allow: ["openrouter", "google", "kilocode", "moonshot"],
-      entries: {
-        google: { enabled: false },
-        kilocode: { enabled: true },
-        moonshot: { enabled: true },
-      },
-    });
-  });
-
-  it("loads explicitly included untrusted workspace provider plugins in setup discovery", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-          bundledDiscovery: "compat",
-        },
-      },
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: true,
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot", "workspace-provider"],
-    });
-  });
-
-  it("excludes untrusted workspace provider plugins from setup discovery when explicitly requested", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-          bundledDiscovery: "compat",
-        },
-      },
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
-  });
-
-  it("does not keep trusted but disabled workspace provider plugins eligible in setup discovery", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter", "workspace-provider"],
-          bundledDiscovery: "compat",
-          entries: {
-            "workspace-provider": { enabled: false },
-          },
-        },
-      },
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
-  });
-
-  it("does not include trusted-but-disabled workspace providers when denylist blocks them", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter", "workspace-provider"],
-          bundledDiscovery: "compat",
-          deny: ["workspace-provider"],
-          entries: {
-            "workspace-provider": { enabled: false },
-          },
-        },
-      },
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
     });
   });
 
@@ -1203,7 +1216,7 @@ describe("resolvePluginProviders", () => {
 
     resolvePluginProviders({
       config: {},
-      providerRefs: ["openai-codex"],
+      providerRefs: ["openai"],
       activate: true,
     });
 
@@ -1595,7 +1608,7 @@ describe("resolvePluginProviders", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps legacy CLI backend ownership as the explicit provider fallback", () => {
+  it("scopes cli-backend provider refs to their owning plugin", () => {
     setOwningProviderManifestPlugins();
 
     resolvePluginProviders({
@@ -1621,7 +1634,7 @@ describe("resolvePluginProviders", () => {
       expectedPluginIds: ["minimax"],
     },
     {
-      provider: "openai-codex",
+      provider: "openai",
       expectedPluginIds: ["openai"],
     },
     {
@@ -1745,7 +1758,6 @@ describe("resolvePluginProviders", () => {
     const providers = resolvePluginProviders({
       config: {},
       modelRefs: ["qwen3.6-27b@iq3_xxs"],
-      bundledProviderAllowlistCompat: true,
     });
 
     expectResolvedProviders(providers, [
@@ -1766,7 +1778,7 @@ describe("resolvePluginProviders", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "openai",
-        providerIds: ["openai", "openai-codex"],
+        providerIds: ["openai", "openai"],
         modelSupport: {
           modelPrefixes: ["gpt-", "o1", "o3", "o4"],
         },
@@ -1784,7 +1796,6 @@ describe("resolvePluginProviders", () => {
     const providers = resolvePluginProviders({
       config: {},
       modelRefs: ["gpt-5.4"],
-      bundledProviderAllowlistCompat: true,
     });
 
     expectResolvedProviders(providers, [

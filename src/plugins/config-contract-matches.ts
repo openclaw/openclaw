@@ -1,4 +1,5 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 
 export type PluginConfigContractMatch = {
@@ -23,11 +24,8 @@ function appendPathSegment(path: string, segment: string): string {
 }
 
 function parseCanonicalArrayIndex(segment: string, length: number): number | null {
-  if (!/^(0|[1-9]\d*)$/.test(segment)) {
-    return null;
-  }
-  const index = Number(segment);
-  return Number.isSafeInteger(index) && index >= 0 && index < length ? index : null;
+  const index = parseConfigPathArrayIndex(segment);
+  return index !== undefined && index < length ? index : null;
 }
 
 export function collectPluginConfigContractMatches(params: {

@@ -69,7 +69,7 @@ describe("anthropic provider policy public artifact", () => {
 
     expect(
       normalizeConfig({
-        provider: "openai-codex",
+        provider: "openai",
         providerConfig,
       }),
     ).toBe(providerConfig);
@@ -123,10 +123,10 @@ describe("anthropic provider policy public artifact", () => {
     ).toBe("short");
   });
 
-  it("exposes Claude Opus 4.7 thinking levels without loading the full provider plugin", () => {
+  it("exposes Claude Opus 4.8 thinking levels without loading the full provider plugin", () => {
     const profile = resolveThinkingProfile({
       provider: "anthropic",
-      modelId: "claude-opus-4-7",
+      modelId: "claude-opus-4-8",
     });
     const ids = levelIds(profile?.levels);
     expect(ids).toContain("xhigh");

@@ -1,3 +1,4 @@
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   dedupeProfileIds,
   ensureAuthProfileStore,
@@ -21,9 +22,8 @@ import {
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { resolveLegacyPiAgentAccessToken } from "./provider-usage.shared.js";
+import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -269,11 +269,13 @@ async function resolveProviderUsageAuthViaPlugin(params: {
       env: params.state.env,
       provider: params.provider,
       resolveApiKeyFromConfigAndStore: (options) =>
-        resolveProviderApiKeyFromConfigAndStore({
-          state: params.state,
-          providerIds: options?.providerIds ?? [params.provider],
-          envDirect: options?.envDirect,
-        }),
+        isOAuthOnlyUsageProvider(params.provider)
+          ? undefined
+          : resolveProviderApiKeyFromConfigAndStore({
+              state: params.state,
+              providerIds: options?.providerIds ?? [params.provider],
+              envDirect: options?.envDirect,
+            }),
       resolveOAuthToken: async (options) => {
         const auth = await resolveOAuthToken({
           state: params.state,
@@ -309,6 +311,9 @@ async function resolveProviderUsageAuthFallback(params: {
   if (oauthToken) {
     return oauthToken;
   }
+  if (isOAuthOnlyUsageProvider(params.provider)) {
+    return null;
+  }
 
   const apiKey = resolveProviderApiKeyFromConfigAndStore({
     state: params.state,
@@ -327,10 +332,12 @@ async function resolveProviderUsageAuthFallback(params: {
 function hasAuthProfileCredentialSource(params: {
   state: UsageAuthState;
   providerIds: string[];
+  usageProvider: UsageProviderId;
 }): boolean {
   const store = ensureAuthProfileStoreWithoutExternalProfiles(params.state.agentDir, {
     allowKeychainPrompt: false,
   });
+  const allowApiKey = !isOAuthOnlyUsageProvider(params.usageProvider);
   for (const provider of params.providerIds) {
     const order = resolveAuthProfileOrder({
       cfg: params.state.cfg,
@@ -340,17 +347,17 @@ function hasAuthProfileCredentialSource(params: {
     if (
       dedupeProfileIds(order).some((profileId) => {
         const cred = store.profiles[profileId];
-        return cred?.type === "api_key" || cred?.type === "oauth" || cred?.type === "token";
+        return (
+          cred?.type === "oauth" ||
+          cred?.type === "token" ||
+          (allowApiKey && cred?.type === "api_key")
+        );
       })
     ) {
       return true;
     }
   }
   return false;
-}
-
-function resolveLegacyPiAgentProviderIds(provider: UsageProviderId): string[] {
-  return provider === "zai" ? ["z-ai", "zai"] : [provider];
 }
 
 export async function resolveProviderAuths(params: {
@@ -405,32 +412,30 @@ export async function resolveProviderAuths(params: {
       provider,
     });
     const hasDirectCredentialSource =
-      Boolean(
+      !isOAuthOnlyUsageProvider(provider) &&
+      (Boolean(
         resolveProviderApiKeyFromConfig({
           state: directCredentialState,
           providerIds: credentialProviderIds,
         }),
       ) ||
-      hasProviderAuthEnvCredentialSource({
-        state: directCredentialState,
-        providerIds: credentialProviderIds,
-      });
+        hasProviderAuthEnvCredentialSource({
+          state: directCredentialState,
+          providerIds: credentialProviderIds,
+        }));
     const allowAuthProfileStore =
       hasDirectCredentialSource ||
       (hasAuthProfileStoreSource &&
         hasAuthProfileCredentialSource({
           state: authProfileSourceState,
           providerIds: credentialProviderIds,
+          usageProvider: provider,
         }));
     const state: UsageAuthState = {
       ...stateBase,
       allowAuthProfileStore,
     };
-    const hasLegacyPiAgentCredentialSource = Boolean(
-      resolveLegacyPiAgentAccessToken(stateBase.env, resolveLegacyPiAgentProviderIds(provider)),
-    );
-    const hasPluginCredentialSource =
-      hasDirectCredentialSource || allowAuthProfileStore || hasLegacyPiAgentCredentialSource;
+    const hasPluginCredentialSource = hasDirectCredentialSource || allowAuthProfileStore;
 
     if (hasPluginCredentialSource) {
       const pluginAuth = await resolveProviderUsageAuthViaPlugin({

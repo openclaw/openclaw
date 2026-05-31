@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
+import {
+  asDateTimestampMs,
+  parseFiniteNumber as readFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
-import { parseFiniteNumber as readFiniteNumber } from "../shared/number-coercion.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   type TalkEvent,
@@ -177,8 +181,13 @@ function closeTranscriptionSession(
 }
 
 function pruneExpiredTranscriptionSessions(nowMs = Date.now()): void {
+  const validNowMs = asDateTimestampMs(nowMs);
+  if (validNowMs === undefined) {
+    return;
+  }
   for (const session of transcriptionSessions.values()) {
-    if (nowMs > session.expiresAtMs) {
+    const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
+    if (expiresAtMs === undefined || validNowMs > expiresAtMs) {
       closeTranscriptionSession(session, "completed");
     }
   }
@@ -210,7 +219,10 @@ export function createTalkTranscriptionRelaySession(
   enforceTranscriptionSessionLimits(params.connId);
   assertRelayInputAudioConfig(params.providerConfig);
   const transcriptionSessionId = randomUUID();
-  const expiresAtMs = Date.now() + TRANSCRIPTION_SESSION_TTL_MS;
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(TRANSCRIPTION_SESSION_TTL_MS);
+  if (expiresAtMs === undefined) {
+    throw new Error("Transcription relay session expiry is outside the supported Date range");
+  }
   const talk = createTalkSessionController(
     {
       sessionId: transcriptionSessionId,
@@ -346,7 +358,15 @@ function getTranscriptionSession(
   connId: string,
 ): TranscriptionRelaySession {
   const session = transcriptionSessions.get(transcriptionSessionId);
-  if (!session || session.connId !== connId || Date.now() > session.expiresAtMs) {
+  const nowMs = asDateTimestampMs(Date.now());
+  const expiresAtMs = session ? asDateTimestampMs(session.expiresAtMs) : undefined;
+  if (
+    !session ||
+    session.connId !== connId ||
+    nowMs === undefined ||
+    expiresAtMs === undefined ||
+    nowMs > expiresAtMs
+  ) {
     if (session) {
       closeTranscriptionSession(session, "completed");
     }

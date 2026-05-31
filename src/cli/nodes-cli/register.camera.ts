@@ -1,10 +1,10 @@
-import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import {
   type CameraFacing,
@@ -20,6 +20,9 @@ import {
   buildNodeInvokeParams,
   callGatewayCli,
   nodesCallOpts,
+  parseOptionalNodeFiniteNumber,
+  parseOptionalNodeNonNegativeInteger,
+  parseOptionalNodePositiveInteger,
   resolveNode,
   resolveNodeId,
 } from "./rpc.js";
@@ -105,7 +108,7 @@ export function registerNodesCameraCommands(nodes: Command) {
   nodesCallOpts(
     camera
       .command("snap")
-      .description("Capture a photo from a node camera (prints MEDIA:<path>)")
+      .description("Capture a photo from a node camera (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--facing <front|back|both>", "Camera facing", "both")
       .option("--device-id <id>", "Camera device id (from nodes camera list)")
@@ -131,16 +134,20 @@ export function registerNodesCameraCommands(nodes: Command) {
                     );
                   })();
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
-          const delayMs = opts.delayMs ? Number.parseInt(opts.delayMs, 10) : undefined;
+          const maxWidth = parseOptionalNodePositiveInteger(opts.maxWidth, "--max-width");
+          const quality = parseOptionalNodeFiniteNumber(opts.quality, "--quality", {
+            minInclusive: 0,
+            maxInclusive: 1,
+          });
+          const delayMs = parseOptionalNodeNonNegativeInteger(opts.delayMs, "--delay-ms");
           const deviceId = normalizeOptionalString(opts.deviceId);
           if (deviceId && facings.length > 1) {
             throw new Error("facing=both is not allowed when --device-id is set");
           }
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(opts.invokeTimeout, 10)
-            : undefined;
+          const timeoutMs = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
 
           const results: Array<{
             facing: CameraFacing;
@@ -189,7 +196,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             defaultRuntime.writeJson({ files: results });
             return;
           }
-          defaultRuntime.log(results.map((r) => `MEDIA:${shortenHomePath(r.path)}`).join("\n"));
+          defaultRuntime.log(results.map((r) => shortenHomePath(r.path)).join("\n"));
         });
       }),
     { timeoutMs: 60_000 },
@@ -198,7 +205,7 @@ export function registerNodesCameraCommands(nodes: Command) {
   nodesCallOpts(
     camera
       .command("clip")
-      .description("Capture a short video clip from a node camera (prints MEDIA:<path>)")
+      .description("Capture a short video clip from a node camera (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--facing <front|back>", "Camera facing", "front")
       .option("--device-id <id>", "Camera device id (from nodes camera list)")
@@ -216,9 +223,10 @@ export function registerNodesCameraCommands(nodes: Command) {
           const facing = parseFacing(opts.facing ?? "front");
           const durationMs = parseDurationMs(opts.duration ?? "3000");
           const includeAudio = opts.audio !== false;
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(opts.invokeTimeout, 10)
-            : undefined;
+          const timeoutMs = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
           const deviceId = normalizeOptionalString(opts.deviceId);
 
           const invokeParams = buildNodeInvokeParams({
@@ -253,7 +261,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             });
             return;
           }
-          defaultRuntime.log(`MEDIA:${shortenHomePath(filePath)}`);
+          defaultRuntime.log(shortenHomePath(filePath));
         });
       }),
     { timeoutMs: 90_000 },

@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS,
@@ -8,13 +8,13 @@ import {
   OPENAI_GPT5_TRANSPORT_DEFAULTS,
   UNRELATED_TOOL_CALLS_PAYLOAD_APIS,
 } from "../../test/helpers/agents/transport-params-runtime-contract.js";
+import { createOpenAIThinkingLevelWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import {
   testing as extraParamsTesting,
   applyExtraParamsToAgent,
   resolveExtraParams,
   resolvePreparedExtraParams,
-} from "./pi-embedded-runner/extra-params.js";
-import { createOpenAIThinkingLevelWrapper } from "./pi-embedded-runner/openai-stream-wrappers.js";
+} from "./embedded-agent-runner/extra-params.js";
 import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
 
 beforeEach(() => {
@@ -25,7 +25,7 @@ afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
 });
 
-describe("transport params runtime contract (Pi/OpenAI path)", () => {
+describe("transport params runtime contract (embedded OpenClaw/OpenAI path)", () => {
   it.each(OPENAI_GPT5_TRANSPORT_DEFAULT_CASES)(
     "applies OpenAI GPT-5 transport defaults for $provider/$modelId",
     ({ provider, modelId }) => {
@@ -83,15 +83,15 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
     },
   );
 
-  it("injects parallel_tool_calls into openai-codex Responses payloads", () => {
+  it("injects parallel_tool_calls into openai Responses payloads", () => {
     const payload = runPayloadMutation({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
-      } as Model<"openai-codex-responses">,
+      } as Model<"openai-chatgpt-responses">,
     });
 
     expect(payload.parallel_tool_calls).toBe(true);
@@ -106,15 +106,15 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
     });
 
     const payload = runPayloadMutation({
-      applyProvider: "openai-codex",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       thinkingLevel: "high",
       model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://chatgpt.com/backend-api",
-      } as Model<"openai-codex-responses">,
+      } as Model<"openai-chatgpt-responses">,
       payload: { reasoning: { effort: "none", summary: "auto" } },
     });
 
@@ -170,7 +170,7 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
 function runPayloadMutation(params: {
   applyProvider: string;
   applyModelId: string;
-  model: Model<"openai-codex-responses"> | Model<"openai-responses">;
+  model: Model<"openai-chatgpt-responses"> | Model<"openai-responses">;
   thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
   payload?: Record<string, unknown>;
 }): Record<string, unknown> {

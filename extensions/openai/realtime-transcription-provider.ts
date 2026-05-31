@@ -47,27 +47,7 @@ type RealtimeEvent = {
   error?: unknown;
 };
 
-type OpenAIRealtimeTranscriptionSessionCreate = {
-  type: "transcription";
-  audio: {
-    input: {
-      format: { type: "audio/pcmu" };
-      transcription: {
-        model: string;
-        language?: string;
-        prompt?: string;
-      };
-      turn_detection: {
-        type: "server_vad";
-        threshold: number;
-        prefix_padding_ms: number;
-        silence_duration_ms: number;
-      };
-    };
-  };
-};
-
-type OpenAIRealtimeTranscriptionSessionUpdate = {
+type OpenAIRealtimeTranscriptionSessionPayload = {
   type: "transcription";
   audio: {
     input: {
@@ -110,38 +90,30 @@ function normalizeProviderConfig(
     language: trimToUndefined(raw?.language),
     model: trimToUndefined(raw?.model) ?? trimToUndefined(raw?.sttModel),
     prompt: trimToUndefined(raw?.prompt),
-    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
-    vadThreshold: asFiniteNumber(raw?.vadThreshold),
+    silenceDurationMs: normalizeNonNegativeInteger(raw?.silenceDurationMs),
+    vadThreshold: normalizeVadThreshold(raw?.vadThreshold),
   };
 }
 
-function buildOpenAIRealtimeTranscriptionSessionCreateConfig(
-  config: OpenAIRealtimeTranscriptionSessionConfig,
-): OpenAIRealtimeTranscriptionSessionCreate {
-  return {
-    type: "transcription",
-    audio: {
-      input: {
-        format: { type: "audio/pcmu" },
-        transcription: {
-          model: config.model,
-          ...(config.language ? { language: config.language } : {}),
-          ...(config.prompt ? { prompt: config.prompt } : {}),
-        },
-        turn_detection: {
-          type: "server_vad",
-          threshold: config.vadThreshold,
-          prefix_padding_ms: 300,
-          silence_duration_ms: config.silenceDurationMs,
-        },
-      },
-    },
-  };
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  if (number === undefined || !Number.isSafeInteger(number) || number < 0) {
+    return undefined;
+  }
+  return number;
 }
 
-function buildOpenAIRealtimeTranscriptionSessionUpdateConfig(
+function normalizeVadThreshold(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  if (number === undefined || number < 0 || number > 1) {
+    return undefined;
+  }
+  return number;
+}
+
+function buildOpenAIRealtimeTranscriptionSessionPayload(
   config: OpenAIRealtimeTranscriptionSessionConfig,
-): OpenAIRealtimeTranscriptionSessionUpdate {
+): OpenAIRealtimeTranscriptionSessionPayload {
   return {
     type: "transcription",
     audio: {
@@ -171,7 +143,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
     return apiKey;
   }
   const authToken = await resolveProviderAuthProfileApiKey({
-    provider: "openai-codex",
+    provider: "openai",
     cfg: config.cfg,
   });
   if (!authToken) {
@@ -180,7 +152,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
   const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
     authToken,
     auditContext: "openai-realtime-transcription-session",
-    session: buildOpenAIRealtimeTranscriptionSessionCreateConfig(config),
+    session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
   });
   return clientSecret.value;
 }
@@ -270,7 +242,7 @@ function createOpenAIRealtimeTranscriptionSession(
     onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
       transport.sendJson({
         type: "session.update",
-        session: buildOpenAIRealtimeTranscriptionSessionUpdateConfig(config),
+        session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
       });
     },
     onMessage: handleEvent,
@@ -289,7 +261,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
         process.env.OPENAI_API_KEY ||
-        isProviderAuthProfileConfigured({ provider: "openai-codex", cfg }),
+        isProviderAuthProfileConfigured({ provider: "openai", cfg }),
       ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);

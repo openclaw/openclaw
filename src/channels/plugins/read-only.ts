@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  sortUniqueStrings,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -26,8 +31,6 @@ import {
 } from "../../plugins/plugin-module-loader-cache.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { sortUniqueStrings, uniqueStrings } from "../../shared/string-normalization.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import {
   isSafeManifestChannelId,
@@ -878,16 +881,27 @@ export function resolveReadOnlyChannelPluginsForConfig(
   }).plugins;
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
-  const configuredChannelIds = uniqueStrings(
-    listConfiguredChannelIdsForReadOnlyScope({
+  const activationSourceConfig = options.activationSourceConfig ?? cfg;
+  const configuredChannelIds = uniqueStrings([
+    ...listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
-      activationSourceConfig: options.activationSourceConfig ?? cfg,
+      activationSourceConfig,
       workspaceDir,
       env,
       includePersistedAuthState: options.includePersistedAuthState,
       manifestRecords,
     }),
-  ).filter(isSafeManifestChannelId);
+    ...(activationSourceConfig === cfg
+      ? []
+      : listConfiguredChannelIdsForReadOnlyScope({
+          config: activationSourceConfig,
+          activationSourceConfig,
+          workspaceDir,
+          env,
+          includePersistedAuthState: options.includePersistedAuthState,
+          manifestRecords,
+        })),
+  ]).filter(isSafeManifestChannelId);
   const byId = new Map<string, ChannelPlugin>();
   const loadFailures: ReadOnlyChannelPluginLoadFailure[] = [];
 

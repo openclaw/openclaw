@@ -78,6 +78,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -117,6 +118,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -222,8 +224,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 41093,
-    "roughTokens": 10274
+    "chars": 42321,
+    "roughTokens": 10581
   },
   "openClawDeveloperInstructions": {
     "chars": 1983,
@@ -234,8 +236,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6780
   },
   "totalWithDynamicToolsJson": {
-    "chars": 68214,
-    "roughTokens": 17054
+    "chars": 69442,
+    "roughTokens": 17361
   },
   "userInputText": {
     "chars": 1367,
@@ -672,6 +674,17 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
+        "mediaUrl": {
+          "description": "Alias for media.",
+          "type": "string"
+        },
+        "mediaUrls": {
+          "description": "Multiple media URLs/paths.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "message": {
           "type": "string"
         },
@@ -706,7 +719,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],

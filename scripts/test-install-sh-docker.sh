@@ -425,9 +425,9 @@ else
   run_install_smoke_container --rm -t \
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
-    "${NPM_CACHE_DOCKER_ARGS[@]}" \
+    ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
     "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
-    "${SMOKE_RUNNER_ENV_ARGS[@]}" \
+    ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
     -v "${LATEST_DIR}:/out" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
@@ -444,13 +444,17 @@ else
   if [[ -f "$LATEST_FILE" ]]; then
     LATEST_VERSION="$(cat "$LATEST_FILE")"
   fi
+  public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+  if [[ -n "$public_latest_version" ]]; then
+    LATEST_VERSION="$public_latest_version"
+  fi
 
   echo "==> Run update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
   run_install_smoke_container --rm -t \
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
-    "${NPM_CACHE_DOCKER_ARGS[@]}" \
-    "${SMOKE_RUNNER_ENV_ARGS[@]}" \
+    ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
+    ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=update \
     -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -469,8 +473,8 @@ else
     run_install_smoke_container --rm -t \
       --platform "$SMOKE_PLATFORM" \
       ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
-      "${NPM_CACHE_DOCKER_ARGS[@]}" \
-      "${SMOKE_RUNNER_ENV_ARGS[@]}" \
+      ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
+      ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
       -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
       -e OPENCLAW_INSTALL_SMOKE_MODE=npm-global \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -491,9 +495,9 @@ else
   echo "==> Run installer npm freshness smoke"
   run_install_smoke_container --rm -t \
     --platform "$SMOKE_PLATFORM" \
-    "${NPM_CACHE_DOCKER_ARGS[@]}" \
+    ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
     "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
-    "${SMOKE_RUNNER_ENV_ARGS[@]}" \
+    ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
     -e OPENCLAW_INSTALL_URL="$FRESHNESS_INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=freshness \

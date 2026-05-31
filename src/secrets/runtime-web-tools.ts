@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
@@ -14,11 +16,10 @@ import {
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
+import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import {
   ensureObject,
@@ -67,35 +68,6 @@ type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
 
-const WEB_FETCH_CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
-
-function hasCredentialBearingWebFetchValue(
-  value: unknown,
-  defaults: SecretDefaults | undefined,
-  seen = new WeakSet<object>(),
-): boolean {
-  if (hasConfiguredSecretRef(value, defaults)) {
-    return true;
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if (seen.has(value)) {
-    return false;
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.some((entry) => hasCredentialBearingWebFetchValue(entry, defaults, seen));
-  }
-  return Object.entries(value as Record<string, unknown>).some(([rawKey, entry]) => {
-    const key = rawKey.toLowerCase();
-    if (WEB_FETCH_CREDENTIAL_FIELD_NAMES.has(key) && entry != null && entry !== "") {
-      return true;
-    }
-    return hasCredentialBearingWebFetchValue(entry, defaults, seen);
-  });
-}
-
 function needsRuntimeWebFetchProviderDiscovery(params: {
   fetch: FetchConfig;
   rawProvider: string;
@@ -114,7 +86,7 @@ function needsRuntimeWebFetchProviderDiscovery(params: {
   if (params.rawProvider) {
     return true;
   }
-  return hasCredentialBearingWebFetchValue(params.fetch, params.defaults);
+  return hasCredentialBearingObjectValue(params.fetch, params.defaults);
 }
 
 function hasPluginScopedWebToolConfig(
@@ -298,6 +270,7 @@ async function resolveSecretInputWithEnvFallback(params: {
         config: params.sourceConfig,
         env: params.context.env,
         cache: params.context.cache,
+        manifestRegistry: params.context.manifestRegistry,
       });
       const resolvedValue = resolved.get(secretRefKey(ref));
       if (typeof resolvedValue !== "string") {
@@ -392,7 +365,6 @@ async function resolveBundledWebSearchProviders(params: {
     return resolvePluginWebSearchProviders({
       config: params.sourceConfig,
       env,
-      bundledAllowlistCompat: true,
       onlyPluginIds,
       origin: "bundled",
     });
@@ -403,7 +375,6 @@ async function resolveBundledWebSearchProviders(params: {
     const bundled = resolveBundledWebSearchProvidersFromPublicArtifacts({
       config: params.sourceConfig,
       env,
-      bundledAllowlistCompat: true,
     });
     if (bundled && bundled.length > 0) {
       return bundled;
@@ -412,7 +383,6 @@ async function resolveBundledWebSearchProviders(params: {
     return resolvePluginWebSearchProviders({
       config: params.sourceConfig,
       env,
-      bundledAllowlistCompat: true,
       origin: "bundled",
     });
   }
@@ -420,7 +390,6 @@ async function resolveBundledWebSearchProviders(params: {
   return resolvePluginWebSearchProviders({
     config: params.sourceConfig,
     env,
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -442,7 +411,6 @@ async function resolveBundledWebFetchProviders(params: {
     return resolvePluginWebFetchProviders({
       config: params.sourceConfig,
       env,
-      bundledAllowlistCompat: true,
       onlyPluginIds: [params.configuredBundledPluginId],
       origin: "bundled",
     });
@@ -453,7 +421,6 @@ async function resolveBundledWebFetchProviders(params: {
     const bundled = resolveBundledWebFetchProvidersFromPublicArtifacts({
       config: params.sourceConfig,
       env,
-      bundledAllowlistCompat: true,
     });
     if (bundled && bundled.length > 0) {
       return bundled;
@@ -462,7 +429,6 @@ async function resolveBundledWebFetchProviders(params: {
     return resolvePluginWebFetchProviders({
       config: params.sourceConfig,
       env,
-      bundledAllowlistCompat: true,
       origin: "bundled",
     });
   }
@@ -470,7 +436,6 @@ async function resolveBundledWebFetchProviders(params: {
   return resolvePluginWebFetchProviders({
     config: params.sourceConfig,
     env,
-    bundledAllowlistCompat: true,
     origin: "bundled",
   });
 }

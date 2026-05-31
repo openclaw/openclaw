@@ -1,4 +1,5 @@
-import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { parseFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import {
   applyOpenClawManifestInstallCommonFields,
   getFrontmatterString,
@@ -10,7 +11,6 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "../shared/frontmatter.js";
-import { readStringValue } from "../shared/string-coerce.js";
 import type {
   OpenClawHookMetadata,
   HookEntry,

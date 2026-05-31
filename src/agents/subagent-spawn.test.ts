@@ -68,7 +68,7 @@ describe("spawnSubagentDirect seam flow", () => {
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       resolveAgentConfig: hoisted.resolveAgentConfigMock,
-      resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
+      resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
       resetModules: false,
@@ -198,7 +198,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "inspect the spawn seam",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -231,7 +231,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(requesterOrigin.threadId).toBe(42);
     expect(registerInput.task).toBe("inspect the spawn seam");
     expect(registerInput.cleanup).toBe("keep");
-    expect(registerInput.model).toBe("openai-codex/gpt-5.4");
+    expect(registerInput.model).toBe("openai/gpt-5.4");
     expect(registerInput.workspaceDir).toBe("/tmp/requester-workspace");
     expect(registerInput.expectsCompletionMessage).toBe(true);
     expect(registerInput.spawnMode).toBe("run");
@@ -245,7 +245,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: childSessionKey,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       overrideSource: "user",
     });
@@ -279,6 +279,37 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
   });
 
+  it("keeps spawn cwd separate from inherited agent workspace", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "work in the requested repo",
+        cwd: "/tmp/task-repo",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const childSessionKey = result.childSessionKey as string;
+    const childEntry = persistedStore?.[childSessionKey];
+    expect(childEntry?.spawnedWorkspaceDir).toBe("/tmp/requester-workspace");
+    expect(childEntry?.spawnedCwd).toBe("/tmp/task-repo");
+
+    const agentRequest = gatewayRequest("agent");
+    const agentParams = requireRecord(agentRequest.params);
+    expect(agentParams).not.toHaveProperty("cwd");
+    expect(agentParams).not.toHaveProperty("workspaceDir");
+  });
+
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {
@@ -294,7 +325,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "inspect unthreaded spawn",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -333,7 +364,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "verify per-method scope routing",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",

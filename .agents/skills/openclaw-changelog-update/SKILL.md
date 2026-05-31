@@ -6,14 +6,16 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 # OpenClaw Changelog Update
 
 Use this for release changelog rewrites and GitHub release-note source text.
-Use it with `release-openclaw-maintainer`; this skill owns changelog content,
-ordering, and audit discipline.
+This is mandatory before every beta, beta rerun, stable release, or stable
+rerun. Use it with `release-openclaw-maintainer`; this skill owns changelog
+content, ordering, grouping, and attribution discipline.
 
 ## Goal
 
 Rewrite the target `CHANGELOG.md` version section from history, not from stale
-draft notes. Produce user-facing release notes sorted by user interest while
-preserving issue/PR refs and thanks.
+draft notes. Produce grouped user-facing release notes sorted by user interest
+while preserving every relevant issue/PR ref and every human `Thanks @...`
+attribution.
 
 ## Inputs
 
@@ -44,13 +46,35 @@ preserving issue/PR refs and thanks.
    - `### Highlights`: 5-8 bullets, broad user wins first
    - `### Changes`: new capabilities and behavior changes
    - `### Fixes`: user-facing fixes first, grouped by impact and surface
+   - group related changes/fixes by surface and user impact; avoid one bullet
+     per tiny commit when several commits tell one user-facing story
 6. Preserve attribution:
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
+   - every human-authored merged PR represented by a user-facing entry needs
+     its PR ref and `Thanks @author`, even when the PR had no linked issue
+   - every human issue reporter for a `Fixes #...` or referenced bug issue
+     represented by a user-facing entry needs `Thanks @reporter` unless the
+     same handle is already thanked in that bullet
+   - every human `Co-authored-by` contributor on represented user-facing work
+     needs `Thanks @handle` when a GitHub handle is known
+   - when grouping multiple PRs/issues in one bullet, include every relevant
+     PR/issue ref and every human contributor handle in that same bullet
+   - multiple `Thanks @...` handles in one bullet are expected; do not drop or
+     collapse contributor credit just because the note is grouped
+   - if one grouped bullet covers both direct commits and PRs, keep all PR refs
+     and thanks, plus any issue refs from the direct commits
+   - before finalizing, audit the final release-note body:
+     - extract all `#NNN` refs from the notes
+     - resolve which refs are PRs and collect human PR authors
+     - resolve issue refs used as bug/report refs and collect human reporters
+     - scan represented commits for `Co-authored-by`
+     - compare those handles to the final `Thanks @...` set
+     - fix every missing human credit or explicitly record why it is omitted
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`
-   - if grouping multiple entries, carry all relevant refs and thanks into the
-     grouped bullet
+   - do not use GitHub's release contributor count as the source of truth; the
+     changelog must carry the complete human credit set itself
 7. Sorting preference:
    - security/data-loss and content-boundary fixes
    - transcript/replay/reply delivery correctness

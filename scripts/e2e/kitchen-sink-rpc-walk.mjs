@@ -27,6 +27,11 @@ const INSTALL_TIMEOUT_MS = readPositiveInt(
   Math.max(COMMAND_TIMEOUT_MS, 600000),
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS, 60000);
+const FETCH_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS, 10000);
+const FETCH_BODY_MAX_BYTES = readPositiveInt(
+  process.env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES,
+  1024 * 1024,
+);
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
@@ -35,11 +40,53 @@ const OUTPUT_CAPTURE_CHARS = readPositiveInt(
   1024 * 1024,
 );
 const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
+const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
+const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
+const LOG_TAIL_BYTES = 256 * 1024;
+const ERROR_LOG_DENY_PATTERNS = [
+  /\buncaught exception\b/iu,
+  /\bunhandled rejection\b/iu,
+  /\bfatal\b/iu,
+  /\bpanic\b/iu,
+  /\blevel["']?\s*:\s*["']error["']/iu,
+  /\[(?:error|ERROR)\]/u,
+];
+const ERROR_LOG_ALLOW_PATTERNS = [
+  /0 errors?/iu,
+  /expected no diagnostics errors?/iu,
+  /diagnostics errors?:\s*$/iu,
+];
 
 let callGatewayModulePromise;
 
-function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
+function usage() {
+  return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
+
+Runs the external Kitchen Sink plugin RPC walk against a built OpenClaw entry.
+
+Environment:
+  OPENCLAW_ENTRY                         Built OpenClaw entrypoint. Defaults to dist/index.mjs or dist/index.js.
+  OPENCLAW_KITCHEN_SINK_NPM_SPEC         Plugin package spec. Default: npm:@openclaw/kitchen-sink@latest.
+  OPENCLAW_KITCHEN_SINK_PLUGIN_ID        Plugin id. Default: openclaw-kitchen-sink-fixture.
+  OPENCLAW_KITCHEN_SINK_RPC_READY_MS     Gateway readiness timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS   OpenClaw command timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS   Plugin install timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_CALL_MS      RPC call timeout.
+  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB      Gateway RSS ceiling.
+  OPENCLAW_KITCHEN_SINK_KEEP_TMP=1       Preserve the isolated temp home.
+`;
+}
+
+export function shouldPrintHelp(argv) {
+  return argv.some((arg) => arg === "--help" || arg === "-h");
+}
+
+export function readPositiveInt(raw, fallback) {
+  const text = String(raw || "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -134,16 +181,65 @@ function formatCapturedOutput(label, buffer) {
 
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeoutKillGraceMs = 2000, timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
+    const {
+      resourceLabel,
+      resourceSampleIntervalMs = 1000,
+      resourceSampleOptions,
+      resourceSamples,
+      sampleProcessImpl = sampleProcess,
+      timeoutKillGraceMs = 2000,
+      timeoutMs = COMMAND_TIMEOUT_MS,
+      ...spawnOptions
+    } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...spawnOptions,
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
+    const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let forceKillTimer;
+    let sampleTimer;
+    let resourceSampleInFlight = null;
+    const commandLabel = resourceLabel ?? [command, ...args.slice(0, 2)].join(" ");
+    const shouldSampleResources = Array.isArray(resourceSamples);
+    const collectResourceSample = () => {
+      if (!shouldSampleResources || !child.pid) {
+        return null;
+      }
+      resourceSampleInFlight ??= Promise.resolve()
+        .then(() => sampleProcessImpl(child.pid, resourceSampleOptions ?? {}))
+        .then((sample) => {
+          if (sample) {
+            resourceSamples.push({
+              ...sample,
+              elapsedMs: Date.now() - startedAt,
+              label: commandLabel,
+            });
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          resourceSampleInFlight = null;
+        });
+      return resourceSampleInFlight;
+    };
+    const stopResourceSampling = async () => {
+      clearInterval(sampleTimer);
+      await resourceSampleInFlight?.catch(() => {});
+    };
+    if (shouldSampleResources) {
+      void collectResourceSample();
+      sampleTimer = setInterval(
+        () => {
+          void collectResourceSample();
+        },
+        Math.max(100, resourceSampleIntervalMs),
+      );
+      sampleTimer.unref?.();
+    }
     const timer = setTimeout(() => {
       timedOut = true;
       signalProcessGroup(child, "SIGTERM");
@@ -159,35 +255,37 @@ export function runCommand(command, args, options = {}) {
     child.on("error", (error) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      reject(error);
+      void stopResourceSampling().finally(() => reject(error));
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
-      if (status === 0) {
-        resolve({
-          stdout: stdout.text,
-          stderr: stderr.text,
-          stdoutTruncatedChars: stdout.truncatedChars,
-          stderrTruncatedChars: stderr.truncatedChars,
-        });
-        return;
-      }
-      const detail = [
-        formatCapturedOutput("stdout", stdout),
-        formatCapturedOutput("stderr", stderr),
-      ]
-        .filter(Boolean)
-        .join("\n")
-        .trim();
-      const failure = timedOut
-        ? `timed out after ${timeoutMs}ms`
-        : `failed with ${signal || status}`;
-      reject(
-        new Error(
-          `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
-        ),
-      );
+      void stopResourceSampling().then(() => {
+        if (status === 0) {
+          resolve({
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdoutTruncatedChars: stdout.truncatedChars,
+            stderrTruncatedChars: stderr.truncatedChars,
+          });
+          return;
+        }
+        const detail = [
+          formatCapturedOutput("stdout", stdout),
+          formatCapturedOutput("stderr", stderr),
+        ]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        const failure = timedOut
+          ? `timed out after ${timeoutMs}ms`
+          : `failed with ${signal || status}`;
+        reject(
+          new Error(
+            `${command} ${args.join(" ")} ${failure}${detail ? `\n${tailText(detail)}` : ""}`,
+          ),
+        );
+      });
     });
   });
 }
@@ -215,6 +313,10 @@ async function runOpenClaw(runner, args, env, options = {}) {
   return runCommand(command.command, command.args, {
     ...command.options,
     env,
+    resourceLabel: options.resourceLabel,
+    resourceSampleIntervalMs: options.resourceSampleIntervalMs,
+    resourceSampleOptions: options.resourceSampleOptions,
+    resourceSamples: options.resourceSamples,
     timeoutMs: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
   });
 }
@@ -439,11 +541,31 @@ function isRetryableTransientNetworkError(error, seen = new Set()) {
 
 export async function fetchJson(url, options = {}) {
   const attempts = Math.max(1, options.attempts ?? 3);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? FETCH_TIMEOUT_MS);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? FETCH_BODY_MAX_BYTES);
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutError = Object.assign(new Error(`fetch ${url} timed out after ${timeoutMs}ms`), {
+      code: "ETIMEDOUT",
+    });
+    let timeout;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort(timeoutError);
+        reject(timeoutError);
+      }, timeoutMs);
+      timeout.unref?.();
+    });
     try {
-      const response = await (options.fetchImpl ?? fetch)(url);
-      const text = await response.text();
+      const response = await Promise.race([
+        (options.fetchImpl ?? fetch)(url, { signal: controller.signal }),
+        timeoutPromise,
+      ]);
+      const text = await Promise.race([
+        readBoundedResponseText(response, maxBodyBytes),
+        timeoutPromise,
+      ]);
       let body = null;
       try {
         body = text ? JSON.parse(text) : null;
@@ -457,9 +579,55 @@ export async function fetchJson(url, options = {}) {
         throw error;
       }
       await delay(options.retryDelayMs ?? 250);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     }
   }
   throw lastError ?? new Error(`fetch ${url} failed`);
+}
+
+export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength) {
+    const parsedContentLength = Number(contentLength);
+    if (Number.isFinite(parsedContentLength) && parsedContentLength > byteLimit) {
+      await response.body?.cancel?.().catch(() => undefined);
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+  }
+
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > byteLimit) {
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+    return text;
+  }
+  const chunks = [];
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    const chunk = Buffer.from(value);
+    totalBytes += chunk.byteLength;
+    if (totalBytes > byteLimit) {
+      await reader.cancel().catch(() => undefined);
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+function createFetchBodyTooLargeError(byteLimit) {
+  return Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
 }
 
 function configureKitchenSink(env, port) {
@@ -540,14 +708,14 @@ async function startGateway(runner, port, env, logPath) {
 }
 
 export async function stopGateway(child, options = {}) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
+  if (!child || hasChildExited(child)) {
     return;
   }
   const teardownGraceMs = Math.max(0, options.teardownGraceMs ?? GATEWAY_TEARDOWN_GRACE_MS);
   const killGraceMs = Math.max(0, options.killGraceMs ?? GATEWAY_TEARDOWN_KILL_GRACE_MS);
   const exited = new Promise((resolve) => child.once("exit", resolve));
   const waitForExit = async (ms) =>
-    child.exitCode !== null || child.signalCode !== null
+    hasChildExited(child)
       ? true
       : await Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
 
@@ -560,6 +728,10 @@ export async function stopGateway(child, options = {}) {
     return;
   }
   releaseUnsettledGatewayChild(child);
+}
+
+export function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
 function releaseUnsettledGatewayChild(child) {
@@ -579,15 +751,79 @@ function signalGateway(child, signal) {
   child.kill(signal);
 }
 
-async function waitForGatewayReady(child, port, logPath) {
+export function createGatewayReadyLogScanner(logPath, marker = "[gateway] ready") {
+  let offset = 0;
+  let tail = "";
+  let found = false;
+
+  return () => {
+    if (found) {
+      return true;
+    }
+
+    let stat;
+    try {
+      stat = fs.statSync(logPath);
+    } catch {
+      offset = 0;
+      tail = "";
+      return false;
+    }
+
+    if (stat.size < offset) {
+      offset = 0;
+      tail = "";
+    }
+    if (stat.size === offset) {
+      return false;
+    }
+
+    const fd = fs.openSync(logPath, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(LOG_SCAN_CHUNK_BYTES, stat.size - offset));
+      while (offset < stat.size) {
+        const bytesToRead = Math.min(buffer.length, stat.size - offset);
+        const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+        if (bytesRead <= 0) {
+          break;
+        }
+        offset += bytesRead;
+        const text = `${tail}${buffer.subarray(0, bytesRead).toString("utf8")}`;
+        if (text.includes(marker)) {
+          found = true;
+          return true;
+        }
+        tail = text.slice(-Math.max(0, marker.length - 1));
+      }
+      return false;
+    } finally {
+      fs.closeSync(fd);
+    }
+  };
+}
+
+export async function waitForGatewayReady(child, port, logPath, options = {}) {
   const started = Date.now();
   let lastError = "";
-  while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (child.exitCode !== null) {
-      throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+  const timeoutMs = Math.max(1, options.timeoutMs ?? READY_TIMEOUT_MS);
+  const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
+  const logReportedReady = createGatewayReadyLogScanner(logPath);
+  const exitedBeforeReadyError = () =>
+    new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+  if (hasChildExited(child)) {
+    throw exitedBeforeReadyError();
+  }
+  while (Date.now() - started < timeoutMs) {
+    const remainingMs = Math.max(1, timeoutMs - (Date.now() - started));
+    if (hasChildExited(child)) {
+      throw exitedBeforeReadyError();
     }
     try {
-      const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`);
+      const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
+        attempts: 1,
+        fetchImpl: options.fetchImpl,
+        timeoutMs: Math.min(FETCH_TIMEOUT_MS, remainingMs),
+      });
       if (readyz.ok) {
         return;
       }
@@ -595,10 +831,14 @@ async function waitForGatewayReady(child, port, logPath) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    if (fs.existsSync(logPath) && fs.readFileSync(logPath, "utf8").includes("[gateway] ready")) {
+    if (logReportedReady()) {
       lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
-    await delay(250);
+    const nextDelayMs = Math.min(pollDelayMs, Math.max(1, timeoutMs - (Date.now() - started)));
+    await delay(nextDelayMs);
+  }
+  if (hasChildExited(child)) {
+    throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(logPath)}`);
 }
@@ -1064,37 +1304,109 @@ export function assertResourceCeiling(sample) {
   }
 }
 
+export function findErrorLogFindings(logPath) {
+  if (!fs.existsSync(logPath)) {
+    return [];
+  }
+  const scanBytes = fs.statSync(logPath).size;
+
+  const findings = [];
+  let currentLine = "";
+  let currentLineNumber = 1;
+  let currentLineHasFinding = false;
+  let currentLineTruncated = false;
+  const recordLine = (lineNumber, line) => {
+    if (currentLineHasFinding) {
+      return;
+    }
+    if (
+      ERROR_LOG_ALLOW_PATTERNS.some((pattern) => pattern.test(line)) ||
+      !ERROR_LOG_DENY_PATTERNS.some((pattern) => pattern.test(line))
+    ) {
+      return;
+    }
+    currentLineHasFinding = true;
+    findings.push({ line, lineNumber });
+    if (findings.length > 20) {
+      findings.shift();
+    }
+  };
+  const inspectCurrentLine = () => {
+    const normalizedLine = currentLine.replace(/\r$/u, "");
+    const line = currentLineTruncated ? `[truncated] ${normalizedLine}` : normalizedLine;
+    recordLine(currentLineNumber, line);
+  };
+  const appendLineFragment = (fragment) => {
+    currentLine += fragment;
+    if (currentLine.length <= LOG_SCAN_MAX_LINE_CHARS) {
+      return;
+    }
+    inspectCurrentLine();
+    currentLine = currentLine.slice(-LOG_SCAN_MAX_LINE_CHARS);
+    currentLineTruncated = true;
+  };
+  const finishLine = () => {
+    inspectCurrentLine();
+    currentLine = "";
+    currentLineNumber += 1;
+    currentLineHasFinding = false;
+    currentLineTruncated = false;
+  };
+
+  const fd = fs.openSync(logPath, "r");
+  try {
+    const buffer = Buffer.alloc(LOG_SCAN_CHUNK_BYTES);
+    let offset = 0;
+    while (offset < scanBytes) {
+      const bytesToRead = Math.min(buffer.length, scanBytes - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const lines = buffer.subarray(0, bytesRead).toString("utf8").split(/\n/u);
+      for (const [index, line] of lines.entries()) {
+        appendLineFragment(line);
+        if (index < lines.length - 1) {
+          finishLine();
+        }
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (currentLine) {
+    inspectCurrentLine();
+  }
+  return findings;
+}
+
 function assertNoErrorLogs(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const deny = [
-    /\buncaught exception\b/iu,
-    /\bunhandled rejection\b/iu,
-    /\bfatal\b/iu,
-    /\bpanic\b/iu,
-    /\blevel["']?\s*:\s*["']error["']/iu,
-    /\[(?:error|ERROR)\]/u,
-  ];
-  const allow = [/0 errors?/iu, /expected no diagnostics errors?/iu, /diagnostics errors?:\s*$/iu];
-  const findings = log
-    .split(/\r?\n/u)
-    .map((line, index) => ({ line, lineNumber: index + 1 }))
-    .filter(({ line }) => !allow.some((pattern) => pattern.test(line)))
-    .filter(({ line }) => deny.some((pattern) => pattern.test(line)));
+  const findings = findErrorLogFindings(logPath);
   if (findings.length > 0) {
     throw new Error(
       `unexpected error-like gateway logs:\n${findings
-        .slice(-20)
         .map(({ line, lineNumber }) => `${logPath}:${lineNumber}: ${line}`)
         .join("\n")}`,
     );
   }
 }
 
-function tailFile(file) {
+export function tailFile(file, maxBytes = LOG_TAIL_BYTES) {
   if (!fs.existsSync(file)) {
     return "";
   }
-  return tailText(fs.readFileSync(file, "utf8"));
+  const stat = fs.statSync(file);
+  const start = Math.max(0, stat.size - Math.max(1, maxBytes));
+  const length = stat.size - start;
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
+    return tailText(buffer.subarray(0, bytesRead).toString("utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function tailText(text) {
@@ -1115,20 +1427,35 @@ export async function main() {
   let child;
 
   const processSamples = [];
+  const commandSamples = [];
+  const commandResourceOptions = {
+    resourceSampleIntervalMs: 500,
+    resourceSamples: commandSamples,
+  };
   let sampleInFlight = null;
   let sampleTimer;
   try {
     console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
     await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
+      ...commandResourceOptions,
+      resourceLabel: "plugins install",
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     runner = resolveOpenClawRunner();
     console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
     configureKitchenSink(env, port);
-    await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, { timeoutMs: 60000 });
+    await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, {
+      ...commandResourceOptions,
+      resourceLabel: "plugins enable",
+      timeoutMs: 60000,
+    });
     const inspect = parseJsonOutput(
-      (await runOpenClaw(runner, ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], env))
-        .stdout,
+      (
+        await runOpenClaw(runner, ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], env, {
+          ...commandResourceOptions,
+          resourceLabel: "plugins inspect",
+        })
+      ).stdout,
     );
     if (inspect?.plugin?.status !== "loaded") {
       throw new Error(`Kitchen Sink plugin did not inspect as loaded: ${JSON.stringify(inspect)}`);
@@ -1253,6 +1580,7 @@ export async function main() {
     const finalSample = await sampleGateway();
     assertResourceCeiling(finalSample);
     const peakSample = summarizeProcessSamples(processSamples);
+    const commandPeakSample = summarizeProcessSamples(commandSamples);
     assertResourceCeiling(peakSample);
     assertNoErrorLogs(logPath);
 
@@ -1264,6 +1592,7 @@ export async function main() {
           commands: commandNames,
           catalogTools: catalogToolIds.filter((id) => EXPECTED_TOOLS.includes(id)),
           channelAccount,
+          commandPeakSample,
           initialSample,
           finalSample,
           peakSample,
@@ -1291,5 +1620,9 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  if (shouldPrintHelp(process.argv.slice(2))) {
+    process.stdout.write(usage());
+  } else {
+    await main();
+  }
 }

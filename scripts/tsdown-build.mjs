@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
   isSourceCheckoutRoot,
@@ -12,7 +13,6 @@ import {
 } from "./postinstall-bundled-plugins.mjs";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
-const extraArgs = process.argv.slice(2);
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
 const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
@@ -20,12 +20,20 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=8192";
 const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 8192;
+const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
+const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
+const CGROUP_MEMORY_LIMIT_PATHS = [
+  "/sys/fs/cgroup/memory.max",
+  "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+];
+const PROC_MEMINFO_PATH = "/proc/meminfo";
 const TERMINATION_GRACE_MS = 5_000;
-const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
+const DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
+const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -60,12 +68,89 @@ function pruneStaleRuntimeSymlinks() {
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  for (const root of TSDOWN_OUTPUT_ROOTS) {
+  const env = params.env ?? process.env;
+  const roots = listTsdownOutputRoots();
+  const protectedDeclarationPaths =
+    env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
+      ? listExistingDeclarationOutputPaths({
+          cwd,
+          fs: fsImpl,
+          roots,
+        })
+      : new Set();
+  for (const root of roots) {
     const rootPath = path.join(cwd, root);
     try {
-      fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      if (hasProtectedChild({ rootPath, protectedPaths: protectedDeclarationPaths })) {
+        cleanOutputRootExcept(rootPath, protectedDeclarationPaths, fsImpl);
+      } else {
+        fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      }
     } catch {
       // Best-effort cleanup. tsdown will recreate the output tree it needs.
+    }
+  }
+}
+
+function hasProtectedChild({ rootPath, protectedPaths }) {
+  const rootWithSeparator = `${path.resolve(rootPath)}${path.sep}`;
+  for (const protectedPath of protectedPaths) {
+    if (protectedPath.startsWith(rootWithSeparator)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function cleanOutputRootExcept(rootPath, protectedPaths, fsImpl) {
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    const resolvedEntryPath = path.resolve(entryPath);
+    if (protectedPaths.has(resolvedEntryPath)) {
+      continue;
+    }
+    try {
+      if (entry.isDirectory()) {
+        cleanOutputRootExcept(entryPath, protectedPaths, fsImpl);
+        fsImpl.rmdirSync(entryPath);
+      } else {
+        fsImpl.rmSync(entryPath, { force: true });
+      }
+    } catch {
+      // Keep best-effort semantics; protected declaration children can keep a directory non-empty.
+    }
+  }
+}
+
+function listExistingDeclarationOutputPaths({ cwd, fs: fsImpl, roots }) {
+  const protectedPaths = new Set();
+  for (const root of roots) {
+    collectDeclarationOutputPaths(path.join(cwd, root), protectedPaths, fsImpl);
+  }
+  return protectedPaths;
+}
+
+function collectDeclarationOutputPaths(rootPath, protectedPaths, fsImpl) {
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      collectDeclarationOutputPaths(entryPath, protectedPaths, fsImpl);
+    } else if (DECLARATION_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) {
+      protectedPaths.add(path.resolve(entryPath));
     }
   }
 }
@@ -73,7 +158,7 @@ export function cleanTsdownOutputRoots(params = {}) {
 export function pruneStaleRootChunkFiles(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const roots = TSDOWN_OUTPUT_ROOTS.map((root) => path.join(cwd, root));
+  const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
     let entries = [];
     try {
@@ -96,6 +181,10 @@ export function pruneStaleRootChunkFiles(params = {}) {
       }
     }
   }
+}
+
+export function listTsdownOutputRoots() {
+  return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...TSDOWN_PACKAGE_OUTPUT_ROOTS];
 }
 
 export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
@@ -202,7 +291,110 @@ function parseNonNegativeInteger(value) {
   return Math.trunc(parsed);
 }
 
-function normalizeTsdownNodeOptions(nodeOptions) {
+function parseCgroupMemoryLimitBytes(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed === "" || trimmed === "max" || !/^\d+$/u.test(trimmed)) {
+    return null;
+  }
+  const parsed = BigInt(trimmed);
+  if (parsed <= 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return null;
+  }
+  return Number(parsed);
+}
+
+function readCgroupMemoryLimitBytes(params = {}) {
+  if (Number.isFinite(params.cgroupMemoryLimitBytes) && params.cgroupMemoryLimitBytes > 0) {
+    return Math.trunc(params.cgroupMemoryLimitBytes);
+  }
+
+  const fsImpl = params.fs ?? fs;
+  const paths = params.cgroupMemoryLimitPaths ?? CGROUP_MEMORY_LIMIT_PATHS;
+  for (const limitPath of paths) {
+    try {
+      const limitBytes = parseCgroupMemoryLimitBytes(fsImpl.readFileSync(limitPath, "utf8"));
+      if (limitBytes !== null) {
+        return limitBytes;
+      }
+    } catch {
+      // Missing cgroup files are expected outside Linux containers.
+    }
+  }
+
+  return null;
+}
+
+function parseProcMemTotalBytes(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.match(/^MemTotal:\s+(\d+)\s+kB$/imu);
+  if (!match) {
+    return null;
+  }
+  const parsed = BigInt(match[1]) * 1024n;
+  if (parsed <= 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return null;
+  }
+  return Number(parsed);
+}
+
+function readProcMemTotalBytes(params = {}) {
+  if (Number.isFinite(params.procMemTotalBytes) && params.procMemTotalBytes > 0) {
+    return Math.trunc(params.procMemTotalBytes);
+  }
+
+  const fsImpl = params.fs ?? fs;
+  try {
+    return parseProcMemTotalBytes(
+      fsImpl.readFileSync(params.procMeminfoPath ?? PROC_MEMINFO_PATH, "utf8"),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function resolveTsdownMaxOldSpaceMb(params = {}) {
+  const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
+  if (limitBytes === null) {
+    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+  }
+
+  const limitMb = Math.floor(limitBytes / 1024 / 1024);
+  if (limitMb <= 0) {
+    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+  }
+
+  const cgroupCap = Math.max(
+    MIN_TSDOWN_MAX_OLD_SPACE_MB,
+    limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB,
+  );
+  return Math.min(DEFAULT_TSDOWN_MAX_OLD_SPACE_MB, cgroupCap);
+}
+
+function parseMaxOldSpaceSizeMb(value, fallbackMb) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallbackMb;
+  }
+  return Math.trunc(parsed);
+}
+
+function normalizeMaxOldSpaceSizeMb(value, maxOldSpaceMb) {
+  // Build wrappers may inherit smaller runner-level caps; tsdown needs the
+  // resolved build heap while still respecting cgroup-derived upper bounds.
+  const parsed = parseMaxOldSpaceSizeMb(value, maxOldSpaceMb);
+  if (parsed < maxOldSpaceMb) {
+    return maxOldSpaceMb;
+  }
+  return Math.min(parsed, maxOldSpaceMb);
+}
+
+function normalizeTsdownNodeOptions(nodeOptions, params = {}) {
+  const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
   const normalized = [];
   let foundMaxOldSpaceSize = false;
@@ -212,7 +404,7 @@ function normalizeTsdownNodeOptions(nodeOptions) {
     const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
     if (inlineMatch) {
       foundMaxOldSpaceSize = true;
-      const value = Math.max(Number(inlineMatch[1]), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB);
+      const value = normalizeMaxOldSpaceSizeMb(inlineMatch[1], maxOldSpaceMb);
       normalized.push(`--max-old-space-size=${value}`);
       continue;
     }
@@ -220,10 +412,7 @@ function normalizeTsdownNodeOptions(nodeOptions) {
     if (part === "--max-old-space-size") {
       foundMaxOldSpaceSize = true;
       const next = parts[index + 1];
-      const parsed = next === undefined ? Number.NaN : Number(next);
-      const value = Number.isFinite(parsed)
-        ? Math.max(Math.trunc(parsed), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB)
-        : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+      const value = normalizeMaxOldSpaceSizeMb(next, maxOldSpaceMb);
       normalized.push(`--max-old-space-size=${value}`);
       if (next !== undefined) {
         index += 1;
@@ -235,17 +424,43 @@ function normalizeTsdownNodeOptions(nodeOptions) {
   }
 
   if (!foundMaxOldSpaceSize) {
-    normalized.push(DEFAULT_TSDOWN_NODE_OPTIONS);
+    normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
   }
 
   return normalized.join(" ");
 }
 
-function resolveTsdownEnv(env) {
+function resolveTsdownEnv(env, params = {}) {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
   return {
     ...env,
-    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions),
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, params),
+  };
+}
+
+export function tsdownBuildUsage() {
+  return [
+    "Usage: node scripts/tsdown-build.mjs [tsdown args...]",
+    "",
+    "Builds OpenClaw with tsdown and validates emitted import diagnostics.",
+    "",
+    "Options:",
+    "  -h, --help  Show this help without starting tsdown.",
+    "",
+    "Other arguments are forwarded to tsdown.",
+  ].join("\n");
+}
+
+export function parseTsdownBuildArgs(argv) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    return {
+      forwardedArgs: [],
+      help: true,
+    };
+  }
+  return {
+    forwardedArgs: argv,
+    help: false,
   };
 }
 
@@ -292,14 +507,15 @@ export function createTsdownOutputScanner(params = {}) {
 }
 
 export function resolveTsdownBuildInvocation(params = {}) {
-  const env = resolveTsdownEnv(params.env ?? process.env);
+  const env = resolveTsdownEnv(params.env ?? process.env, params);
+  const forwardedArgs = params.args ?? [];
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
-    ...extraArgs,
+    ...forwardedArgs,
   ];
   if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
     return {
@@ -434,11 +650,16 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
+  const args = parseTsdownBuildArgs(process.argv.slice(2));
+  if (args.help) {
+    console.log(tsdownBuildUsage());
+    process.exit(0);
+  }
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
   cleanTsdownOutputRoots();
-  const invocation = resolveTsdownBuildInvocation();
+  const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
   const result = await runTsdownBuildInvocation(invocation);
 
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {

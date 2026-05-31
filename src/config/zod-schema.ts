@@ -1,10 +1,11 @@
-import { z } from "zod";
-import { parseByteSize } from "../cli/parse-bytes.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
+import { parseByteSize } from "../cli/parse-bytes.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
@@ -214,6 +215,14 @@ const HttpUrlSchema = z
     return protocol === "http:" || protocol === "https:";
   }, "Expected http:// or https:// URL");
 
+const McpOAuthClientMetadataUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.pathname !== "/";
+  }, "Expected https:// URL with a non-root pathname");
+
 const ResponsesEndpointUrlFetchShape = {
   allowUrl: z.boolean().optional(),
   urlAllowlist: z.array(z.string()).optional(),
@@ -274,6 +283,8 @@ const TalkRealtimeSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     model: z.string().optional(),
+    speakerVoice: z.string().optional(),
+    speakerVoiceId: z.string().optional(),
     voice: z.string().optional(),
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
@@ -341,6 +352,7 @@ const TalkSchema = z
 
 const McpServerSchema = z
   .object({
+    enabled: z.boolean().optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
     env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
@@ -353,6 +365,35 @@ const McpServerSchema = z
         z.string(),
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
+      .optional(),
+    connectionTimeoutMs: z.number().finite().positive().optional(),
+    connectTimeout: z.number().finite().positive().optional(),
+    connect_timeout: z.number().finite().positive().optional(),
+    requestTimeoutMs: z.number().finite().positive().optional(),
+    timeout: z.number().finite().positive().optional(),
+    supportsParallelToolCalls: z.boolean().optional(),
+    supports_parallel_tool_calls: z.boolean().optional(),
+    auth: z.literal("oauth").optional(),
+    oauth: z
+      .object({
+        scope: z.string().trim().min(1).optional(),
+        redirectUrl: HttpUrlSchema.optional(),
+        clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
+      })
+      .strict()
+      .optional(),
+    sslVerify: z.boolean().optional(),
+    ssl_verify: z.boolean().optional(),
+    clientCert: z.string().optional(),
+    client_cert: z.string().optional(),
+    clientKey: z.string().optional(),
+    client_key: z.string().optional(),
+    toolFilter: z
+      .object({
+        include: z.array(z.string().trim().min(1)).min(1).optional(),
+        exclude: z.array(z.string().trim().min(1)).min(1).optional(),
+      })
+      .strict()
       .optional(),
     codex: z
       .object({
@@ -1181,6 +1222,20 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        workshop: z
+          .object({
+            autonomous: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+            maxPending: z.number().int().min(1).optional(),
+            maxSkillBytes: z.number().int().min(1).optional(),
+          })
+          .strict()
+          .optional(),
         entries: z.record(z.string(), SkillEntrySchema).optional(),
       })
       .strict()
@@ -1228,6 +1283,28 @@ export const OpenClawSchema = z
       return;
     }
     const agentIds = new Set(agents.map((agent) => agent.id));
+    const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+
+    // Bindings referencing a missing agent id silently misroute at gateway
+    // load time. Match routing's normalized id semantics; otherwise valid
+    // configured routes like "Team Ops" -> "team-ops" would fail at load.
+    const bindings = cfg.bindings;
+    if (Array.isArray(bindings)) {
+      for (let idx = 0; idx < bindings.length; idx += 1) {
+        const binding = bindings[idx];
+        if (!binding || typeof binding !== "object") {
+          continue;
+        }
+        const agentId = (binding as { agentId?: unknown }).agentId;
+        if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["bindings", idx, "agentId"],
+            message: `Unknown agent id "${agentId}" (not in agents.list).`,
+          });
+        }
+      }
+    }
 
     const broadcast = cfg.broadcast;
     if (!broadcast) {

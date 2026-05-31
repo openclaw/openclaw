@@ -5,6 +5,7 @@ import {
   isoToPerplexityDate,
   normalizeToIsoDate,
   normalizeFreshness,
+  parseWebSearchTimeFilters,
 } from "./web-search-provider-common.js";
 import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
 import { createWebSearchTool } from "./web-search.js";
@@ -88,6 +89,52 @@ describe("web_search date normalization", () => {
   });
 });
 
+describe("web_search time filter parsing", () => {
+  const baseMessages = {
+    invalidFreshnessMessage: "bad freshness",
+    invalidDateAfterMessage: "bad after",
+    invalidDateBeforeMessage: "bad before",
+    invalidDateRangeMessage: "bad range",
+  };
+
+  it("normalizes freshness shortcuts for providers", () => {
+    expect(
+      parseWebSearchTimeFilters({
+        rawFreshness: "pd",
+        freshnessProvider: "perplexity",
+        ...baseMessages,
+      }),
+    ).toEqual({ freshness: "day" });
+  });
+
+  it("rejects conflicting freshness and date filters", () => {
+    expect(
+      parseWebSearchTimeFilters({
+        rawFreshness: "week",
+        rawDateAfter: "2026-01-01",
+        freshnessProvider: "brave",
+        ...baseMessages,
+      }),
+    ).toEqual({
+      error: "conflicting_time_filters",
+      message:
+        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    });
+  });
+
+  it("parses date bounds through the shared ISO range validator", () => {
+    expect(
+      parseWebSearchTimeFilters({
+        rawDateAfter: "2026-01-01",
+        rawDateBefore: "2026-01-31",
+        freshnessProvider: "brave",
+        ...baseMessages,
+      }),
+    ).toEqual({ dateAfter: "2026-01-01", dateBefore: "2026-01-31" });
+  });
+});
+
 describe("web_search unsupported filter response", () => {
   it("returns undefined when no unsupported filter is set", () => {
     expect(buildUnsupportedSearchFilterResponse({ query: "openclaw" }, "gemini")).toBeUndefined();
@@ -143,6 +190,20 @@ describe("web_search scoped config merge", () => {
       apiKey: "brave-test-key",
       brave: { count: 5, apiKey: "brave-test-key" },
     });
+  });
+
+  it("keeps mirrored Brave plugin config runtime-only when newly injected", () => {
+    const merged = mergeScopedSearchConfig(
+      { provider: "brave" },
+      "brave",
+      { apiKey: "brave-test-key" },
+      { mirrorApiKeyToTopLevel: true },
+    );
+
+    expect(merged?.brave).toEqual({ apiKey: "brave-test-key" });
+    expect(merged?.apiKey).toBe("brave-test-key");
+    expect(Object.keys(merged ?? {})).toEqual(["provider", "apiKey"]);
+    expect(Object.getOwnPropertyDescriptor(merged, "brave")?.enumerable).toBe(false);
   });
 
   it("keeps newly injected legacy provider config runtime-only for validation", () => {

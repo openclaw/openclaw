@@ -139,7 +139,83 @@ describe("approval and confirmation modals", () => {
     ).toEqual(["Allow once", "Always allow", "Deny"]);
   });
 
-  it("denies exec approval on Escape", async () => {
+  it("hides unavailable exec approval decisions", async () => {
+    const request = createExecRequest();
+    request.request.ask = "always";
+    request.request.allowedDecisions = ["allow-once", "deny"];
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+  });
+
+  it("falls back to ask when exec approval decisions are omitted", async () => {
+    const request = createExecRequest();
+    request.request.ask = "always";
+    request.request.allowedDecisions = undefined;
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+  });
+
+  it("keeps durable exec approval when the request allows it", async () => {
+    const request = createExecRequest();
+    request.request.allowedDecisions = ["allow-once", "allow-always", "deny"];
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Always allow", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")).toBeNull();
+  });
+
+  it("does not show exec policy warning for restricted plugin approvals", async () => {
+    const request: ExecApprovalRequest = {
+      id: "plugin-approval-1",
+      kind: "plugin",
+      request: {
+        command: "Plugin approval",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      pluginTitle: "Plugin approval",
+      createdAtMs: Date.now() - 1_000,
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")).toBeNull();
+  });
+
+  it("maps Escape to exec denial when approval is idle", async () => {
     const handleExecApprovalDecision = vi.fn(async () => undefined);
     render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);
 
@@ -148,6 +224,38 @@ describe("approval and confirmation modals", () => {
     dispatchEscape(dialog);
 
     expect(handleExecApprovalDecision).toHaveBeenCalledWith("deny");
+  });
+
+  it("does not dispatch an extra exec decision from Escape while busy", async () => {
+    const handleExecApprovalDecision = vi.fn(async () => undefined);
+    render(
+      renderExecApprovalPrompt(
+        createExecState({ execApprovalBusy: true, handleExecApprovalDecision }),
+      ),
+      container,
+    );
+
+    const { dialog } = await getRenderedDialog();
+    dispatchEscape(dialog);
+
+    expect(handleExecApprovalDecision).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch denied from Escape when denial is unavailable", async () => {
+    const request = createExecRequest();
+    request.request.allowedDecisions = ["allow-once"];
+    const handleExecApprovalDecision = vi.fn(async () => undefined);
+    render(
+      renderExecApprovalPrompt(
+        createExecState({ execApprovalQueue: [request], handleExecApprovalDecision }),
+      ),
+      container,
+    );
+
+    const { dialog } = await getRenderedDialog();
+    dispatchEscape(dialog);
+
+    expect(handleExecApprovalDecision).not.toHaveBeenCalled();
   });
 
   it("renders exec approval chrome from the active locale", async () => {

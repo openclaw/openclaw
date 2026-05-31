@@ -100,6 +100,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     for (const key of ENV_KEYS) {
       const value = envSnapshot[key];
       if (value === undefined) {
@@ -312,6 +313,55 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(lastConnectParams().config).not.toHaveProperty("temperature");
   });
 
+  it("drops malformed VAD timing values before connecting", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        prefixPaddingMs: -1,
+        silenceDurationMs: 250.5,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("realtimeInputConfig");
+  });
+
+  it("drops malformed thinking budgets before connecting", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        thinkingBudget: 24_576.5,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("thinkingConfig");
+  });
+
+  it("passes Google Live dynamic thinking budget through", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        thinkingBudget: -1,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config.thinkingConfig).toEqual({ thinkingBudget: -1 });
+  });
+
   it("creates constrained browser sessions for Google Live Talk", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
 
@@ -401,6 +451,34 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(websocketSession.initialMessage.setup.generationConfig.responseModalities).toEqual([
       "AUDIO",
     ]);
+  });
+
+  it("rejects browser session expiry outside Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    await expect(
+      provider.createBrowserSession?.({
+        providerConfig: {
+          apiKey: "gemini-key",
+        },
+      }),
+    ).rejects.toThrow("Google realtime browser session expiry is outside the supported Date range");
+    expect(createTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects browser session creation while the process clock is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    await expect(
+      provider.createBrowserSession?.({
+        providerConfig: {
+          apiKey: "gemini-key",
+        },
+      }),
+    ).rejects.toThrow("Google realtime browser session expiry is outside the supported Date range");
+    expect(createTokenMock).not.toHaveBeenCalled();
   });
 
   it("can opt out of Google Live session resumption and context compression", async () => {

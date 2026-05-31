@@ -1,7 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import {
@@ -11,7 +13,6 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { rawDataToString } from "../infra/ws.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -21,7 +22,6 @@ import {
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { startGatewayServer } from "./server.js";
 
 export async function getFreeGatewayPort(): Promise<number> {

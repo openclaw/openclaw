@@ -1,8 +1,10 @@
 import path from "node:path";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
@@ -31,15 +33,16 @@ import {
   isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
-import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
@@ -47,6 +50,10 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+const LEGACY_CHATGPT_PROVIDER_ID = ["openai", "codex"].join("-");
+const LEGACY_CHATGPT_RESPONSES_API = `${LEGACY_CHATGPT_PROVIDER_ID}-responses`;
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -63,14 +70,79 @@ type AllowedValuesCollection = {
 };
 type JsonSchemaLike = Record<string, unknown>;
 
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+function normalizeLegacyOpenAIProviderForValidation(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.models) || !isRecord(raw.models.providers)) {
     return raw;
   }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
+  let providersChanged = false;
+  const providers = { ...raw.models.providers };
+  const normalizeProviderConfig = (providerConfig: unknown): unknown => {
+    if (!isRecord(providerConfig)) {
+      return providerConfig;
+    }
+    let providerChanged = false;
+    const nextProvider = { ...providerConfig };
+    if (nextProvider.api === LEGACY_CHATGPT_RESPONSES_API) {
+      nextProvider.api = OPENAI_CHATGPT_RESPONSES_API;
+      providerChanged = true;
+    }
+    if (Array.isArray(nextProvider.models)) {
+      const nextModels = nextProvider.models.map((model) => {
+        if (!isRecord(model) || model.api !== LEGACY_CHATGPT_RESPONSES_API) {
+          return model;
+        }
+        providerChanged = true;
+        return { ...model, api: OPENAI_CHATGPT_RESPONSES_API };
+      });
+      if (providerChanged) {
+        nextProvider.models = nextModels;
+      }
+    }
+    return providerChanged ? nextProvider : providerConfig;
+  };
+
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    const normalizedProvider = normalizeLowercaseStringOrEmpty(providerId);
+    const normalizedConfig = normalizeProviderConfig(providerConfig);
+    if (normalizedProvider !== LEGACY_CHATGPT_PROVIDER_ID) {
+      if (normalizedConfig !== providerConfig) {
+        providers[providerId] = normalizedConfig;
+        providersChanged = true;
+      }
+      continue;
+    }
+    if (!Object.hasOwn(providers, OPENAI_PROVIDER_ID)) {
+      providers[OPENAI_PROVIDER_ID] = normalizedConfig;
+    }
+    delete providers[providerId];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return raw;
+  }
   return {
     ...raw,
+    models: {
+      ...raw.models,
+      providers,
+    },
+  };
+}
+
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  const normalizedRaw = normalizeLegacyOpenAIProviderForValidation(raw);
+  if (
+    !isRecord(normalizedRaw) ||
+    !isRecord(normalizedRaw.commands) ||
+    !Object.hasOwn(normalizedRaw.commands, "modelsWrite")
+  ) {
+    return normalizedRaw;
+  }
+  const commands = { ...normalizedRaw.commands };
+  delete commands.modelsWrite;
+  return {
+    ...normalizedRaw,
     commands,
   };
 }
@@ -854,6 +926,19 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationIssue[] {
+  const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
+  if (!isUnsafeGatewayTailscaleNoAuth({ authMode: config.gateway?.auth?.mode, tailscaleMode })) {
+    return [];
+  }
+  return [
+    {
+      path: "gateway.auth.mode",
+      message: formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
+    },
+  ];
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -913,6 +998,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
+  if (gatewayTailscaleAuthIssues.length > 0) {
+    return { ok: false, issues: gatewayTailscaleAuthIssues };
   }
   return {
     ok: true,
@@ -1007,7 +1096,7 @@ function validateConfigObjectWithPluginsBase(
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
     : null;
-  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "skip") {
+  if (opts.applyDefaults && !registryInfo) {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(base.config);
     if (pluginMetadataSnapshot) {
       registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
@@ -1133,17 +1222,8 @@ function validateConfigObjectWithPluginsBase(
       return compatConfig ?? config;
     }
 
-    const allow = config.plugins?.allow;
-    if (!Array.isArray(allow) || allow.length === 0) {
-      compatConfig = config;
-      return config;
-    }
-
-    compatConfig = withBundledPluginAllowlistCompat({
-      config,
-      pluginIds: [...ensureCompatPluginIds()],
-    });
-    return compatConfig ?? config;
+    compatConfig = config;
+    return config;
   };
 
   const ensureRegistry = (): RegistryInfo => {

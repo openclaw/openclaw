@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -8,7 +9,6 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -40,9 +40,9 @@ import {
 import {
   callGateway,
   dispatchGatewayMethodInProcess,
-  isEmbeddedPiRunActive,
+  isEmbeddedAgentRunActive,
   getRuntimeConfig,
-  waitForEmbeddedPiRunEnd,
+  waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -269,11 +269,14 @@ export async function runSubagentAnnounceFlow(params: {
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
-    if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
-      const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
-      if (!settled && isEmbeddedPiRunActive(childSessionId)) {
+    if (childSessionId && isEmbeddedAgentRunActive(childSessionId)) {
+      const settled = await waitForEmbeddedAgentRunEnd(childSessionId, settleTimeoutMs);
+      if (!settled && isEmbeddedAgentRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
-        return false;
+        // Keep delete cleanup retryable until the active child can be removed.
+        if (outcome?.status !== "timeout" || params.cleanup === "delete") {
+          return false;
+        }
       }
     }
 

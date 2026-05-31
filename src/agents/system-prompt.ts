@@ -1,4 +1,13 @@
 import { createHmac, createHash } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -10,15 +19,6 @@ import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import {
-  normalizeStringEntries,
-  normalizeStringEntriesLower,
-  normalizeUniqueStringEntries,
-} from "../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -27,11 +27,11 @@ import {
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
-} from "./pi-embedded-runner/types.js";
+} from "./embedded-agent-runner/types.js";
 import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
@@ -41,6 +41,10 @@ import {
   shouldRenderOpenClawToolWorkflowHints,
 } from "./prompt-surface.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import {
+  buildSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME,
+} from "./skill-workshop-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import type {
   ProviderSystemPromptContribution,
@@ -96,7 +100,7 @@ function buildSubagentDelegationPreferenceSection(params: {
     "- Anything requiring more work than a direct reply should go through `sessions_spawn`; avoid doing expensive tool calls yourself.",
     "- Delegate file/code inspection, shell commands, web/browser use, long reads, debugging, coding, multi-step analysis, comparisons, non-trivial summarization, and background waiting.",
     "- Before spawning, decide what stays local and what is delegated. Give each child a clear objective, expected output, relevant files/inputs, write scope, verification ask, and whether it blocks your final answer.",
-    '- Set `taskName` when you will need a stable handle later; keep it lowercase with underscores. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
+    '- Set `taskName` when you will need a stable handle later; keep it lowercase with underscores or hyphens. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
     params.hasSessionsYield
       ? "- After spawning required work, call `sessions_yield` if you need completion events before answering. Do not poll for completion."
       : "- After spawning, do not poll for completion. Child completion is push-based and returns as a runtime event; synthesize that result for the user.",
@@ -176,6 +180,17 @@ function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): Embedde
     }
     return aPath.localeCompare(bPath);
   });
+}
+
+function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[] = []) {
+  const ordered = sortContextFilesForPrompt(
+    contextFiles.filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
+  );
+  return {
+    ordered,
+    stable: ordered.filter((file) => !isDynamicContextFile(file.path)),
+    dynamic: ordered.filter((file) => isDynamicContextFile(file.path)),
+  };
 }
 
 function buildProjectContextSection(params: {
@@ -308,25 +323,10 @@ export function buildAgentBootstrapSystemContext(params: {
   ];
 }
 
-export function buildAgentBootstrapSystemPromptSupplement(params: {
-  bootstrapMode?: BootstrapMode;
-  bootstrapTruncationNotice?: string;
-  contextFiles?: EmbeddedContextFile[];
-}): string | undefined {
-  const supplement = buildAgentBootstrapSystemPromptSections({
-    ...params,
-    includeProjectContext: true,
-  })
-    .join("\n")
-    .trim();
-  return supplement.length > 0 ? supplement : undefined;
-}
-
 export function buildAgentBootstrapSystemPromptSections(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   contextFiles?: EmbeddedContextFile[];
-  includeProjectContext?: boolean;
 }): string[] {
   const bootstrapFiles =
     params.bootstrapMode === "full"
@@ -344,29 +344,7 @@ export function buildAgentBootstrapSystemPromptSections(params: {
   if (bootstrapTruncationNotice) {
     lines.push("## Bootstrap Context Notice", bootstrapTruncationNotice, "");
   }
-  if (params.includeProjectContext === true && bootstrapFiles.length > 0) {
-    lines.push(
-      ...buildProjectContextSection({
-        files: bootstrapFiles,
-        heading: "# Project Context",
-        dynamic: false,
-      }),
-    );
-  }
   return lines;
-}
-
-export function appendAgentBootstrapSystemPromptSupplement(params: {
-  systemPrompt: string;
-  bootstrapMode?: BootstrapMode;
-  bootstrapTruncationNotice?: string;
-  contextFiles?: EmbeddedContextFile[];
-}): string {
-  const supplement = buildAgentBootstrapSystemPromptSupplement(params);
-  if (!supplement) {
-    return params.systemPrompt;
-  }
-  return `${params.systemPrompt.trimEnd()}\n\n${supplement}`;
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
@@ -418,7 +396,7 @@ function buildAssistantOutputDirectivesSection(params: {
     return [
       "## Assistant Output Directives",
       "- Visible source-channel output is delivered through `message(action=send)`.",
-      "- Attach media with message-tool attachment fields such as `media`, `path`, or `filePath`; do not use legacy `MEDIA:` directives for source-channel delivery.",
+      "- Attach media with message-tool attachment fields such as `media`, `mediaUrl`, `path`, or `filePath`; do not write attachment commands in text.",
       "- Voice-note audio hint: use message-tool `asVoice` when sending audio as a voice note.",
       "- Native quote/reply: use message-tool `replyTo` when an explicit reply target is needed.",
       "",
@@ -426,7 +404,7 @@ function buildAssistantOutputDirectivesSection(params: {
   }
   return [
     "## Assistant Output Directives",
-    "- Attach media: `MEDIA:<path-or-url>` on its own line.",
+    "- Attach media in the final visible reply with `MEDIA:<path-or-url>` on its own line.",
     "  The MEDIA directive must start the line as plain text, outside code fences and without Markdown wrappers. Do not write `**MEDIA:...**`, `` `MEDIA:...` ``, or inline prose like `Here is the file: MEDIA:...`.",
     "- Voice-note audio hint: `[[audio_as_voice]]` when audio is attached.",
     "- Native quote/reply: first token `[[reply_to_current]]`; use `[[reply_to:<id>]]` only with an explicit id.",
@@ -449,7 +427,7 @@ function buildWebchatCanvasSection(params: {
     "- Do not use `[embed ...]` for non-web channels.",
     params.sourceMessageToolOnly
       ? "- `[embed ...]` is separate from message-tool attachments; use message-tool attachment fields for files and `[embed ...]` for web-only rich rendering."
-      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
+      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for final-reply attachments; use `[embed ...]` for web-only rich rendering.",
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
@@ -706,7 +684,7 @@ export function buildAgentSystemPrompt(params: {
   subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
-  /** Prompt surface controls runtime-specific fallback fragments. Defaults to PI main. */
+  /** Prompt surface controls runtime-specific fallback fragments. Defaults to OpenClaw main. */
   promptSurface?: AgentPromptSurfaceKind;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
@@ -740,7 +718,7 @@ export function buildAgentSystemPrompt(params: {
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
-  const promptSurface = params.promptSurface ?? "pi_main";
+  const promptSurface = params.promptSurface ?? "openclaw_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const coreToolSummaries: Record<string, string> = {
@@ -776,6 +754,8 @@ export function buildAgentSystemPrompt(params: {
       "On-demand list/status visibility for sub-agent runs in this requester session; do not use for wait loops",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    skill_workshop:
+      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
   };
@@ -806,6 +786,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_yield",
     "subagents",
     "session_status",
+    "skill_workshop",
     "image",
     "image_generate",
   ];
@@ -946,6 +927,9 @@ export function buildAgentSystemPrompt(params: {
     skillsPrompt,
     readToolName,
   });
+  const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
+    ? buildSkillWorkshopPromptSection()
+    : [];
   const memorySection = buildMemorySection({
     isMinimal,
     includeMemorySection: params.includeMemorySection,
@@ -967,18 +951,11 @@ export function buildAgentSystemPrompt(params: {
       .join("\n");
   }
 
-  const contextFiles = params.contextFiles ?? [];
-  const validContextFiles = contextFiles.filter(
-    (file) => typeof file.path === "string" && file.path.trim().length > 0,
-  );
-  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
-  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
-  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  const contextFiles = prepareContextFilesForPrompt(params.contextFiles);
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
-    contextFiles: orderedContextFiles,
-    includeProjectContext: false,
+    contextFiles: contextFiles.ordered,
   });
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
@@ -1019,7 +996,7 @@ export function buildAgentSystemPrompt(params: {
     memoryCitationsMode: params.memoryCitationsMode,
     memorySection,
     acpEnabled,
-    stableContextFiles,
+    stableContextFiles: contextFiles.stable,
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
     const lines = [
@@ -1115,6 +1092,7 @@ export function buildAgentSystemPrompt(params: {
       "`restart`, not stop+start.",
       "",
       ...skillsSection,
+      ...skillWorkshopSection,
       ...memorySection,
       hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
       hasGateway && !isMinimal
@@ -1227,7 +1205,7 @@ export function buildAgentSystemPrompt(params: {
 
     lines.push(
       ...buildProjectContextSection({
-        files: stableContextFiles,
+        files: contextFiles.stable,
         heading: "# Project Context",
         dynamic: false,
       }),
@@ -1258,8 +1236,8 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     ...buildProjectContextSection({
-      files: dynamicContextFiles,
-      heading: stableContextFiles.length > 0 ? "# Dynamic Project Context" : "# Project Context",
+      files: contextFiles.dynamic,
+      heading: contextFiles.stable.length > 0 ? "# Dynamic Project Context" : "# Project Context",
       dynamic: true,
     }),
   );

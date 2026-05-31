@@ -93,7 +93,7 @@ openclaw_live_should_include_auth_file_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
-    codex-cli | openai | openai-codex)
+    codex-cli | openai)
       printf '%s\n' ".codex/auth.json"
       printf '%s\n' ".codex/config.toml"
       ;;
@@ -237,6 +237,32 @@ openclaw_live_init_docker_run_args() {
   else
     eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run)"
   fi
+}
+
+openclaw_live_container_node_options() {
+  local value
+  value="$(openclaw_live_trim "${OPENCLAW_DOCKER_NODE_OPTIONS:-${NODE_OPTIONS:-}}")"
+  if [[ -z "$value" ]]; then
+    value="--max-old-space-size=4096"
+  fi
+
+  case " $value " in
+    *" --dns-result-order="*)
+      ;;
+    *)
+      value="$value --dns-result-order=ipv4first"
+      ;;
+  esac
+
+  case " $value " in
+    *" --disable-warning=ExperimentalWarning "*)
+      ;;
+    *)
+      value="$value --disable-warning=ExperimentalWarning"
+      ;;
+  esac
+
+  printf '%s\n' "$value"
 }
 
 openclaw_live_stage_auth_into_home() {

@@ -13,6 +13,30 @@ vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   CHAT_SESSIONS_REFRESH_LIMIT: 25,
   createChatSessionsLoadOverrides: () => ({ activeMinutes: 10, limit: 25 }),
+  scopedAgentParamsForSession: (host: { assistantAgentId?: string | null }, sessionKey: string) =>
+    sessionKey === "global" && host.assistantAgentId ? { agentId: host.assistantAgentId } : {},
+  scopedAgentListParamsForSession: (
+    host: { assistantAgentId?: string | null },
+    sessionKey: string,
+  ) => {
+    const [, agentId] = sessionKey.split(":");
+    if (sessionKey.startsWith("agent:") && agentId) {
+      return { agentId };
+    }
+    return sessionKey === "global" && host.assistantAgentId
+      ? { agentId: host.assistantAgentId }
+      : {};
+  },
+  scopedAgentListParamsForRefreshTarget: (
+    _host: { assistantAgentId?: string | null },
+    target: { sessionKey: string; agentId?: string },
+  ) => {
+    if (target.agentId) {
+      return { agentId: target.agentId };
+    }
+    const [, agentId] = target.sessionKey.split(":");
+    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   refreshChatAvatar: vi.fn(),
@@ -134,7 +158,7 @@ function createHost() {
     sessionKey: "main",
     chatRunId: null,
     toolStreamOrder: [],
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
@@ -151,7 +175,7 @@ describe("handleGatewayEvent sessions.changed", () => {
     handleChatEventMock.mockReset().mockReturnValue("final");
     const host = createHost();
     host.sessionKey = "agent:ops:main";
-    host.refreshSessionsAfterChat.add("run-1");
+    host.refreshSessionsAfterChat.set("run-1", { sessionKey: "agent:ops:main" });
 
     handleGatewayEvent(host, {
       type: "event",
@@ -163,6 +187,29 @@ describe("handleGatewayEvent sessions.changed", () => {
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
       limit: 25,
+      agentId: "ops",
+    });
+  });
+
+  it("scopes selected-global chat session refreshes after a completed run", () => {
+    loadSessionsMock.mockReset();
+    handleChatEventMock.mockReset().mockReturnValue("final");
+    const host = createHost();
+    host.sessionKey = "global";
+    host.assistantAgentId = "main";
+    host.refreshSessionsAfterChat.set("run-1", { sessionKey: "global", agentId: "work" });
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "chat",
+      payload: { state: "final", runId: "run-1", sessionKey: "global", agentId: "work" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      limit: 25,
+      agentId: "work",
     });
   });
 
@@ -549,6 +596,45 @@ describe("handleGatewayEvent session.message", () => {
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
   });
 
+  it("reloads chat history for selected agent main aliases receiving canonical global messages", () => {
+    loadChatHistoryMock.mockReset();
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    const host = createHost();
+    host.sessionKey = "agent:work:main";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "global", agentId: "work" },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores canonical global messages for other agent main aliases", () => {
+    loadChatHistoryMock.mockReset();
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    const host = createHost();
+    host.sessionKey = "agent:work:main";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "global", agentId: "main" },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).not.toHaveBeenCalled();
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
   it("reloads history before flushing queue when session.message clears the run", async () => {
     loadChatHistoryMock.mockReset();
     clearPendingQueueItemsForRunMock.mockReset();
@@ -622,10 +708,85 @@ describe("handleGatewayEvent session.message", () => {
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
       limit: 25,
+      agentId: "qa",
       publishChatRunStatus: false,
     });
     await Promise.resolve();
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes selected-global session.message refreshes while a chat run is active", async () => {
+    loadChatHistoryMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    loadSessionsMock.mockReset().mockResolvedValue(undefined);
+    const host = createHost();
+    host.sessionKey = "global";
+    host.assistantAgentId = "work";
+    host.chatRunId = "run-123";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "global", agentId: "work" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      limit: 25,
+      agentId: "work",
+      publishChatRunStatus: false,
+    });
+  });
+
+  it("ignores selected-global session.message events from other agents", () => {
+    loadChatHistoryMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    loadSessionsMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "global";
+    host.assistantAgentId = "work";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "global", agentId: "main" },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).not.toHaveBeenCalled();
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses hello default agent for unscoped global session.message events before agents load", () => {
+    loadChatHistoryMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    loadSessionsMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "global";
+    host.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "work",
+        },
+      },
+    };
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "global" },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalled();
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
   });
 
   it("replays deferred history reload after session refresh clears a stale active run", async () => {

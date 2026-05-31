@@ -59,6 +59,20 @@ describe("parseExecApprovalRequested", () => {
     expect(result?.kind).toBe("exec");
     expect(result?.request.command).toBe("rm -rf /");
   });
+
+  it("preserves allowed approval decisions", () => {
+    const result = parseExecApprovalRequested({
+      id: "exec-1",
+      request: {
+        command: "pwd",
+        allowedDecisions: ["allow-once", "bad", "deny", "allow-always"],
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+
+    expect(result?.request.allowedDecisions).toEqual(["allow-once", "deny", "allow-always"]);
+  });
 });
 
 describe("parsePluginApprovalRequested", () => {

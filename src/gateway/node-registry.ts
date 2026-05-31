@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import {
+  addTimerTimeoutGraceMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -110,7 +116,7 @@ function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined 
     return undefined;
   }
   const timeoutMs = Math.trunc(value);
-  return timeoutMs > 0 ? timeoutMs : null;
+  return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
 }
 
 function resolvePendingSystemRunEvent(params: {
@@ -440,7 +446,7 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
+    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
@@ -528,7 +534,8 @@ export class NodeRegistry {
     if (typeof timeoutMs !== "number") {
       return null;
     }
-    return Date.now() + timeoutMs + AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS;
+    const durationMs = addTimerTimeoutGraceMs(timeoutMs, AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS);
+    return resolveExpiresAtMsFromDurationMs(durationMs) ?? 0;
   }
 
   private matchAuthorizedSystemRunEvent(params: {
@@ -590,7 +597,10 @@ export class NodeRegistry {
 
   private pruneAuthorizedSystemRunEvents(now = Date.now()): void {
     for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.expiresAtMs !== null && event.expiresAtMs <= now) {
+      if (
+        event.expiresAtMs !== null &&
+        !isFutureDateTimestampMs(event.expiresAtMs, { nowMs: now })
+      ) {
         this.authorizedSystemRunEvents.delete(key);
       }
     }

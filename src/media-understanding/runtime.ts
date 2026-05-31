@@ -10,6 +10,7 @@ import {
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
+import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
@@ -56,7 +57,19 @@ function buildFileContext(params: {
   mediaUrl?: string;
   mime?: string;
   capability?: MediaUnderstandingCapability;
+  scopeContext?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 }) {
+  const scopeFields = {
+    ...(params.scopeContext?.sessionKey ? { SessionKey: params.scopeContext.sessionKey } : {}),
+    ...(params.scopeContext?.channel
+      ? { Provider: params.scopeContext.channel, Surface: params.scopeContext.channel }
+      : {}),
+    ...(params.scopeContext?.chatType ? { ChatType: params.scopeContext.chatType } : {}),
+  };
   const remoteRef =
     params.mediaUrl ??
     (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
@@ -72,11 +85,13 @@ function buildFileContext(params: {
     return {
       MediaUrl: remoteRef,
       MediaType: mediaType,
+      ...scopeFields,
     };
   }
   return {
     MediaPath: params.filePath,
     MediaType: mediaType,
+    ...scopeFields,
   };
 }
 
@@ -144,7 +159,11 @@ export async function runMediaUnderstandingFile(
           },
         }
       : params.cfg;
-  const ctx = buildFileContext({ ...params, capability: params.capability });
+  const ctx = buildFileContext({
+    ...params,
+    capability: params.capability,
+    scopeContext: params.scopeContext,
+  });
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
     return {
@@ -214,7 +233,7 @@ export async function describeImageFile(
 }
 
 export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
   const image = await readImageDescriptionInput({
@@ -286,7 +305,7 @@ async function readImageDescriptionInput(params: {
 }
 
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   if (!hasStructuredImageInput(params.input)) {
     throw new Error("Structured extraction requires at least one image input.");
   }

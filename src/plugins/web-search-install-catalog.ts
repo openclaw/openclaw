@@ -1,6 +1,6 @@
+import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString as normalizeString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import { enablePluginInConfig } from "./enable.js";
 import type { PluginPackageInstall } from "./manifest.js";
@@ -11,7 +11,7 @@ import {
   resolveOfficialExternalPluginLabel,
   type OfficialExternalWebSearchProvider,
 } from "./official-external-plugin-catalog.js";
-import type { PluginWebSearchProviderEntry } from "./types.js";
+import type { PluginWebSearchProviderEntry } from "./web-provider-types.js";
 
 export type WebSearchInstallCatalogEntry = {
   pluginId: string;

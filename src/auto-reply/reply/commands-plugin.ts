@@ -5,8 +5,8 @@
  * This handler is called before built-in command handlers.
  */
 
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 /**
@@ -41,6 +41,7 @@ export const handlePluginCommand: CommandHandler = async (
     isAuthorizedSender: command.isAuthorizedSender,
     senderIsOwner: command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry?.sessionFile,

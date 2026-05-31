@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   ),
   refreshActiveSecretsRuntimeSnapshot: vi.fn(async () => false),
   clearCurrentProviderAuthState: vi.fn(),
-  warmCurrentProviderAuthState: vi.fn(async (_cfg: unknown) => {}),
+  warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
   buildAuthHealthSummary: vi.fn(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
@@ -74,7 +74,7 @@ vi.mock("../../secrets/runtime.js", () => ({
 
 vi.mock("../../agents/model-provider-auth.js", () => ({
   clearCurrentProviderAuthState: mocks.clearCurrentProviderAuthState,
-  warmCurrentProviderAuthState: mocks.warmCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread: mocks.warmCurrentProviderAuthStateOffMainThread,
 }));
 
 import {
@@ -128,6 +128,7 @@ function createLogoutOptions(
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map(),
+    clearChatRunState: vi.fn(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
@@ -168,14 +169,14 @@ function firstBuildAuthHealthSummaryCall() {
 
 function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
   const profile = {
-    profileId: "openai-codex:default",
-    provider: "openai-codex",
+    profileId: "openai:default",
+    provider: "openai",
     type: "oauth",
     status: "ok",
     expiresAt: 1_000_000,
     remainingMs: 60_000,
     source: "store",
-    label: "openai-codex:default",
+    label: "openai:default",
   } satisfies AuthHealthSummary["profiles"][number];
   return {
     now: 0,
@@ -183,7 +184,7 @@ function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
     profiles: [profile],
     providers: [
       {
-        provider: "openai-codex",
+        provider: "openai",
         status: "ok",
         expiresAt: 1_000_000,
         remainingMs: 60_000,
@@ -229,7 +230,7 @@ describe("models.authStatus", () => {
     expect(error).toBeUndefined();
     const result = payload as ModelAuthStatusResult;
     expect(result.providers).toHaveLength(1);
-    expect(result.providers[0].provider).toBe("openai-codex");
+    expect(result.providers[0].provider).toBe("openai");
     expect(result.providers[0].status).toBe("ok");
     expect(result.providers[0].expiry?.at).toBe(1_000_000);
     expect(result.providers[0].profiles[0].type).toBe("oauth");
@@ -370,14 +371,14 @@ describe("models.authStatus", () => {
       warnAfterMs: 0,
       profiles: [
         {
-          profileId: "openai-codex:default",
-          provider: "openai-codex",
+          profileId: "openai:default",
+          provider: "openai",
           type: "oauth",
           status: "ok",
           expiresAt: 1,
           remainingMs: 1,
           source: "store",
-          label: "openai-codex:default",
+          label: "openai:default",
           // Simulate a future profile shape that includes an access token —
           // the handler must NOT forward this, since it field-maps explicitly.
           access: "sk-SECRET-TOKEN",
@@ -386,20 +387,20 @@ describe("models.authStatus", () => {
       ],
       providers: [
         {
-          provider: "openai-codex",
+          provider: "openai",
           status: "ok",
           expiresAt: 1,
           remainingMs: 1,
           profiles: [
             {
-              profileId: "openai-codex:default",
-              provider: "openai-codex",
+              profileId: "openai:default",
+              provider: "openai",
               type: "oauth",
               status: "ok",
               expiresAt: 1,
               remainingMs: 1,
               source: "store",
-              label: "openai-codex:default",
+              label: "openai:default",
               access: "sk-SECRET-TOKEN",
               refresh: "rt-SECRET-REFRESH",
             } as never,
@@ -424,7 +425,7 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          "openai-codex": { auth: "oauth", apiKey: "sk-xxxxx" },
+          openai: { auth: "oauth", apiKey: "sk-xxxxx" },
         },
       },
     });
@@ -442,7 +443,7 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             auth: "oauth",
             apiKey: {
               source: "env",
@@ -455,7 +456,7 @@ describe("models.authStatus", () => {
     });
     await handler(createOptions());
     const call = firstBuildAuthHealthSummaryCall();
-    expect(call?.[0]?.providers).toEqual(["openai-codex"]);
+    expect(call?.[0]?.providers).toEqual(["openai"]);
   });
 
   it("env SecretRef pointing at a set env var is treated as env-backed", async () => {
@@ -463,7 +464,7 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             auth: "oauth",
             apiKey: {
               source: "env",
@@ -491,12 +492,12 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          "openai-codex": { auth: "oauth", apiKey: "sk-xxxxx" },
+          openai: { auth: "oauth", apiKey: "sk-xxxxx" },
         },
       },
       auth: {
         profiles: {
-          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+          "openai:default": { provider: "openai", mode: "oauth" },
         },
       },
     });
@@ -505,11 +506,7 @@ describe("models.authStatus", () => {
     expect(call?.[0]?.providers).toBeUndefined();
   });
 
-  it("normalizes expectsOAuth provider ids to match buildAuthHealthSummary", async () => {
-    // Config uses alias `z.ai`; buildAuthHealthSummary normalizes to `zai`.
-    // Without normalization, expectsOAuth.has(prov.provider) fires on the
-    // raw `z.ai` key but prov.provider is `zai`, so the "configured oauth
-    // but no oauth profile" signal silently skipped the alias path.
+  it("does not map expectsOAuth provider ids across provider id variants", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: { providers: { "z.ai": { auth: "oauth" } } },
     });
@@ -538,7 +535,7 @@ describe("models.authStatus", () => {
     await handler(opts);
     const [, payload] = firstRespondCall(opts) ?? [];
     const result = payload as ModelAuthStatusResult;
-    expect(result.providers[0]?.status).toBe("missing");
+    expect(result.providers[0]?.status).toBe("static");
   });
 
   it("flags provider configured auth:oauth but with only api_key profile as missing", async () => {
@@ -622,7 +619,7 @@ describe("models.authLogout", () => {
     });
     expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearCurrentProviderAuthState).toHaveBeenCalled();
-    expect(mocks.warmCurrentProviderAuthState).toHaveBeenCalledWith({});
+    expect(mocks.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith({});
     const [ok, payload] = firstRespondCall(opts) ?? [];
     expect(ok).toBe(true);
     expect((payload as ModelAuthLogoutResult).removedProfiles).toEqual(["openrouter:default"]);
@@ -783,7 +780,7 @@ describe("aggregateOAuthStatus", () => {
   function oauth(status: "ok" | "expiring" | "expired" | "missing", expiresAt?: number) {
     return {
       profileId: `p-${status}`,
-      provider: "openai-codex",
+      provider: "openai",
       type: "oauth" as const,
       status,
       expiresAt,
@@ -796,7 +793,7 @@ describe("aggregateOAuthStatus", () => {
   function token(status: "ok" | "expired") {
     return {
       profileId: `t-${status}`,
-      provider: "openai-codex",
+      provider: "openai",
       type: "token" as const,
       status,
       expiresAt: status === "expired" ? NOW - 1 : undefined,
@@ -809,7 +806,7 @@ describe("aggregateOAuthStatus", () => {
   it("ignores token profiles — healthy OAuth + expired token stays ok", () => {
     const result = aggregateOAuthStatus(
       {
-        provider: "openai-codex",
+        provider: "openai",
         status: "expired",
         profiles: [oauth("ok", expiring + 10_000_000), token("expired")],
       },
@@ -823,7 +820,7 @@ describe("aggregateOAuthStatus", () => {
     const stale = oauth("expired", NOW - 1);
     const result = aggregateOAuthStatus(
       {
-        provider: "openai-codex",
+        provider: "openai",
         status: "ok",
         effectiveProfiles: [healthy],
         profiles: [stale, healthy],
@@ -858,7 +855,7 @@ describe("aggregateOAuthStatus", () => {
   it("expired + missing both map to 'expired'", () => {
     const expiredResult = aggregateOAuthStatus(
       {
-        provider: "openai-codex",
+        provider: "openai",
         status: "expired",
         profiles: [oauth("expired", NOW - 1)],
       },
@@ -868,7 +865,7 @@ describe("aggregateOAuthStatus", () => {
 
     const missingResult = aggregateOAuthStatus(
       {
-        provider: "openai-codex",
+        provider: "openai",
         status: "missing",
         profiles: [oauth("missing")],
       },
@@ -881,7 +878,7 @@ describe("aggregateOAuthStatus", () => {
     // expiring + ok → expiring (expired-marker absent)
     const res1 = aggregateOAuthStatus(
       {
-        provider: "openai-codex",
+        provider: "openai",
         status: "expiring",
         profiles: [oauth("expiring", expiring), oauth("ok", expiring + 10_000_000)],
       },
@@ -892,7 +889,7 @@ describe("aggregateOAuthStatus", () => {
     // expired beats expiring
     const res2 = aggregateOAuthStatus(
       {
-        provider: "openai-codex",
+        provider: "openai",
         status: "expired",
         profiles: [oauth("expired", NOW - 1), oauth("expiring", expiring)],
       },
@@ -906,7 +903,7 @@ describe("aggregateOAuthStatus", () => {
     const later = NOW + 99_999;
     const result = aggregateOAuthStatus(
       {
-        provider: "openai-codex",
+        provider: "openai",
         status: "ok",
         profiles: [oauth("ok", later), oauth("ok", earlier)],
       },

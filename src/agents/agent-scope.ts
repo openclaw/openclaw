@@ -3,6 +3,12 @@ import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -15,12 +21,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import {
-  lowercasePreservingWhitespace,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import { resolveUserPath } from "../utils.js";
 import {
   listAgentIds,
@@ -28,7 +29,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope-config.js";
-import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 export {
   listAgentEntries,
   listAgentIds,
@@ -299,6 +299,7 @@ export function resolveSessionAgentIds(params: {
 export function resolveSessionAgentId(params: {
   sessionKey?: string;
   config?: OpenClawConfig;
+  agentId?: string;
 }): string {
   return resolveSessionAgentIds(params).sessionAgentId;
 }
@@ -306,12 +307,13 @@ export function resolveSessionAgentId(params: {
 export function resolveAgentExecutionContract(
   cfg: OpenClawConfig | undefined,
   agentId?: string | null,
-): NonNullable<NonNullable<AgentDefaultsConfig["embeddedPi"]>["executionContract"]> | undefined {
-  const defaultContract = cfg?.agents?.defaults?.embeddedPi?.executionContract;
+): NonNullable<NonNullable<AgentDefaultsConfig["embeddedAgent"]>["executionContract"]> | undefined {
+  const defaultContract = cfg?.agents?.defaults?.embeddedAgent?.executionContract;
   if (!cfg || !agentId) {
     return defaultContract;
   }
-  const agentContract = resolveAgentConfig(cfg, agentId)?.embeddedPi?.executionContract;
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const agentContract = agentConfig?.embeddedAgent?.executionContract;
   return agentContract ?? defaultContract;
 }
 

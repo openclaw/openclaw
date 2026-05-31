@@ -1,5 +1,7 @@
 import { t } from "../i18n/index.ts";
+import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import {
+  formatDateMs,
   formatRelativeTimestamp,
   formatDurationHuman,
   formatMs,
@@ -24,7 +26,10 @@ export function formatNextRun(ms?: number | null) {
   if (!ms) {
     return t("common.na");
   }
-  const weekday = new Date(ms).toLocaleDateString(undefined, { weekday: "short" });
+  const weekday = formatDateMs(ms, { weekday: "short" });
+  if (weekday === t("common.na")) {
+    return weekday;
+  }
   return `${weekday}, ${formatMs(ms)} (${formatRelativeTimestamp(ms)})`;
 }
 
@@ -52,7 +57,7 @@ export function formatCronState(job: CronJob) {
   const state = job.state ?? {};
   const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : t("common.na");
   const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : t("common.na");
-  const status = state.lastStatus ?? t("common.na");
+  const status = resolveCronJobLastRunStatus(job);
   return `${status} · next ${next} · last ${last}`;
 }
 

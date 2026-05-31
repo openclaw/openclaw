@@ -3,6 +3,9 @@ import { StringDecoder } from "node:string_decoder";
 
 const TRANSCRIPT_INDEX_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_TRANSCRIPT_INDEX_CACHE_ENTRIES = 256;
+const MAX_TRANSCRIPT_INDEX_PARSE_LINE_BYTES = 256 * 1024;
+const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
+const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
 
 type ParsedTranscriptRecord = Record<string, unknown>;
 
@@ -37,6 +40,10 @@ type CacheEntry = {
   index: SessionTranscriptIndex;
 };
 
+type ReadSessionTranscriptIndexOptions = {
+  cache?: "reuse" | "skip";
+};
+
 const transcriptIndexCache = new Map<string, CacheEntry>();
 const transcriptIndexBuilds = new Map<
   string,
@@ -49,6 +56,44 @@ const transcriptIndexBuilds = new Map<
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
+  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  try {
+    const decoded = JSON.parse(`"${match[1]}"`) as unknown;
+    return normalizeOptionalString(decoded);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractJsonNullableStringFieldPrefix(
+  prefix: string,
+  field: string,
+): string | null | undefined {
+  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
+    return null;
+  }
+  return extractJsonStringFieldPrefix(prefix, field);
+}
+
+function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
+  const match = new RegExp(
+    `"${escapeRegExp(field)}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`,
+  ).exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  const decoded = Number(match[1]);
+  return Number.isFinite(decoded) ? decoded : undefined;
 }
 
 async function yieldTranscriptIndexScan(): Promise<void> {
@@ -87,6 +132,41 @@ function isVisibleTranscriptRecord(record: ParsedTranscriptRecord): boolean {
 
 function isTreeTranscriptRecord(record: ParsedTranscriptRecord): boolean {
   return record.type !== "session" && typeof record.id === "string" && "parentId" in record;
+}
+
+function buildOversizedIndexedRawEntry(params: {
+  line: string;
+  offset: number;
+  byteLength: number;
+}): IndexedRawEntry | null {
+  const prefix = params.line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
+  const messageMatch = /"message"\s*:/.exec(prefix);
+  const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
+  const id = extractJsonStringFieldPrefix(prefix, "id");
+  const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
+  const type = extractJsonStringFieldPrefix(prefix, "type");
+  const timestamp =
+    extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
+    extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
+  const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
+  const record: ParsedTranscriptRecord = {
+    ...(type ? { type } : {}),
+    ...(id ? { id } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
+    message: {
+      role,
+      content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
+      __openclaw: { truncated: true, reason: "oversized" },
+    },
+  };
+  return {
+    ...(id ? { id } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    offset: params.offset,
+    byteLength: params.byteLength,
+    record,
+  };
 }
 
 async function visitTranscriptJsonLines(
@@ -186,6 +266,21 @@ async function buildSessionTranscriptIndex(
     if (!line.trim()) {
       return;
     }
+    if (byteLength > MAX_TRANSCRIPT_INDEX_PARSE_LINE_BYTES) {
+      const rawEntry = buildOversizedIndexedRawEntry({ line, offset, byteLength });
+      if (!rawEntry) {
+        return;
+      }
+      rawEntries.push(rawEntry);
+      if (rawEntry.id) {
+        byId.set(rawEntry.id, rawEntry);
+        if (isTreeTranscriptRecord(rawEntry.record)) {
+          hasTreeEntries = true;
+          leafId = rawEntry.id;
+        }
+      }
+      return;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
@@ -228,6 +323,7 @@ async function buildSessionTranscriptIndex(
 
 export async function readSessionTranscriptIndex(
   filePath: string,
+  opts: ReadSessionTranscriptIndexOptions = {},
 ): Promise<SessionTranscriptIndex | null> {
   let stat: fs.Stats;
   try {
@@ -239,6 +335,9 @@ export async function readSessionTranscriptIndex(
   if (!stat.isFile()) {
     transcriptIndexCache.delete(filePath);
     return null;
+  }
+  if (opts.cache === "skip") {
+    return await buildSessionTranscriptIndex(filePath, stat);
   }
   const cached = transcriptIndexCache.get(filePath);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {

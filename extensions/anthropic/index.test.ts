@@ -72,6 +72,8 @@ function levelIds(profile: unknown): Array<unknown> {
   return (levels as Array<{ id?: unknown }>).map((level) => level.id);
 }
 
+const ANTHROPIC_SETUP_TOKEN = `sk-ant-oat01-${"a".repeat(80)}`;
+
 describe("anthropic provider replay hooks", () => {
   it("registers the claude-cli backend", () => {
     const captured = capturePluginRegistration({ register: anthropicPlugin.register });
@@ -162,7 +164,7 @@ describe("anthropic provider replay hooks", () => {
 
     expect(
       provider.normalizeConfig?.({
-        provider: "openai-codex",
+        provider: "openai",
         providerConfig,
       } as never),
     ).toBe(providerConfig);
@@ -257,6 +259,7 @@ describe("anthropic provider replay hooks", () => {
     });
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     for (const modelId of [
+      "anthropic/claude-opus-4-8",
       "anthropic/claude-opus-4-7",
       "anthropic/claude-sonnet-4-6",
       "anthropic/claude-opus-4-6",
@@ -444,15 +447,15 @@ describe("anthropic provider replay hooks", () => {
     expect(models["anthropic/claude-opus-5-0"]).toBeUndefined();
   });
 
-  it("resolves explicit claude-opus-4-7 refs from the 4.6 template family", async () => {
+  it("resolves explicit claude-opus-4-8 refs from the 4.7 template family", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const resolved = provider.resolveDynamicModel?.({
       provider: "anthropic",
-      modelId: "claude-opus-4-7",
+      modelId: "claude-opus-4-8",
       modelRegistry: createModelRegistry([
         {
-          id: "claude-opus-4-6",
-          name: "Claude Opus 4.6",
+          id: "claude-opus-4-7",
+          name: "Claude Opus 4.7",
           provider: "anthropic",
           api: "anthropic-messages",
           reasoning: true,
@@ -466,12 +469,22 @@ describe("anthropic provider replay hooks", () => {
 
     expectFields(resolved, {
       provider: "anthropic",
-      id: "claude-opus-4-7",
+      id: "claude-opus-4-8",
       api: "anthropic-messages",
       reasoning: true,
       contextWindow: 1_048_576,
       contextTokens: 1_048_576,
+      maxTokens: 128_000,
     });
+    const opus48Profile = provider.resolveThinkingProfile?.({
+      provider: "anthropic",
+      modelId: "claude-opus-4-8",
+    } as never);
+    const opus48LevelIds = levelIds(opus48Profile);
+    expect(opus48LevelIds).toContain("xhigh");
+    expect(opus48LevelIds).toContain("adaptive");
+    expect(opus48LevelIds).toContain("max");
+    expect(requireRecord(opus48Profile, "opus 4.8 thinking profile").defaultLevel).toBe("off");
     const opus47Profile = provider.resolveThinkingProfile?.({
       provider: "anthropic",
       modelId: "claude-opus-4-7",
@@ -495,6 +508,24 @@ describe("anthropic provider replay hooks", () => {
         } as never)
         ?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
     ).toBe(false);
+  });
+
+  it("resolves dated modern Claude refs without discovery templates", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-opus-4.7-20260219",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    expectFields(resolved, {
+      provider: "anthropic",
+      id: "claude-opus-4.7-20260219",
+      api: "anthropic-messages",
+      input: ["text", "image"],
+      reasoning: true,
+    });
   });
 
   it("does not forward-compat case-mismatched Anthropic model ids", async () => {
@@ -575,6 +606,7 @@ describe("anthropic provider replay hooks", () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     for (const [runtimeProvider, modelId] of [
+      ["anthropic", "claude-opus-4-8"],
       ["anthropic", "claude-opus-4-7"],
       ["claude-cli", "claude-opus-4.7-20260219"],
       ["anthropic", "claude-opus-4-6"],
@@ -605,6 +637,32 @@ describe("anthropic provider replay hooks", () => {
     }
   });
 
+  it("normalizes Claude Opus 4.8 to 128k max output tokens", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-opus-4-8",
+      model: {
+        id: "claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 64_000,
+      },
+    } as never);
+
+    expectFields(normalized, {
+      contextWindow: 1_048_576,
+      contextTokens: 1_048_576,
+      maxTokens: 128_000,
+    });
+  });
+
   it("does not normalize legacy Claude 4.5 models to 1M context", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -626,6 +684,61 @@ describe("anthropic provider replay hooks", () => {
     } as never);
 
     expect(normalized).toBeUndefined();
+  });
+
+  it("stores setup-token expiry from a bounded duration", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
+      if (!setupTokenAuth) {
+        throw new Error("expected Anthropic setup-token auth method");
+      }
+
+      const result = await setupTokenAuth.run({
+        opts: {
+          token: ANTHROPIC_SETUP_TOKEN,
+          tokenExpiresIn: "1h",
+        },
+      } as never);
+
+      expect(result?.profiles[0]?.credential).toMatchObject({
+        type: "token",
+        provider: "anthropic",
+        token: ANTHROPIC_SETUP_TOKEN,
+        expires: 3_601_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits setup-token expiry when duration overflows the Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(8_640_000_000_000_000);
+    try {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
+      if (!setupTokenAuth) {
+        throw new Error("expected Anthropic setup-token auth method");
+      }
+
+      const result = await setupTokenAuth.run({
+        opts: {
+          token: ANTHROPIC_SETUP_TOKEN,
+          tokenExpiresIn: "1h",
+        },
+      } as never);
+
+      expect(result?.profiles[0]?.credential).toEqual({
+        type: "token",
+        provider: "anthropic",
+        token: ANTHROPIC_SETUP_TOKEN,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resolves claude-cli synthetic oauth auth", async () => {

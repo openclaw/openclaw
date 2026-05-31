@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
@@ -118,6 +118,8 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
+  chatQueue: import("./ui-types.ts").ChatQueueItem[];
+  chatQueueBySession: Record<string, import("./ui-types.ts").ChatQueueItem[]>;
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
@@ -169,6 +171,7 @@ function createHost(): TestGatewayHost {
     sessionKey: "main",
     chatMessages: [],
     chatQueue: [],
+    chatQueueBySession: {},
     chatToolMessages: [],
     activityEntries: [],
     chatStreamSegments: [],
@@ -180,7 +183,7 @@ function createHost(): TestGatewayHost {
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
     execApprovalBusy: false,
@@ -946,6 +949,95 @@ describe("connectGateway", () => {
     expect(host.pendingAbort).toBeNull();
   });
 
+  it("replays queued selected-global chat aborts with agent scope", async () => {
+    const host = createHost();
+    host.pendingAbort = { sessionKey: "global", agentId: "work" };
+    host.assistantAgentId = "main";
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(client.request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "global",
+      agentId: "work",
+    });
+    expect(host.pendingAbort).toBeNull();
+  });
+
+  it("retries reconnectable queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.chatQueue = [
+      {
+        id: "pending-send",
+        text: "retry this prompt",
+        createdAt: 1,
+        sendRunId: "run-retry-1",
+        sendState: "waiting-reconnect",
+        sessionKey: "main",
+      },
+    ];
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry this prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-1",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe("run-retry-1");
+    });
+  });
+
+  it("retries saved-session queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.sessionKey = "other";
+    host.chatQueueBySession = {
+      main: [
+        {
+          id: "pending-send-main",
+          text: "retry main prompt",
+          createdAt: 1,
+          sendRunId: "run-retry-main",
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        },
+      ],
+    };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry main prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-main",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueueBySession.main).toBeUndefined();
+      expect(host.chatMessages).toStrictEqual([]);
+      expect(host.chatRunId).toBeNull();
+    });
+  });
+
   it("logs and drops stale queued chat abort failures after reconnect", async () => {
     const host = createHost();
     host.pendingAbort = { runId: "run-stale", sessionKey: "main" };
@@ -1078,6 +1170,58 @@ describe("connectGateway", () => {
     expect(sideResult?.question).toBe("what changed?");
     expect(sideResult?.text).toBe("Only the UI layer is missing support.");
     expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
+  });
+
+  it("stores selected-global BTW side results for agent main aliases", () => {
+    const { host, client } = connectHostGateway();
+    host.sessionKey = "agent:work:main";
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-work-global",
+        sessionKey: "global",
+        agentId: "work",
+        question: "what changed?",
+        text: "The alias now receives canonical global side results.",
+        ts: 123,
+      },
+    });
+
+    const sideResult = host.chatSideResult as
+      | { agentId?: string; kind?: string; runId?: string; sessionKey?: string; text?: string }
+      | undefined;
+    expect(sideResult?.kind).toBe("btw");
+    expect(sideResult?.runId).toBe("btw-work-global");
+    expect(sideResult?.sessionKey).toBe("global");
+    expect(sideResult?.agentId).toBe("work");
+    expect(sideResult?.text).toBe("The alias now receives canonical global side results.");
+    expect(host.chatSideResultTerminalRuns.has("btw-work-global")).toBe(true);
+  });
+
+  it("ignores selected-global BTW side results from another agent", () => {
+    const { host, client } = connectHostGateway();
+    host.sessionKey = "global";
+    host.assistantAgentId = "work";
+    host.agentsList = { defaultId: "main", agents: [], mainKey: "main", scope: "global" };
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-main-global",
+        sessionKey: "global",
+        agentId: "main",
+        question: "what changed?",
+        text: "This belongs to the default agent.",
+        ts: 123,
+      },
+    });
+
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns.has("btw-main-global")).toBe(false);
   });
 
   it("ignores tracked BTW terminal finals without tearing down the active run", () => {

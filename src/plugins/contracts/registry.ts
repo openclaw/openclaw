@@ -1,5 +1,5 @@
-import { normalizeProviderId } from "../../agents/provider-id.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import { discoverOpenClawPlugins } from "../discovery.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
@@ -80,15 +80,29 @@ type ManifestContractKey =
 
 type ManifestRegistryContractKey = "webFetchProviders" | "webSearchProviders";
 
-function normalizeProviderAuthEnvVars(
-  providerAuthEnvVars: Record<string, string[]> | undefined,
+function normalizeProviderEnvVars(
+  providerEnvVars: Record<string, string[]> | undefined,
 ): Record<string, string[]> {
   return Object.fromEntries(
-    Object.entries(providerAuthEnvVars ?? {}).map(([providerId, envVars]) => [
+    Object.entries(providerEnvVars ?? {}).map(([providerId, envVars]) => [
       providerId,
       uniqueStrings(envVars),
     ]),
   );
+}
+
+function resolvePluginProviderEnvVars(plugin: {
+  setup?: { providers?: Array<{ id: string; envVars?: string[] }> };
+  providerAuthEnvVars?: Record<string, string[]>;
+}): Record<string, string[]> {
+  const envVars: Record<string, string[]> = {};
+  for (const provider of plugin.setup?.providers ?? []) {
+    envVars[provider.id] = uniqueStrings(provider.envVars ?? []);
+  }
+  for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars ?? {})) {
+    envVars[providerId] = uniqueStrings([...(envVars[providerId] ?? []), ...keys]);
+  }
+  return normalizeProviderEnvVars(envVars);
 }
 
 function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
@@ -97,7 +111,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       pluginId: entry.pluginId,
       cliBackendIds: [...entry.cliBackendIds],
       providerIds: [...entry.providerIds],
-      providerAuthEnvVars: normalizeProviderAuthEnvVars(entry.providerAuthEnvVars),
+      providerEnvVars: normalizeProviderEnvVars(entry.providerEnvVars),
       embeddingProviderIds: [...entry.embeddingProviderIds],
       speechProviderIds: [...entry.speechProviderIds],
       realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
@@ -141,7 +155,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       pluginId: plugin.id,
       cliBackendIds: uniqueStrings(plugin.cliBackends),
       providerIds: uniqueStrings(plugin.providers),
-      providerAuthEnvVars: normalizeProviderAuthEnvVars(plugin.providerAuthEnvVars),
+      providerEnvVars: resolvePluginProviderEnvVars(plugin),
       embeddingProviderIds: uniqueStrings(plugin.contracts?.embeddingProviders ?? []),
       speechProviderIds: uniqueStrings(plugin.contracts?.speechProviders ?? []),
       realtimeTranscriptionProviderIds: uniqueStrings(

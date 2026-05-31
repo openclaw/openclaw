@@ -3,13 +3,6 @@ import type {
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
 
-export type DiagnosticSessionRecoveryStatus =
-  | "aborted"
-  | "released"
-  | "skipped"
-  | "noop"
-  | "failed";
-
 export type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
@@ -23,6 +16,7 @@ export type DiagnosticSessionRecoveryNoopReason = "no_active_work";
 export type StuckSessionRecoveryRequest = {
   sessionId?: string;
   sessionKey?: string;
+  sessionFile?: string;
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;

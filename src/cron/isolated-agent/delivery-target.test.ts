@@ -42,10 +42,6 @@ vi.mock("../../infra/outbound/target-id-resolution.js", () => ({
   maybeResolveIdLikeTarget: vi.fn(),
 }));
 
-vi.mock("../../pairing/allow-from-store-read.js", () => ({
-  readChannelAllowFromStoreEntriesSync: vi.fn(() => []),
-}));
-
 vi.mock("../../infra/outbound/targets.runtime.js", () => ({
   resolveOutboundTarget: vi.fn(),
 }));
@@ -57,14 +53,12 @@ const mockedModuleIds = [
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
   "../../infra/outbound/target-id-resolution.js",
-  "../../pairing/allow-from-store-read.js",
 ];
 
 import { loadSessionStore, readSessionEntry } from "../../config/sessions/store-load.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
-import { readChannelAllowFromStoreEntriesSync } from "../../pairing/allow-from-store-read.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
 afterAll(() => {
@@ -118,8 +112,6 @@ beforeEach(() => {
   extractDeliveryInfoMock.mockReset();
   extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   normalizeTelegramTargetForDeliveryTest.mockClear();
-  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReset();
-  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
   vi.mocked(resolveOutboundTarget).mockReset();
   vi.mocked(loadSessionStore).mockReset().mockReturnValue({});
   vi.mocked(readSessionEntry).mockReset().mockReturnValue(undefined);
@@ -258,10 +250,6 @@ function setLastSessionEntry(params: {
   });
 }
 
-function setStoredAlphaAllowFrom(allowFrom: string[]) {
-  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue(allowFrom);
-}
-
 async function resolveForAgent(params: {
   cfg: OpenClawConfig;
   target?: { channel?: "last" | "forum" | "alpha"; to?: string };
@@ -339,8 +327,6 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-denied",
     });
-    setStoredAlphaAllowFrom(["room-allowed"]);
-
     const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "alpha",
@@ -352,7 +338,6 @@ describe("resolveDeliveryTarget", () => {
 
   it("does not use pairing-store entries as implicit automation recipients", async () => {
     setMainSessionEntry(undefined);
-    setStoredAlphaAllowFrom(["room-paired"]);
 
     const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
     const result = await resolveLastTarget(cfg);
@@ -360,7 +345,6 @@ describe("resolveDeliveryTarget", () => {
     expect(result.ok).toBe(false);
     expect(result.channel).toBe("alpha");
     expect(result.to).toBeUndefined();
-    expect(readChannelAllowFromStoreEntriesSync).not.toHaveBeenCalled();
   });
 
   it("falls back to bound accountId when session has no lastAccountId", async () => {
@@ -448,6 +432,7 @@ describe("resolveDeliveryTarget", () => {
       to: "user:123456789",
       kind: "user",
       source: "directory",
+      resolutionSource: "plugin",
     });
 
     const cfg = makeCfg({ bindings: [] });
@@ -601,6 +586,149 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.ok).toBe(true);
     expect(result.to).toBe("room-b");
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("preserves plugin-canonical targets that begin with the selected channel prefix", async () => {
+    setMainSessionEntry(undefined);
+    const canonicalTarget = "Bncr:tgBot:-1003891624016:6278285192";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "bncr",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "bncr",
+            outbound: createStubOutbound("Bncr"),
+            messaging: {
+              targetPrefixes: ["bncr"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === canonicalTarget
+                    ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
+                    : null,
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "bncr",
+      to: canonicalTarget,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe(canonicalTarget);
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("preserves plugin-canonical targets returned for aliases", async () => {
+    setMainSessionEntry(undefined);
+    const canonicalTarget = "Bncr:tgBot:-1003891624016:6278285192";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "bncr",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "bncr",
+            outbound: createStubOutbound("Bncr"),
+            messaging: {
+              targetPrefixes: ["bncr"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === "alerts"
+                    ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
+                    : null,
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "bncr",
+      to: "alerts",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe(canonicalTarget);
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("still strips selected prefixes from generic normalized fallback targets", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createStubOutbound("Alpha"),
+            messaging: { targetPrefixes: ["alpha"] },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "alpha:room-a",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("room-a");
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("uses plugin-resolved directory targets for route parsing", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createStubOutbound("Alpha"),
+            messaging: {
+              targetPrefixes: ["alpha"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === "alice"
+                    ? { to: "user:123", kind: "user" as const, source: "directory" as const }
+                    : null,
+              },
+              resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+                const isUser = target.startsWith("user:");
+                return buildChannelOutboundSessionRoute({
+                  cfg,
+                  agentId,
+                  channel: "alpha",
+                  accountId,
+                  peer: { kind: isUser ? "direct" : "channel", id: target },
+                  chatType: isUser ? "direct" : "channel",
+                  from: target,
+                  to: isUser ? target : `channel:${target}`,
+                });
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "alice",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("user:123");
     expect(result.threadId).toBeUndefined();
   });
 

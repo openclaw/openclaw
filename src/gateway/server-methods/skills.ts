@@ -1,122 +1,199 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  validateSkillsBinsParams,
+  validateSkillsDetailParams,
+  validateSkillsInstallParams,
+  validateSkillsProposalActionParams,
+  validateSkillsProposalCreateParams,
+  validateSkillsProposalInspectParams,
+  validateSkillsProposalReviseParams,
+  validateSkillsProposalsListParams,
+  validateSkillsProposalUpdateParams,
+  validateSkillsSearchParams,
+  validateSkillsSecurityVerdictsParams,
+  validateSkillsSkillCardParams,
+  validateSkillsStatusParams,
+  validateSkillsUpdateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
-import {
-  installSkillFromClawHub,
-  searchSkillsFromClawHub,
-  updateSkillsFromClawHub,
-} from "../../agents/skills-clawhub.js";
-import { installSkill } from "../../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
-import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
+import { collectSkillBins } from "../../skills/discovery/bins.js";
+import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateSkillsBinsParams,
-  validateSkillsDetailParams,
-  validateSkillsInstallParams,
-  validateSkillsSearchParams,
-  validateSkillsStatusParams,
-  validateSkillsUpdateParams,
-} from "../protocol/index.js";
-import { updateSkillConfigEntry } from "./skills-config-mutations.js";
-import { installUploadedSkillArchive, skillsUploadHandlers } from "./skills-upload.js";
-import type { GatewayRequestHandlers } from "./types.js";
+  installSkillFromClawHub,
+  readLocalSkillCardContentSync,
+  searchSkillsFromClawHub,
+  updateSkillsFromClawHub,
+} from "../../skills/lifecycle/clawhub.js";
+import { installSkill } from "../../skills/lifecycle/install.js";
+import { installUploadedSkillArchive } from "../../skills/lifecycle/upload-install.js";
+import { loadWorkspaceSkillEntries } from "../../skills/loading/workspace.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import {
+  collectClawHubVerdictTargets,
+  fetchOpenClawSkillSecurityVerdicts,
+} from "../../skills/security/clawhub-verdicts.js";
+import {
+  applySkillProposal,
+  inspectSkillProposal,
+  listSkillProposals,
+  proposeCreateSkill,
+  proposeUpdateSkill,
+  quarantineSkillProposal,
+  rejectSkillProposal,
+  reviseSkillProposal,
+} from "../../skills/workshop/service.js";
+import { skillsUploadHandlers } from "./skills-upload.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
-function collectSkillBins(entries: SkillEntry[]): string[] {
-  const bins = new Set<string>();
-  for (const entry of entries) {
-    const required = entry.metadata?.requires?.bins ?? [];
-    const anyBins = entry.metadata?.requires?.anyBins ?? [];
-    const install = entry.metadata?.install ?? [];
-    for (const bin of required) {
-      const trimmed = bin.trim();
-      if (trimmed) {
-        bins.add(trimmed);
-      }
-    }
-    for (const bin of anyBins) {
-      const trimmed = bin.trim();
-      if (trimmed) {
-        bins.add(trimmed);
-      }
-    }
-    for (const spec of install) {
-      const specBins = spec?.bins ?? [];
-      for (const bin of specBins) {
-        const trimmed = normalizeOptionalString(bin) ?? "";
-        if (trimmed) {
-          bins.add(trimmed);
-        }
-      }
+function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
+  const cfg = context.getRuntimeConfig();
+  const agentIdRaw =
+    params && typeof params === "object" && "agentId" in params
+      ? normalizeOptionalString((params as { agentId?: unknown }).agentId)
+      : undefined;
+  const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
+  if (agentIdRaw) {
+    const knownAgents = listAgentIds(cfg);
+    if (!knownAgents.includes(agentId)) {
+      return {
+        ok: false as const,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
+      };
     }
   }
-  return [...bins].toSorted();
+  return {
+    ok: true as const,
+    cfg,
+    agentId,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+  };
+}
+
+type ResolvedSkillsWorkspace = Extract<
+  ReturnType<typeof resolveSkillsAgentWorkspace>,
+  { ok: true }
+>;
+
+function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace) {
+  return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+    config: resolved.cfg,
+    eligibility: {
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({
+          cfg: resolved.cfg,
+          agentId: resolved.agentId,
+        }),
+      }),
+    },
+  });
+}
+
+function respondSkillWorkshopError(respond: RespondFn, err: unknown) {
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
 }
 
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsUploadHandlers,
   "skills.status": ({ params, respond, context }) => {
-    if (!validateSkillsStatusParams(params)) {
+    if (!assertValidParams(params, validateSkillsStatusParams, "skills.status", respond)) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    const report = buildRemoteAwareWorkspaceSkillStatus(resolved);
+    respond(true, report, undefined);
+  },
+  "skills.securityVerdicts": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsSecurityVerdictsParams,
+        "skills.securityVerdicts",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      const report = buildRemoteAwareWorkspaceSkillStatus(resolved);
+      const targets = collectClawHubVerdictTargets(report);
+      if (targets.length === 0) {
+        respond(true, { schema: "openclaw.skills.security-verdicts.v1", items: [] }, undefined);
+        return;
+      }
+      const items = await fetchOpenClawSkillSecurityVerdicts(targets);
+      respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.skillCard": ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSkillsSkillCardParams, "skills.skillCard", respond)) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    const report = buildWorkspaceSkillStatus(resolved.workspaceDir, {
+      config: resolved.cfg,
+      agentId: resolved.agentId,
+    });
+    const skill = report.skills.find((candidate) => candidate.skillKey === params.skillKey);
+    if (!skill?.skillCard) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.status params: ${formatValidationErrors(validateSkillsStatusParams.errors)}`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `skill card not found for ${params.skillKey}`),
       );
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const agentIdRaw = normalizeOptionalString(params?.agentId) ?? "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
-    if (agentIdRaw) {
-      const knownAgents = listAgentIds(cfg);
-      if (!knownAgents.includes(agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
-        );
-        return;
-      }
-    }
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const report = buildWorkspaceSkillStatus(workspaceDir, {
-      config: cfg,
-      eligibility: {
-        remote: getRemoteSkillEligibility({
-          advertiseExecNode: canExecRequestNode({
-            cfg,
-            agentId,
-          }),
-        }),
-      },
-    });
-    respond(true, report, undefined);
-  },
-  "skills.bins": ({ params, respond, context }) => {
-    if (!validateSkillsBinsParams(params)) {
+    const content = readLocalSkillCardContentSync(skill.baseDir);
+    if (content === undefined) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.bins params: ${formatValidationErrors(validateSkillsBinsParams.errors)}`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `skill card not readable for ${params.skillKey}`),
       );
+      return;
+    }
+    respond(
+      true,
+      {
+        schema: "openclaw.skills.skill-card.v1",
+        skillKey: skill.skillKey,
+        path: skill.skillCard.path,
+        sizeBytes: skill.skillCard.sizeBytes,
+        content,
+      },
+      undefined,
+    );
+  },
+  "skills.bins": ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSkillsBinsParams, "skills.bins", respond)) {
       return;
     }
     const cfg = context.getRuntimeConfig();
@@ -131,15 +208,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     respond(true, { bins: [...bins].toSorted() }, undefined);
   },
   "skills.search": async ({ params, respond }) => {
-    if (!validateSkillsSearchParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.search params: ${formatValidationErrors(validateSkillsSearchParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsSearchParams, "skills.search", respond)) {
       return;
     }
     try {
@@ -153,15 +222,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
   },
   "skills.detail": async ({ params, respond }) => {
-    if (!validateSkillsDetailParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.detail params: ${formatValidationErrors(validateSkillsDetailParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsDetailParams, "skills.detail", respond)) {
       return;
     }
     try {
@@ -173,16 +234,261 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
     }
   },
-  "skills.install": async ({ params, respond, context }) => {
-    if (!validateSkillsInstallParams(params)) {
+  "skills.proposals.list": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalsListParams,
+        "skills.proposals.list",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(true, await listSkillProposals({ workspaceDir: resolved.workspaceDir }), undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.inspect": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalInspectParams,
+        "skills.proposals.inspect",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      const proposal = await inspectSkillProposal(params.proposalId, {
+        workspaceDir: resolved.workspaceDir,
+      });
+      if (!proposal) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Skill proposal not found: ${params.proposalId}`),
+        );
+        return;
+      }
+      respond(true, proposal, undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.create": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalCreateParams,
+        "skills.proposals.create",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
       respond(
-        false,
+        true,
+        await proposeCreateSkill({
+          workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
+          name: params.name,
+          description: params.description,
+          content: params.content,
+          supportFiles: params.supportFiles,
+          createdBy: "gateway",
+          goal: params.goal,
+          evidence: params.evidence,
+        }),
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.install params: ${formatValidationErrors(validateSkillsInstallParams.errors)}`,
-        ),
       );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.update": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalUpdateParams,
+        "skills.proposals.update",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await proposeUpdateSkill({
+          workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
+          agentId: resolved.agentId,
+          skillName: params.skillName,
+          description: params.description,
+          content: params.content,
+          supportFiles: params.supportFiles,
+          createdBy: "gateway",
+          goal: params.goal,
+          evidence: params.evidence,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.revise": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalReviseParams,
+        "skills.proposals.revise",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await reviseSkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
+          proposalId: params.proposalId,
+          content: params.content,
+          supportFiles: params.supportFiles,
+          description: params.description,
+          goal: params.goal,
+          evidence: params.evidence,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.apply": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalActionParams,
+        "skills.proposals.apply",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await applySkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          proposalId: params.proposalId,
+          reason: params.reason,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.reject": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalActionParams,
+        "skills.proposals.reject",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await rejectSkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          proposalId: params.proposalId,
+          reason: params.reason,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.quarantine": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalActionParams,
+        "skills.proposals.quarantine",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await quarantineSkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          proposalId: params.proposalId,
+          reason: params.reason,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.install": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSkillsInstallParams, "skills.install", respond)) {
       return;
     }
     const cfg = context.getRuntimeConfig();
@@ -234,12 +540,24 @@ export const skillsHandlers: GatewayRequestHandlers = {
         sha256: p.sha256,
         timeoutMs: p.timeoutMs,
         workspaceDir: workspaceDirRaw,
-        context,
+        config: context.getRuntimeConfig(),
+        log: context.logGateway,
       });
+      const errorCode =
+        !result.ok && result.errorKind === "invalid-request"
+          ? ErrorCodes.INVALID_REQUEST
+          : ErrorCodes.UNAVAILABLE;
+      const responseResult = result.ok
+        ? result
+        : {
+            ok: false,
+            error: result.error,
+            errorCode,
+          };
       respond(
         result.ok,
-        result,
-        result.ok ? undefined : errorShape(result.errorCode, result.error),
+        responseResult,
+        result.ok ? undefined : errorShape(errorCode, result.error),
       );
       return;
     }
@@ -264,15 +582,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     );
   },
   "skills.update": async ({ params, respond, context }) => {
-    if (!validateSkillsUpdateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.update params: ${formatValidationErrors(validateSkillsUpdateParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsUpdateParams, "skills.update", respond)) {
       return;
     }
     if (params && typeof params === "object" && "source" in params && params.source === "clawhub") {

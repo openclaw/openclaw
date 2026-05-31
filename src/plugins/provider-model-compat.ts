@@ -1,7 +1,7 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import type { Model } from "../llm/types.js";
 
 export function extractModelCompat(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
@@ -74,11 +74,11 @@ export function shouldOmitEmptyArrayItems(
   return compat?.omitEmptyArrayItems === true;
 }
 
-function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
+function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
 }
 
-function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
+function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
 
@@ -86,7 +86,7 @@ function normalizeAnthropicBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "");
 }
 
-export function normalizeModelCompat(model: Model<Api>): Model<Api> {
+export function normalizeModelCompat(model: Model): Model {
   const baseUrl = model.baseUrl ?? "";
 
   if (isAnthropicMessagesModel(model) && baseUrl) {

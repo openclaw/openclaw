@@ -1,14 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
-import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   hasNonzeroUsage,
   normalizeUsage,
   toOpenAiChatCompletionsUsage,
   type NormalizedUsage,
+  type OpenAiChatCompletionsUsage,
 } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -27,10 +33,6 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -83,6 +85,7 @@ type OpenAiChatCompletionRequest = {
   frequency_penalty?: unknown;
   presence_penalty?: unknown;
   seed?: unknown;
+  stop?: unknown;
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
@@ -110,14 +113,14 @@ function resolveOpenAiChatCompletionsLimits(
   const imageConfig = config?.images;
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
-    maxImageParts:
-      typeof config?.maxImageParts === "number"
-        ? Math.max(0, Math.floor(config.maxImageParts))
-        : DEFAULT_OPENAI_MAX_IMAGE_PARTS,
-    maxTotalImageBytes:
-      typeof config?.maxTotalImageBytes === "number"
-        ? Math.max(1, Math.floor(config.maxTotalImageBytes))
-        : DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
+    maxImageParts: resolveIntegerOption(config?.maxImageParts, DEFAULT_OPENAI_MAX_IMAGE_PARTS, {
+      min: 0,
+    }),
+    maxTotalImageBytes: resolveIntegerOption(
+      config?.maxTotalImageBytes,
+      DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
+      { min: 1 },
+    ),
     images: {
       allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
       urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),
@@ -348,7 +351,7 @@ function writeUsageChunk(
   params: {
     runId: string;
     model: string;
-    usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    usage: OpenAiChatCompletionsUsage;
   },
 ) {
   writeSse(res, {
@@ -767,11 +770,7 @@ function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   return { stopReason, pendingToolCalls };
 }
 
-function resolveChatCompletionUsage(result: unknown): {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-} {
+function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage {
   return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 }
 
@@ -798,6 +797,28 @@ function resolveResponseFormat(value: unknown): Record<string, unknown> | undefi
     throw new Error("response_format.type must be text, json_object, or json_schema");
   }
   return obj;
+}
+
+function resolveStopSequences(value: unknown): string[] | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const list = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(list)) {
+    throw new Error("stop must be a string or array of strings");
+  }
+  // OpenAI Chat Completions accepts at most 4 stop sequences.
+  if (list.length > 4) {
+    throw new Error("stop supports at most 4 sequences");
+  }
+  const sequences: string[] = [];
+  for (const item of list) {
+    if (typeof item !== "string" || item.length === 0) {
+      throw new Error("stop entries must be non-empty strings");
+    }
+    sequences.push(item);
+  }
+  return sequences.length > 0 ? sequences : undefined;
 }
 
 function resolveErrorMessage(err: unknown): string {
@@ -864,6 +885,18 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
+  let stop: string[] | undefined;
+  try {
+    stop = resolveStopSequences(payload.stop);
+  } catch (err) {
+    sendJson(res, 400, {
+      error: {
+        message: `Invalid stop: ${resolveErrorMessage(err)}`,
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
   const samplingError = validateOpenAiSamplingParams({
     temperature: payload.temperature,
     topP: payload.top_p,
@@ -884,7 +917,8 @@ export async function handleOpenAiHttpRequest(
     responseFormat !== undefined ||
     frequencyPenalty !== undefined ||
     presencePenalty !== undefined ||
-    seed !== undefined
+    seed !== undefined ||
+    stop !== undefined
       ? {
           ...(maxTokens !== undefined ? { maxTokens } : {}),
           ...(temperature !== undefined ? { temperature } : {}),
@@ -893,6 +927,7 @@ export async function handleOpenAiHttpRequest(
           ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
           ...(presencePenalty !== undefined ? { presencePenalty } : {}),
           ...(seed !== undefined ? { seed } : {}),
+          ...(stop !== undefined ? { stop } : {}),
         }
       : undefined;
 
@@ -1066,13 +1101,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
-  let finalUsage:
-    | {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
-      }
-    | undefined;
+  let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;

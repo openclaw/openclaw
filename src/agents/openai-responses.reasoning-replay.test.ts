@@ -1,5 +1,5 @@
-import type { AssistantMessage, Model, ToolResultMessage } from "@earendil-works/pi-ai";
-import { streamOpenAIResponses } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
+import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 
@@ -88,7 +88,7 @@ async function runAbortedOpenAIResponsesStream(params: {
   controller.abort();
   let payload: Record<string, unknown> | undefined;
 
-  const stream = streamOpenAIResponses(
+  const responseStream = stream(
     buildModel(),
     {
       systemPrompt: "system",
@@ -104,7 +104,7 @@ async function runAbortedOpenAIResponsesStream(params: {
     },
   );
 
-  await stream.result();
+  await responseStream.result();
   const input = extractInput(payload);
   return {
     input,
@@ -192,6 +192,32 @@ describe("openai-responses reasoning replay", () => {
     expect(types).toContain("message");
   });
 
+  it("assigns distinct ids to multiple id-less text blocks after a reasoning drop", async () => {
+    // After a model/fallback switch the sanitizer strips textSignatures from a
+    // turn's text blocks. msgIndex is per-message, so the transport must still
+    // emit unique message-item ids per text block (issue #88019).
+    const assistantWithTwoTexts = buildAssistantMessage({
+      stopReason: "stop",
+      content: [
+        { type: "text", text: "commentary" },
+        { type: "text", text: "final" },
+      ],
+    });
+
+    const { input } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Hi", timestamp: Date.now() },
+        assistantWithTwoTexts,
+        { role: "user", content: "Ok", timestamp: Date.now() },
+      ],
+    });
+
+    const messageIds = extractInputMessages(input).map((item) => item.id);
+    expect(messageIds).toHaveLength(2);
+    expect(messageIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(messageIds).size).toBe(2);
+  });
+
   it.each(["commentary", "final_answer"] as const)(
     "replays assistant message phase metadata for %s",
     async (phase) => {
@@ -223,4 +249,40 @@ describe("openai-responses reasoning replay", () => {
       expect(replayedMessage?.phase).toBe(phase);
     },
   );
+
+  it("replays a synthetic id while preserving phase for id-less text signatures", async () => {
+    // After a reasoning drop the sanitizer keeps the phase but removes the msg_*
+    // id. The conversion must then emit a unique synthetic id per text block AND
+    // retain the phase metadata (issue #88019 review follow-up).
+    const assistantWithPhaseOnly = buildAssistantMessage({
+      stopReason: "stop",
+      content: [
+        {
+          type: "text",
+          text: "commentary",
+          textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "final",
+          textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+        },
+      ],
+    });
+
+    const { input } = await runAbortedOpenAIResponsesStream({
+      messages: [
+        { role: "user", content: "Hi", timestamp: Date.now() },
+        assistantWithPhaseOnly,
+        { role: "user", content: "Ok", timestamp: Date.now() },
+      ],
+    });
+
+    const messages = extractInputMessages(input);
+    expect(messages).toHaveLength(2);
+    const ids = messages.map((item) => item.id);
+    expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(2);
+    expect(messages.map((item) => item.phase)).toEqual(["commentary", "final_answer"]);
+  });
 });

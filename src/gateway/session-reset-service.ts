@@ -1,21 +1,26 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
-import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
-import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
+import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   snapshotSessionOrigin,
@@ -29,11 +34,11 @@ import {
   rewriteSessionFileForNewSessionId,
 } from "../config/sessions/session-file-rotation.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -47,7 +52,6 @@ import {
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
-import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -59,6 +63,7 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
+  resolveSessionStoreKey,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
@@ -370,7 +375,8 @@ async function ensureSessionRuntimeCleanup(params: {
       ...params.target.storeKeys,
       params.sessionId ?? "",
     ]);
-    return await closeTrackedBrowserTabsForSessions({
+    await cleanupBrowserSessionsForLifecycleEnd({
+      cfg: params.cfg,
       sessionKeys: [...closeKeys],
       onWarn: (message) => logVerbose(message),
     });
@@ -388,8 +394,8 @@ async function ensureSessionRuntimeCleanup(params: {
     await closeTrackedBrowserTabs();
     return undefined;
   }
-  abortEmbeddedPiRun(params.sessionId);
-  const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  abortEmbeddedAgentRun(params.sessionId);
+  const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
   clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
     await retireSessionMcpRuntime({
@@ -702,18 +708,55 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
 export async function performGatewaySessionReset(params: {
   key: string;
+  agentId?: string;
   reason: "new" | "reset";
   commandSource: string;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry }
+  | { ok: true; key: string; entry: SessionEntry; agentId: string }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const { cfg, target, storePath } = (() => {
+  const resetTarget = (() => {
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
-    return { cfg, target, storePath: target.storePath };
+    const explicitAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const parsedKey = parseAgentSessionKey(params.key);
+    const inferredGlobalAgentId =
+      !explicitAgentId &&
+      parsedKey &&
+      resolveSessionStoreKey({ cfg, sessionKey: params.key }) === "global"
+        ? normalizeAgentId(parsedKey.agentId)
+        : undefined;
+    const requestedAgentId = explicitAgentId ?? inferredGlobalAgentId;
+    if (requestedAgentId && !listAgentIds(cfg).includes(requestedAgentId)) {
+      return {
+        ok: false as const,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
+      };
+    }
+    if (
+      explicitAgentId &&
+      parsedKey?.agentId &&
+      normalizeAgentId(parsedKey.agentId) !== explicitAgentId
+    ) {
+      return {
+        ok: false as const,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      };
+    }
+    const target = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: params.key,
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+    });
+    return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
   })();
-  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
+  if (!resetTarget.ok) {
+    return resetTarget;
+  }
+  const { cfg, target, storePath, requestedAgentId } = resetTarget;
+  const { entry, legacyKey, canonicalKey } = loadSessionEntry(
+    params.key,
+    requestedAgentId ? { agentId: requestedAgentId } : undefined,
+  );
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -751,11 +794,14 @@ export async function performGatewaySessionReset(params: {
       cfg,
       key: params.key,
       store,
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
     });
     const currentEntry = store[primaryKey];
     resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
     const parsed = parseAgentSessionKey(primaryKey);
-    const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+    const sessionAgentId = normalizeAgentId(
+      parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
+    );
     const resetPreservedSelection = resolveResetPreservedSelection({
       entry: currentEntry,
     });
@@ -816,6 +862,7 @@ export async function performGatewaySessionReset(params: {
       queueDrop: currentEntry?.queueDrop,
       spawnedBy: currentEntry?.spawnedBy,
       spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
+      spawnedCwd: currentEntry?.spawnedCwd,
       parentSessionKey: currentEntry?.parentSessionKey,
       forkedFromParent: currentEntry?.forkedFromParent,
       spawnDepth: currentEntry?.spawnDepth,
@@ -915,5 +962,5 @@ export async function performGatewaySessionReset(params: {
       reason: "session-reset",
     });
   }
-  return { ok: true, key: target.canonicalKey, entry: next };
+  return { ok: true, key: target.canonicalKey, entry: next, agentId: target.agentId };
 }

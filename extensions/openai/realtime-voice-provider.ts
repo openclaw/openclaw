@@ -122,6 +122,7 @@ type RealtimeEvent = {
   text?: string;
   transcript?: string;
   item_id?: string;
+  response_id?: string;
   call_id?: string;
   name?: string;
   arguments?: string;
@@ -209,11 +210,11 @@ function normalizeProviderConfig(
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
     model: trimToUndefined(raw?.model),
-    voice: normalizeOpenAIRealtimeVoice(raw?.voice),
+    voice: normalizeOpenAIRealtimeVoice(raw?.speakerVoice ?? raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
-    vadThreshold: asFiniteNumber(raw?.vadThreshold),
-    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
-    prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
+    vadThreshold: asUnitInterval(raw?.vadThreshold),
+    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
+    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
     interruptResponseOnInputAudio:
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
@@ -228,7 +229,12 @@ function normalizeProviderConfig(
 
 function asNonNegativeInteger(value: unknown): number | undefined {
   const number = asFiniteNumber(value);
-  return number === undefined || number < 0 ? undefined : Math.floor(number);
+  return number !== undefined && Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+}
+
+function asUnitInterval(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number !== undefined && number >= 0 && number <= 1 ? number : undefined;
 }
 
 type OpenAIRealtimeApiKeyResolution =
@@ -356,7 +362,7 @@ async function resolveOpenAIRealtimeDefaultAuth(params: {
 
   if (prefersCodexOAuthForRealtimeModel(params.model)) {
     const codexToken = await resolveProviderAuthProfileApiKey({
-      provider: "openai-codex",
+      provider: "openai",
       cfg: params.cfg,
       includeExternalCliAuth: true,
     });
@@ -395,7 +401,7 @@ function hasOpenAIRealtimeBrowserAuthInput(params: {
   if (prefersCodexOAuthForRealtimeModel(params.model)) {
     return (
       isProviderAuthProfileConfigured({
-        provider: "openai-codex",
+        provider: "openai",
         cfg: params.cfg,
         includeExternalCliAuth: true,
       }) || hasOpenAIRealtimeApiKeyInput(undefined)
@@ -738,7 +744,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     if (
       !isProviderAuthProfileConfigured({
-        provider: "openai-codex",
+        provider: "openai",
         cfg: cfg.cfg,
         includeExternalCliAuth: true,
       })
@@ -984,6 +990,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         direction: "server",
         type: event.type,
         detail: this.describeServerEvent(event),
+        ...(event.item_id ? { itemId: event.item_id } : {}),
+        ...((event.response_id ?? event.response?.id)
+          ? { responseId: event.response_id ?? event.response?.id }
+          : {}),
       });
     if (
       event.type === "error" &&

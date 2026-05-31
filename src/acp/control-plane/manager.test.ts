@@ -1,5 +1,6 @@
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
@@ -253,6 +254,38 @@ function extractStatesFromUpserts(): SessionAcpMeta["state"][] {
   return states;
 }
 
+function extractStateUpsertPersistenceOptions(): Array<{
+  state: SessionAcpMeta["state"];
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+}> {
+  const options: Array<{
+    state: SessionAcpMeta["state"];
+    skipMaintenance?: boolean;
+    takeCacheOwnership?: boolean;
+  }> = [];
+  for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
+    const payload = firstArg as {
+      skipMaintenance?: boolean;
+      takeCacheOwnership?: boolean;
+      mutate: (
+        current: SessionAcpMeta | undefined,
+        entry: { acp?: SessionAcpMeta } | undefined,
+      ) => SessionAcpMeta | null | undefined;
+    };
+    const current = readySessionMeta();
+    const next = payload.mutate(current, { acp: current });
+    if (next?.state && payload.skipMaintenance && payload.takeCacheOwnership) {
+      options.push({
+        state: next.state,
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      });
+    }
+  }
+  return options;
+}
+
 function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | undefined> {
   const options: Array<AcpSessionRuntimeOptions | undefined> = [];
   for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
@@ -314,6 +347,10 @@ describe("AcpSessionManager", () => {
     }
     expect(resolved.error.code).toBe("ACP_SESSION_INIT_FAILED");
     expect(resolved.error.message).toContain("ACP metadata is missing");
+    expectRecordFields(mockCallArg(hoisted.readAcpSessionEntryMock), {
+      clone: false,
+      sessionKey: "agent:codex:acp:session-1",
+    });
   });
 
   it("canonicalizes the main alias before ACP rehydrate after restart", async () => {
@@ -361,6 +398,10 @@ describe("AcpSessionManager", () => {
       agent: "main",
       sessionKey: "agent:main:main",
     });
+    expect(extractStateUpsertPersistenceOptions()).toEqual([
+      { state: "running", skipMaintenance: true, takeCacheOwnership: true },
+      { state: "idle", skipMaintenance: true, takeCacheOwnership: true },
+    ]);
   });
 
   it("tracks parented direct ACP turns in the task registry", async () => {
@@ -764,6 +805,38 @@ describe("AcpSessionManager", () => {
       expect(states.at(-1)).toBe("idle");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("caps ACP runtime option turn timeouts before arming the watchdog", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta({
+        runtimeOptions: {
+          timeoutSeconds: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+    });
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      timeoutSpy.mockRestore();
     }
   });
 
@@ -1286,7 +1359,7 @@ describe("AcpSessionManager", () => {
         acp: {
           ...readySessionMeta(),
           runtimeOptions: {
-            model: "openai-codex/gpt-5.4",
+            model: "openai/gpt-5.4",
           },
         },
       };
@@ -1303,7 +1376,7 @@ describe("AcpSessionManager", () => {
 
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey,
-      model: "openai-codex/gpt-5.4",
+      model: "openai/gpt-5.4",
     });
   });
 
@@ -1874,7 +1947,7 @@ describe("AcpSessionManager", () => {
       storeSessionKey: "agent:codex:acp:session-a",
       acp: readySessionMeta({
         runtimeOptions: {
-          model: "openai-codex/gpt-5.4",
+          model: "openai/gpt-5.4",
           thinking: "high",
         },
       }),
@@ -1887,20 +1960,20 @@ describe("AcpSessionManager", () => {
       agent: "codex",
       mode: "persistent",
       runtimeOptions: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
     });
 
     expect(extractRuntimeOptionsFromUpserts()).toEqual([
       {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
     ]);
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey: "agent:codex:acp:session-a",
-      model: "openai-codex/gpt-5.4",
+      model: "openai/gpt-5.4",
       thinking: "high",
     });
   });
@@ -3668,7 +3741,7 @@ describe("AcpSessionManager", () => {
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       key: "model",
-      value: "openai-codex/gpt-5.4",
+      value: "openai/gpt-5.4",
     });
     expect(runtimeState.setMode).not.toHaveBeenCalled();
 
@@ -4137,7 +4210,7 @@ describe("AcpSessionManager", () => {
         ...readySessionMeta(),
         runtimeOptions: {
           runtimeMode: "plan",
-          model: "openai-codex/gpt-5.4",
+          model: "openai/gpt-5.4",
           thinking: "high",
           permissionProfile: "strict",
           timeoutSeconds: 120,
@@ -4159,7 +4232,7 @@ describe("AcpSessionManager", () => {
     });
     expectMockCallFields(runtimeState.setConfigOption, {
       key: "model",
-      value: "openai-codex/gpt-5.4",
+      value: "openai/gpt-5.4",
     });
     expectMockCallFields(runtimeState.setConfigOption, {
       key: "thinking",
