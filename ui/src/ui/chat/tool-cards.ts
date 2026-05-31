@@ -245,11 +245,7 @@ function findFirstUnmatchedCard(
   fallbackMatchedCards: WeakSet<ToolCard>,
 ): ToolCard | undefined {
   let nameOnlyCandidate: ToolCard | undefined;
-  for (let i = 0; i < cards.length; i++) {
-    const card = cards[i];
-    if (!card) {
-      continue;
-    }
+  for (const card of cards) {
     if (card.id === id) {
       return card;
     }
