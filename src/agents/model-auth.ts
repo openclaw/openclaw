@@ -45,6 +45,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
+  resolveInlineProviderApiKeyUnusableUntil,
 } from "./auth-profiles.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import * as cliCredentials from "./cli-credentials.js";
@@ -393,6 +394,48 @@ export function shouldPreferExplicitConfigApiKeyAuth(
     resolveProviderAuthOverride(cfg, provider) === "api-key" &&
     providerConfig !== undefined &&
     hasExplicitProviderApiKeyConfig(providerConfig)
+  );
+}
+
+export function isInlineProviderApiKeyAuth(auth: ResolvedProviderAuth | null | undefined): boolean {
+  if (!auth || auth.mode !== "api-key") {
+    return false;
+  }
+  return isInlineProviderApiKeySource(auth.source);
+}
+
+function isInlineProviderApiKeySource(source: string): boolean {
+  return (
+    source === "models.json" ||
+    source.endsWith(" (models.json secretref)") ||
+    source.endsWith(" (models.json marker)")
+  );
+}
+
+function isConfigBackedInlineProviderApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  source: string;
+}): boolean {
+  if (isInlineProviderApiKeySource(params.source)) {
+    return true;
+  }
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  return Boolean(providerConfig && hasExplicitProviderApiKeyConfig(providerConfig));
+}
+
+function assertInlineProviderApiKeyUsable(params: {
+  store: AuthProfileStore;
+  provider: string;
+}): void {
+  const unusableUntil = resolveInlineProviderApiKeyUnusableUntil(params.store, params.provider);
+  if (typeof unusableUntil !== "number" || unusableUntil <= Date.now()) {
+    return;
+  }
+  const waitMs = Math.max(0, unusableUntil - Date.now());
+  const waitMinutes = Math.max(1, Math.ceil(waitMs / 60_000));
+  throw new Error(
+    `Inline API key for provider "${params.provider}" is temporarily disabled after a provider auth/billing failure. Retry after about ${waitMinutes} minute${waitMinutes === 1 ? "" : "s"}, or switch to a different auth profile/API key.`,
   );
 }
 
@@ -1264,6 +1307,18 @@ export async function resolveApiKeyForProvider(params: {
         ? "oauth"
         : "api-key";
       if (
+        resolvedMode === "api-key" &&
+        isConfigBackedInlineProviderApiKey({ cfg, provider, source: envResolved.source })
+      ) {
+        scopedStore ??= resolveScopedAuthProfileStore({
+          agentDir,
+          cfg,
+          provider,
+          preferredProfile,
+        });
+        assertInlineProviderApiKeyUsable({ store: scopedStore, provider });
+      }
+      if (
         !isAuthModeAllowedForModel({
           provider,
           modelApi: params.modelApi,
@@ -1348,6 +1403,13 @@ export async function resolveApiKeyForProvider(params: {
       secretSentinels: params.secretSentinels,
     });
     if (customKey) {
+      scopedStore ??= resolveScopedAuthProfileStore({
+        agentDir,
+        cfg,
+        provider,
+        preferredProfile,
+      });
+      assertInlineProviderApiKeyUsable({ store: scopedStore, provider });
       return {
         apiKey: customKey.apiKey,
         source: customKey.source,
@@ -1485,6 +1547,20 @@ export async function resolveApiKeyForProvider(params: {
       ? "oauth"
       : "api-key";
     if (
+      resolvedMode === "api-key" &&
+      isConfigBackedInlineProviderApiKey({ cfg, provider, source: envResolved.source })
+    ) {
+      const inlineStore =
+        params.store ??
+        resolveScopedAuthProfileStore({
+          agentDir,
+          cfg,
+          provider,
+          preferredProfile,
+        });
+      assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+    }
+    if (
       isAuthModeAllowedForModel({
         provider,
         modelApi: params.modelApi,
@@ -1521,6 +1597,7 @@ export async function resolveApiKeyForProvider(params: {
     secretSentinels: params.secretSentinels,
   });
   if (customKey) {
+    assertInlineProviderApiKeyUsable({ store, provider });
     const result = { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" as const };
     return result;
   }
@@ -1668,23 +1745,6 @@ export async function hasAvailableAuthForProvider(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
-  const envAuth = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
-  if (
-    envAuth &&
-    isAuthModeAllowedForModel({
-      provider,
-      modelApi: params.modelApi,
-      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
-    })
-  ) {
-    return true;
-  }
-  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
-    return true;
-  }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
-    return true;
-  }
   const store =
     params.store ??
     resolveScopedAuthProfileStore({
@@ -1693,6 +1753,35 @@ export async function hasAvailableAuthForProvider(params: {
       provider,
       preferredProfile,
     });
+  const inlineUnusableUntil = resolveInlineProviderApiKeyUnusableUntil(store, provider);
+  const inlineProviderApiKeyUsable =
+    typeof inlineUnusableUntil !== "number" || inlineUnusableUntil <= Date.now();
+  const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+  if (envResolved) {
+    const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
+      ? "oauth"
+      : "api-key";
+    if (
+      isAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        mode: resolvedMode,
+      }) &&
+      (!isConfigBackedInlineProviderApiKey({ cfg, provider, source: envResolved.source }) ||
+        inlineProviderApiKeyUsable)
+    ) {
+      return true;
+    }
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg, provider }) && inlineProviderApiKeyUsable) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+    return true;
+  }
+  if (authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock") {
+    return true;
+  }
   const order = resolveAuthProfileOrder({
     cfg,
     store,

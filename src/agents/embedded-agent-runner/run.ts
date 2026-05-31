@@ -62,6 +62,7 @@ import {
   isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileSuccess,
+  markInlineProviderApiKeyFailure,
   resolveAuthProfileEligibility,
 } from "../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../auth-profiles/external-cli-auth-selection.js";
@@ -111,6 +112,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  isInlineProviderApiKeyAuth,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
@@ -1738,7 +1740,7 @@ async function runEmbeddedAgentInternal(
         modelId?: string;
       }) => {
         const { profileId, reason } = failure;
-        if (!profileId || !reason) {
+        if (!reason) {
           return;
         }
         if (pluginHarnessOwnsTransport && reason === "timeout") {
@@ -1746,9 +1748,24 @@ async function runEmbeddedAgentInternal(
           // credential evidence. Do not poison OpenClaw auth cooldowns.
           return;
         }
-        await markAuthProfileFailure({
-          store: profileFailureStore,
-          profileId,
+        if (profileId) {
+          await markAuthProfileFailure({
+            store: profileFailureStore,
+            profileId,
+            reason,
+            cfg: params.config,
+            agentDir,
+            runId: params.runId,
+            modelId: failure.modelId,
+          });
+          return;
+        }
+        if (!isInlineProviderApiKeyAuth(apiKeyInfo)) {
+          return;
+        }
+        await markInlineProviderApiKeyFailure({
+          store: authStore,
+          provider,
           reason,
           cfg: params.config,
           agentDir,
