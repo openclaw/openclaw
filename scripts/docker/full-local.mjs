@@ -1209,10 +1209,10 @@ function collectMcpServerRootCandidates(servers, params) {
       continue;
     }
     const command = cleanString(server.command);
-    const commandIsWindowsExe = Boolean(
-      command && isWindowsAbsolutePath(command) && commandName(command).endsWith(".exe"),
+    const commandIsHostExe = Boolean(
+      command && isHostAbsolutePath(command) && commandName(command).endsWith(".exe"),
     );
-    if (commandIsWindowsExe) {
+    if (commandIsHostExe) {
       continue;
     }
     pushCandidate(command);
