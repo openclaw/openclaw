@@ -1701,8 +1701,12 @@ export async function dispatchReplyFromConfig(
   const attachSourceReplyDeliveryMode = (
     result: DispatchFromConfigResult,
   ): DispatchFromConfigResult =>
-    sourceReplyDeliveryMode === "message_tool_only"
-      ? { ...result, sourceReplyDeliveryMode }
+    sourceReplyDeliveryMode === "message_tool_only" || sendPolicyDenied
+      ? {
+          ...result,
+          ...(sourceReplyDeliveryMode === "message_tool_only" ? { sourceReplyDeliveryMode } : {}),
+          ...(sendPolicyDenied ? { sendPolicyDenied: true } : {}),
+        }
       : result;
   const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
   const unauthorizedTextSlashSourceReplyCtx =

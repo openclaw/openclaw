@@ -88,6 +88,18 @@ const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
 
 type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
+function shouldSendNoVisibleReplyFallback(dispatchResult: {
+  counts: { final?: number };
+  sendPolicyDenied?: boolean;
+  sourceReplyDeliveryMode?: string;
+}): boolean {
+  return (
+    (dispatchResult.counts.final ?? 0) === 0 &&
+    dispatchResult.sendPolicyDenied !== true &&
+    dispatchResult.sourceReplyDeliveryMode !== "message_tool_only"
+  );
+}
+
 function resolveConfiguredFeishuGroupSessionScope(params: {
   groupConfig?: {
     groupSessionScope?: FeishuGroupSessionScope;
@@ -1549,7 +1561,10 @@ export async function handleFeishuMessage(params: {
               }),
             },
           });
-          if (turnResult.dispatched && turnResult.dispatchResult.counts.final === 0) {
+          if (
+            turnResult.dispatched &&
+            shouldSendNoVisibleReplyFallback(turnResult.dispatchResult)
+          ) {
             await ensureNoVisibleReplyFallback("broadcast-dispatch-complete-zero-final");
           }
         } else {
@@ -1740,7 +1755,7 @@ export async function handleFeishuMessage(params: {
       }
       const { dispatchResult } = turnResult;
       const { queuedFinal, counts } = dispatchResult;
-      if (counts.final === 0) {
+      if (shouldSendNoVisibleReplyFallback(dispatchResult)) {
         await ensureNoVisibleReplyFallback("dispatch-complete-zero-final");
       }
 

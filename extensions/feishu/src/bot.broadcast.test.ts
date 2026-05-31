@@ -381,6 +381,46 @@ describe("broadcast dispatch", () => {
     );
   });
 
+  it("skips no-visible-reply fallback for source-suppressed active broadcast dispatch", async () => {
+    mockDispatchReplyFromConfig
+      .mockResolvedValueOnce({ queuedFinal: false, counts: { final: 1 } })
+      .mockResolvedValueOnce({
+        queuedFinal: false,
+        counts: { final: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+    const ensureNoVisibleReplyFallback = vi.fn();
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      ensureNoVisibleReplyFallback,
+    });
+    const cfg = createBroadcastConfig();
+    const event = createBroadcastEvent({
+      messageId: "msg-broadcast-source-suppressed",
+      text: "hello @bot",
+      botMentioned: true,
+    });
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(ensureNoVisibleReplyFallback).not.toHaveBeenCalled();
+  });
+
   it("skips broadcast dispatch when bot is NOT mentioned (requireMention=true)", async () => {
     const cfg = createBroadcastConfig();
     const event = createBroadcastEvent({

@@ -6912,6 +6912,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     // Delivery MUST be suppressed
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
+    expect(result.sendPolicyDenied).toBe(true);
   });
 
   it("suppresses tool result delivery when sendPolicy is deny", async () => {
