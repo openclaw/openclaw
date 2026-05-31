@@ -125,6 +125,60 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     expect(mocks.disableTailscaleServe).toHaveBeenCalledWith(undefined, "svc:openclaw");
   });
 
+  it("does not use serviceName in funnel mode", async () => {
+    const logTailscale = createLogger();
+    mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
+
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: "funnel",
+      port: 18789,
+      resetOnExit: true,
+      serviceName: "svc:openclaw",
+      logTailscale,
+    });
+
+    expect(mocks.enableTailscaleFunnel).toHaveBeenCalledWith(18789);
+    expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
+    expect(logTailscale.info).toHaveBeenCalledWith(
+      "funnel enabled: https://node.tailnet.ts.net/ (WS via wss://node.tailnet.ts.net)",
+    );
+
+    await cleanup?.();
+
+    expect(mocks.disableTailscaleFunnel).toHaveBeenCalledWith();
+    expect(mocks.disableTailscaleServe).not.toHaveBeenCalled();
+  });
+
+  it("does not derive a Service URL when Tailscale only reports an IP", async () => {
+    const logTailscale = createLogger();
+    mocks.getTailnetHostname.mockResolvedValue("100.64.0.8");
+
+    await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      serviceName: "svc:openclaw",
+      logTailscale,
+    });
+
+    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789, undefined, "svc:openclaw");
+    expect(logTailscale.info).toHaveBeenCalledWith("serve enabled");
+  });
+
+  it("does not derive a Service URL when Tailscale omits the DNS suffix", async () => {
+    const logTailscale = createLogger();
+    mocks.getTailnetHostname.mockResolvedValue("node");
+
+    await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      serviceName: "svc:openclaw",
+      logTailscale,
+    });
+
+    expect(mocks.enableTailscaleServe).toHaveBeenCalledWith(18789, undefined, "svc:openclaw");
+    expect(logTailscale.info).toHaveBeenCalledWith("serve enabled");
+  });
+
   it("never consults the Funnel route helper when running in funnel mode", async () => {
     const logTailscale = createLogger();
 

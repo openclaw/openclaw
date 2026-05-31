@@ -8,10 +8,13 @@ import {
   hasTailscaleFunnelRouteForPort,
 } from "../infra/tailscale.js";
 
-function serviceHostnameFromTailnetHost(serviceName: string, tailnetHost: string): string {
+function serviceHostnameFromTailnetHost(serviceName: string, tailnetHost: string): string | null {
+  if (/^[\d.:]+$/.test(tailnetHost)) {
+    return null;
+  }
   const bareServiceName = serviceName.replace(/^svc:/, "");
   const tailnetSuffix = tailnetHost.split(".").slice(1).join(".");
-  return tailnetSuffix ? `${bareServiceName}.${tailnetSuffix}` : bareServiceName;
+  return tailnetSuffix ? `${bareServiceName}.${tailnetSuffix}` : null;
 }
 
 export async function startGatewayTailscaleExposure(params: {
@@ -26,7 +29,8 @@ export async function startGatewayTailscaleExposure(params: {
   if (params.tailscaleMode === "off") {
     return null;
   }
-  const serviceName = params.serviceName?.trim() || undefined;
+  const serviceName =
+    params.tailscaleMode === "serve" ? params.serviceName?.trim() || undefined : undefined;
 
   try {
     if (params.tailscaleMode === "serve") {
@@ -56,11 +60,15 @@ export async function startGatewayTailscaleExposure(params: {
     const host = await getTailnetHostname().catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
-      const serviceLabel = serviceName ? ` for ${serviceName}` : "";
       const publicHost = serviceName ? serviceHostnameFromTailnetHost(serviceName, host) : host;
-      params.logTailscale.info(
-        `${params.tailscaleMode} enabled${serviceLabel}: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
-      );
+      if (publicHost) {
+        const serviceLabel = serviceName ? ` for ${serviceName}` : "";
+        params.logTailscale.info(
+          `${params.tailscaleMode} enabled${serviceLabel}: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
+        );
+      } else {
+        params.logTailscale.info(`${params.tailscaleMode} enabled`);
+      }
     } else {
       params.logTailscale.info(`${params.tailscaleMode} enabled`);
     }
