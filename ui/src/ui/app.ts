@@ -137,6 +137,9 @@ import type {
   SkillStatusReport,
   StatusSummary,
   NostrProfile,
+  ProjectContextPreview,
+  ProjectsGetResult,
+  ProjectsListResult,
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "./types.ts";
@@ -433,6 +436,22 @@ export class OpenClawApp extends LitElement {
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
   @state() agentsSelectedId: string | null = null;
+  @state() projectsLoading = false;
+  @state() projectsSaving = false;
+  @state() projectsError: string | null = null;
+  @state() projectsList: ProjectsListResult | null = null;
+  @state() projectsSelectedId: string | null = null;
+  @state() projectsDetail: ProjectsGetResult | null = null;
+  @state() projectsContextPreview: ProjectContextPreview | null = null;
+  @state() projectsSessions: import("./types.js").SessionsListResult | null = null;
+  @state() projectCreateName = "";
+  @state() projectCreateDescription = "";
+  @state() projectCreateInstructions = "";
+  @state() projectResourcePath = "";
+  @state() projectResourceName = "";
+  @state() projectResourceNote = "";
+  @state() projectSearchQuery = "";
+  @state() projectInstructionsDraft = "";
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogError: string | null = null;
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;

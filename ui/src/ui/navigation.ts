@@ -6,7 +6,17 @@ export const TAB_GROUPS = [
   { label: "chat", tabs: ["chat"] },
   {
     label: "control",
-    tabs: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
+    tabs: [
+      "overview",
+      "activity",
+      "workboard",
+      "projects",
+      "snesStudio",
+      "instances",
+      "sessions",
+      "usage",
+      "cron",
+    ],
   },
   { label: "agent", tabs: ["agents", "skills", "nodes", "dreams"] },
   {
@@ -20,6 +30,8 @@ export type Tab =
   | "activity"
   | "overview"
   | "workboard"
+  | "projects"
+  | "snesStudio"
   | "channels"
   | "instances"
   | "sessions"
@@ -55,6 +67,8 @@ const TAB_PATHS: Record<Tab, string> = {
   activity: "/activity",
   overview: "/overview",
   workboard: "/workboard",
+  projects: "/projects",
+  snesStudio: "/snes-studio",
   channels: "/channels",
   instances: "/instances",
   sessions: "/sessions",
@@ -185,6 +199,10 @@ export function iconForTab(tab: Tab): IconName {
       return "activity";
     case "workboard":
       return "folder";
+    case "projects":
+      return "folder";
+    case "snesStudio":
+      return "gamepad";
     case "channels":
       return "link";
     case "instances":

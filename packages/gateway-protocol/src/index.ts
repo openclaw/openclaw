@@ -207,6 +207,36 @@ import {
   PluginsSessionActionResultSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
+  type ProjectsContextPreviewParams,
+  ProjectsContextPreviewParamsSchema,
+  type ProjectsCreateParams,
+  ProjectsCreateParamsSchema,
+  type ProjectsDeleteParams,
+  ProjectsDeleteParamsSchema,
+  type ProjectsGetParams,
+  ProjectsGetParamsSchema,
+  type ProjectsListParams,
+  ProjectsListParamsSchema,
+  type ProjectsResourcesAddParams,
+  ProjectsResourcesAddParamsSchema,
+  type ProjectsResourcesListParams,
+  ProjectsResourcesListParamsSchema,
+  type ProjectsResourcesReindexParams,
+  ProjectsResourcesReindexParamsSchema,
+  type ProjectsResourcesRemoveParams,
+  ProjectsResourcesRemoveParamsSchema,
+  type ProjectsResourcesUploadParams,
+  ProjectsResourcesUploadParamsSchema,
+  type ProjectsRestoreParams,
+  ProjectsRestoreParamsSchema,
+  type ProjectsSessionsAttachParams,
+  ProjectsSessionsAttachParamsSchema,
+  type ProjectsSessionsDetachParams,
+  ProjectsSessionsDetachParamsSchema,
+  type ProjectsSessionsListParams,
+  ProjectsSessionsListParamsSchema,
+  type ProjectsUpdateParams,
+  ProjectsUpdateParamsSchema,
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
@@ -838,6 +868,47 @@ export const validatePluginsSessionActionParams = lazyCompile<PluginsSessionActi
 export const validatePluginsSessionActionResult = lazyCompile<PluginsSessionActionResult>(
   PluginsSessionActionResultSchema,
 );
+export const validateProjectsListParams = lazyCompile<ProjectsListParams>(ProjectsListParamsSchema);
+export const validateProjectsGetParams = lazyCompile<ProjectsGetParams>(ProjectsGetParamsSchema);
+export const validateProjectsCreateParams = lazyCompile<ProjectsCreateParams>(
+  ProjectsCreateParamsSchema,
+);
+export const validateProjectsUpdateParams = lazyCompile<ProjectsUpdateParams>(
+  ProjectsUpdateParamsSchema,
+);
+export const validateProjectsDeleteParams = lazyCompile<ProjectsDeleteParams>(
+  ProjectsDeleteParamsSchema,
+);
+export const validateProjectsRestoreParams = lazyCompile<ProjectsRestoreParams>(
+  ProjectsRestoreParamsSchema,
+);
+export const validateProjectsResourcesListParams = lazyCompile<ProjectsResourcesListParams>(
+  ProjectsResourcesListParamsSchema,
+);
+export const validateProjectsResourcesAddParams = lazyCompile<ProjectsResourcesAddParams>(
+  ProjectsResourcesAddParamsSchema,
+);
+export const validateProjectsResourcesUploadParams = lazyCompile<ProjectsResourcesUploadParams>(
+  ProjectsResourcesUploadParamsSchema,
+);
+export const validateProjectsResourcesRemoveParams = lazyCompile<ProjectsResourcesRemoveParams>(
+  ProjectsResourcesRemoveParamsSchema,
+);
+export const validateProjectsResourcesReindexParams = lazyCompile<ProjectsResourcesReindexParams>(
+  ProjectsResourcesReindexParamsSchema,
+);
+export const validateProjectsSessionsListParams = lazyCompile<ProjectsSessionsListParams>(
+  ProjectsSessionsListParamsSchema,
+);
+export const validateProjectsSessionsAttachParams = lazyCompile<ProjectsSessionsAttachParams>(
+  ProjectsSessionsAttachParamsSchema,
+);
+export const validateProjectsSessionsDetachParams = lazyCompile<ProjectsSessionsDetachParams>(
+  ProjectsSessionsDetachParamsSchema,
+);
+export const validateProjectsContextPreviewParams = lazyCompile<ProjectsContextPreviewParams>(
+  ProjectsContextPreviewParamsSchema,
+);
 export const validateExecApprovalsNodeGetParams = lazyCompile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -1070,6 +1141,21 @@ export {
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
   PluginsUiDescriptorsParamsSchema,
+  ProjectsListParamsSchema,
+  ProjectsGetParamsSchema,
+  ProjectsCreateParamsSchema,
+  ProjectsUpdateParamsSchema,
+  ProjectsDeleteParamsSchema,
+  ProjectsRestoreParamsSchema,
+  ProjectsResourcesListParamsSchema,
+  ProjectsResourcesAddParamsSchema,
+  ProjectsResourcesUploadParamsSchema,
+  ProjectsResourcesRemoveParamsSchema,
+  ProjectsResourcesReindexParamsSchema,
+  ProjectsSessionsListParamsSchema,
+  ProjectsSessionsAttachParamsSchema,
+  ProjectsSessionsDetachParamsSchema,
+  ProjectsContextPreviewParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -1228,6 +1314,21 @@ export type {
   CommandEntry,
   PluginsSessionActionParams,
   PluginsSessionActionResult,
+  ProjectsListParams,
+  ProjectsGetParams,
+  ProjectsCreateParams,
+  ProjectsUpdateParams,
+  ProjectsDeleteParams,
+  ProjectsRestoreParams,
+  ProjectsResourcesListParams,
+  ProjectsResourcesAddParams,
+  ProjectsResourcesUploadParams,
+  ProjectsResourcesRemoveParams,
+  ProjectsResourcesReindexParams,
+  ProjectsSessionsListParams,
+  ProjectsSessionsAttachParams,
+  ProjectsSessionsDetachParams,
+  ProjectsContextPreviewParams,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,

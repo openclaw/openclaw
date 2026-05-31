@@ -427,6 +427,14 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
 const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyViewChanged);
 const lazyActivity = createLazyView(() => import("./views/activity.ts"), notifyLazyViewChanged);
 const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
+const lazyProjects = createLazyView(
+  () => import("./app-render-projects-tab.ts"),
+  notifyLazyViewChanged,
+);
+const lazySnesStudio = createLazyView(
+  () => import("./views/snes-studio.ts"),
+  notifyLazyViewChanged,
+);
 const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
 const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
 const lazyInstances = createLazyView(() => import("./views/instances.ts"), notifyLazyViewChanged);
@@ -974,7 +982,8 @@ export function renderApp(state: AppViewState) {
 
   // Gate: require successful gateway connection before showing the dashboard.
   // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
-  if (!state.connected) {
+  const allowsDisconnectedRender = state.tab === "snesStudio";
+  if (!state.connected && !allowsDisconnectedRender) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
 
@@ -2093,6 +2102,50 @@ export function renderApp(state: AppViewState) {
                   state.activityExpandedIds = next;
                 },
                 onScroll: (event) => state.handleActivityScroll(event),
+              }),
+            )
+          : nothing}
+        ${state.tab === "projects"
+          ? renderLazyView(lazyProjects, (m) => m.renderProjectsTab(state))
+          : nothing}
+        ${state.tab === "snesStudio"
+          ? renderLazyView(lazySnesStudio, (m) => m.renderSnesStudio(state))
+          : nothing}
+        ${state.tab === "channels"
+          ? renderLazyView(lazyChannels, (m) =>
+              m.renderChannels({
+                connected: state.connected,
+                loading: state.channelsLoading,
+                snapshot: state.channelsSnapshot,
+                lastError: state.channelsError,
+                lastSuccessAt: state.channelsLastSuccess,
+                whatsappMessage: state.whatsappLoginMessage,
+                whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
+                whatsappConnected: state.whatsappLoginConnected,
+                whatsappBusy: state.whatsappBusy,
+                configSchema: state.configSchema,
+                configSchemaLoading: state.configSchemaLoading,
+                configForm: state.configForm,
+                configUiHints: state.configUiHints,
+                configSaving: state.configSaving,
+                configFormDirty: state.configFormDirty,
+                nostrProfileFormState: state.nostrProfileFormState,
+                nostrProfileAccountId: state.nostrProfileAccountId,
+                onRefresh: (probe) => loadChannels(state, probe),
+                onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
+                onWhatsAppWait: () => state.handleWhatsAppWait(),
+                onWhatsAppLogout: () => state.handleWhatsAppLogout(),
+                onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
+                onConfigSave: () => state.handleChannelConfigSave(),
+                onConfigReload: () => state.handleChannelConfigReload(),
+                onNostrProfileEdit: (accountId, profile) =>
+                  state.handleNostrProfileEdit(accountId, profile),
+                onNostrProfileCancel: () => state.handleNostrProfileCancel(),
+                onNostrProfileFieldChange: (field, value) =>
+                  state.handleNostrProfileFieldChange(field, value),
+                onNostrProfileSave: () => state.handleNostrProfileSave(),
+                onNostrProfileImport: () => state.handleNostrProfileImport(),
+                onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
               }),
             )
           : nothing}

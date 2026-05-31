@@ -2097,6 +2097,7 @@ export function buildGatewaySessionRow(params: {
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
+    projectId: entry?.projectId,
     responseUsage: entry?.responseUsage,
     modelProvider: rowModelProvider,
     model: rowModel,
@@ -2332,6 +2333,7 @@ function filterSessionEntries(params: {
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
+  const projectId = normalizeOptionalString(opts.projectId) ?? "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
@@ -2398,6 +2400,12 @@ function filterSessionEntries(params: {
         return true;
       }
       return entry?.label === label;
+    })
+    .filter(([, entry]) => {
+      if (!projectId) {
+        return true;
+      }
+      return normalizeOptionalString(entry?.projectId) === projectId;
     });
 
   if (search) {

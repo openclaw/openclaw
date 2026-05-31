@@ -385,6 +385,7 @@ function emitSessionsChanged(
             contextTokens: sessionRow.contextTokens,
             estimatedCostUsd: sessionRow.estimatedCostUsd,
             responseUsage: sessionRow.responseUsage,
+            projectId: sessionRow.projectId,
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
             status: sessionRow.status,
@@ -1676,6 +1677,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         patch: {
           key: target.canonicalKey,
           label: normalizeOptionalString(p.label),
+          projectId: normalizeOptionalString(p.projectId),
           model: normalizeOptionalString(p.model),
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,

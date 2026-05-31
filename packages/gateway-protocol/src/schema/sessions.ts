@@ -79,6 +79,7 @@ export const SessionsListParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
+    projectId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -134,6 +135,7 @@ export const SessionsCreateParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
+    projectId: Type.Optional(NonEmptyString),
     emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
@@ -208,6 +210,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    projectId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
     subagentRole: Type.Optional(
       Type.Union([Type.Literal("orchestrator"), Type.Literal("leaf"), Type.Null()]),

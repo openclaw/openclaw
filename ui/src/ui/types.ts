@@ -1,6 +1,11 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type {
+  ProjectContextPreview,
+  ProjectRecord,
+  ProjectResourceRecord,
+} from "../../../src/projects/store.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
   GatewayAgentRuntime,
@@ -10,6 +15,7 @@ import type {
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
+export type { ProjectContextPreview, ProjectRecord, ProjectResourceRecord };
 
 export type ChannelsStatusSnapshot = {
   ts: number;
@@ -427,6 +433,8 @@ export type GatewaySessionRow = {
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
   surface?: string;
   subject?: string;
   room?: string;
@@ -455,6 +463,7 @@ export type GatewaySessionRow = {
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
+  projectId?: string;
   childSessions?: string[];
   model?: string;
   modelProvider?: string;
@@ -835,4 +844,18 @@ export type AttentionItem = {
   description: string;
   href?: string;
   external?: boolean;
+};
+
+export type ProjectsListResult = {
+  ok: true;
+  ts: number;
+  count: number;
+  projects: ProjectRecord[];
+};
+
+export type ProjectsGetResult = {
+  ok: true;
+  project: ProjectRecord;
+  sessions?: SessionsListResult;
+  contextPreview?: ProjectContextPreview;
 };

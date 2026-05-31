@@ -47,6 +47,9 @@ import type {
   SessionCompactionCheckpoint,
   SkillStatusReport,
   StatusSummary,
+  ProjectContextPreview,
+  ProjectsGetResult,
+  ProjectsListResult,
   ToolsCatalogResult,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
@@ -271,6 +274,22 @@ export type AppViewState = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   agentsSelectedId: string | null;
+  projectsLoading: boolean;
+  projectsSaving: boolean;
+  projectsError: string | null;
+  projectsList: ProjectsListResult | null;
+  projectsSelectedId: string | null;
+  projectsDetail: ProjectsGetResult | null;
+  projectsContextPreview: ProjectContextPreview | null;
+  projectsSessions: SessionsListResult | null;
+  projectCreateName: string;
+  projectCreateDescription: string;
+  projectCreateInstructions: string;
+  projectResourcePath: string;
+  projectResourceName: string;
+  projectResourceNote: string;
+  projectSearchQuery: string;
+  projectInstructionsDraft: string;
   toolsCatalogLoading: boolean;
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;

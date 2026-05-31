@@ -10,6 +10,8 @@
 @import "./styles/usage.css";
 @import "./styles/dreams.css";
 @import "./styles/workboard.css";
+@import "./styles/projects.css";
+@import "./styles/snes-studio.css";
 @import "@create-markdown/preview/themes/system.css";
 
 .cm-preview {

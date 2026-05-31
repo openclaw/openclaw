@@ -139,6 +139,10 @@ const loadPluginHostHookHandlers = lazyHandlerModule(
   () => import("./server-methods/plugin-host-hooks.js"),
   (module) => module.pluginHostHookHandlers,
 );
+const loadProjectsHandlers = lazyHandlerModule(
+  () => import("./server-methods/projects.js"),
+  (module) => module.projectsHandlers,
+);
 const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
   (module) => module.pushHandlers,
@@ -553,6 +557,26 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "agents.files.set",
     ],
     loadHandlers: loadAgentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "projects.list",
+      "projects.get",
+      "projects.create",
+      "projects.update",
+      "projects.delete",
+      "projects.restore",
+      "projects.resources.list",
+      "projects.resources.add",
+      "projects.resources.upload",
+      "projects.resources.remove",
+      "projects.resources.reindex",
+      "projects.sessions.list",
+      "projects.sessions.attach",
+      "projects.sessions.detach",
+      "projects.context.preview",
+    ],
+    loadHandlers: loadProjectsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],

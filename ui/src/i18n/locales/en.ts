@@ -253,6 +253,8 @@ export const en: TranslationMap = {
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
       overview: "Overview",
+      projects: "Projects",
+      snesStudio: "SNES Studio",
       files: "Files",
       tools: "Tools",
       skills: "Skills",
@@ -424,6 +426,8 @@ export const en: TranslationMap = {
     activity: "Browser-local tool activity summaries.",
     overview: "Status, entry points, health.",
     workboard: "Agent work queue and session handoff.",
+    projects: "Persistent project workspaces, resources, and chats.",
+    snesStudio: "SNES build workspace and hardware proof.",
     channels: "Channels and settings.",
     instances: "Connected clients and nodes.",
     sessions: "Active sessions and defaults.",
