@@ -107,7 +107,9 @@ export class DiscordEntityCache {
     if (ttl > 0) {
       const expiresAt = resolveExpiresAtMsFromDurationMs(ttl, { nowMs: rawNow });
       if (expiresAt !== undefined) {
-        this.maybeSweepExpired(now);
+        if (now !== undefined) {
+          this.maybeSweepExpired(now);
+        }
         this.entries.set(key, { expiresAt, value });
         this.enforceMaxEntries();
       }
