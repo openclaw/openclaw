@@ -7308,6 +7308,46 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("treats omitted session maintenance mode as warn for retention conformance", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: {},
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        dataHandling: {
+          retention: { requireSessionMaintenance: true },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.dataHandling).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "sessionRetentionMode",
+          source: "oc://openclaw.config/session/maintenance/mode",
+          value: "warn",
+          explicit: false,
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/data-handling-session-retention-not-enforced",
+        ocPath: "oc://openclaw.config/session/maintenance/mode",
+        requirement: "oc://policy.jsonc/dataHandling/retention/requireSessionMaintenance",
+      }),
+    ]);
+  });
+
   it("does not treat disabled telemetry capture subkeys as content capture", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
