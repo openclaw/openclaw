@@ -125,7 +125,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
       "dashboard:child": sessionStoreEntry("sess-child", {
         updatedAt: Date.now() - 1_000,
         modelProvider: "anthropic",
-        model: "claude-sonnet-4-6",
+        model: "test-model-without-catalog-context",
         parentSessionKey: "agent:main:main",
         totalTokens: 0,
         totalTokensFresh: false,
@@ -164,7 +164,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   expect(child?.contextTokens).toBe(1_048_576);
   expect(child?.estimatedCostUsd).toBeUndefined();
   expect(child?.modelProvider).toBe("anthropic");
-  expect(child?.model).toBe("claude-sonnet-4-6");
+  expect(child?.model).toBe("test-model-without-catalog-context");
 
   ws.close();
 });

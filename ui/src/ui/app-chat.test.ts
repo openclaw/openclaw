@@ -209,8 +209,10 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+const neverSettlesPromise: Promise<never> = Promise.race([]);
+
 function pendingPromise<T = unknown>(): Promise<T> {
-  return new Promise(() => {});
+  return neverSettlesPromise as Promise<T>;
 }
 
 async function raceWithMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
