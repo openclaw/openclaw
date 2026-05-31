@@ -92,6 +92,31 @@ describe("model auth markers", () => {
     expect(markers.has("ollama-local")).toBe(true);
   });
 
+  it("reads installed plugin-owned non-secret markers from manifests", async () => {
+    vi.doMock("../plugins/manifest-metadata-scan.js", () => ({
+      listOpenClawPluginManifestMetadata: () => [
+        {
+          pluginDir: "/tmp/installed-plugin",
+          origin: "npm",
+          manifest: { nonSecretAuthMarkers: ["installed-plugin-marker"] },
+        },
+      ],
+    }));
+    vi.resetModules();
+
+    try {
+      const markersModule = await import("./model-auth-markers.js");
+      expect(markersModule.isNonSecretApiKeyMarker("installed-plugin-marker")).toBe(true);
+      expect(
+        new Set(markersModule.listKnownNonSecretApiKeyMarkers()).has("installed-plugin-marker"),
+      ).toBe(true);
+    } finally {
+      vi.doUnmock("../plugins/manifest-metadata-scan.js");
+      vi.resetModules();
+      await loadMarkerModules();
+    }
+  });
+
   it("does not treat removed provider markers as active auth markers", () => {
     expect(isNonSecretApiKeyMarker("qwen-oauth")).toBe(false);
   });

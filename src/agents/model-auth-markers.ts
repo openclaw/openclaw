@@ -57,9 +57,7 @@ export function listKnownNonSecretApiKeyMarkers(): string[] {
   knownNonSecretApiKeyMarkersCache ??= uniqueStrings([
     ...CORE_NON_SECRET_API_KEY_MARKERS,
     ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
-      plugin.origin === "bundled"
-        ? normalizeTrimmedStringList(plugin.manifest.nonSecretAuthMarkers)
-        : [],
+      normalizeTrimmedStringList(plugin.manifest.nonSecretAuthMarkers),
     ),
   ]);
   return [...knownNonSecretApiKeyMarkersCache];
