@@ -340,11 +340,19 @@ OpenClaw also enforces a safety floor for embedded runs:
 - If `compaction.reserveTokens < reserveTokensFloor`, OpenClaw bumps it.
 - Default floor is `20000` tokens.
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
-- If it's already higher, OpenClaw leaves it alone.
+- When the active model context window is known, OpenClaw first caps that floor
+  so `reserveTokens` cannot consume the whole context window. This keeps
+  smaller local models with 16K-32K windows from entering an immediate
+  compaction loop.
+- Explicit or existing `reserveTokens` values can also be capped to the same
+  context-aware maximum. Without a known context window, OpenClaw keeps the old
+  uncapped floor behavior.
 - Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
   and keeps OpenClaw runtime's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- When the active model context window is known, OpenClaw caps `keepRecentTokens`
+  to the prompt budget left after `reserveTokens` and summary overhead.
 - Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
   optional tool-loop precheck after new tool results and before the next model
   call. This is a trigger only; summary generation still uses the configured
@@ -362,8 +370,12 @@ OpenClaw also enforces a safety floor for embedded runs:
 
 Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
 
-Implementation: `ensureAgentCompactionReserveTokens()` in `src/agents/agent-settings.ts`
-(called from `src/agents/embedded-agent-runner.ts`).
+Implementation: `applyAgentCompactionSettingsFromConfig()` in
+`src/agents/agent-settings.ts` applies config, reserve floors, context-window
+caps, and keep-recent caps for embedded runs. The older
+`ensureAgentCompactionReserveTokens()` helper is not context-aware and should
+not be used for small-context model setup unless the caller has already chosen
+a safe floor.
 
 ---
 

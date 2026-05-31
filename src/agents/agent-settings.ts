@@ -2,7 +2,11 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
-import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
+import {
+  COMPACTION_SUMMARY_OVERHEAD_TOKENS,
+  MIN_PROMPT_BUDGET_RATIO,
+  MIN_PROMPT_BUDGET_TOKENS,
+} from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
@@ -65,6 +69,13 @@ function toPositiveInt(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
+function resolveKeepRecentOverheadTokens(promptBudgetAfterReserve: number): number {
+  return Math.min(
+    COMPACTION_SUMMARY_OVERHEAD_TOKENS,
+    Math.max(1, Math.floor(promptBudgetAfterReserve / 2)),
+  );
+}
+
 export function applyAgentCompactionSettingsFromConfig(params: {
   settingsManager: AgentSettingsManagerLike;
   cfg?: OpenClawConfig;
@@ -81,6 +92,7 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
   let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  let maxReserveTokens: number | undefined;
 
   // Cap the floor to a safe fraction of the context window so that
   // small-context models (e.g. Ollama with 16 K tokens) are not starved of
@@ -93,15 +105,31 @@ export function applyAgentCompactionSettingsFromConfig(params: {
       MIN_PROMPT_BUDGET_TOKENS,
       Math.max(1, Math.floor(ctxBudget * MIN_PROMPT_BUDGET_RATIO)),
     );
-    const maxReserve = Math.max(0, ctxBudget - minPromptBudget);
-    reserveTokensFloor = Math.min(reserveTokensFloor, maxReserve);
+    maxReserveTokens = Math.max(0, ctxBudget - minPromptBudget);
+    reserveTokensFloor = Math.min(reserveTokensFloor, maxReserveTokens);
   }
 
-  const targetReserveTokens = Math.max(
+  let targetReserveTokens = Math.max(
     configuredReserveTokens ?? currentReserveTokens,
     reserveTokensFloor,
   );
-  const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
+  if (maxReserveTokens !== undefined) {
+    targetReserveTokens = Math.min(targetReserveTokens, maxReserveTokens);
+  }
+  let targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
+  if (
+    typeof ctxBudget === "number" &&
+    Number.isFinite(ctxBudget) &&
+    ctxBudget > 0 &&
+    targetKeepRecentTokens > 0
+  ) {
+    const promptBudgetAfterReserve = Math.max(1, Math.floor(ctxBudget) - targetReserveTokens);
+    const keepRecentOverheadTokens = resolveKeepRecentOverheadTokens(promptBudgetAfterReserve);
+    targetKeepRecentTokens = Math.min(
+      targetKeepRecentTokens,
+      Math.max(1, promptBudgetAfterReserve - keepRecentOverheadTokens),
+    );
+  }
 
   const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
   if (targetReserveTokens !== currentReserveTokens) {

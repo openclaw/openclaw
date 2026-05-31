@@ -1,3 +1,4 @@
+import { COMPACTION_SUMMARY_OVERHEAD_TOKENS } from "./agent-compaction-constants.js";
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -9,10 +10,8 @@ export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
 const DEFAULT_PARTS = 2;
 
-// Overhead reserved for summarization prompt, system prompt, previous summary,
-// and serialization wrappers (<conversation> tags, instructions, etc.).
 // generateSummary uses reasoning: "high" which also consumes context budget.
-export const SUMMARIZATION_OVERHEAD_TOKENS = 4096;
+export const SUMMARIZATION_OVERHEAD_TOKENS = COMPACTION_SUMMARY_OVERHEAD_TOKENS;
 
 export type StageSplitPlan =
   | {

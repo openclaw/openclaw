@@ -10,3 +10,9 @@ export const MIN_PROMPT_BUDGET_TOKENS = 8_000;
  * content after reserve tokens are subtracted.
  */
 export const MIN_PROMPT_BUDGET_RATIO = 0.5;
+
+/**
+ * Overhead reserved for summarization prompt, system prompt, previous summary,
+ * and serialization wrappers (<conversation> tags, instructions, etc.).
+ */
+export const COMPACTION_SUMMARY_OVERHEAD_TOKENS = 4_096;
