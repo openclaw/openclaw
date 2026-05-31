@@ -29,6 +29,17 @@ function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSms
   };
 }
 
+function twilioRequestBody(init: RequestInit | undefined): URLSearchParams {
+  const body = init?.body;
+  if (body instanceof URLSearchParams) {
+    return body;
+  }
+  if (typeof body !== "string") {
+    throw new Error("Expected Twilio request body to be URL-encoded.");
+  }
+  return new URLSearchParams(body);
+}
+
 describe("Twilio SMS helpers", () => {
   it("parses Twilio form bodies and inbound messages", () => {
     const form = parseTwilioFormBody(
@@ -105,7 +116,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("sends SMS through Twilio's Messages API", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(
           JSON.stringify({
@@ -156,14 +167,14 @@ describe("Twilio SMS helpers", () => {
       authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
       "content-type": "application/x-www-form-urlencoded",
     });
-    const body = new URLSearchParams(String(init?.body));
+    const body = twilioRequestBody(init);
     expect(body.get("From")).toBe("+15557654321");
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
   });
 
   it("can send through a Twilio Messaging Service SID", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ sid: "SM789" }), {
           status: 201,
@@ -193,14 +204,14 @@ describe("Twilio SMS helpers", () => {
     });
 
     const [, init] = fetchImpl.mock.calls[0] ?? [];
-    const body = new URLSearchParams(String(init?.body));
+    const body = twilioRequestBody(init);
     expect(body.get("MessagingServiceSid")).toBe("MG123");
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
   });
 
   it("prefers an explicit from number when both sender options are resolved", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ sid: "SM999" }), {
           status: 201,
@@ -230,13 +241,13 @@ describe("Twilio SMS helpers", () => {
     });
 
     const [, init] = fetchImpl.mock.calls[0] ?? [];
-    const body = new URLSearchParams(String(init?.body));
+    const body = twilioRequestBody(init);
     expect(body.get("From")).toBe("+15557654321");
     expect(body.get("MessagingServiceSid")).toBeNull();
   });
 
   it("throws structured Twilio errors from JSON error bodies", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(
           JSON.stringify({
@@ -266,7 +277,9 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("includes non-JSON Twilio error text in send failures", async () => {
-    const fetchImpl = vi.fn(async () => new Response("upstream unavailable", { status: 503 }));
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new Response("upstream unavailable", { status: 503 }),
+    );
 
     await expect(
       sendSmsViaTwilio({
@@ -279,7 +292,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("rejects malformed JSON from successful Twilio sends", async () => {
-    const fetchImpl = vi.fn(async () => new Response("not json", { status: 201 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("not json", { status: 201 }));
 
     await expect(
       sendSmsViaTwilio({
@@ -304,7 +317,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("requires successful Twilio sends to include a Message SID", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify({ status: "queued" }), { status: 201 }),
     );
 

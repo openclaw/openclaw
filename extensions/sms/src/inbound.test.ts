@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
+import type { sendSmsViaTwilio as sendSmsViaTwilioFn } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
 const sendSmsViaTwilio = vi.hoisted(() =>
-  vi.fn(async () => ({ sid: "SM-pair", to: "+15551234567" })),
+  vi.fn<typeof sendSmsViaTwilioFn>(async () => ({ sid: "SM-pair", to: "+15551234567" })),
 );
 
 vi.mock("./twilio.js", () => ({
