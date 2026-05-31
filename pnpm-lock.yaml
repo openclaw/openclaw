@@ -1455,6 +1455,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/sms:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/stepfun:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1853,9 +1863,9 @@ importers:
         specifier: 5.6.2
         version: 5.6.2
 
-  packages/web-content-core: {}
-
   packages/tool-call-repair: {}
+
+  packages/web-content-core: {}
 
   ui:
     dependencies:
