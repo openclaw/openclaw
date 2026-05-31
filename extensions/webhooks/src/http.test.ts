@@ -59,7 +59,9 @@ function createJsonRequest(params: {
   return req;
 }
 
-function createHandler(): {
+function createHandler(params?: {
+  canUseChildSessionKey?: TaskFlowWebhookTarget["canUseChildSessionKey"];
+}): {
   handler: ReturnType<typeof createTaskFlowWebhookRequestHandler>;
   target: TaskFlowWebhookTarget;
   secret: string;
@@ -76,6 +78,9 @@ function createHandler(): {
     taskFlow: runtime.bindSession({
       sessionKey: `agent:main:webhook-test-${String(nextSessionId)}`,
     }),
+    ...(params?.canUseChildSessionKey
+      ? { canUseChildSessionKey: params.canUseChildSessionKey }
+      : {}),
   };
   const targetsByPath = new Map<string, TaskFlowWebhookTarget[]>([[target.path, [target]]]);
   return {
@@ -219,7 +224,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("runs child tasks and scrubs task ownership fields from responses", async () => {
-    const { handler, target, secret } = createHandler();
+    const { handler, target, secret } = createHandler({
+      canUseChildSessionKey: (childSessionKey) => childSessionKey === "agent:main:subagent:child",
+    });
     const flow = target.taskFlow.createManaged({
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",
@@ -249,6 +256,36 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(parsed.result.task.runtime).toBe("acp");
     expect(parsed.result.task.ownerKey).toBeUndefined();
     expect(parsed.result.task.requesterSessionKey).toBeUndefined();
+  });
+
+  it("rejects child task session keys outside the route session tree", async () => {
+    const { handler, target, secret } = createHandler({
+      canUseChildSessionKey: (childSessionKey) => childSessionKey === "agent:main:subagent:allowed",
+    });
+    const flow = target.taskFlow.createManaged({
+      controllerId: "webhooks/zapier",
+      goal: "Triage inbox",
+    });
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret,
+      body: {
+        action: "run_task",
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:victim:acp:child",
+        task: "Inspect the next message batch",
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(parseJsonBody(res)).toMatchObject({
+      ok: false,
+      code: "child_session_forbidden",
+      error: "Child session key is outside this webhook route session tree.",
+    });
+    expect(target.taskFlow.getTaskSummary(flow.flowId)?.total ?? 0).toBe(0);
   });
 
   it("returns 404 for missing flow mutations", async () => {
@@ -345,7 +382,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
   });
 
   it("reuses the same task record when retried with the same runId", async () => {
-    const { handler, target, secret } = createHandler();
+    const { handler, target, secret } = createHandler({
+      canUseChildSessionKey: (childSessionKey) => childSessionKey === "agent:main:subagent:child",
+    });
     const flow = target.taskFlow.createManaged({
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",

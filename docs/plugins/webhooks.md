@@ -88,6 +88,9 @@ The plugin applies:
 - Fixed-window rate limiting
 - In-flight request limiting
 - Owner-bound TaskFlow access through `api.runtime.tasks.managedFlows.bindSession(...)`
+- Session-tree checks for `run_task.childSessionKey`, so a route can only attach
+  the bound session itself or child sessions already recorded as spawned or
+  parented by that bound session
 
 ## Request format
 
@@ -146,6 +149,11 @@ Allowed runtimes are:
 
 - `subagent`
 - `acp`
+
+`childSessionKey` is optional. When present, it must identify the route's bound
+session or an OpenClaw session already recorded as spawned or parented by that
+bound session. Use `runId` or `sourceId` for external system identifiers that
+are not OpenClaw session keys.
 
 Example:
 

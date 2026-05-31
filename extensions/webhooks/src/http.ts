@@ -22,6 +22,9 @@ type BoundTaskFlowRuntime = ReturnType<PluginRuntime["tasks"]["managedFlows"]["b
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+const CHILD_SESSION_FORBIDDEN_REASON =
+  "Child session key is outside this webhook route session tree.";
+
 const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.null(),
@@ -180,6 +183,7 @@ export type TaskFlowWebhookTarget = {
   secretConfigPath: string;
   defaultControllerId: string;
   taskFlow: BoundTaskFlowRuntime;
+  canUseChildSessionKey?: (childSessionKey: string) => boolean;
 };
 
 type FlowView = {
@@ -415,6 +419,13 @@ function mapRunTaskStatus(result: { created: boolean; found: boolean; reason?: s
   if (result.created) {
     return { statusCode: 200 };
   }
+  if (result.reason === CHILD_SESSION_FORBIDDEN_REASON) {
+    return {
+      statusCode: 403,
+      code: "child_session_forbidden",
+      error: result.reason,
+    };
+  }
   if (!result.found) {
     return {
       statusCode: 404,
@@ -531,6 +542,20 @@ function describeWebhookOutcome(params: { action: WebhookAction; result: unknown
   }
 }
 
+function canUseRunTaskChildSessionKey(params: {
+  action: Extract<WebhookAction, { action: "run_task" }>;
+  target: TaskFlowWebhookTarget;
+}): boolean {
+  const childSessionKey = params.action.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return true;
+  }
+  if (childSessionKey === params.target.taskFlow.sessionKey) {
+    return true;
+  }
+  return params.target.canUseChildSessionKey?.(childSessionKey) === true;
+}
+
 async function executeWebhookAction(params: {
   action: WebhookAction;
   target: TaskFlowWebhookTarget;
@@ -627,6 +652,18 @@ async function executeWebhookAction(params: {
       };
     }
     case "run_task": {
+      if (
+        !canUseRunTaskChildSessionKey({
+          action,
+          target,
+        })
+      ) {
+        return {
+          found: true,
+          created: false,
+          reason: CHILD_SESSION_FORBIDDEN_REASON,
+        };
+      }
       const result = target.taskFlow.runTask({
         flowId: action.flowId,
         runtime: action.runtime,
