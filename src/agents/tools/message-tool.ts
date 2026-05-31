@@ -301,13 +301,26 @@ function buildRoutingSchema() {
   };
 }
 
+const presentationActionSchema = Type.Union([
+  Type.Object({
+    type: Type.Literal("command"),
+    command: Type.String(),
+  }),
+  Type.Object({
+    type: Type.Literal("callback"),
+    value: Type.String(),
+  }),
+]);
+
 const presentationOptionSchema = Type.Object({
   label: Type.String(),
-  value: Type.String(),
+  action: Type.Optional(presentationActionSchema),
+  value: Type.Optional(Type.String()),
 });
 
 const presentationButtonSchema = Type.Object({
   label: Type.String(),
+  action: Type.Optional(presentationActionSchema),
   value: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   webApp: Type.Optional(Type.Object({ url: Type.String() })),

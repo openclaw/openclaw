@@ -142,6 +142,7 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -2051,8 +2052,12 @@ export const registerTelegramHandlers = ({
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
       const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
-      const callbackCommandText = nativeCallbackCommand ?? data;
-      const approvalCallback = parseExecApprovalCommandText(callbackCommandText);
+      const opaqueCallbackData = parseTelegramOpaqueCallbackData(data);
+      const callbackCommandText = nativeCallbackCommand ?? (opaqueCallbackData ? "" : data);
+      const pluginCallbackData = opaqueCallbackData ?? data;
+      const approvalCallback = parseExecApprovalCommandText(
+        nativeCallbackCommand ?? (opaqueCallbackData ? "" : data),
+      );
       const isApprovalCallback = approvalCallback !== null;
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
@@ -2141,7 +2146,7 @@ export const registerTelegramHandlers = ({
       }
       const runtimeCfg = telegramDeps.getRuntimeConfig();
       const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
-        data,
+        data: pluginCallbackData,
         callbackId: callback.id,
         ctx: {
           accountId,
@@ -2335,6 +2340,10 @@ export const registerTelegramHandlers = ({
           }
           logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
         }
+        return;
+      }
+
+      if (opaqueCallbackData) {
         return;
       }
 

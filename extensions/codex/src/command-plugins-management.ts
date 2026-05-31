@@ -1,6 +1,9 @@
-import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import {
+  buildCodexCommandPickerPresentation,
+  type CodexCommandPickerButton,
+} from "./command-presentation.js";
 
 /**
  * Lightweight read/write surface over the Openclaw config file. Plugged in by
@@ -33,24 +36,6 @@ export type CodexPluginsConfigBlock = {
 // /reset. A full gateway restart is NOT needed.
 const POLICY_REFRESH_HINT =
   "New Codex conversations pick this up automatically. Use /new or /reset to refresh the current one.";
-
-type CodexPickerButton = { label: string; command: string };
-
-function buildPickerPresentation(title: string, prompt: string, buttons: CodexPickerButton[]) {
-  return {
-    title,
-    blocks: [
-      { type: "text", text: prompt },
-      {
-        type: "buttons",
-        buttons: buttons.map((button) => ({
-          label: button.label,
-          value: button.command,
-        })),
-      },
-    ],
-  } satisfies MessagePresentation;
-}
 
 export async function handleCodexPluginsSubcommand(
   ctx: PluginCommandContext,
@@ -123,7 +108,7 @@ export async function handleCodexPluginsSubcommand(
 }
 
 function buildPluginsMenuReply(): PluginCommandResult {
-  const buttons: CodexPickerButton[] = [
+  const buttons: CodexCommandPickerButton[] = [
     { label: "list", command: "/codex plugins list" },
     { label: "enable", command: "/codex plugins enable" },
     { label: "disable", command: "/codex plugins disable" },
@@ -142,7 +127,7 @@ function buildPluginsMenuReply(): PluginCommandResult {
   ].join("\n");
   return {
     text,
-    presentation: buildPickerPresentation(
+    presentation: buildCodexCommandPickerPresentation(
       "Codex sub-plugins",
       "Pick a Codex sub-plugin action:",
       buttons,
@@ -172,7 +157,7 @@ function buildPluginNamePickerReply(
         "Type '/codex plugins list' to inspect configured sub-plugins.",
         "Type '/codex plugins menu' to go back to the plugins menu.",
       ].join("\n"),
-      presentation: buildPickerPresentation(
+      presentation: buildCodexCommandPickerPresentation(
         "Codex sub-plugins",
         "Pick another Codex sub-plugin action:",
         [
@@ -183,7 +168,7 @@ function buildPluginNamePickerReply(
     };
   }
 
-  const buttons: CodexPickerButton[] = [
+  const buttons: CodexCommandPickerButton[] = [
     ...eligible.map(([key]) => ({
       label: formatCodexDisplayText(key),
       command: `/codex plugins ${verb} ${key}`,
@@ -196,17 +181,14 @@ function buildPluginNamePickerReply(
     ...eligible.map(([key], index) => `  ${index + 1}. /codex plugins ${verb} ${key}`),
     "",
     ...(verb === "enable" && !globalEnabled
-      ? [
-          "Global codexPlugins.enabled is off; enabling one configured sub-plugin turns it on.",
-          "",
-        ]
+      ? ["Global codexPlugins.enabled is off; enabling one configured sub-plugin turns it on.", ""]
       : []),
     "Type '/codex plugins menu' to go back to the plugins menu.",
   ].join("\n");
 
   return {
     text,
-    presentation: buildPickerPresentation(
+    presentation: buildCodexCommandPickerPresentation(
       "Codex sub-plugins",
       `Pick a Codex sub-plugin to ${verb}:`,
       buttons,

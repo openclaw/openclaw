@@ -201,11 +201,19 @@ function registerCodexDiagnosticsCommandForTest(
             buttons: [
               {
                 label: "Send diagnostics",
+                action: {
+                  type: "command",
+                  command: "/codex diagnostics confirm abc123def456",
+                },
                 value: "/codex diagnostics confirm abc123def456",
                 style: "danger" as const,
               },
               {
                 label: "Cancel",
+                action: {
+                  type: "command",
+                  command: "/codex diagnostics cancel abc123def456",
+                },
                 value: "/codex diagnostics cancel abc123def456",
                 style: "secondary" as const,
               },

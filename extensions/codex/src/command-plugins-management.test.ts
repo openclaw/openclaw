@@ -40,12 +40,14 @@ const fakeCtx: PluginCommandContext = {
   getCurrentConversationBinding: async () => null,
 };
 
-function buttonValues(result: PluginCommandResult): string[] {
+function buttonCommands(result: PluginCommandResult): string[] {
   const block = result.presentation?.blocks.find((candidate) => candidate.type === "buttons");
   if (!block || block.type !== "buttons") {
     throw new Error("expected button presentation");
   }
-  return block.buttons.map((button) => button.value ?? "");
+  return block.buttons.map((button) =>
+    button.action?.type === "command" ? button.action.command : "",
+  );
 }
 
 describe("Codex /codex plugins subcommand", () => {
@@ -86,7 +88,7 @@ describe("Codex /codex plugins subcommand", () => {
     const result = await handleCodexPluginsSubcommand(fakeCtx, ["menu"], io);
 
     expect(result.text).toContain("/codex plugins list");
-    expect(buttonValues(result)).toEqual([
+    expect(buttonCommands(result)).toEqual([
       "/codex plugins list",
       "/codex plugins enable",
       "/codex plugins disable",
@@ -111,14 +113,14 @@ describe("Codex /codex plugins subcommand", () => {
 
     const enableResult = await handleCodexPluginsSubcommand(fakeCtx, ["enable"], io);
     expect(enableResult.text).toContain("/codex plugins enable google-calendar");
-    expect(buttonValues(enableResult)).toEqual([
+    expect(buttonCommands(enableResult)).toEqual([
       "/codex plugins enable google-calendar",
       "/codex plugins menu",
     ]);
 
     const disableResult = await handleCodexPluginsSubcommand(fakeCtx, ["disable"], io);
     expect(disableResult.text).toContain("/codex plugins disable notion");
-    expect(buttonValues(disableResult)).toEqual([
+    expect(buttonCommands(disableResult)).toEqual([
       "/codex plugins disable notion",
       "/codex plugins menu",
     ]);

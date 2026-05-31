@@ -94,6 +94,9 @@ function createButtonComponent(params: {
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
       ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+      ...(params.spec.callbackDataKind !== undefined
+        ? { callbackDataKind: params.spec.callbackDataKind }
+        : {}),
       ...(params.modalId !== undefined ? { modalId: params.modalId } : {}),
       ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
       ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
@@ -127,6 +130,9 @@ function createSelectComponent(params: {
     kind: "select",
     label,
     ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+    ...(params.spec.callbackDataKind !== undefined
+      ? { callbackDataKind: params.spec.callbackDataKind }
+      : {}),
     selectType,
     ...(options ? { options } : {}),
     ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),

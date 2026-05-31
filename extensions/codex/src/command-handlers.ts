@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
-import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -40,6 +39,10 @@ import {
   handleCodexPluginsSubcommand,
   type CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
+import {
+  buildCodexCommandPickerPresentation,
+  type CodexCommandPickerButton,
+} from "./command-presentation.js";
 import {
   codexControlRequest,
   readCodexStatusProbes,
@@ -241,30 +244,12 @@ export function resetCodexDiagnosticsFeedbackStateForTests(): void {
   pendingCodexDiagnosticsConfirmationTokensByScope.clear();
 }
 
-type CodexPickerButton = { label: string; command: string };
-
-function buildPickerPresentation(title: string, prompt: string, buttons: CodexPickerButton[]) {
-  return {
-    title,
-    blocks: [
-      { type: "text", text: prompt },
-      {
-        type: "buttons",
-        buttons: buttons.map((button) => ({
-          label: button.label,
-          value: button.command,
-        })),
-      },
-    ],
-  } satisfies MessagePresentation;
-}
-
 /**
- * No-arg `/codex` picker. Core owns the native command tree; channels render
- * the portable buttons as inline controls when their transport can.
+ * No-arg `/codex` picker. Codex owns the command tree; channels render the
+ * portable command actions as inline controls when their transport can.
  */
 function buildCodexSubcommandPickerReply(): PluginCommandResult {
-  const verbs: CodexPickerButton[] = [
+  const verbs: CodexCommandPickerButton[] = [
     { label: "plugins", command: "/codex plugins menu" },
     { label: "permissions", command: "/codex permissions menu" },
     { label: "fast", command: "/codex fast menu" },
@@ -287,14 +272,18 @@ function buildCodexSubcommandPickerReply(): PluginCommandResult {
 
   return {
     text: fallbackTextLines.join("\n"),
-    presentation: buildPickerPresentation("Codex commands", "Pick a Codex subcommand:", verbs),
+    presentation: buildCodexCommandPickerPresentation(
+      "Codex commands",
+      "Pick a Codex subcommand:",
+      verbs,
+    ),
   };
 }
 
 /** Sub-picker for `/codex fast menu` (on / off / status). */
 function buildCodexFastMenuReply(): PluginCommandResult {
   const modes = ["on", "off", "status"] as const;
-  const buttons: CodexPickerButton[] = [
+  const buttons: CodexCommandPickerButton[] = [
     ...modes.map((mode) => ({ label: mode, command: `/codex fast ${mode}` })),
     { label: "back", command: "/codex" },
   ];
@@ -307,14 +296,18 @@ function buildCodexFastMenuReply(): PluginCommandResult {
   ];
   return {
     text: fallbackTextLines.join("\n"),
-    presentation: buildPickerPresentation("Codex fast mode", "Pick a Codex fast mode:", buttons),
+    presentation: buildCodexCommandPickerPresentation(
+      "Codex fast mode",
+      "Pick a Codex fast mode:",
+      buttons,
+    ),
   };
 }
 
 /** Sub-picker for `/codex permissions menu` (default / yolo / status). */
 function buildCodexPermissionsMenuReply(): PluginCommandResult {
   const modes = ["default", "yolo", "status"] as const;
-  const buttons: CodexPickerButton[] = [
+  const buttons: CodexCommandPickerButton[] = [
     ...modes.map((mode) => ({ label: mode, command: `/codex permissions ${mode}` })),
     { label: "back", command: "/codex" },
   ];
@@ -327,7 +320,7 @@ function buildCodexPermissionsMenuReply(): PluginCommandResult {
   ];
   return {
     text: fallbackTextLines.join("\n"),
-    presentation: buildPickerPresentation(
+    presentation: buildCodexCommandPickerPresentation(
       "Codex permissions",
       "Pick a Codex permissions mode:",
       buttons,
@@ -338,7 +331,7 @@ function buildCodexPermissionsMenuReply(): PluginCommandResult {
 /** Sub-picker for `/codex computer-use menu` (status / install). */
 function buildCodexComputerUseMenuReply(): PluginCommandResult {
   const actions = ["status", "install"] as const;
-  const buttons: CodexPickerButton[] = [
+  const buttons: CodexCommandPickerButton[] = [
     ...actions.map((action) => ({
       label: action,
       command: `/codex computer-use ${action}`,
@@ -356,7 +349,7 @@ function buildCodexComputerUseMenuReply(): PluginCommandResult {
   ];
   return {
     text: fallbackTextLines.join("\n"),
-    presentation: buildPickerPresentation(
+    presentation: buildCodexCommandPickerPresentation(
       "Codex computer-use",
       "Pick a Codex computer-use action:",
       buttons,
@@ -1149,8 +1142,18 @@ async function requestCodexDiagnosticsFeedbackApproval(
         {
           type: "buttons",
           buttons: [
-            { label: "Send diagnostics", value: confirmCommand, style: "danger" },
-            { label: "Cancel", value: cancelCommand, style: "secondary" },
+            {
+              label: "Send diagnostics",
+              action: { type: "command", command: confirmCommand },
+              value: confirmCommand,
+              style: "danger",
+            },
+            {
+              label: "Cancel",
+              action: { type: "command", command: cancelCommand },
+              value: cancelCommand,
+              style: "secondary",
+            },
           ],
         },
       ],

@@ -451,6 +451,36 @@ describe("feishuPlugin actions", () => {
     ).toBe(false);
   });
 
+  it("does not render callback action buttons as Feishu quick commands", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Inspect", action: { type: "callback", value: "inspect:123" } }],
+            },
+          ],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    const elements = requireArray(requireRecord(card.body, "card body").elements, "card elements");
+    expect(elements).toEqual([{ tag: "markdown", content: "- Inspect" }]);
+  });
+
   it("renders legacy web_app presentation buttons as native Feishu link buttons", async () => {
     sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 

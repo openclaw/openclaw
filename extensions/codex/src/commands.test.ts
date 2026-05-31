@@ -151,12 +151,14 @@ function expectResultTextContains(result: PluginCommandResult, expected: string)
   expect(requireResultText(result)).toContain(expected);
 }
 
-function buttonValues(result: PluginCommandResult): string[] {
+function buttonCommands(result: PluginCommandResult): string[] {
   const block = result.presentation?.blocks.find((candidate) => candidate.type === "buttons");
   if (!block || block.type !== "buttons") {
     throw new Error("expected button presentation");
   }
-  return block.buttons.map((button) => button.value ?? "");
+  return block.buttons.map((button) =>
+    button.action?.type === "command" ? button.action.command : "",
+  );
 }
 
 function installAuthProfileStore(store: AuthProfileStore, config: PluginCommandContext["config"]) {
@@ -279,7 +281,7 @@ describe("codex command", () => {
     const result = await handleCodexCommand(createContext(""));
 
     expectResultTextContains(result, "/codex plugins menu");
-    expect(buttonValues(result)).toEqual([
+    expect(buttonCommands(result)).toEqual([
       "/codex plugins menu",
       "/codex permissions menu",
       "/codex fast menu",
@@ -297,7 +299,7 @@ describe("codex command", () => {
     });
 
     expectResultTextContains(result, "/codex plugins enable");
-    expect(buttonValues(result)).toContain("/codex plugins list");
+    expect(buttonCommands(result)).toContain("/codex plugins list");
   });
 
   it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
@@ -2182,11 +2184,13 @@ describe("codex command", () => {
           buttons: [
             {
               label: "Send diagnostics",
+              action: { type: "command", command: `/codex diagnostics confirm ${token}` },
               value: `/codex diagnostics confirm ${token}`,
               style: "danger",
             },
             {
               label: "Cancel",
+              action: { type: "command", command: `/codex diagnostics cancel ${token}` },
               value: `/codex diagnostics cancel ${token}`,
               style: "secondary",
             },

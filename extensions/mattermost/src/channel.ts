@@ -18,6 +18,7 @@ import {
   type MessagePresentation,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -65,18 +66,27 @@ function buildMattermostPresentationButtons(presentation: MessagePresentation) {
   return presentation.blocks
     .filter((block) => block.type === "buttons")
     .map((block) =>
-      block.buttons.flatMap((button) =>
-        button.value
+      block.buttons.flatMap((button) => {
+        if (button.action) {
+          return [];
+        }
+        const value = resolveMessagePresentationControlValue(button);
+        return value
           ? [
               {
+                id: value,
                 text: button.label,
-                callback_data: button.value,
+                callback_data: value,
+                context: {
+                  callback_data: value,
+                },
                 style: button.style,
               },
             ]
-          : [],
-      ),
-    );
+          : [];
+      }),
+    )
+    .filter((row) => row.length > 0);
 }
 
 const MATTERMOST_PRESENTATION_CAPABILITIES = {
@@ -274,6 +284,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
 
     const mediaUrl =
       typeof params.media === "string" ? params.media.trim() || undefined : undefined;
+    const buttons = presentation ? buildMattermostPresentationButtons(presentation) : [];
 
     const result = await (
       await loadMattermostChannelRuntime()
@@ -281,7 +292,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: resolvedAccountId,
       replyToId,
-      buttons: presentation ? buildMattermostPresentationButtons(presentation) : undefined,
+      buttons: buttons.length > 0 ? buttons : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
     });
