@@ -517,6 +517,11 @@ function isConcreteIMessageMessageId(messageId: string | undefined): boolean {
   return Boolean(trimmed && trimmed !== "unknown" && trimmed !== "ok");
 }
 
+function canSynthesizeAttachmentChatHandle(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed.includes("@") || trimmed.startsWith("+");
+}
+
 function resolveOutboundEchoScope(params: {
   accountId: string;
   target: ReturnType<typeof parseIMessageTarget>;
@@ -694,6 +699,9 @@ async function resolveAttachmentChatTarget(params: {
     return params.target.chatGuid;
   }
   if (params.target.kind === "handle") {
+    if (!canSynthesizeAttachmentChatHandle(params.target.to)) {
+      return null;
+    }
     const normalizedHandle = normalizeIMessageHandle(params.target.to);
     if (!normalizedHandle) {
       return null;

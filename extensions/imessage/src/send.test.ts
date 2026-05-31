@@ -342,6 +342,32 @@ describe("sendMessageIMessage receipts", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("keeps national-format phone media sends on the region-aware RPC path", async () => {
+    const client = createClient({ guid: "p:0/media-guid" });
+    const runCliJson = vi.fn();
+
+    const result = await sendMessageIMessage("555-000-4567", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      region: "US",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        file: "/tmp/image.png",
+        region: "US",
+        to: "555-000-4567",
+      }),
+      expect.any(Object),
+    );
+    expect(result.messageId).toBe("p:0/media-guid");
+  });
+
   it("keeps chat_identifier media sends on the rpc send path", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn();
