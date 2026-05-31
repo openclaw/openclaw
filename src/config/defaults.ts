@@ -35,7 +35,7 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet: "anthropic/claude-sonnet-4-6",
 
   // OpenAI
-  gpt: "openai/gpt-5.4",
+  gpt: "openai/gpt-5.5",
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",
 
