@@ -50,12 +50,13 @@ describe("trajectory runtime", () => {
   });
 
   it("sanitizes session ids when resolving an override directory", () => {
+    const trajectoryDir = path.resolve("/tmp/traces");
     expect(
       resolveTrajectoryFilePath({
-        env: { OPENCLAW_TRAJECTORY_DIR: "/tmp/traces" },
+        env: { OPENCLAW_TRAJECTORY_DIR: trajectoryDir },
         sessionId: "../evil/session",
       }),
-    ).toBe("/tmp/traces/___evil_session.jsonl");
+    ).toBe(path.join(trajectoryDir, "___evil_session.jsonl"));
   });
 
   it("records sanitized runtime events by default", () => {
