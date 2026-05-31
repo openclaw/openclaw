@@ -143,6 +143,7 @@ type CodeModeWorkerResult =
 
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
+let activeRunReservations = 0;
 let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
 let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
@@ -261,9 +262,22 @@ function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): numb
 
 function enforceActiveRunLimit(): void {
   removeExpiredRuns();
-  if (activeRuns.size >= MAX_ACTIVE_CODE_MODE_RUNS) {
+  if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
     throw new ToolInputError("too many suspended code mode runs.");
   }
+}
+
+function reserveActiveRunSlot(): () => void {
+  enforceActiveRunLimit();
+  activeRunReservations += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    activeRunReservations = Math.max(0, activeRunReservations - 1);
+  };
 }
 
 function toJsonSafe(value: unknown): unknown {
@@ -945,43 +959,47 @@ async function settleCodeModeResult(params: {
       config: params.config,
       output,
     });
-    const pending = createPendingBridgeStates({
-      pendingRequests: result.pendingRequests,
-      runtime: params.runtime,
-      namespaceRuntime: params.namespaceRuntime,
-      parentToolCallId: params.parentToolCallId,
-      signal: params.signal,
-      onUpdate: params.onUpdate,
-    });
-    const ready = await waitForPending(pending, remainingMs);
-    if (!ready) {
-      enforceActiveRunLimit();
-      return storeSnapshotState({
-        pending,
-        snapshotBytes: result.snapshotBytes,
-        parentToolCallId: params.parentToolCallId,
-        ctx: params.ctx,
-        config: params.config,
+    const releaseReservation = reserveActiveRunSlot();
+    try {
+      const pending = createPendingBridgeStates({
+        pendingRequests: result.pendingRequests,
         runtime: params.runtime,
         namespaceRuntime: params.namespaceRuntime,
-        output,
+        parentToolCallId: params.parentToolCallId,
+        signal: params.signal,
+        onUpdate: params.onUpdate,
       });
-    }
-    const settledRequests: SettledBridgeRequest[] = [];
-    for (const entry of pending) {
-      settledRequests.push(entry.settled ?? (await entry.promise));
-    }
-    result = normalizeCodeModeWorkerResult(
-      await runCodeModeWorker(
-        {
-          kind: "resume",
+      const ready = await waitForPending(pending, remainingMs);
+      if (!ready) {
+        return storeSnapshotState({
+          pending,
           snapshotBytes: result.snapshotBytes,
+          parentToolCallId: params.parentToolCallId,
+          ctx: params.ctx,
           config: params.config,
-          settledRequests,
-        },
-        Math.max(1, settleDeadline - Date.now()) + 1000,
-      ),
-    );
+          runtime: params.runtime,
+          namespaceRuntime: params.namespaceRuntime,
+          output,
+        });
+      }
+      const settledRequests: SettledBridgeRequest[] = [];
+      for (const entry of pending) {
+        settledRequests.push(entry.settled ?? (await entry.promise));
+      }
+      result = normalizeCodeModeWorkerResult(
+        await runCodeModeWorker(
+          {
+            kind: "resume",
+            snapshotBytes: result.snapshotBytes,
+            config: params.config,
+            settledRequests,
+          },
+          Math.max(1, settleDeadline - Date.now()) + 1000,
+        ),
+      );
+    } finally {
+      releaseReservation();
+    }
     output.push(...result.output);
     enforceOutputLimit(output, params.config);
     namespaceRounds += 1;
