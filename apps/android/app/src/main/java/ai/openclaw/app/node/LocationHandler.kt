@@ -10,6 +10,9 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
+/**
+ * Injectable location facade for command tests and Android runtime access.
+ */
 internal interface LocationDataSource {
   fun hasFinePermission(context: Context): Boolean
 
@@ -92,6 +95,7 @@ class LocationHandler private constructor(
 
   suspend fun handleLocationGet(paramsJson: String?): GatewaySession.InvokeResult {
     if (!isForeground()) {
+      // Android foreground restrictions and user expectation keep live location tied to the visible app.
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_BACKGROUND_UNAVAILABLE",
         message = "LOCATION_BACKGROUND_UNAVAILABLE: location requires OpenClaw to stay open",
@@ -107,12 +111,14 @@ class LocationHandler private constructor(
     val preciseEnabled = locationPreciseEnabled()
     val accuracy =
       when (desiredAccuracy) {
+        // User/device settings can downgrade precise requests to balanced without failing the invoke.
         "precise" -> if (preciseEnabled && dataSource.hasFinePermission(appContext)) "precise" else "balanced"
         "coarse" -> "coarse"
         else -> if (preciseEnabled && dataSource.hasFinePermission(appContext)) "precise" else "balanced"
       }
     val providers =
       when (accuracy) {
+        // Provider order is part of the accuracy policy: GPS first for precise, network first otherwise.
         "precise" -> listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
         "coarse" -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
         else -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
@@ -151,6 +157,7 @@ class LocationHandler private constructor(
     val timeoutMs =
       (root?.get("timeoutMs") as? JsonPrimitive)?.content?.toLongOrNull()?.coerceIn(1_000L, 60_000L)
         ?: 10_000L
+    // desiredAccuracy is advisory; invalid values fall through to the default policy.
     val desiredAccuracy =
       (root?.get("desiredAccuracy") as? JsonPrimitive)?.content?.trim()?.lowercase()
     return Triple(maxAgeMs, timeoutMs, desiredAccuracy)
