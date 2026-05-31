@@ -54,6 +54,8 @@ const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
+const SOURCE_WIDE_BATCH_MAX_FILES = 32;
+const SOURCE_WIDE_BATCH_MAX_CHUNKS = 256;
 
 const log = createSubsystemLogger("memory");
 
@@ -788,42 +790,74 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (entries.length === 0) {
       return;
     }
+    const provider = this.provider;
     const batchEmbed = this.providerRuntime?.batchEmbed;
-    if (!this.provider || !this.batch.enabled || !batchEmbed) {
+    if (
+      !provider ||
+      !this.batch.enabled ||
+      !batchEmbed ||
+      this.providerRuntime?.sourceWideBatchEmbed !== true
+    ) {
       for (const entry of entries) {
         await this.indexFile(entry, options);
       }
       return;
     }
 
-    const prepared: PreparedMemoryIndexEntry[] = [];
+    let prepared: PreparedMemoryIndexEntry[] = [];
+    let preparedChunkCount = 0;
+    const flushPrepared = async () => {
+      const firstEntry = prepared[0]?.entry;
+      if (!firstEntry) {
+        return;
+      }
+      const chunks = prepared.flatMap((item) => item.chunks);
+      const embeddings = await this.embedChunksWithBatch(chunks, firstEntry, options.source);
+      const sample = embeddings.find((embedding) => embedding.length > 0);
+      const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
+      let offset = 0;
+      for (const item of prepared) {
+        const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
+        offset += item.chunks.length;
+        this.writeChunks(
+          item.entry,
+          options.source,
+          provider.model,
+          item.chunks,
+          fileEmbeddings,
+          vectorReady,
+        );
+      }
+      prepared = [];
+      preparedChunkCount = 0;
+    };
+
     for (const entry of entries) {
       if ("kind" in entry && entry.kind === "multimodal") {
         await this.indexFile(entry, options);
         continue;
       }
       const preparedEntry = await this.prepareIndexEntry(entry, options);
-      if (preparedEntry) {
-        prepared.push(preparedEntry);
+      if (!preparedEntry) {
+        continue;
+      }
+      if (
+        prepared.length > 0 &&
+        (prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES ||
+          preparedChunkCount + preparedEntry.chunks.length > SOURCE_WIDE_BATCH_MAX_CHUNKS)
+      ) {
+        await flushPrepared();
+      }
+      prepared.push(preparedEntry);
+      preparedChunkCount += preparedEntry.chunks.length;
+      if (
+        prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES ||
+        preparedChunkCount >= SOURCE_WIDE_BATCH_MAX_CHUNKS
+      ) {
+        await flushPrepared();
       }
     }
-    const chunks = prepared.flatMap((item) => item.chunks);
-    const embeddings = await this.embedChunksWithBatch(chunks, entries[0], options.source);
-    const sample = embeddings.find((embedding) => embedding.length > 0);
-    const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
-    let offset = 0;
-    for (const item of prepared) {
-      const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
-      offset += item.chunks.length;
-      this.writeChunks(
-        item.entry,
-        options.source,
-        this.provider.model,
-        item.chunks,
-        fileEmbeddings,
-        vectorReady,
-      );
-    }
+    await flushPrepared();
   }
 
   protected async indexFile(

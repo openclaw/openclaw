@@ -28,6 +28,7 @@ export const voyageMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       provider,
       runtime: {
         id: "voyage",
+        sourceWideBatchEmbed: true,
         cacheKeyData: {
           provider: "voyage",
           baseUrl: client.baseUrl,

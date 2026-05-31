@@ -80,7 +80,8 @@ vi.mock("./embeddings.js", () => {
       const providerId =
         options.provider === "gemini" ||
         options.provider === "fallback-provider" ||
-        options.provider === "batch-test"
+        options.provider === "batch-test" ||
+        options.provider === "batch-wide-test"
           ? options.provider
           : "mock";
       const model = options.model ?? "mock-embed";
@@ -133,10 +134,11 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "batch-test"
+        ...(providerId === "batch-test" || providerId === "batch-wide-test"
           ? {
               runtime: {
                 id: providerId,
+                ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
                 batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
                   providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
                   return batch.chunks.map((chunk) => embedText(chunk.text));
@@ -275,7 +277,7 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
-    provider?: "openai" | "gemini" | "fallback-provider" | "batch-test";
+    provider?: "openai" | "gemini" | "fallback-provider" | "batch-test" | "batch-wide-test";
     fallback?: "none" | "gemini" | "fallback-provider";
     batchEnabled?: boolean;
     model?: string;
@@ -414,7 +416,7 @@ describe("memory index", () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
     await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
     const cfg = createCfg({
-      provider: "batch-test",
+      provider: "batch-wide-test",
       batchEnabled: true,
       storePath: path.join(workspaceDir, "index-cross-file-batch.sqlite"),
     });
@@ -428,6 +430,52 @@ describe("memory index", () => {
         "# Log\nBeta memory line.",
         "# Log\nGamma memory line.",
       ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps custom batch runtimes per file without source-wide opt in", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-custom-batch-compat.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toEqual([
+        ["# Log\nAlpha memory line.\nZebra memory line."],
+        ["# Log\nBeta memory line."],
+        ["# Log\nGamma memory line."],
+      ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("bounds source-wide memory batches", async () => {
+    for (let index = 0; index < 32; index += 1) {
+      await fs.writeFile(
+        path.join(memoryDir, `2026-02-${String(index + 1).padStart(2, "0")}.md`),
+        `# Log\nBounded memory line ${index}.`,
+      );
+    }
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-bounded-cross-file-batch.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(providerRuntimeBatchCalls.every((call) => call.length <= 32)).toBe(true);
+      expect(providerRuntimeBatchCalls.flat()).toHaveLength(33);
     } finally {
       await manager.close?.();
     }
@@ -476,7 +524,7 @@ describe("memory index", () => {
       "utf8",
     );
     const cfg = createCfg({
-      provider: "batch-test",
+      provider: "batch-wide-test",
       batchEnabled: true,
       sources: ["memory", "sessions"],
       sessionMemory: true,

@@ -39,6 +39,7 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       provider,
       runtime: {
         id: "gemini",
+        sourceWideBatchEmbed: true,
         cacheKeyData: {
           provider: "gemini",
           baseUrl: client.baseUrl,
