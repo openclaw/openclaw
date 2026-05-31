@@ -49,13 +49,16 @@ describe("smsPlugin status", () => {
       },
     });
 
-    expect(snapshot).toEqual({
+    expect(snapshot).toMatchObject({
       accountId: "support",
       name: "+15557654321",
       enabled: true,
       configured: true,
       statusState: "configured",
+      running: false,
+      webhookPath: "/webhooks/sms",
     });
+    expect(snapshot).not.toHaveProperty("connected");
   });
 });
 
