@@ -251,30 +251,27 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
           : nothing}
       </div>
 
-      <div class="sw-action-bar">
-        <button class="sw-btn sw-btn--primary" @click=${() => props.onApply(proposal.key)}>
-          Apply <span class="sw-kbd">↵</span>
-        </button>
-        <button class="sw-btn" @click=${() => props.onRevise(proposal.key)}>
-          Revise <span class="sw-kbd">E</span>
-        </button>
-        <button class="sw-btn sw-btn--ghost" @click=${() => props.onSetAside(proposal.key)}>
-          Set aside <span class="sw-kbd">⇧Q</span>
-        </button>
-        <button
-          class="sw-btn sw-btn--ghost sw-btn--danger"
-          @click=${() => props.onReject(proposal.key)}
-        >
-          Reject <span class="sw-kbd">R</span>
-        </button>
-        <span class="sw-action-bar__spacer"></span>
-        <div class="sw-action-bar__hint">
-          <span><code>J</code> next</span>
-          <span><code>K</code> prev</span>
-          <span><code>X</code> multi-select</span>
-          <span><code>?</code> shortcuts</span>
-        </div>
-      </div>
+      ${proposal.status === "pending" ? renderPendingActions(props, proposal) : nothing}
+    </div>
+  `;
+}
+
+function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
+  return html`
+    <div class="sw-action-bar">
+      <button class="sw-btn sw-btn--primary" @click=${() => props.onApply(proposal.key)}>
+        Apply
+      </button>
+      <button class="sw-btn" @click=${() => props.onRevise(proposal.key)}>Revise</button>
+      <button class="sw-btn sw-btn--ghost" @click=${() => props.onSetAside(proposal.key)}>
+        Set aside
+      </button>
+      <button
+        class="sw-btn sw-btn--ghost sw-btn--danger"
+        @click=${() => props.onReject(proposal.key)}
+      >
+        Reject
+      </button>
     </div>
   `;
 }
