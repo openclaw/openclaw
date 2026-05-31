@@ -35,6 +35,8 @@ export function resolveConversationIdFromTargets(params: {
       return explicitConversationId;
     }
     if (target.includes(":") && explicitConversationId === undefined) {
+      // Colon targets are usually provider-native ids. Only explicit target
+      // prefixes above are safe to collapse into a portable conversation id.
       continue;
     }
     const mentionMatch = target.match(/^<#(\d+)>$/);
