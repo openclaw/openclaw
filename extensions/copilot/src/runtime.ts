@@ -20,7 +20,7 @@ export interface PoolKey {
 
 export interface ClientCreateOptions extends Omit<
   CopilotClientOptions,
-  "baseDirectory" | "workingDirectory" | "useLoggedInUser" | "gitHubToken"
+  "copilotHome" | "useLoggedInUser" | "gitHubToken"
 > {
   readonly copilotHome: string;
   readonly useLoggedInUser?: boolean;
@@ -364,7 +364,7 @@ function normalizeClientCreateOptions(
   const { copilotHome: _copilotHome, ...clientOptions } = options;
   return {
     ...clientOptions,
-    baseDirectory: normalizedCopilotHome,
+    copilotHome: normalizedCopilotHome,
   };
 }
 
