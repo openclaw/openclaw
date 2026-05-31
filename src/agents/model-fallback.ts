@@ -25,6 +25,7 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
+import { isPeriodicUsageLimitErrorMessage } from "./embedded-agent-helpers/failover-matches.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import {
   FailoverError,
@@ -1134,6 +1135,13 @@ export async function runWithModelFallback<T>(
     agentDir?: string;
     /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
     fallbacksOverride?: string[];
+    /**
+     * Fallback chain to activate if the primary candidate fails with a
+     * permanent quota error (weekly/monthly limits) and fallbacksOverride is
+     * empty.  Used for user-pinned sessions so transient failures stay visible
+     * while long-term quota exhaustion still recovers automatically.
+     */
+    quotaExhaustionFallbacksOverride?: string[];
     run: ModelFallbackRunFn<T>;
     onError?: ModelFallbackErrorHandler;
     onFallbackStep?: ModelFallbackStepHandler;
@@ -1186,7 +1194,7 @@ export async function runWithModelFallback<T>(
     }
   };
 
-  const hasFallbackCandidates = candidates.length > 1;
+  let hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates[0];
 
   for (let i = 0; i < candidates.length; i += 1) {
@@ -1496,6 +1504,26 @@ export async function runWithModelFallback<T>(
       const isKnownFailover = isFailoverError(normalized);
       if (!isKnownFailover && i === candidates.length - 1) {
         throw err;
+      }
+
+      // User-pinned primary hit permanent quota exhaustion: expand the candidate
+      // list on the fly so the run recovers via the configured fallback chain.
+      // Transient errors are intentionally excluded — only weekly/monthly limits
+      // warrant silent recovery from a pinned selection.
+      if (isPrimary && !hasFallbackCandidates && params.quotaExhaustionFallbacksOverride?.length) {
+        if (isPeriodicUsageLimitErrorMessage(errMessage)) {
+          const quotaCandidates = resolveModelCandidateChain({
+            cfg: params.cfg,
+            provider: params.provider,
+            model: params.model,
+            fallbacksOverride: params.quotaExhaustionFallbacksOverride,
+            manifestPlugins: params.manifestPlugins,
+          });
+          for (const qc of quotaCandidates.slice(1)) {
+            candidates.push(qc);
+          }
+          hasFallbackCandidates = candidates.length > 1;
+        }
       }
 
       lastError = isKnownFailover ? normalized : err;

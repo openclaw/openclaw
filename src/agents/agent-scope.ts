@@ -539,17 +539,31 @@ export function resolveEffectiveModelFallbacks(params: {
   const canUseConfiguredFallbacks =
     params.modelOverrideSource === "auto" ||
     (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
-  // User pins are a preference, not a hard lock: fall back on long-term quota exhaustion.
   if (!canUseConfiguredFallbacks) {
-    const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
-      ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
-      : undefined;
-    if (subagentFallbacksOverride !== undefined) {
-      return subagentFallbacksOverride;
-    }
-    const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-    return agentFallbacksOverride ?? defaultFallbacks;
+    return [];
   }
+  const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
+    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
+    : undefined;
+  if (subagentFallbacksOverride !== undefined) {
+    return subagentFallbacksOverride;
+  }
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+  return agentFallbacksOverride ?? defaultFallbacks;
+}
+
+/**
+ * Returns the fallback chain to activate when a user-pinned primary hits
+ * permanent quota exhaustion (weekly/monthly limits). This is separate from
+ * resolveEffectiveModelFallbacks, which returns [] for user-pinned sessions to
+ * keep the pin strict for transient errors.
+ */
+export function resolveQuotaExhaustionFallbacks(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string | null;
+}): string[] | undefined {
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
     ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
     : undefined;

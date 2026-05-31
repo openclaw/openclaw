@@ -60,6 +60,7 @@ import {
   resolveAgentConfig,
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
+  resolveQuotaExhaustionFallbacks,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
@@ -1333,6 +1334,14 @@ async function agentCommandInternal(
             ? false
             : hasStoredAutoFallbackProvenance,
         });
+        // When the effective fallback list is empty (user-pinned session),
+        // pre-compute the quota fallback chain so runWithModelFallback can
+        // expand it on permanent quota exhaustion without changing the strict
+        // behavior for transient errors.
+        const quotaExhaustionFallbacksOverride =
+          effectiveFallbacksOverride?.length === 0
+            ? resolveQuotaExhaustionFallbacks({ cfg, agentId: sessionAgentId, sessionKey })
+            : undefined;
 
         let fallbackAttemptIndex = 0;
         attemptLifecycleState.currentTurnUserMessagePersisted = false;
@@ -1357,6 +1366,7 @@ async function agentCommandInternal(
             });
           },
           fallbacksOverride: effectiveFallbacksOverride,
+          quotaExhaustionFallbacksOverride,
           onFallbackStep: (step) => {
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
           },
