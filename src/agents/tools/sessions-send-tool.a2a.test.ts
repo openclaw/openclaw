@@ -145,6 +145,10 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       maxPingPongTurns: 2,
       requesterSessionKey: "agent:main:discord:channel:target-room",
       requesterChannel: "discord",
+      baseline: {
+        text: "Previous channel reply",
+        fingerprint: "previous-channel-reply",
+      },
       waitRunId: "run-delayed-channel",
     });
 
@@ -161,6 +165,34 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.to).toBe("channel:target-room");
     expect(sendParams.message).toBe("Delayed channel reply");
+  });
+
+  it("does not direct-deliver a delayed same-session reply that matches the baseline", async () => {
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
+      text: "Previous channel reply",
+      fingerprint: "previous-channel-reply",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:channel:target-room",
+      displayKey: "agent:main:discord:channel:target-room",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:channel:target-room",
+      requesterChannel: "discord",
+      baseline: {
+        text: "Previous channel reply",
+        fingerprint: "previous-channel-reply",
+      },
+      waitRunId: "run-delayed-channel",
+    });
+
+    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe(
+      "run-delayed-channel",
+    );
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
   it("keeps the announce decider for same-session sends from a different channel", async () => {

@@ -929,6 +929,47 @@ describe("sessions_send gating", () => {
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
   });
 
+  it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const tool = createMainSessionsSendTool();
+    const staleAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "older reply from a previous run" }],
+      timestamp: 20,
+    };
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [staleAssistantMessage] };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-fire-and-forget", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-fire-and-forget-same-session", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
+    expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
+    expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
+  });
+
   it("caps oversized timeoutSeconds before waiting for the target run", async () => {
     const tool = createMainSessionsSendTool();
     const waitTimeouts: unknown[] = [];
