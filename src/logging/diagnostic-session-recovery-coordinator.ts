@@ -1,4 +1,5 @@
 import { emitInternalDiagnosticEvent as emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { clearDiagnosticEmbeddedRunsForSession } from "./diagnostic-run-activity.js";
 import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
@@ -126,6 +127,14 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     : preserveQueuedIdleWork
       ? Math.max(state.queueDepth, params.request.queueDepth ?? 0)
       : Math.max(0, state.queueDepth - 1);
+  // The idle declaration is authoritative: reconcile the activity store so an
+  // embedded run cleared without markDiagnosticEmbeddedRunEnded cannot leave the
+  // lane reporting idle/embedded_run and re-triggering recovery forever. The
+  // guard above already excludes any newer run that re-armed activity.
+  clearDiagnosticEmbeddedRunsForSession({
+    sessionId: state.sessionId,
+    sessionKey: state.sessionKey,
+  });
   emitDiagnosticEvent({
     type: "session.state",
     sessionId: state.sessionId,

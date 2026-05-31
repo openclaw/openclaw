@@ -286,6 +286,21 @@ function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string
   return params.workKey ?? params.sessionId;
 }
 
+// Drops every embedded-run owner for a session at once. Used when an authority
+// (stuck-session recovery) declares the lane terminal and the per-run
+// markDiagnosticEmbeddedRunEnded may have been bypassed for some work keys.
+export function clearDiagnosticEmbeddedRunsForSession(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): void {
+  const activity = resolveSessionActivity(params);
+  if (!activity || activity.activeEmbeddedRuns.size === 0) {
+    return;
+  }
+  activity.activeEmbeddedRuns.clear();
+  touchSessionActivity(activity, "embedded_run:ended");
+}
+
 export function getDiagnosticSessionActivitySnapshot(
   params: { sessionId?: string; sessionKey?: string },
   now = Date.now(),

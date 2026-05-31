@@ -16,11 +16,19 @@ import {
   markDiagnosticModelStartedForTest,
   markDiagnosticRunProgressForTest,
   markDiagnosticToolStartedForTest,
+  resetDiagnosticRunActivityForTest,
 } from "./diagnostic-run-activity.js";
+import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
+import {
+  requestStuckSessionRecovery,
+  resetDiagnosticSessionRecoveryCoordinatorForTest,
+} from "./diagnostic-session-recovery-coordinator.js";
+import type { StuckSessionRecoveryOutcome } from "./diagnostic-session-recovery.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
   getDiagnosticSessionStateCountForTest,
+  peekDiagnosticSessionState,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
@@ -2269,5 +2277,123 @@ describe("diagnostic stability snapshots", () => {
     const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
     expect(event).not.toHaveProperty("sessionKey");
     expect(event).not.toHaveProperty("sessionId");
+  });
+});
+
+describe("stuck session recovery activity reconciliation", () => {
+  const sessionKey = "agent:main:whatsapp:direct:demo";
+  const sessionId = "wa-run-1";
+
+  const stalledClassification: SessionAttentionClassification = {
+    eventType: "session.stalled",
+    reason: "active_work_without_progress",
+    classification: "stalled_agent_run",
+    activeWorkKind: "embedded_run",
+    recoveryEligible: false,
+  };
+
+  function abortedOutcome(): StuckSessionRecoveryOutcome {
+    return {
+      status: "aborted",
+      action: "abort_embedded_run",
+      sessionId,
+      sessionKey,
+      activeSessionId: sessionId,
+      activeWorkKind: "embedded_run",
+      aborted: true,
+      drained: false,
+      forceCleared: false,
+      released: 0,
+    };
+  }
+
+  function flush(): Promise<void> {
+    return new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+
+  beforeEach(() => {
+    setDiagnosticsEnabledForProcess(true);
+    resetDiagnosticSessionStateForTest();
+    resetDiagnosticRunActivityForTest();
+    resetDiagnosticSessionRecoveryCoordinatorForTest();
+  });
+
+  afterEach(() => {
+    resetDiagnosticSessionStateForTest();
+    resetDiagnosticRunActivityForTest();
+    resetDiagnosticSessionRecoveryCoordinatorForTest();
+  });
+
+  it("clears the embedded-run activity flag when recovery declares the lane idle", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    state.queueDepth = 2;
+
+    // The aborted run was removed without markDiagnosticEmbeddedRunEnded, so the
+    // activity flag survives the idle transition and otherwise resurfaces as
+    // idle/embedded_run on every later liveness sweep.
+    requestStuckSessionRecovery({
+      recover: () => Promise.resolve(abortedOutcome()),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("idle");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBeUndefined();
+    expect(activity.hasActiveEmbeddedRun).toBeUndefined();
+  });
+
+  it("preserves an active flag for a newer run that re-armed work mid-recovery", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    const staleGeneration = state.generation;
+
+    requestStuckSessionRecovery({
+      recover: () => {
+        // A requeued run started before the coordinator applied the outcome,
+        // advancing the generation past the captured one.
+        logSessionStateChange({
+          sessionId: "wa-run-2",
+          sessionKey,
+          state: "processing",
+          reason: "run_started",
+        });
+        markDiagnosticEmbeddedRunStarted({ sessionId: "wa-run-2", sessionKey });
+        return Promise.resolve(abortedOutcome());
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: staleGeneration,
+      },
+    });
+    await flush();
+    await flush();
+
+    // Generation guard bails: the live run keeps processing and its activity flag.
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      "embedded_run",
+    );
   });
 });
