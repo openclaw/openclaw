@@ -279,6 +279,7 @@ describe("applyMediaUnderstanding", () => {
           `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
         );
       },
+      isProviderAuthError: vi.fn(() => false),
     }));
     vi.doMock("../media/fetch.js", () => ({
       readRemoteMediaBuffer: readRemoteMediaBufferMock,
@@ -365,7 +366,6 @@ describe("applyMediaUnderstanding", () => {
       cfg: createGroqAudioConfig(),
       providers: createGroqProviders(),
     });
-
     expect(result.appliedAudio).toBe(true);
     expectTranscriptApplied({
       ctx,

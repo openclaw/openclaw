@@ -168,6 +168,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
           `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
         );
       },
+      isProviderAuthError: vi.fn(() => false),
       resolveAwsSdkEnvVarName: vi.fn(() => undefined),
       resolveEnvApiKey: vi.fn(() => null),
       resolveModelAuthMode: vi.fn(() => "api-key"),

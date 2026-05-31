@@ -19,6 +19,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function parseDeviceAuthEntry(role: string, value: unknown): DeviceAuthEntry | null {
+  if (
+    !isRecord(value) ||
+    typeof value.token !== "string" ||
+    !Array.isArray(value.scopes) ||
+    !value.scopes.every((scope) => typeof scope === "string") ||
+    typeof value.updatedAtMs !== "number" ||
+    !Number.isFinite(value.updatedAtMs)
+  ) {
+    return null;
+  }
+  return {
+    token: value.token,
+    role,
+    scopes: value.scopes,
+    updatedAtMs: value.updatedAtMs,
+  };
+}
+
 function parseDeviceAuthStore(value: unknown): DeviceAuthStore | null {
   if (!isRecord(value) || value.version !== 1 || typeof value.deviceId !== "string") {
     return null;
@@ -26,10 +45,17 @@ function parseDeviceAuthStore(value: unknown): DeviceAuthStore | null {
   if (!isRecord(value.tokens)) {
     return null;
   }
+  const tokens: Record<string, DeviceAuthEntry> = {};
+  for (const [role, rawEntry] of Object.entries(value.tokens)) {
+    const entry = parseDeviceAuthEntry(role, rawEntry);
+    if (entry) {
+      tokens[role] = entry;
+    }
+  }
   return {
     version: 1,
     deviceId: value.deviceId,
-    tokens: value.tokens,
+    tokens,
   };
 }
 

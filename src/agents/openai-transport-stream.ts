@@ -3524,7 +3524,7 @@ function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolea
 }
 
 function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): boolean {
-  if (model.reasoning !== true || isGemma4ModelId(model.id)) {
+  if (!model.reasoning || isGemma4ModelId(model.id)) {
     return false;
   }
   const provider = model.provider.trim().toLowerCase();
