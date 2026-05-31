@@ -919,11 +919,15 @@ export function createSessionStatusTool(opts?: {
           .map((value) => value?.trim())
           .filter((value): value is string => Boolean(value)),
       );
+      const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
+      const isLiveRouteSession = activeRouteRunSessionKey
+        ? resolved.key.trim() === activeRouteRunSessionKey
+        : liveSessionKeySet.has(resolved.key.trim());
       const routeDetails = buildSessionStatusRouteDetails({
         entry: statusSessionEntry,
         sessionKey: resolved.key,
         activeDeliveryContext: opts?.activeDeliveryContext,
-        isLiveRunSession: liveSessionKeySet.has(resolved.key.trim()),
+        isLiveRunSession: isLiveRouteSession,
       });
       const routeContextText = formatSessionStatusRouteContext(routeDetails);
       const visibleStatusText = routeContextText

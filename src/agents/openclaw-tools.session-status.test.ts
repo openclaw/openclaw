@@ -732,6 +732,50 @@ describe("session_status tool", () => {
     });
   });
 
+  it("does not report an active route for an explicit stale policy-key lookup", async () => {
+    const policyKey = "agent:main:telegram:default:direct:1234";
+    const runKey = "agent:main:main";
+    resetSessionStore({
+      [policyKey]: {
+        sessionId: "s-policy",
+        updatedAt: 5,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:direct:1234",
+        },
+      },
+      [runKey]: {
+        sessionId: "s-run",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: policyKey,
+      runSessionKey: runKey,
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-explicit-stale-policy-key-route-context", {
+      sessionKey: policyKey,
+    });
+    const details = result.details as {
+      sessionKey?: string;
+      active?: { channel?: string };
+      deliveryContext?: { channel?: string; to?: string };
+    };
+    expect(details.sessionKey).toBe(policyKey);
+    expect(details.active).toBeUndefined();
+    expect(details.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "telegram:direct:1234",
+    });
+  });
+
   it("rejects explicit cross-session key under tree visibility even when it equals runSessionKey (#76708)", async () => {
     resetSessionStore({
       "agent:main:telegram:default:direct:1234": {
