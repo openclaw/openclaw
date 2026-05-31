@@ -637,6 +637,13 @@ export async function runEmbeddedAgent(
         config: params.config,
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+        ...(params.onExecutionPhase
+          ? {
+              onLoadProgress: (runtimePlugins) => {
+                notifyExecutionPhase("runtime_plugins", { runtimePlugins });
+              },
+            }
+          : {}),
       });
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");

@@ -200,6 +200,26 @@ describe("ensureRuntimePluginsLoaded", () => {
     });
   });
 
+  it("forwards runtime plugin load progress diagnostics to the registry loader", () => {
+    const onLoadProgress = vi.fn();
+
+    ensureRuntimePluginsLoaded({
+      config: {} as never,
+      workspaceDir: "/tmp/workspace",
+      onLoadProgress,
+    });
+
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
+      requiredPluginIds: undefined,
+      loadOptions: {
+        config: {} as never,
+        workspaceDir: "/tmp/workspace",
+        runtimePluginLoadProgress: onLoadProgress,
+        runtimeOptions: undefined,
+      },
+    });
+  });
+
   it("inherits gateway-bindable mode from an active gateway registry", () => {
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
 

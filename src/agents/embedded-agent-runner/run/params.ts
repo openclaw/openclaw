@@ -13,6 +13,7 @@ import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { RuntimePluginLoadProgress } from "../../../plugins/runtime/load-diagnostics.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
@@ -183,6 +184,7 @@ export type RunEmbeddedAgentParams = {
     tool?: string;
     toolCallId?: string;
     itemId?: string;
+    runtimePlugins?: RuntimePluginLoadProgress;
     firstModelCallStarted?: boolean;
   }) => void;
   onRunProgress?: (info: {
