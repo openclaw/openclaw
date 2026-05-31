@@ -233,6 +233,25 @@ function buildResponsesUrlPolicyConfig(maxUrlParts: number) {
   };
 }
 
+function buildWebchatOpenResponsesProgressConfig() {
+  return {
+    gateway: {
+      http: {
+        endpoints: {
+          responses: {
+            enabled: true,
+          },
+        },
+      },
+      webchat: {
+        openResponsesProgress: {
+          mode: "event",
+        },
+      },
+    },
+  };
+}
+
 it("uses default URL part limits for non-finite OpenResponses config caps", () => {
   const limits = openResponsesTesting.resolveResponsesLimits({
     maxUrlParts: Number.POSITIVE_INFINITY,
@@ -790,6 +809,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.output_text.done");
       expect(eventTypes).toContain("response.content_part.done");
       expect(eventTypes).toContain("response.completed");
+      expect(eventTypes).not.toContain("response.openclaw_progress");
       expect(deltaEvents.map((event) => event.data)).toContain("[DONE]");
 
       const deltas = deltaEvents
@@ -847,6 +867,74 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }
     } finally {
       // shared server
+    }
+  });
+
+  it("emits opt-in WebChat progress metadata before assistant deltas", async () => {
+    await writeGatewayConfig(buildWebchatOpenResponsesProgressConfig());
+    const port = await getFreePort();
+    const server = await startServer(port, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["he", "llo"],
+          text: "hello",
+        })) as never);
+
+      const webchatResponse = await postResponses(port, {
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(webchatResponse.status).toBe(200);
+      const webchatEvents = parseSseEvents(await webchatResponse.text());
+      const webchatEventTypes = collectSseEventTypes(webchatEvents);
+
+      const progressIndex = webchatEventTypes.indexOf("response.openclaw_progress");
+      expect(progressIndex).toBeGreaterThan(webchatEventTypes.indexOf("response.in_progress"));
+      expect(progressIndex).toBeLessThan(webchatEventTypes.indexOf("response.output_text.delta"));
+
+      const progressData = parseSseData(findSseEvent(webchatEvents, "response.openclaw_progress"));
+      const createdData = parseSseData(findSseEvent(webchatEvents, "response.created"));
+      expect(progressData).toMatchObject({
+        type: "response.openclaw_progress",
+        message: "OpenClaw is working on your request.",
+      });
+      expect((progressData as { response_id?: string }).response_id).toBe(
+        (createdData as { response?: { id?: string } }).response?.id,
+      );
+
+      const deltas = webchatEvents
+        .filter((event) => event.event === "response.output_text.delta")
+        .map((event) => (parseSseData(event) as { delta?: string }).delta ?? "")
+        .join("");
+      expect(deltas).toBe("hello");
+
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["slack"],
+          text: "slack",
+        })) as never);
+      const nonWebchatResponse = await postResponses(
+        port,
+        {
+          stream: true,
+          model: "openclaw",
+          input: "hi",
+        },
+        { "x-openclaw-message-channel": "slack" },
+      );
+      expect(nonWebchatResponse.status).toBe(200);
+      const nonWebchatEvents = parseSseEvents(await nonWebchatResponse.text());
+      expect(collectSseEventTypes(nonWebchatEvents)).not.toContain("response.openclaw_progress");
+    } finally {
+      await server.close({ reason: "webchat openresponses progress test done" });
     }
   });
 

@@ -282,6 +282,7 @@ Event types currently emitted:
 
 - `response.created`
 - `response.in_progress`
+- `response.openclaw_progress` (OpenClaw-specific, WebChat-only, opt-in)
 - `response.output_item.added`
 - `response.content_part.added`
 - `response.output_text.delta`
@@ -290,6 +291,42 @@ Event types currently emitted:
 - `response.output_item.done`
 - `response.completed`
 - `response.failed` (on error)
+
+### WebChat progress event
+
+By default, OpenClaw only emits `response.output_text.delta` for real assistant
+text, or for the existing post-run fallback when no assistant stream text was
+available. To let WebChat clients render an early active state without adding
+fake assistant text to the transcript, enable the OpenClaw-specific progress
+event:
+
+```json
+{
+  "gateway": {
+    "webchat": {
+      "openResponsesProgress": {
+        "mode": "event"
+      }
+    }
+  }
+}
+```
+
+When enabled for a streaming WebChat request, the Gateway emits
+`response.openclaw_progress` after `response.in_progress` and before assistant
+text deltas:
+
+```json
+{
+  "type": "response.openclaw_progress",
+  "response_id": "resp_...",
+  "message": "OpenClaw is working on your request.",
+  "created_at": 1780000000
+}
+```
+
+This event is metadata only. It is not part of the assistant transcript, and
+non-WebChat OpenResponses clients do not receive it.
 
 ## Usage
 

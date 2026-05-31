@@ -362,6 +362,13 @@ export const OutputTextDoneEventSchema = z.object({
   text: z.string(),
 });
 
+export const OpenClawProgressEventSchema = z.object({
+  type: z.literal("response.openclaw_progress"),
+  response_id: z.string(),
+  message: z.string(),
+  created_at: z.number().int(),
+});
+
 export type StreamingEvent =
   | z.infer<typeof ResponseCreatedEventSchema>
   | z.infer<typeof ResponseInProgressEventSchema>
@@ -372,4 +379,5 @@ export type StreamingEvent =
   | z.infer<typeof ContentPartAddedEventSchema>
   | z.infer<typeof ContentPartDoneEventSchema>
   | z.infer<typeof OutputTextDeltaEventSchema>
-  | z.infer<typeof OutputTextDoneEventSchema>;
+  | z.infer<typeof OutputTextDoneEventSchema>
+  | z.infer<typeof OpenClawProgressEventSchema>;

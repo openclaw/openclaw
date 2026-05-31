@@ -15,7 +15,7 @@ import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/p
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
-import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
+import type { GatewayHttpResponsesConfig, GatewayWebchatConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { renderFileContextBlock } from "../media/file-context.js";
@@ -64,6 +64,7 @@ type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
+  webchatConfig?: GatewayWebchatConfig;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
@@ -71,6 +72,7 @@ type OpenResponsesHttpOptions = {
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
+const DEFAULT_OPENRESPONSES_WEBCHAT_PROGRESS_MESSAGE = "OpenClaw is working on your request.";
 
 // In-memory map from responseId -> sessionKey for previous_response_id continuity.
 // Entries are evicted after 30 minutes to bound memory usage.
@@ -227,6 +229,16 @@ export const testing = {
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function shouldEmitWebchatOpenResponsesProgress(params: {
+  messageChannel: string;
+  webchatConfig?: GatewayWebchatConfig;
+}): boolean {
+  return (
+    params.messageChannel === "webchat" &&
+    params.webchatConfig?.openResponsesProgress?.mode === "event"
+  );
 }
 
 type ResolvedResponsesLimits = {
@@ -917,6 +929,19 @@ export async function handleOpenResponsesHttpRequest(
 
   writeSseEvent(res, { type: "response.created", response: initialResponse });
   writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
+  if (
+    shouldEmitWebchatOpenResponsesProgress({
+      messageChannel,
+      webchatConfig: opts.webchatConfig,
+    })
+  ) {
+    writeSseEvent(res, {
+      type: "response.openclaw_progress",
+      response_id: responseId,
+      message: DEFAULT_OPENRESPONSES_WEBCHAT_PROGRESS_MESSAGE,
+      created_at: initialResponse.created_at,
+    });
+  }
 
   // Add output item
   const outputItem = createAssistantOutputItem({
