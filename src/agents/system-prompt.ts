@@ -1,4 +1,13 @@
 import { createHmac, createHash } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -10,15 +19,6 @@ import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import {
-  normalizeStringEntries,
-  normalizeStringEntriesLower,
-  normalizeUniqueStringEntries,
-} from "../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -41,6 +41,10 @@ import {
   shouldRenderOpenClawToolWorkflowHints,
 } from "./prompt-surface.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import {
+  buildSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME,
+} from "./skill-workshop-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import type {
   ProviderSystemPromptContribution,
@@ -392,7 +396,7 @@ function buildAssistantOutputDirectivesSection(params: {
     return [
       "## Assistant Output Directives",
       "- Visible source-channel output is delivered through `message(action=send)`.",
-      "- Attach media with message-tool attachment fields such as `media`, `path`, or `filePath`; do not use legacy `MEDIA:` directives for source-channel delivery.",
+      "- Attach media with message-tool attachment fields such as `media`, `mediaUrl`, `path`, or `filePath`; do not write attachment commands in text.",
       "- Voice-note audio hint: use message-tool `asVoice` when sending audio as a voice note.",
       "- Native quote/reply: use message-tool `replyTo` when an explicit reply target is needed.",
       "",
@@ -400,7 +404,7 @@ function buildAssistantOutputDirectivesSection(params: {
   }
   return [
     "## Assistant Output Directives",
-    "- Attach media: `MEDIA:<path-or-url>` on its own line.",
+    "- Attach media in the final visible reply with `MEDIA:<path-or-url>` on its own line.",
     "  The MEDIA directive must start the line as plain text, outside code fences and without Markdown wrappers. Do not write `**MEDIA:...**`, `` `MEDIA:...` ``, or inline prose like `Here is the file: MEDIA:...`.",
     "- Voice-note audio hint: `[[audio_as_voice]]` when audio is attached.",
     "- Native quote/reply: first token `[[reply_to_current]]`; use `[[reply_to:<id>]]` only with an explicit id.",
@@ -423,7 +427,7 @@ function buildWebchatCanvasSection(params: {
     "- Do not use `[embed ...]` for non-web channels.",
     params.sourceMessageToolOnly
       ? "- `[embed ...]` is separate from message-tool attachments; use message-tool attachment fields for files and `[embed ...]` for web-only rich rendering."
-      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
+      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for final-reply attachments; use `[embed ...]` for web-only rich rendering.",
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
@@ -923,23 +927,8 @@ export function buildAgentSystemPrompt(params: {
     skillsPrompt,
     readToolName,
   });
-  const skillWorkshopSection = availableTools.has("skill_workshop")
-    ? [
-        "## Skill Workshop",
-        "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
-        "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
-        "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations. The final proposal artifact must go through `skill_workshop`.",
-        "Use `action=create` for a new skill, `action=update` for an existing approved/live skill, and `action=revise` for an existing pending proposal; keep `description` under 160 bytes and `proposal_content` within the configured body limit.",
-        "For `action=update`, pass a concise `description` when the existing live skill description should be shortened in the proposal listing.",
-        "For `action=revise`, pass `proposal_id` when known. If it is not known, pass the proposal or skill name in `name` so `skill_workshop` can resolve the pending proposal or return candidates.",
-        "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",
-        "If the user names an existing live skill, read or view that skill when needed for context, but create the update proposal through `skill_workshop`.",
-        "Generated skills are pending proposals by default. Do not apply, install, approve, enable, or write into live skills unless the user explicitly asks for that separate action.",
-        "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal. Pass `proposal_id`; if it is not known, use `action=list` or `action=inspect` first.",
-        "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands. Proposal lifecycle changes must use `skill_workshop`.",
-        "You may gather context first, but the durable proposal write or lifecycle change must use `skill_workshop`.",
-        "",
-      ]
+  const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
+    ? buildSkillWorkshopPromptSection()
     : [];
   const memorySection = buildMemorySection({
     isMinimal,

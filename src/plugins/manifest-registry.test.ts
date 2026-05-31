@@ -28,6 +28,14 @@ function makeTempDir() {
   return makeTrackedTempDir("openclaw-manifest-registry", tempDirs);
 }
 
+function makeOpenClawDevSourceRoot() {
+  const root = makeTempDir();
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  mkdirSafe(path.join(root, "src"));
+  mkdirSafe(path.join(root, "extensions"));
+  return root;
+}
+
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
   fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
 }
@@ -582,6 +590,41 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
+  it("prefers dev source bundled plugins over installed globals with the same id", () => {
+    const devSourceRoot = makeOpenClawDevSourceRoot();
+    const bundledDir = path.join(devSourceRoot, "extensions", "codex");
+    const globalDir = makeTempDir();
+    const manifest = { id: "codex", configSchema: { type: "object" } };
+    mkdirSafe(bundledDir);
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
+      installRecords: {
+        codex: {
+          source: "npm",
+          installPath: globalDir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+  });
+
   it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -702,7 +745,7 @@ describe("loadPluginManifestRegistry", () => {
       id: "openai",
       enabledByDefault: true,
       enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
-      providers: ["openai", "openai-codex"],
+      providers: ["openai", "openai"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
@@ -757,7 +800,7 @@ describe("loadPluginManifestRegistry", () => {
       syntheticAuthRefs: ["openai-cli"],
       nonSecretAuthMarkers: ["openai-cli"],
       providerAuthAliases: {
-        "openai-codex": "openai",
+        openai: "openai",
       },
       providerAuthChoices: [
         {
@@ -822,7 +865,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
     expect(registry.plugins[0]?.providerAuthAliases).toEqual({
-      "openai-codex": "openai",
+      openai: "openai",
     });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
     expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
@@ -1759,11 +1802,11 @@ describe("loadPluginManifestRegistry", () => {
       },
       imageGenerationProviderMetadata: {
         openai: {
-          aliases: ["openai-codex"],
+          aliases: ["openai"],
           authProviders: ["openai"],
           authSignals: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               providerBaseUrl: {
                 provider: "openai",
                 defaultBaseUrl: "https://api.openai.com/v1",
@@ -1817,7 +1860,7 @@ describe("loadPluginManifestRegistry", () => {
           optional: true,
           authSignals: [
             {
-              provider: "openai-codex",
+              provider: "openai",
             },
           ],
           configSignals: [
@@ -1840,11 +1883,11 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.imageGenerationProviderMetadata).toEqual({
       openai: {
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         authProviders: ["openai"],
         authSignals: [
           {
-            provider: "openai-codex",
+            provider: "openai",
             providerBaseUrl: {
               provider: "openai",
               defaultBaseUrl: "https://api.openai.com/v1",
@@ -1892,7 +1935,7 @@ describe("loadPluginManifestRegistry", () => {
         optional: true,
         authSignals: [
           {
-            provider: "openai-codex",
+            provider: "openai",
           },
         ],
         configSignals: [
@@ -2143,9 +2186,9 @@ describe("loadPluginManifestRegistry", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "openai",
-      providers: ["openai", "openai-codex"],
+      providers: ["openai", "openai"],
       speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai", "openai-codex"],
+      mediaUnderstandingProviders: ["openai", "openai"],
       imageGenerationProviders: ["openai"],
       configSchema: { type: "object" },
     });

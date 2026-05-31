@@ -10,7 +10,7 @@ import type {
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,

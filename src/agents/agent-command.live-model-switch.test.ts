@@ -618,7 +618,7 @@ vi.mock("./model-visibility-policy.js", () => ({
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
-    provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
+    provider.trim().toLowerCase() === "codex-cli" ? "openai" : provider.trim().toLowerCase(),
 }));
 
 vi.mock("../skills/discovery/agent-filter.js", () => ({
@@ -2052,7 +2052,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       updatedAt: Date.now(),
       providerOverride: "codex-cli",
       modelOverride: "gpt-5.4",
-      authProfileOverride: "openai-codex:work",
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
@@ -2068,9 +2068,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     };
     state.authProfileStoreMock = {
       profiles: {
-        "openai-codex:work": {
+        "openai:work": {
           type: "api_key",
-          provider: "openai-codex",
+          provider: "openai",
           key: "sk-test",
         },
       },

@@ -3,9 +3,9 @@ import {
   collectManifestModelIdNormalizationPolicies,
   normalizeConfiguredProviderCatalogModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { isRecord } from "../shared/record-coerce.js";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,

@@ -227,7 +227,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
     const privateQaBuild = runStep(
       "private QA build",
       process.execPath,
-      ["scripts/build-all.mjs", "cliStartup"],
+      ["scripts/build-all.mjs", "qaRuntime"],
       { env: qaBuildEnv },
       params,
     );

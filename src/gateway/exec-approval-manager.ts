@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
-import { resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;

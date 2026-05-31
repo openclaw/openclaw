@@ -21,6 +21,8 @@ export type McpServerToolFilterConfig = {
 };
 
 export type McpServerConfig = {
+  /** Set false to keep the saved definition while excluding it from runtime/probe sessions. */
+  enabled?: boolean;
   /** Stdio transport: command to spawn. */
   command?: string;
   /** Stdio transport: arguments for the command. */
@@ -39,6 +41,34 @@ export type McpServerConfig = {
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
+  /** Optional connection timeout in seconds. */
+  connectTimeout?: number;
+  /** Optional per-request timeout in milliseconds. */
+  requestTimeoutMs?: number;
+  /** Optional per-request timeout in seconds. */
+  timeout?: number;
+  /** Whether this server can safely handle concurrent tool calls. */
+  supportsParallelToolCalls?: boolean;
+  /** HTTP OAuth mode. Tokens are stored in OpenClaw state, not in config. */
+  auth?: "oauth";
+  /** Optional OAuth client metadata overrides for HTTP MCP servers. */
+  oauth?: {
+    scope?: string;
+    redirectUrl?: string;
+    clientMetadataUrl?: string;
+  };
+  /** HTTP TLS verification, disabled only for explicitly trusted private endpoints. */
+  sslVerify?: boolean;
+  /** Alias for sslVerify. */
+  ssl_verify?: boolean;
+  /** HTTP mutual TLS client certificate path. */
+  clientCert?: string;
+  /** Alias for clientCert. */
+  client_cert?: string;
+  /** HTTP mutual TLS client key path. */
+  clientKey?: string;
+  /** Alias for clientKey. */
+  client_key?: string;
   /** Optional per-server OpenClaw MCP tool selection. */
   toolFilter?: McpServerToolFilterConfig;
   /** Codex-specific projection controls for Codex app-server/runtime config. */

@@ -164,7 +164,7 @@ describe("anthropic provider replay hooks", () => {
 
     expect(
       provider.normalizeConfig?.({
-        provider: "openai-codex",
+        provider: "openai",
         providerConfig,
       } as never),
     ).toBe(providerConfig);

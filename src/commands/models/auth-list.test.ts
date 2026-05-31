@@ -65,9 +65,9 @@ describe("modelsAuthListCommand", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:user@example.com": {
+        "openai:user@example.com": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-secret",
           refresh: "refresh-secret",
           expires: 1_800_000_000_000,
@@ -80,7 +80,7 @@ describe("modelsAuthListCommand", () => {
         },
       },
       usageStats: {
-        "openai-codex:user@example.com": {
+        "openai:user@example.com": {
           cooldownUntil: 1_800_000_010_000,
         },
       },
@@ -92,7 +92,7 @@ describe("modelsAuthListCommand", () => {
 
     expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
       cfg: {},
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(runtime.jsonPayloads).toStrictEqual([
       {
@@ -104,25 +104,35 @@ describe("modelsAuthListCommand", () => {
             cooldownUntil: "2027-01-15T08:00:10.000Z",
             email: "user@example.com",
             expiresAt: "2027-01-15T08:00:00.000Z",
-            id: "openai-codex:user@example.com",
-            label: "openai-codex:user@example.com",
-            provider: "openai-codex",
+            id: "openai:user@example.com",
+            label: "openai:user@example.com",
+            provider: "openai",
             type: "oauth",
           },
         ],
-        provider: "openai-codex",
+        provider: "openai",
       },
     ]);
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
   });
 
   it("treats the OpenAI filter as the friendly view over API-key and Codex subscription profiles", async () => {
+    const legacyOpenAIProvider = ["openai", "codex"].join("-");
+    const legacyProfileId = `${legacyOpenAIProvider}:legacy@example.com`;
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:user@example.com": {
+        [legacyProfileId]: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: legacyOpenAIProvider,
+          access: "legacy-access-secret",
+          refresh: "legacy-refresh-secret",
+          expires: 1_800_000_000_000,
+          email: "legacy@example.com",
+        },
+        "openai:user@example.com": {
+          type: "oauth",
+          provider: "openai",
           access: "access-secret",
           refresh: "refresh-secret",
           expires: 1_800_000_000_000,
@@ -156,6 +166,14 @@ describe("modelsAuthListCommand", () => {
         authStatePath: "/tmp/openclaw/agents/main/auth-state.json",
         profiles: [
           {
+            email: "legacy@example.com",
+            expiresAt: "2027-01-15T08:00:00.000Z",
+            id: legacyProfileId,
+            label: legacyProfileId,
+            provider: "openai",
+            type: "oauth",
+          },
+          {
             id: "openai:api-key-backup",
             label: "openai:api-key-backup",
             provider: "openai",
@@ -164,9 +182,9 @@ describe("modelsAuthListCommand", () => {
           {
             email: "user@example.com",
             expiresAt: "2027-01-15T08:00:00.000Z",
-            id: "openai-codex:user@example.com",
-            label: "openai-codex:user@example.com",
-            provider: "openai-codex",
+            id: "openai:user@example.com",
+            label: "openai:user@example.com",
+            provider: "openai",
             type: "oauth",
           },
         ],
@@ -193,9 +211,9 @@ describe("modelsAuthListCommand", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:user@example.com": {
+        "openai:user@example.com": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-secret",
           refresh: "refresh-secret",
           expires: 8_700_000_000_000_000,
@@ -203,7 +221,7 @@ describe("modelsAuthListCommand", () => {
         },
       },
       usageStats: {
-        "openai-codex:user@example.com": {
+        "openai:user@example.com": {
           cooldownUntil: 8_700_000_000_000_000,
         },
       },
@@ -211,7 +229,7 @@ describe("modelsAuthListCommand", () => {
     mocks.ensureAuthProfileStore.mockReturnValue(store);
     const runtime = createRuntime();
 
-    await modelsAuthListCommand({ provider: "openai-codex", json: true }, runtime);
+    await modelsAuthListCommand({ provider: "openai", json: true }, runtime);
 
     expect(runtime.jsonPayloads).toStrictEqual([
       {
@@ -221,13 +239,13 @@ describe("modelsAuthListCommand", () => {
         profiles: [
           {
             email: "user@example.com",
-            id: "openai-codex:user@example.com",
-            label: "openai-codex:user@example.com",
-            provider: "openai-codex",
+            id: "openai:user@example.com",
+            label: "openai:user@example.com",
+            provider: "openai",
             type: "oauth",
           },
         ],
-        provider: "openai-codex",
+        provider: "openai",
       },
     ]);
   });

@@ -1,14 +1,14 @@
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   getLoadedChannelPlugin,
   listChannelPlugins,
   resolveChannelApprovalAdapter,
 } from "../../channels/plugins/index.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
-import { resolveExpiresAtMsFromDurationMs } from "../../shared/number-coercion.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";

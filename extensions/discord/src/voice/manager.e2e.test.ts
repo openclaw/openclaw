@@ -2215,7 +2215,7 @@ describe("DiscordVoiceManager", () => {
       groupPolicy: "open",
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
@@ -2300,7 +2300,7 @@ describe("DiscordVoiceManager", () => {
     );
 
     const commandArgs = lastAgentCommandArgs();
-    expect(commandArgs.model).toBe("openai-codex/gpt-5.5");
+    expect(commandArgs.model).toBe("openai/gpt-5.5");
     expect(commandArgs.messageProvider).toBe("discord-voice");
     expect(commandArgs.toolsAllow).toBeUndefined();
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
@@ -4468,7 +4468,7 @@ describe("DiscordVoiceManager", () => {
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",

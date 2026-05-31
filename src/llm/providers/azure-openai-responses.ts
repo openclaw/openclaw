@@ -23,7 +23,7 @@ import { buildBaseOptions } from "./simple-options.js";
 const DEFAULT_AZURE_API_VERSION = "v1";
 const AZURE_TOOL_CALL_PROVIDERS = new Set([
   "openai",
-  "openai-codex",
+  "openai",
   "opencode",
   "azure-openai-responses",
 ]);

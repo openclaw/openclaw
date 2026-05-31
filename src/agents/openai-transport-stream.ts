@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -26,8 +28,6 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -90,7 +90,7 @@ const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
-const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai", "openai-codex"]);
+const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -1939,7 +1939,8 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
 function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
     OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
-    (model.api === "openai-codex-responses" || model.api === "openclaw-openai-responses-transport")
+    (model.api === "openai-chatgpt-responses" ||
+      model.api === "openclaw-openai-responses-transport")
   );
 }
 
@@ -2076,7 +2077,7 @@ export function buildOpenAIResponsesParams(
   const messages = convertResponsesMessages(
     model,
     context,
-    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses", "github-copilot"]),
+    new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,

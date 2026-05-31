@@ -2577,8 +2577,8 @@ describe("deliverOutboundPayloads", () => {
       { text: " ", mediaUrls: [] },
     ]);
     expect(normalized).toEqual([
-      { text: "hi", mediaUrls: [] },
-      { text: "", mediaUrls: ["https://x.test/a.jpg"] },
+      { text: "hi", mediaUrls: [], audioAsVoice: undefined },
+      { text: "", mediaUrls: ["https://x.test/a.jpg"], audioAsVoice: undefined },
     ]);
   });
 
@@ -2769,7 +2769,7 @@ describe("deliverOutboundPayloads", () => {
     const rawPayloads: DeliverOutboundPayload[] = [
       { text: "NO_REPLY" },
       { text: '{"action":"NO_REPLY"}' },
-      { text: "caption\nMEDIA:https://x.test/a.png" },
+      { text: "caption", mediaUrl: "https://x.test/a.png" },
       { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
     ];
 
@@ -2805,13 +2805,13 @@ describe("deliverOutboundPayloads", () => {
     expect(queuedDelivery?.payloads).toStrictEqual([
       { text: "NO_REPLY" },
       { text: '{"action":"NO_REPLY"}' },
-      { text: "caption\nMEDIA:https://x.test/a.png" },
+      { text: "caption", mediaUrl: "https://x.test/a.png" },
       { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
     ]);
     const renderedPlan = queuedDelivery?.renderedBatchPlan;
     expect(renderedPlan?.payloadCount).toBe(4);
     expect(renderedPlan?.textCount).toBe(4);
-    expect(renderedPlan?.mediaCount).toBe(1);
+    expect(renderedPlan?.mediaCount).toBe(2);
     const noReplyMediaItem = renderedPlan?.items?.find((item) => item.index === 3);
     expect(noReplyMediaItem?.kinds).toStrictEqual(["text", "media"]);
     expect(noReplyMediaItem?.text).toBe("NO_REPLY");

@@ -356,7 +356,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           },
         } as OpenClawConfig,
         model: {
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           provider: "gateway",
           id: "gpt-5.5",
           contextWindow: 8192,

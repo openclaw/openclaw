@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { streamSimple } from "../../stream.js";
 type AnthropicToolSchemaMode = "openai-functions";
 type AnthropicToolChoiceMode = "openai-string-modes";

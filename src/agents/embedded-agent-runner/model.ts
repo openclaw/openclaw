@@ -1,3 +1,4 @@
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
@@ -12,7 +13,6 @@ import {
   normalizeProviderResolvedModelWithPlugin,
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
-import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
@@ -27,7 +27,7 @@ import {
   shouldSuppressBuiltInModel,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
@@ -162,7 +162,7 @@ function discoverCachedAgentStoresForAgent(
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
   if (
-    !["openai", "openai-codex"].includes(normalizeProviderId(params.provider)) ||
+    normalizeProviderId(params.provider) !== "openai" ||
     params.model.id.trim().toLowerCase() !== "gpt-5.4-codex"
   ) {
     return params.model;

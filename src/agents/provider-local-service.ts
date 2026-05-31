@@ -1,12 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
-import type { Model } from "../llm/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import type { Model } from "../llm/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;

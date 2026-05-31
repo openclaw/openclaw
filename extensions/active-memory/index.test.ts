@@ -1875,7 +1875,7 @@ describe("active-memory plugin", () => {
       },
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://chatgpt.com/backend-api/codex",
             models: [
               {
@@ -1907,7 +1907,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    expect(lastEmbeddedRunParams().provider).toBe("openai-codex");
+    expect(lastEmbeddedRunParams().provider).toBe("openai");
     expect(lastEmbeddedRunParams().model).toBe("gpt-5.5");
   });
 

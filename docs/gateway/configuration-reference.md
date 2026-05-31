@@ -106,9 +106,19 @@ target server during config edits.
       remote: {
         url: "https://example.com/mcp",
         transport: "streamable-http", // streamable-http | sse
+        timeout: 20,
+        connectTimeout: 5,
+        supportsParallelToolCalls: true,
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
         },
+        auth: "oauth",
+        oauth: {
+          scope: "docs.read",
+        },
+        sslVerify: true,
+        clientCert: "/path/to/client.crt",
+        clientKey: "/path/to/client.key",
         toolFilter: {
           include: ["search_*"],
           exclude: ["admin_*"],
@@ -129,6 +139,20 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+- `mcp.servers.<name>.enabled`: set `false` to keep a saved server definition
+  while excluding it from embedded OpenClaw MCP discovery and tool projection.
+- `mcp.servers.<name>.timeout` / `requestTimeoutMs`: per-server MCP request
+  timeout in seconds or milliseconds.
+- `mcp.servers.<name>.connectTimeout` / `connectionTimeoutMs`: per-server
+  connection timeout in seconds or milliseconds.
+- `mcp.servers.<name>.supportsParallelToolCalls`: optional concurrency hint for
+  adapters that can choose whether to issue parallel MCP tool calls.
+- `mcp.servers.<name>.auth`: set `"oauth"` for HTTP MCP servers that require
+  OAuth. Run `openclaw mcp login <name>` to store tokens under OpenClaw state.
+- `mcp.servers.<name>.oauth`: optional OAuth scope, redirect URL, and client
+  metadata URL overrides.
+- `mcp.servers.<name>.sslVerify`, `clientCert`, `clientKey`: HTTP TLS controls
+  for private endpoints and mutual TLS.
 - `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
   limits the discovered MCP tools to matching names; `exclude` hides matching
   names. Entries are exact MCP tool names or simple `*` globs. Servers with

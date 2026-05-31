@@ -1,11 +1,11 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import type { AuthProfileConfig } from "../config/types.auth.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import type { AuthProfileConfig } from "../config/types.auth.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
 const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([

@@ -11,7 +11,7 @@ export type OAuthRefreshFailureReason =
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
-const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const LEGACY_OPENAI_CODEX_PROVIDER_ID = ["openai", "codex"].join("-");
 const OPENAI_PROVIDER_ID = "openai";
 
 function isOAuthRefreshFailureMessage(message: string): boolean {

@@ -42,8 +42,8 @@ function assistantMessage(text: string, timestamp: number) {
   return {
     role: "assistant" as const,
     content: [{ type: "text" as const, text }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
     model: "gpt-5.4-codex",
     usage: {
       input: 0,
@@ -69,7 +69,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     sessionFile,
     workspaceDir: tempDir,
     runId: "run-1",
-    provider: "openai-codex",
+    provider: "openai",
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(),
     thinkLevel: "medium",
@@ -368,8 +368,8 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.lastAssistant?.provider).toBe("openai-codex");
-    expect(result.lastAssistant?.api).toBe("openai-codex-responses");
+    expect(result.lastAssistant?.provider).toBe("openai");
+    expect(result.lastAssistant?.api).toBe("openai-chatgpt-responses");
     expect(result.lastAssistant?.model).toBe("gpt-5.5");
   });
 
@@ -390,7 +390,7 @@ describe("CodexAppServerEventProjector", () => {
         auth: {
           providerForAuth: "openai",
           authProfileProviderForAuth: "openai",
-          harnessAuthProvider: "openai-codex",
+          harnessAuthProvider: "openai",
           forwardedAuthProfileId: "openai:work",
         },
         observability: {
@@ -1158,7 +1158,7 @@ describe("CodexAppServerEventProjector", () => {
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
         runId: "run-1",
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4-codex",
         model: createCodexTestModel(),
         thinkLevel: "medium",

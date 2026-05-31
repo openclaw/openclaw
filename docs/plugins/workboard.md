@@ -140,14 +140,19 @@ Claimed cards reject agent-tool mutations from other agents unless the caller
 has the claim token returned by `workboard_claim`. Dashboard operators still use
 the normal Gateway RPC surface and can recover or reassign cards.
 
-Workboard stores all durable board data through the plugin SQLite key-value
-store. Cards live in `workboard.cards`, board metadata in `workboard.boards`,
-notification subscriptions in `workboard.notify`, and attachment blobs in
-`workboard.attachments`. Run history, comments, proof, artifact references,
-attachment indexes, diagnostics, dependencies, lifecycle events, worker logs,
-protocol state, and automation metadata stay on the card record so a card export
-preserves the board narrative without inlining attachment blob contents. Each
-attachment blob must fit one 64 KiB plugin state value after JSON serialization.
+Workboard stores durable board data in a plugin-owned relational SQLite database
+under the OpenClaw state directory. Boards, cards, labels, lifecycle events,
+run attempts, comments, dependency links, proof, artifact references,
+attachment metadata and blobs, diagnostics, notifications, worker logs,
+protocol state, and subscriptions are persisted in Workboard tables instead of
+plugin key-value entries. A card export still preserves the board narrative
+without inlining attachment blob contents.
+
+Installations that used Workboard in the `.28` release can run
+`openclaw doctor --fix` to migrate the shipped legacy plugin-state namespaces
+(`workboard.cards`, `workboard.boards`, and `workboard.notify`) into the
+relational database. If a legacy `workboard.attachments` namespace is present,
+doctor migrates those attachment blobs too.
 
 Workboard diagnostics are computed from local card metadata. The built-in checks
 flag assigned cards that wait too long, running cards without recent heartbeat,

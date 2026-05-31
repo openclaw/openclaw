@@ -223,8 +223,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 41222,
-    "roughTokens": 10306
+    "chars": 41505,
+    "roughTokens": 10377
   },
   "openClawDeveloperInstructions": {
     "chars": 2988,
@@ -235,8 +235,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6925
   },
   "totalWithDynamicToolsJson": {
-    "chars": 68924,
-    "roughTokens": 17231
+    "chars": 69207,
+    "roughTokens": 17302
   },
   "userInputText": {
     "chars": 1629,
@@ -685,6 +685,17 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
         "media": {
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
+        },
+        "mediaUrl": {
+          "description": "Alias for media.",
+          "type": "string"
+        },
+        "mediaUrls": {
+          "description": "Multiple media URLs/paths.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "message": {
           "type": "string"

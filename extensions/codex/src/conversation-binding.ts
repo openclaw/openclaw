@@ -714,13 +714,10 @@ function resolveThreadRequestModelProvider(params: {
   if (!modelProvider || modelProvider.toLowerCase() === "codex") {
     return undefined;
   }
-  if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    (modelProvider.toLowerCase() === "openai" || modelProvider.toLowerCase() === "openai-codex")
-  ) {
+  if (isCodexAppServerNativeAuthProfile(params) && modelProvider.toLowerCase() === "openai") {
     return undefined;
   }
-  return modelProvider.toLowerCase() === "openai-codex" ? "openai" : modelProvider;
+  return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
 }
 
 function buildAgentLookup(params: {

@@ -3,6 +3,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveAgentDir,
@@ -40,7 +41,6 @@ import {
 } from "../plugins/memory-runtime.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
@@ -667,6 +667,9 @@ async function hasApiKeyForProvider(
 }
 
 function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
+  if (provider === "openai") {
+    return "OPENAI_API_KEY";
+  }
   const metadata = resolveMemoryEmbeddingProviderDoctorMetadata(provider);
   return metadata?.envVars[0] ?? `${provider.toUpperCase()}_API_KEY`;
 }

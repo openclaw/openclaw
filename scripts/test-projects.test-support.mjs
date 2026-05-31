@@ -524,6 +524,14 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/e2e/plugin-lifecycle-matrix-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
   [
+    "scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs",
+    ["test/scripts/plugin-lifecycle-probe.test.ts"],
+  ],
+  [
+    "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh",
+    ["test/scripts/plugin-lifecycle-probe.test.ts"],
+  ],
+  [
     "scripts/e2e/release-media-memory-docker.sh",
     ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/release-media-memory-scenario.test.ts"],
   ],

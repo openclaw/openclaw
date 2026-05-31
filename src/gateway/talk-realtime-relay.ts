@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import { asDateTimestampMs, resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   buildRealtimeVoiceAgentConsultWorkingResponse,

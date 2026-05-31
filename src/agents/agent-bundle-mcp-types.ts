@@ -24,6 +24,8 @@ export type McpServerCatalog = {
     listChanged?: boolean;
     filteredCount?: number;
   };
+  requestTimeoutMs?: number;
+  supportsParallelToolCalls?: boolean;
   toolFilter?: {
     include?: string[];
     exclude?: string[];

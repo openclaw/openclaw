@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -33,7 +34,6 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,

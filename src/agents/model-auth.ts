@@ -1,4 +1,9 @@
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
@@ -15,11 +20,6 @@ import {
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
@@ -74,7 +74,7 @@ export type RuntimeProviderAuthLookup = {
 
 const log = createSubsystemLogger("model-auth");
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
 function directOpenAIPlatformModelRequiresApiKey(params: {
   provider: string;

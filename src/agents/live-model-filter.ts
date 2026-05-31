@@ -1,8 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
-import { parseStrictNonNegativeInteger } from "../shared/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 
 type ModelRef = {
@@ -139,9 +139,6 @@ function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
 }
 
 function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean {
-  if (provider === "openai-codex") {
-    return true;
-  }
   if (!isOpenAiFamilyLiveModel(provider, id)) {
     return false;
   }

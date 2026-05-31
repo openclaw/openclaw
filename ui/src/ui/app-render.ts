@@ -3008,6 +3008,7 @@ export function renderApp(state: AppViewState) {
                   },
                   agentsList: state.agentsList,
                   currentAgentId: resolvedAgentId ?? "main",
+                  fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
                   onAgentChange: (agentId: string) => {
                     switchChatSession(state, buildAgentMainSessionKey({ agentId }));
                   },

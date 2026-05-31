@@ -49,7 +49,7 @@ describe("hasUsableOAuthCredential", () => {
       hasUsableOAuthCredential(
         {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: now + DEFAULT_OAUTH_REFRESH_MARGIN_MS - 1,
@@ -112,7 +112,7 @@ describe("evaluateStoredCredentialEligibility", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "",
         refresh: "",
         expires: now + 60_000,

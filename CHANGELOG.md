@@ -30,6 +30,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Codex: keep public OpenAI API-key profiles from being treated as native Codex app-server auth while preserving persisted Codex OAuth sessions.
+- Control UI: keep collapsed tool cards labeled with the tool name and action instead of generic output text. Thanks @shakkernerd.
+- Agents/Codex: surface Skill Workshop guidance in Codex app-server prompts when `skill_workshop` is available. Thanks @shakkernerd.
 - CLI: keep `plugins list --json` on the snapshot-only path so plugin sweeps avoid loading the full runtime status graph.
 - Plugins: make PixVerse external-plugin ClawHub metadata explicit and keep it out of bundled dist builds.
 - Cron: keep SQLite cron migrations compatible with legacy run-log tables, archived job stores, diagnostic cron names, and legacy one-shot delete-after-run behavior. (#88285)
@@ -56,7 +59,11 @@ Docs: https://docs.openclaw.ai
 - CI/tooling: skip expensive import-graph scans once a changed diff already requires broad fallback, keeping local changed-test planning fast while still collecting explicit owner tests.
 - CI/tooling: route script edits through conventional owner tests when matching `test/scripts` or `src/scripts` coverage already exists.
 - CI/tooling: honor option terminators in the memory FD repro script so follow-on arguments are not reparsed.
+- Release/CI/E2E: assert plugin lifecycle runtime inspect output instead of only capturing it.
+- Release/CI/E2E: make gateway-network prove the advertised health RPC and retry early WebSocket closes without burning full open timeouts.
 - Release/CI/E2E: honor option terminators across release, Parallels smoke, plugin gauntlet, and extension-memory scripts.
+- Release/CI/E2E: fail plugin gateway gauntlet QA chunks when the requested suite summary is missing or invalid.
+- Performance: prebuild QA runtime probes with generated plugin assets but without CLI startup metadata.
 - Performance: skip declaration bundling for runtime-only CLI startup and gateway watch build profiles.
 - Performance: reuse prepared provider handles, strict tool schemas, gateway runtime metadata, session maintenance config, plugin metadata, bundled skill allowlists, package-local plugin artifacts, single-entry store writes, and validated/serialized session prompt blobs.
 

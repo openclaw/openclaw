@@ -828,7 +828,7 @@ export function convertMessages(
   const normalizeToolCallId = (id: string): string => {
     // Handle pipe-separated IDs from OpenAI Responses API
     // Format: {call_id}|{id} where {id} can be 400+ chars with special chars (+, /, =)
-    // These come from providers like github-copilot, openai-codex, opencode
+    // These come from providers like github-copilot, openai, opencode
     // Extract just the call_id part and normalize it
     if (id.includes("|")) {
       const [callId] = id.split("|");

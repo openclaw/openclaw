@@ -99,9 +99,9 @@ export function isSafeToUseExternalCliCredential(
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-    profileAliases: ["openai-codex:default"],
+    profileAliases: ["openai:default"],
     provider: "openai",
-    aliases: ["openai-codex", "codex", "codex-cli", "codex-app-server"],
+    aliases: ["openai", "codex", "codex-cli", "codex-app-server"],
     readCredentials: (options) =>
       readCodexCliCredentialsCached({
         ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
@@ -184,7 +184,7 @@ function externalCliProfileIdMatches(
     return false;
   }
   const normalizedPrefix = normalizeProviderId(getAuthProfileProviderPrefix(profileId));
-  return normalizedPrefix === "openai-codex";
+  return normalizedPrefix === "openai";
 }
 
 function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {

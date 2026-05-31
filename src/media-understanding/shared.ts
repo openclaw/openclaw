@@ -9,6 +9,11 @@ export {
   readProviderJsonObjectResponse,
   readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -28,11 +33,6 @@ import {
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
-import {
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-  resolveTimerTimeoutMs,
-} from "../shared/number-coercion.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";

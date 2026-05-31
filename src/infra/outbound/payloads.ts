@@ -397,7 +397,7 @@ export function formatOutboundPayloadLog(
     lines.push(payload.text.trimEnd());
   }
   for (const url of payload.mediaUrls) {
-    lines.push(`MEDIA:${url}`);
+    lines.push(`Attachment: ${url}`);
   }
   return lines.join("\n");
 }

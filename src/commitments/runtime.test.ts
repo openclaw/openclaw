@@ -188,7 +188,7 @@ describe("commitment extraction runtime", () => {
     cfg.agents = {
       defaults: {
         model: {
-          primary: "openai-codex/gpt-5.5",
+          primary: "openai/gpt-5.5",
         },
       },
     };
@@ -196,7 +196,7 @@ describe("commitment extraction runtime", () => {
       payloads: [{ text: '{"candidates":[]}' }],
     });
     resolveDefaultModelMock.mockReturnValue({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5",
     });
     configureCommitmentExtractionRuntime({
@@ -221,7 +221,7 @@ describe("commitment extraction runtime", () => {
     expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const request = requireFirstEmbeddedAgentRequest();
-    expect(request.provider).toBe("openai-codex");
+    expect(request.provider).toBe("openai");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);
   });

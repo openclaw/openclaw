@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -13,7 +14,6 @@ import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
   resolvePluginApprovalRequestAllowedDecisions,
 } from "../../infra/plugin-approvals.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalRequesterMetadata,

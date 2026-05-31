@@ -1,15 +1,15 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
-import { parseByteSize } from "../cli/parse-bytes.js";
-import type { CronConfig } from "../config/types.cron.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import type { Insertable, Selectable } from "kysely";
+import { parseByteSize } from "../cli/parse-bytes.js";
+import type { CronConfig } from "../config/types.cron.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,

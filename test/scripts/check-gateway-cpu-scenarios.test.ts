@@ -137,7 +137,7 @@ describe("gateway CPU scenario guard", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.summary.steps.map((step) => step.name)).toEqual(["private QA build", "qa suite"]);
-    expect(calls[0]?.args).toEqual(["scripts/build-all.mjs", "cliStartup"]);
+    expect(calls[0]?.args).toEqual(["scripts/build-all.mjs", "qaRuntime"]);
     expect(calls[0]?.env).toMatchObject({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",

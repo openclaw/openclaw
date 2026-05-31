@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -10,7 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import {
   canUseSecretsRuntimeFastPath,

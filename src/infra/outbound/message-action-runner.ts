@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -9,7 +13,6 @@ import {
 } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -34,12 +37,9 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -821,8 +821,10 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
     readStringParam(actionParams, "fileUrl", { trim: false });
+  const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
   const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
-  const hasMediaHint = Boolean(mediaHint) || attachmentMediaHints.length > 0;
+  const hasMediaHint =
+    Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
@@ -838,7 +840,10 @@ async function buildSendPayloadParts(params: {
     message = caption;
   }
 
-  const parsed = parseReplyDirectives(message);
+  const parsed = parseInlineDirectives(message, {
+    stripAudioTag: true,
+    stripReplyTags: true,
+  });
   const mergedMediaUrls: string[] = [];
   const seenMedia = new Set<string>();
   const pushMedia = (value?: string | null) => {
@@ -850,13 +855,12 @@ async function buildSendPayloadParts(params: {
     mergedMediaUrls.push(trimmed);
   };
   pushMedia(mediaHint);
+  for (const mediaUrlHint of mediaUrlHints) {
+    pushMedia(mediaUrlHint);
+  }
   for (const attachmentMediaHint of attachmentMediaHints) {
     pushMedia(attachmentMediaHint);
   }
-  for (const url of parsed.mediaUrls ?? []) {
-    pushMedia(url);
-  }
-  pushMedia(parsed.mediaUrl);
 
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,
@@ -910,8 +914,7 @@ async function buildSendPayloadParts(params: {
   const asVoice =
     readBooleanParam(actionParams, "asVoice") ??
     readBooleanParam(actionParams, "audioAsVoice") ??
-    parsed.audioAsVoice ??
-    false;
+    parsed.audioAsVoice;
   const bestEffort = readBooleanParam(actionParams, "bestEffort");
   const silent = readBooleanParam(actionParams, "silent");
   const mirrorMediaUrls =

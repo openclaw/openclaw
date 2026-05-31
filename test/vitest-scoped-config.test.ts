@@ -708,7 +708,7 @@ describe("scoped vitest configs", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
     expect(
       extensionExcludes.some((pattern) =>
-        path.matchesGlob("openai/openai-codex-provider.test.ts", pattern),
+        path.matchesGlob("openai/openai-chatgpt-provider.test.ts", pattern),
       ),
     ).toBe(true);
   });

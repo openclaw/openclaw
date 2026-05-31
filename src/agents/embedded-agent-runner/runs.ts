@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -18,7 +19,6 @@ import {
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
