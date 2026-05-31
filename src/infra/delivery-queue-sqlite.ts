@@ -1,6 +1,13 @@
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 type QueueStatus = "pending" | "failed";
+type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
 export type DeliveryQueueRowMetadata = {
   entryKind?: string;
@@ -31,7 +38,7 @@ type QueueRow = {
   recovery_state: string | null;
 };
 
-function db(stateDir?: string) {
+function openStateDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
     env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
   });
@@ -90,44 +97,51 @@ export function upsertDeliveryQueueEntry(params: {
   const now = Date.now();
   const status = params.status ?? "pending";
   const meta = params.metadata ?? metadata(params.entry);
-  db(params.stateDir)
-    .db.prepare(
-      `
-        INSERT INTO delivery_queue_entries (
-          queue_name, id, status, entry_kind, session_key, channel, target, account_id,
-          retry_count, last_attempt_at, last_error, recovery_state, platform_send_started_at,
-          entry_json, enqueued_at, updated_at, failed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(queue_name, id) DO UPDATE SET
-          status = excluded.status, entry_kind = excluded.entry_kind,
-          session_key = excluded.session_key, channel = excluded.channel,
-          target = excluded.target, account_id = excluded.account_id,
-          retry_count = excluded.retry_count, last_attempt_at = excluded.last_attempt_at,
-          last_error = excluded.last_error, recovery_state = excluded.recovery_state,
-          platform_send_started_at = excluded.platform_send_started_at,
-          entry_json = excluded.entry_json, enqueued_at = excluded.enqueued_at,
-          updated_at = excluded.updated_at, failed_at = excluded.failed_at
-      `,
-    )
-    .run(
-      params.queueName,
-      params.entry.id,
-      status,
-      meta.entryKind ?? null,
-      meta.sessionKey ?? null,
-      meta.channel ?? null,
-      meta.target ?? null,
-      meta.accountId ?? null,
-      params.entry.retryCount,
-      params.entry.lastAttemptAt ?? null,
-      params.entry.lastError ?? null,
-      params.entry.recoveryState ?? null,
-      params.entry.platformSendStartedAt ?? null,
-      JSON.stringify(params.entry),
-      params.entry.enqueuedAt,
-      now,
-      status === "failed" ? now : null,
-    );
+  const database = openStateDatabase(params.stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .insertInto("delivery_queue_entries")
+      .values({
+        queue_name: params.queueName,
+        id: params.entry.id,
+        status,
+        entry_kind: meta.entryKind ?? null,
+        session_key: meta.sessionKey ?? null,
+        channel: meta.channel ?? null,
+        target: meta.target ?? null,
+        account_id: meta.accountId ?? null,
+        retry_count: params.entry.retryCount,
+        last_attempt_at: params.entry.lastAttemptAt ?? null,
+        last_error: params.entry.lastError ?? null,
+        recovery_state: params.entry.recoveryState ?? null,
+        platform_send_started_at: params.entry.platformSendStartedAt ?? null,
+        entry_json: JSON.stringify(params.entry),
+        enqueued_at: params.entry.enqueuedAt,
+        updated_at: now,
+        failed_at: status === "failed" ? now : null,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["queue_name", "id"]).doUpdateSet({
+          status: (eb) => eb.ref("excluded.status"),
+          entry_kind: (eb) => eb.ref("excluded.entry_kind"),
+          session_key: (eb) => eb.ref("excluded.session_key"),
+          channel: (eb) => eb.ref("excluded.channel"),
+          target: (eb) => eb.ref("excluded.target"),
+          account_id: (eb) => eb.ref("excluded.account_id"),
+          retry_count: (eb) => eb.ref("excluded.retry_count"),
+          last_attempt_at: (eb) => eb.ref("excluded.last_attempt_at"),
+          last_error: (eb) => eb.ref("excluded.last_error"),
+          recovery_state: (eb) => eb.ref("excluded.recovery_state"),
+          platform_send_started_at: (eb) => eb.ref("excluded.platform_send_started_at"),
+          entry_json: (eb) => eb.ref("excluded.entry_json"),
+          enqueued_at: (eb) => eb.ref("excluded.enqueued_at"),
+          updated_at: (eb) => eb.ref("excluded.updated_at"),
+          failed_at: (eb) => eb.ref("excluded.failed_at"),
+        }),
+      ),
+  );
 }
 
 export function loadDeliveryQueueEntry(
@@ -135,14 +149,26 @@ export function loadDeliveryQueueEntry(
   id: string,
   stateDir?: string,
 ): DeliveryQueueEntryState | null {
-  const row = db(stateDir)
-    .db.prepare(
-      `SELECT id, entry_json, enqueued_at, retry_count, last_attempt_at, last_error,
-              platform_send_started_at, recovery_state
-         FROM delivery_queue_entries
-        WHERE queue_name = ? AND id = ? AND status = 'pending'`,
-    )
-    .get(queueName, id) as QueueRow | undefined;
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select([
+        "id",
+        "entry_json",
+        "enqueued_at",
+        "retry_count",
+        "last_attempt_at",
+        "last_error",
+        "platform_send_started_at",
+        "recovery_state",
+      ])
+      .where("queue_name", "=", queueName)
+      .where("id", "=", id)
+      .where("status", "=", "pending"),
+  ) as QueueRow | undefined;
   return row ? inflate(row) : null;
 }
 
@@ -150,24 +176,41 @@ export function loadDeliveryQueueEntries(
   queueName: string,
   stateDir?: string,
 ): DeliveryQueueEntryState[] {
-  const rows = db(stateDir)
-    .db.prepare(
-      `SELECT id, entry_json, enqueued_at, retry_count, last_attempt_at, last_error,
-              platform_send_started_at, recovery_state
-         FROM delivery_queue_entries
-        WHERE queue_name = ? AND status = 'pending'
-        ORDER BY enqueued_at ASC, id ASC`,
-    )
-    .all(queueName) as QueueRow[];
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select([
+        "id",
+        "entry_json",
+        "enqueued_at",
+        "retry_count",
+        "last_attempt_at",
+        "last_error",
+        "platform_send_started_at",
+        "recovery_state",
+      ])
+      .where("queue_name", "=", queueName)
+      .where("status", "=", "pending")
+      .orderBy("enqueued_at", "asc")
+      .orderBy("id", "asc"),
+  ).rows as QueueRow[];
   return rows.map(inflate);
 }
 
 export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir?: string): void {
-  db(stateDir)
-    .db.prepare(
-      "DELETE FROM delivery_queue_entries WHERE queue_name = ? AND id = ? AND status = 'pending'",
-    )
-    .run(queueName, id);
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .deleteFrom("delivery_queue_entries")
+      .where("queue_name", "=", queueName)
+      .where("id", "=", id)
+      .where("status", "=", "pending"),
+  );
 }
 
 export function updateDeliveryQueueEntry(

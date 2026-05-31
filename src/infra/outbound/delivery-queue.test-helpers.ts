@@ -45,6 +45,21 @@ export function readQueuedEntry(tmpDir: string, id: string): Record<string, unkn
   return JSON.parse(row.entry_json) as Record<string, unknown>;
 }
 
+export function readQueuedEntries(tmpDir: string): Record<string, unknown>[] {
+  const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
+  const rows = db
+    .prepare(
+      `
+        SELECT entry_json
+          FROM delivery_queue_entries
+         WHERE queue_name = 'outbound' AND status = 'pending'
+         ORDER BY enqueued_at ASC, id ASC
+      `,
+    )
+    .all() as Array<{ entry_json: string }>;
+  return rows.map((row) => JSON.parse(row.entry_json) as Record<string, unknown>);
+}
+
 export function setQueuedEntryState(
   tmpDir: string,
   id: string,

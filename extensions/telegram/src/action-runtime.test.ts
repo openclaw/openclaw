@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
@@ -233,23 +232,6 @@ function mockCall(source: MockCallSource, callIndex: number, label: string) {
 
 function resultDetails(result: Awaited<ReturnType<typeof handleTelegramAction>>) {
   return requireRecord(result.details, "Telegram action details");
-}
-
-function readDurableQueueEntries(stateDir: string): Record<string, unknown>[] {
-  const { db } = openOpenClawStateDatabase({
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  const rows = db
-    .prepare(
-      `
-        SELECT entry_json
-          FROM delivery_queue_entries
-         WHERE queue_name = 'outbound' AND status = 'pending'
-         ORDER BY enqueued_at ASC, id ASC
-      `,
-    )
-    .all() as Array<{ entry_json: string }>;
-  return rows.map((row) => JSON.parse(row.entry_json) as Record<string, unknown>);
 }
 
 describe("handleTelegramAction", () => {
@@ -663,12 +645,17 @@ describe("handleTelegramAction", () => {
 
   it("persists sendMessage action deliveries before Telegram platform send", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-action-durable-"));
-    const { createOutboundTestPlugin, createTestRegistry, setActivePluginRegistry } =
-      await import("openclaw/plugin-sdk/plugin-test-runtime");
+    const {
+      createOutboundTestPlugin,
+      createTestRegistry,
+      readQueuedDeliveryEntriesForTest,
+      setActivePluginRegistry,
+    } = await import("openclaw/plugin-sdk/plugin-test-runtime");
+    const readDurableQueueEntries = () => readQueuedDeliveryEntriesForTest(stateDir);
     const sendText = vi
       .fn()
       .mockImplementationOnce(async () => {
-        const entries = readDurableQueueEntries(stateDir);
+        const entries = readDurableQueueEntries();
         expect(entries).toHaveLength(1);
         expect(entries[0]).toMatchObject({
           channel: "telegram",
@@ -686,7 +673,7 @@ describe("handleTelegramAction", () => {
         throw new Error("telegram timeout");
       })
       .mockImplementationOnce(async () => {
-        const entries = readDurableQueueEntries(stateDir);
+        const entries = readDurableQueueEntries();
         const liveEntry = entries.find((entry) =>
           JSON.stringify(entry.payloads).includes("delivers after queue write"),
         );
@@ -747,7 +734,7 @@ describe("handleTelegramAction", () => {
         ),
       ).rejects.toThrow("telegram timeout");
 
-      const retryableEntries = readDurableQueueEntries(stateDir);
+      const retryableEntries = readDurableQueueEntries();
       expect(retryableEntries).toHaveLength(1);
       expect(retryableEntries[0]).toMatchObject({
         payloads: [
@@ -774,8 +761,8 @@ describe("handleTelegramAction", () => {
         ok: true,
         messageId: "tg-ok",
       });
-      expect(readDurableQueueEntries(stateDir)).toHaveLength(1);
-      expect(readDurableQueueEntries(stateDir)[0]).toMatchObject({
+      expect(readDurableQueueEntries()).toHaveLength(1);
+      expect(readDurableQueueEntries()[0]).toMatchObject({
         payloads: [
           {
             text: "times out after queue write",
