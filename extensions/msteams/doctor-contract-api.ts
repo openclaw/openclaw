@@ -25,15 +25,8 @@ function decodeSessionKey(fileStem: string): string | null {
   }
 }
 
-function decodeLegacySanitizedSessionKey(fileStem: string): string | null {
-  if (fileStem.startsWith("msteams_") && fileStem.length > "msteams_".length) {
-    return `msteams:${fileStem.slice("msteams_".length)}`;
-  }
-  return null;
-}
-
 function resolveLearningSessionKey(fileStem: string): string | null {
-  return decodeSessionKey(fileStem) ?? decodeLegacySanitizedSessionKey(fileStem);
+  return decodeSessionKey(fileStem);
 }
 
 function listAgentIds(config: { agents?: { list?: Array<{ id?: unknown }> } }): string[] {

@@ -46,7 +46,6 @@ describe("msteams doctor state migration", () => {
     const mainStorePath = path.join(stateDir, "agents", "main", "sessions");
     const workStorePath = path.join(stateDir, "agents", "work", "sessions");
     const encodedSessionKey = "msteams:user1";
-    const sanitizedSessionKey = "msteams:user2";
     const encodedSourcePath = path.join(
       mainStorePath,
       `${encodeSessionKey(encodedSessionKey)}.learnings.json`,
@@ -96,16 +95,16 @@ describe("msteams doctor state migration", () => {
       context,
     });
 
-    expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      expect.stringContaining("Migrated 2 Microsoft Teams feedback-learning entries"),
-      expect.stringContaining("Archived Microsoft Teams feedback-learning legacy source"),
+      expect.stringContaining("Migrated 1 Microsoft Teams feedback-learning entry"),
       expect.stringContaining("Archived Microsoft Teams feedback-learning legacy source"),
     ]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("legacy filename cannot be mapped to a session key"),
+    ]);
     await expect(fs.access(encodedSourcePath)).rejects.toThrow();
-    await expect(fs.access(sanitizedSourcePath)).rejects.toThrow();
+    await expect(fs.access(sanitizedSourcePath)).resolves.toBeUndefined();
     await expect(fs.access(`${encodedSourcePath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${sanitizedSourcePath}.migrated`)).resolves.toBeUndefined();
 
     const store = context.openPluginStateKeyedStore({
       namespace: "feedback-learnings",
@@ -114,10 +113,6 @@ describe("msteams doctor state migration", () => {
     await expect(store.lookup(encodeSessionKey(encodedSessionKey))).resolves.toMatchObject({
       sessionKey: encodedSessionKey,
       learnings: ["Be concise", "Use examples", "New runtime note"],
-    });
-    await expect(store.lookup(encodeSessionKey(sanitizedSessionKey))).resolves.toMatchObject({
-      sessionKey: sanitizedSessionKey,
-      learnings: ["Prefer cards"],
     });
   });
 });
