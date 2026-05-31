@@ -52,7 +52,7 @@ describe("copyToClipboard", () => {
     await expect(copyToClipboard(tokenUrl)).resolves.toBe(true);
 
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      ["/bin/sh", "-c", "cat | /mnt/c/Windows/System32/clip.exe"],
+      ["/bin/sh", "-c", "exec /mnt/c/Windows/System32/clip.exe"],
       {
         timeoutMs: 3000,
         input: tokenUrl,

@@ -1,9 +1,9 @@
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isWSL2Sync } from "./wsl.js";
 
-// WSL interop needs a shell to launch Windows PE binaries; use sh without
-// login/profile startup so tokenized dashboard URLs stay only on stdin.
-const WSL_CLIPBOARD_ARGV = ["/bin/sh", "-c", "cat | /mnt/c/Windows/System32/clip.exe"];
+// WSL interop needs a shell to launch Windows PE binaries; exec keeps the
+// clipboard process as the timeout-owned child while values stay on stdin.
+const WSL_CLIPBOARD_ARGV = ["/bin/sh", "-c", "exec /mnt/c/Windows/System32/clip.exe"];
 
 export async function copyToClipboard(value: string): Promise<boolean> {
   const attempts: Array<{ argv: string[] }> = [
