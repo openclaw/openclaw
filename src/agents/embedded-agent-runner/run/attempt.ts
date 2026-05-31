@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
@@ -34,7 +35,6 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";

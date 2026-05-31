@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
+import { detectMime } from "@openclaw/media-core/mime";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
   canonicalPathFromExistingAncestor,
@@ -9,7 +10,6 @@ import {
 } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
-import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import {
   REQUIRED_PARAM_GROUPS,

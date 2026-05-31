@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -15,7 +16,6 @@ import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../acp/runtime/session-identifiers.js";
-import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import {
   resolveChannelDefaultBindingPlacement,

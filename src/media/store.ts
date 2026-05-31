@@ -6,6 +6,12 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import {
+  basenameFromAnyPath,
+  extnameFromAnyPath,
+  nameFromAnyPath,
+} from "@openclaw/media-core/file-name";
+import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
@@ -14,8 +20,6 @@ import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-h
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
-import { basenameFromAnyPath, extnameFromAnyPath, nameFromAnyPath } from "./file-name.js";
-import { detectMime, extensionForMime } from "./mime.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");

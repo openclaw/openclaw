@@ -1770,6 +1770,12 @@ importers:
         specifier: 2026.5.28
         version: 2026.5.28
 
+  packages/acp-core:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
+
   packages/agent-core:
     dependencies:
       '@openclaw/llm-core':
@@ -1824,6 +1830,12 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
+  packages/media-core:
+    dependencies:
+      file-type:
+        specifier: 22.0.1
+        version: 22.0.1
+
   packages/media-generation-core: {}
 
   packages/media-understanding-common: {}
@@ -1877,6 +1889,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@openclaw/media-core':
+        specifier: workspace:*
+        version: link:../packages/media-core
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../packages/normalization-core

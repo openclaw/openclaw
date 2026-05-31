@@ -184,4 +184,4 @@ export {
   isTextSlashCommandTurn,
 } from "../auto-reply/command-turn-context.js";
 export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
-export { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
+export { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";

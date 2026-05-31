@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -61,7 +62,6 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   deleteMediaBuffer,

@@ -1,7 +1,7 @@
+import { isValidInboundPathRootPattern } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
-import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
   normalizeCommandDescription,
   normalizeSlashCommandName,
