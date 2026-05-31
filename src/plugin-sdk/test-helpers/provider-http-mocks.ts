@@ -1,6 +1,10 @@
 import { afterEach, vi, type Mock } from "vitest";
 import type {
+  assertOkOrThrowHttpError,
+  assertOkOrThrowProviderError,
+  fetchWithTimeout,
   pollProviderOperationJson,
+  postJsonRequest,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-http.js";
@@ -20,15 +24,28 @@ type ResolveProviderHttpRequestConfigResult = {
   dispatcherPolicy: undefined;
 };
 
-type AnyMock = Mock<(...args: any[]) => any>;
+type PostJsonRequestMock = Mock<
+  (params: Parameters<typeof postJsonRequest>[0]) => Promise<unknown>
+>;
+type FetchWithTimeoutMock = Mock<
+  (
+    url: Parameters<typeof fetchWithTimeout>[0],
+    init: Parameters<typeof fetchWithTimeout>[1],
+    timeoutMs: Parameters<typeof fetchWithTimeout>[2],
+    fetchFn?: Parameters<typeof fetchWithTimeout>[3],
+  ) => Promise<unknown>
+>;
+type PollProviderOperationJsonMock = Mock<
+  (params: PollProviderOperationJsonParams) => Promise<unknown>
+>;
 
 interface ProviderHttpMocks {
   resolveApiKeyForProviderMock: Mock<() => Promise<{ apiKey: string }>>;
-  postJsonRequestMock: AnyMock;
-  fetchWithTimeoutMock: AnyMock;
-  pollProviderOperationJsonMock: AnyMock;
-  assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
-  assertOkOrThrowProviderErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
+  postJsonRequestMock: PostJsonRequestMock;
+  fetchWithTimeoutMock: FetchWithTimeoutMock;
+  pollProviderOperationJsonMock: PollProviderOperationJsonMock;
+  assertOkOrThrowHttpErrorMock: Mock<typeof assertOkOrThrowHttpError>;
+  assertOkOrThrowProviderErrorMock: Mock<typeof assertOkOrThrowProviderError>;
   sanitizeConfiguredModelProviderRequestMock: Mock<
     (
       request: SanitizeConfiguredModelProviderRequestParams,
@@ -41,11 +58,24 @@ interface ProviderHttpMocks {
 
 const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
-  postJsonRequestMock: vi.fn(),
-  fetchWithTimeoutMock: vi.fn(),
-  pollProviderOperationJsonMock: vi.fn(),
-  assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
-  assertOkOrThrowProviderErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
+  postJsonRequestMock: vi.fn<(params: Parameters<typeof postJsonRequest>[0]) => Promise<unknown>>(),
+  fetchWithTimeoutMock:
+    vi.fn<
+      (
+        url: Parameters<typeof fetchWithTimeout>[0],
+        init: Parameters<typeof fetchWithTimeout>[1],
+        timeoutMs: Parameters<typeof fetchWithTimeout>[2],
+        fetchFn?: Parameters<typeof fetchWithTimeout>[3],
+      ) => Promise<unknown>
+    >(),
+  pollProviderOperationJsonMock:
+    vi.fn<(params: PollProviderOperationJsonParams) => Promise<unknown>>(),
+  assertOkOrThrowHttpErrorMock: vi.fn<typeof assertOkOrThrowHttpError>(
+    async (_response: Response, _label: string) => {},
+  ),
+  assertOkOrThrowProviderErrorMock: vi.fn<typeof assertOkOrThrowProviderError>(
+    async (_response: Response, _label: string) => {},
+  ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn(
     (request: SanitizeConfiguredModelProviderRequestParams) => request,
   ),
@@ -60,7 +90,7 @@ const providerHttpMocks = vi.hoisted(() => ({
 providerHttpMocks.pollProviderOperationJsonMock.mockImplementation(
   async (params: PollProviderOperationJsonParams) => {
     for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
-      const response = await providerHttpMocks.fetchWithTimeoutMock(
+      const response = (await providerHttpMocks.fetchWithTimeoutMock(
         params.url,
         {
           method: "GET",
@@ -68,7 +98,7 @@ providerHttpMocks.pollProviderOperationJsonMock.mockImplementation(
         },
         params.defaultTimeoutMs,
         params.fetchFn,
-      );
+      )) as Response;
       await providerHttpMocks.assertOkOrThrowHttpErrorMock(response, params.requestFailedMessage);
       const payload = await response.json();
       if (params.isComplete(payload)) {

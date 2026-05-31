@@ -6,26 +6,32 @@ type ChannelRegistryValueResolver<TValue> = (
   entry: PluginChannelRegistration,
 ) => TValue | undefined;
 
+type ChannelRegistryLookup<TValue> = { found: true; value: TValue | undefined } | { found: false };
+
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
   return async (id: ChannelId): Promise<TValue | undefined> => {
     const resolveFromRegistry = (
       registry: ReturnType<typeof getActivePluginRegistry>,
-    ): TValue | undefined => {
+    ): ChannelRegistryLookup<TValue> => {
       const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
-      return pluginEntry ? resolveValue(pluginEntry) : undefined;
+      return pluginEntry ? { found: true, value: resolveValue(pluginEntry) } : { found: false };
     };
 
     const channelRegistry = getActivePluginChannelRegistry();
-    const channelValue = resolveFromRegistry(channelRegistry);
-    if (channelValue !== undefined) {
-      return channelValue;
+    const channelResult = resolveFromRegistry(channelRegistry);
+    if (!channelResult.found) {
+      return undefined;
+    }
+    if (channelResult.value !== undefined) {
+      return channelResult.value;
     }
 
     const activeRegistry = getActivePluginRegistry();
     if (activeRegistry && activeRegistry !== channelRegistry) {
-      return resolveFromRegistry(activeRegistry);
+      const activeResult = resolveFromRegistry(activeRegistry);
+      return activeResult.found ? activeResult.value : undefined;
     }
 
     return undefined;

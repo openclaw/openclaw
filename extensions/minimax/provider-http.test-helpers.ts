@@ -1,4 +1,9 @@
-import type { resolveProviderHttpRequestConfig } from "openclaw/plugin-sdk/provider-http";
+import type {
+  assertOkOrThrowHttpError,
+  fetchWithTimeout,
+  postJsonRequest,
+  resolveProviderHttpRequestConfig,
+} from "openclaw/plugin-sdk/provider-http";
 import { afterEach, vi, type Mock } from "vitest";
 
 type ResolveProviderHttpRequestConfigParams = Parameters<
@@ -12,13 +17,23 @@ type ResolveProviderHttpRequestConfigResult = {
   dispatcherPolicy: undefined;
 };
 
-type AnyMock = Mock<(...args: any[]) => any>;
+type PostJsonRequestMock = Mock<
+  (params: Parameters<typeof postJsonRequest>[0]) => Promise<unknown>
+>;
+type FetchWithTimeoutMock = Mock<
+  (
+    url: Parameters<typeof fetchWithTimeout>[0],
+    init: Parameters<typeof fetchWithTimeout>[1],
+    timeoutMs: Parameters<typeof fetchWithTimeout>[2],
+    fetchFn?: Parameters<typeof fetchWithTimeout>[3],
+  ) => Promise<unknown>
+>;
 
 interface MinimaxProviderHttpMocks {
   resolveApiKeyForProviderMock: Mock<() => Promise<{ apiKey: string }>>;
-  postJsonRequestMock: AnyMock;
-  fetchWithTimeoutMock: AnyMock;
-  assertOkOrThrowHttpErrorMock: Mock<() => Promise<void>>;
+  postJsonRequestMock: PostJsonRequestMock;
+  fetchWithTimeoutMock: FetchWithTimeoutMock;
+  assertOkOrThrowHttpErrorMock: Mock<typeof assertOkOrThrowHttpError>;
   resolveProviderHttpRequestConfigMock: Mock<
     (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
   >;
@@ -26,9 +41,19 @@ interface MinimaxProviderHttpMocks {
 
 const minimaxProviderHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
-  postJsonRequestMock: vi.fn(),
-  fetchWithTimeoutMock: vi.fn(),
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  postJsonRequestMock: vi.fn<(params: Parameters<typeof postJsonRequest>[0]) => Promise<unknown>>(),
+  fetchWithTimeoutMock:
+    vi.fn<
+      (
+        url: Parameters<typeof fetchWithTimeout>[0],
+        init: Parameters<typeof fetchWithTimeout>[1],
+        timeoutMs: Parameters<typeof fetchWithTimeout>[2],
+        fetchFn?: Parameters<typeof fetchWithTimeout>[3],
+      ) => Promise<unknown>
+    >(),
+  assertOkOrThrowHttpErrorMock: vi.fn<typeof assertOkOrThrowHttpError>(
+    async (_response: Response, _label: string) => {},
+  ),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork: false,
