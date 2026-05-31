@@ -59,6 +59,9 @@ export type CanonicalInboundMessageHookContext = {
   isGroup: boolean;
   groupId?: string;
   topicName?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
   trace?: DiagnosticTraceContext;
   callDepth?: number;
 };
@@ -158,6 +161,9 @@ export function deriveInboundMessageHookContext(
     isGroup,
     groupId: isGroup ? conversationId : undefined,
     topicName: ctx.TopicName,
+    replyToId: ctx.ReplyToId,
+    replyToBody: ctx.ReplyToBody,
+    replyToSender: ctx.ReplyToSender,
   };
 }
 
