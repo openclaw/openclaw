@@ -759,6 +759,12 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   const adapter = getNativeHookRelayProviderAdapter(provider);
   const message = params.message?.trim() || "Native hook relay unavailable";
   if (event === "pre_tool_use") {
+    // A stale or missing relay should not turn basic tool execution into a
+    // hard failure when OpenClaw has no before-tool policy to enforce. If a
+    // policy exists, keep the fail-closed behavior.
+    if (!hasBeforeToolCallPolicy()) {
+      return adapter.renderNoopResponse(event);
+    }
     return adapter.renderPreToolUseBlockResponse(message);
   }
   if (event === "permission_request") {
