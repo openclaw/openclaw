@@ -1026,7 +1026,20 @@ function normalizeNpmRegistryUrl(value: string | undefined | null): string | nul
 }
 
 function isPublicNpmRegistry(value: string | undefined | null): boolean {
-  return normalizeNpmRegistryUrl(value) === PUBLIC_NPM_REGISTRY;
+  const normalized = normalizeNpmRegistryUrl(value);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    const url = new URL(normalized);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      url.host === "registry.npmjs.org" &&
+      url.pathname === "/"
+    );
+  } catch {
+    return normalized === PUBLIC_NPM_REGISTRY;
+  }
 }
 
 function readNpmRegistryEnv(env: NodeJS.ProcessEnv): string | null {
