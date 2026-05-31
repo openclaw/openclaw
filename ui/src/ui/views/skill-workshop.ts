@@ -127,9 +127,11 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
     : null;
   const allPending = props.proposals.filter((p) => p.status === "pending");
   const todayHero = selected ?? allPending[0] ?? props.proposals[0];
+  const hasNoProposals = props.proposals.length === 0 && !props.loading && !props.error;
 
-  const body =
-    props.mode === "today"
+  const body = hasNoProposals
+    ? renderWorkshopEmptyState(props)
+    : props.mode === "today"
       ? renderToday(props, todayHero, allPending)
       : renderBoard(props, filtered, groups, selected);
 
@@ -500,6 +502,25 @@ function renderEmpty() {
       <p class="sw-empty__sub">
         Try a different lifecycle tab or clear the search to see everything.
       </p>
+    </div>
+  `;
+}
+
+function renderWorkshopEmptyState(props: SkillWorkshopProps) {
+  const assistantName = props.assistantName.trim() || "Your agent";
+  return html`
+    <div class="sw-empty-state">
+      <section class="sw-empty-state__panel" aria-label="No Skill Workshop proposals">
+        <div class="sw-empty-state__glyph" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <p class="sw-empty-state__eyebrow">Skill Workshop</p>
+        <h2>No proposals yet</h2>
+        <p>${assistantName} hasn't drafted any skill proposals.</p>
+        <div class="sw-empty-state__footer">New proposals will appear here for review.</div>
+      </section>
     </div>
   `;
 }
