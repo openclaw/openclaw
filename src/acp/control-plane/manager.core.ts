@@ -48,6 +48,7 @@ import {
   applyManagerRuntimeControls,
   resolveManagerRuntimeCapabilities,
 } from "./manager.runtime-controls.js";
+import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
   awaitTurnWithTimeout,
@@ -81,10 +82,7 @@ import {
   resolveAcpAgentFromSessionKey,
   resolveAcpSessionResolutionError,
   resolveMissingMetaError,
-  resolveRuntimeIdleTtlMs,
 } from "./manager.utils.js";
-import { RuntimeCache } from "./runtime-cache.js";
-import type { CachedRuntimeState } from "./runtime-cache.js";
 import {
   inferRuntimeOptionPatchFromConfigOption,
   mergeRuntimeOptions,
@@ -103,7 +101,7 @@ const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
-  private readonly runtimeCache = new RuntimeCache();
+  private readonly runtimeHandles = new ManagerRuntimeHandleCache();
   private readonly activeTurnBySession = new Map<string, ActiveTurnState>();
   private readonly turnLatencyStats: TurnLatencyStats = {
     completed: 0,
@@ -112,8 +110,6 @@ export class AcpSessionManager {
     maxMs: 0,
   };
   private readonly errorCountsByCode = new Map<string, number>();
-  private evictedRuntimeCount = 0;
-  private lastEvictedAt: number | undefined;
   private readonly deps: AcpSessionManagerDeps;
 
   constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
@@ -158,12 +154,7 @@ export class AcpSessionManager {
     const averageLatencyMs =
       completedTurns > 0 ? Math.round(this.turnLatencyStats.totalMs / completedTurns) : 0;
     return {
-      runtimeCache: {
-        activeSessions: this.runtimeCache.size(),
-        idleTtlMs: resolveRuntimeIdleTtlMs(cfg),
-        evictedTotal: this.evictedRuntimeCount,
-        ...(this.lastEvictedAt ? { lastEvictedAt: this.lastEvictedAt } : {}),
-      },
+      runtimeCache: this.runtimeHandles.getObservabilitySnapshot(cfg),
       turns: {
         active: this.activeTurnBySession.size,
         queueDepth: this.actorQueue.getTotalPendingCount(),
@@ -259,7 +250,7 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     const agent = normalizeAgentId(input.agent);
-    await this.evictIdleRuntimeHandles({ cfg: input.cfg });
+    await this.evictIdleRuntimeHandles(input.cfg);
     return await this.withSessionActor(sessionKey, async () => {
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
       const runtime = backend.runtime;
@@ -362,7 +353,7 @@ export class AcpSessionManager {
           `Could not persist ACP metadata for ${sessionKey}.`,
         );
       }
-      this.setCachedRuntimeState(sessionKey, {
+      this.runtimeHandles.set(sessionKey, {
         runtime,
         handle,
         backend: handle.backend || backend.id,
@@ -389,7 +380,7 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
     this.throwIfAborted(params.signal);
-    await this.evictIdleRuntimeHandles({ cfg: params.cfg });
+    await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(
       sessionKey,
       async () => {
@@ -466,7 +457,7 @@ export class AcpSessionManager {
     }
     const runtimeMode = validateRuntimeModeInput(params.runtimeMode);
 
-    await this.evictIdleRuntimeHandles({ cfg: params.cfg });
+    await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(sessionKey, async () => {
       const resolution = this.resolveSession({
         cfg: params.cfg,
@@ -523,7 +514,7 @@ export class AcpSessionManager {
     const key = normalizedOption.key;
     const value = normalizedOption.value;
 
-    await this.evictIdleRuntimeHandles({ cfg: params.cfg });
+    await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(sessionKey, async () => {
       const resolution = this.resolveSession({
         cfg: params.cfg,
@@ -602,7 +593,7 @@ export class AcpSessionManager {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
 
-    await this.evictIdleRuntimeHandles({ cfg: params.cfg });
+    await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(sessionKey, async () => {
       const resolution = this.resolveSession({
         cfg: params.cfg,
@@ -630,7 +621,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles({ cfg: params.cfg });
+    await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(sessionKey, async () => {
       const resolution = this.resolveSession({
         cfg: params.cfg,
@@ -651,7 +642,7 @@ export class AcpSessionManager {
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "Could not reset ACP runtime options.",
       });
-      this.clearCachedRuntimeState(sessionKey);
+      this.runtimeHandles.clear(sessionKey);
       await this.persistRuntimeOptions({
         cfg: params.cfg,
         sessionKey,
@@ -669,7 +660,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles({ cfg: input.cfg });
+    await this.evictIdleRuntimeHandles(input.cfg);
     await this.withSessionActor(
       sessionKey,
       async () => {
@@ -748,7 +739,7 @@ export class AcpSessionManager {
           for (let backendIdx = 0; backendIdx < candidateBackends.length; backendIdx += 1) {
             const currentBackend = candidateBackends[backendIdx];
             if (backendIdx > 0) {
-              await this.closeCachedRuntimeState({
+              await this.runtimeHandles.close({
                 sessionKey,
                 reason: "backend-failover",
               });
@@ -881,7 +872,7 @@ export class AcpSessionManager {
                       activeTurn,
                       mode: sessionMode,
                       clearCachedRuntimeStateIfHandleMatches: (turn) => {
-                        this.clearCachedRuntimeStateIfHandleMatches({
+                        this.runtimeHandles.clearIfHandleMatches({
                           sessionKey,
                           handle: turn.handle,
                         });
@@ -991,7 +982,7 @@ export class AcpSessionManager {
                       `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
                     );
                   } finally {
-                    this.clearCachedRuntimeState(sessionKey);
+                    this.runtimeHandles.clear(sessionKey);
                   }
                 }
               }
@@ -1019,7 +1010,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles({ cfg: params.cfg });
+    await this.evictIdleRuntimeHandles(params.cfg);
     const actorKey = normalizeActorKey(sessionKey);
     const activeTurn = this.activeTurnBySession.get(actorKey);
     if (activeTurn) {
@@ -1090,7 +1081,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    await this.evictIdleRuntimeHandles({ cfg: input.cfg });
+    await this.evictIdleRuntimeHandles(input.cfg);
     return await this.withSessionActor(sessionKey, async () => {
       const resolution = this.resolveSession({
         cfg: input.cfg,
@@ -1130,7 +1121,7 @@ export class AcpSessionManager {
             );
           }
         }
-        this.clearCachedRuntimeState(sessionKey);
+        this.runtimeHandles.clear(sessionKey);
       } else {
         try {
           const { runtime: ensuredRuntime, handle } = await this.ensureRuntimeHandle({
@@ -1149,7 +1140,7 @@ export class AcpSessionManager {
             fallbackMessage: "ACP close failed before completion.",
           });
           runtimeClosed = true;
-          this.clearCachedRuntimeState(sessionKey);
+          this.runtimeHandles.clear(sessionKey);
         } catch (error) {
           const acpError = toAcpRuntimeError({
             error,
@@ -1183,7 +1174,7 @@ export class AcpSessionManager {
             }
             // Treat unavailable backends as terminal for this cached handle so it
             // cannot continue counting against maxConcurrentSessions.
-            this.clearCachedRuntimeState(sessionKey);
+            this.runtimeHandles.clear(sessionKey);
             runtimeNotice = acpError.message;
           } else {
             throw acpError;
@@ -1236,14 +1227,14 @@ export class AcpSessionManager {
     const thinking = normalizeText(runtimeOptions.thinking);
     const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
     const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
-    const cached = this.getCachedRuntimeState(params.sessionKey);
+    const cached = this.runtimeHandles.get(params.sessionKey);
     if (cached) {
       const backendMatches = !configuredBackend || cached.backend === configuredBackend;
       const agentMatches = cached.agent === agent;
       const modeMatches = cached.mode === mode;
       const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
       const configMatches = cached.configSignature === configSignature;
-      const handleMatchesMeta = this.runtimeHandleMatchesMeta({
+      const handleMatchesMeta = this.runtimeHandles.handleMatchesMeta({
         handle: cached.handle,
         meta: params.meta,
       });
@@ -1254,7 +1245,7 @@ export class AcpSessionManager {
         cwdMatches &&
         configMatches &&
         handleMatchesMeta &&
-        (await this.isCachedRuntimeHandleReusable({
+        (await this.runtimeHandles.isReusable({
           sessionKey: params.sessionKey,
           runtime: cached.runtime,
           handle: cached.handle,
@@ -1266,7 +1257,7 @@ export class AcpSessionManager {
           meta: params.meta,
         };
       }
-      await this.closeCachedRuntimeState({
+      await this.runtimeHandles.close({
         sessionKey: params.sessionKey,
         reason: "runtime-handle-replaced",
       });
@@ -1400,7 +1391,7 @@ export class AcpSessionManager {
         },
       });
     }
-    this.setCachedRuntimeState(params.sessionKey, {
+    this.runtimeHandles.set(params.sessionKey, {
       runtime,
       handle: nextHandle,
       backend: ensured.backend || backend.id,
@@ -1415,48 +1406,6 @@ export class AcpSessionManager {
       handle: nextHandle,
       meta: nextMeta,
     };
-  }
-
-  private async isCachedRuntimeHandleReusable(params: {
-    sessionKey: string;
-    runtime: AcpRuntime;
-    handle: AcpRuntimeHandle;
-  }): Promise<boolean> {
-    if (!params.runtime.getStatus) {
-      return true;
-    }
-    try {
-      const status = await params.runtime.getStatus({
-        handle: params.handle,
-      });
-      if (this.isRuntimeStatusUnavailable(status)) {
-        this.clearCachedRuntimeState(params.sessionKey);
-        logVerbose(
-          `acp-manager: evicting cached runtime handle for ${params.sessionKey} after unhealthy status probe: ${status.summary ?? "status unavailable"}`,
-        );
-        return false;
-      }
-      return true;
-    } catch (error) {
-      this.clearCachedRuntimeState(params.sessionKey);
-      logVerbose(
-        `acp-manager: evicting cached runtime handle for ${params.sessionKey} after status probe failed: ${String(error)}`,
-      );
-      return false;
-    }
-  }
-
-  private isRuntimeStatusUnavailable(status: AcpRuntimeStatus | undefined): boolean {
-    if (!status) {
-      return false;
-    }
-    const detailsStatus = normalizeLowercaseStringOrEmpty(status.details?.status);
-    if (detailsStatus === "dead" || detailsStatus === "no-session") {
-      return true;
-    }
-    const summaryMatch = status.summary?.match(/\bstatus=([^\s]+)/i);
-    const summaryStatus = normalizeLowercaseStringOrEmpty(summaryMatch?.[1]);
-    return summaryStatus === "dead" || summaryStatus === "no-session";
   }
 
   private async persistRuntimeOptions(params: {
@@ -1493,12 +1442,12 @@ export class AcpSessionManager {
       failOnError: true,
     });
 
-    const cached = this.getCachedRuntimeState(params.sessionKey);
+    const cached = this.runtimeHandles.get(params.sessionKey);
     if (!cached) {
       return;
     }
     if ((cached.cwd ?? "") !== (normalized.cwd ?? "")) {
-      this.clearCachedRuntimeState(params.sessionKey);
+      this.runtimeHandles.clear(params.sessionKey);
       return;
     }
     // Persisting options does not guarantee this process pushed all controls to the runtime.
@@ -1512,11 +1461,10 @@ export class AcpSessionManager {
       return;
     }
     const limit = Math.max(1, Math.floor(configuredLimit));
-    const actorKey = normalizeActorKey(params.sessionKey);
-    if (this.runtimeCache.has(actorKey)) {
+    if (this.runtimeHandles.has(params.sessionKey)) {
       return;
     }
-    const activeCount = this.runtimeCache.size();
+    const activeCount = this.runtimeHandles.size();
     if (activeCount >= limit) {
       throw new AcpRuntimeError(
         "ACP_SESSION_INIT_FAILED",
@@ -1555,7 +1503,7 @@ export class AcpSessionManager {
       return false;
     }
     if (this.isRecoverableAcpxExitError(params.error.message)) {
-      this.clearCachedRuntimeState(params.sessionKey);
+      this.runtimeHandles.clear(params.sessionKey);
       logVerbose(
         `acp-manager: retrying ${params.sessionKey} with a fresh runtime handle after early turn failure: ${params.error.message}`,
       );
@@ -1588,7 +1536,7 @@ export class AcpSessionManager {
         return false;
       }
     }
-    this.clearCachedRuntimeState(params.sessionKey);
+    this.runtimeHandles.clear(params.sessionKey);
     logVerbose(
       `acp-manager: retrying ${params.sessionKey} with a fresh persistent session after missing backend resume target: ${params.error.message}`,
     );
@@ -1699,56 +1647,20 @@ export class AcpSessionManager {
     });
   }
 
-  private async evictIdleRuntimeHandles(params: { cfg: OpenClawConfig }): Promise<void> {
-    const idleTtlMs = resolveRuntimeIdleTtlMs(params.cfg);
-    if (idleTtlMs <= 0 || this.runtimeCache.size() === 0) {
-      return;
-    }
-    const now = Date.now();
-    const candidates = this.runtimeCache.collectIdleCandidates({
-      maxIdleMs: idleTtlMs,
-      now,
-    });
-    if (candidates.length === 0) {
-      return;
-    }
-
-    for (const candidate of candidates) {
-      await this.actorQueue.run(candidate.actorKey, async () => {
-        if (this.activeTurnBySession.has(candidate.actorKey)) {
-          return;
-        }
-        const lastTouchedAt = this.runtimeCache.getLastTouchedAt(candidate.actorKey);
-        if (lastTouchedAt == null || now - lastTouchedAt < idleTtlMs) {
-          return;
-        }
-        const cached = this.runtimeCache.peek(candidate.actorKey);
-        if (!cached) {
-          return;
-        }
-        this.runtimeCache.clear(candidate.actorKey);
-        this.evictedRuntimeCount += 1;
-        this.lastEvictedAt = Date.now();
-        try {
-          await cached.runtime.close({
-            handle: cached.handle,
-            reason: "idle-evicted",
-          });
-        } catch (error) {
-          logVerbose(
-            `acp-manager: idle eviction close failed for ${candidate.state.handle.sessionKey}: ${String(error)}`,
-          );
-        }
-      });
-    }
-  }
-
   private async resolveRuntimeCapabilities(params: {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
     includeStatusConfigOptionKeys?: boolean;
   }): Promise<AcpRuntimeCapabilities> {
     return await resolveManagerRuntimeCapabilities(params);
+  }
+
+  private async evictIdleRuntimeHandles(cfg: OpenClawConfig): Promise<void> {
+    await this.runtimeHandles.evictIdle({
+      cfg,
+      actorQueue: this.actorQueue,
+      activeTurnBySession: this.activeTurnBySession,
+    });
   }
 
   private async applyRuntimeControls(params: {
@@ -1759,7 +1671,7 @@ export class AcpSessionManager {
   }): Promise<void> {
     await applyManagerRuntimeControls({
       ...params,
-      getCachedRuntimeState: (sessionKey) => this.getCachedRuntimeState(sessionKey),
+      getCachedRuntimeState: (sessionKey) => this.runtimeHandles.get(sessionKey),
     });
   }
 
@@ -1822,7 +1734,7 @@ export class AcpSessionManager {
     return await reconcileManagerRuntimeSessionIdentifiers({
       ...params,
       setCachedHandle: (sessionKey, handle) => {
-        const cached = this.getCachedRuntimeState(sessionKey);
+        const cached = this.runtimeHandles.get(sessionKey);
         if (cached) {
           cached.handle = handle;
         }
@@ -1924,81 +1836,5 @@ export class AcpSessionManager {
       return;
     }
     throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP operation aborted.");
-  }
-
-  private getCachedRuntimeState(sessionKey: string): CachedRuntimeState | null {
-    return this.runtimeCache.get(normalizeActorKey(sessionKey));
-  }
-
-  private setCachedRuntimeState(sessionKey: string, state: CachedRuntimeState): void {
-    this.runtimeCache.set(normalizeActorKey(sessionKey), state);
-  }
-
-  private clearCachedRuntimeState(sessionKey: string): void {
-    this.runtimeCache.clear(normalizeActorKey(sessionKey));
-  }
-
-  private async closeCachedRuntimeState(params: {
-    sessionKey: string;
-    reason: string;
-  }): Promise<void> {
-    const cached = this.getCachedRuntimeState(params.sessionKey);
-    if (!cached) {
-      return;
-    }
-    try {
-      await cached.runtime.close({
-        handle: cached.handle,
-        reason: params.reason,
-      });
-    } catch (error) {
-      logVerbose(
-        `acp-manager: cached runtime close failed for ${params.sessionKey}: ${String(error)}`,
-      );
-    } finally {
-      this.clearCachedRuntimeState(params.sessionKey);
-    }
-  }
-
-  private clearCachedRuntimeStateIfHandleMatches(params: {
-    sessionKey: string;
-    handle: AcpRuntimeHandle;
-  }): void {
-    const cached = this.getCachedRuntimeState(params.sessionKey);
-    if (!cached || !this.runtimeHandlesMatch(cached.handle, params.handle)) {
-      return;
-    }
-    this.clearCachedRuntimeState(params.sessionKey);
-  }
-
-  private runtimeHandlesMatch(a: AcpRuntimeHandle, b: AcpRuntimeHandle): boolean {
-    return (
-      a.sessionKey === b.sessionKey &&
-      a.backend === b.backend &&
-      a.runtimeSessionName === b.runtimeSessionName &&
-      (a.cwd ?? "") === (b.cwd ?? "") &&
-      (a.acpxRecordId ?? "") === (b.acpxRecordId ?? "") &&
-      (a.backendSessionId ?? "") === (b.backendSessionId ?? "") &&
-      (a.agentSessionId ?? "") === (b.agentSessionId ?? "")
-    );
-  }
-
-  private runtimeHandleMatchesMeta(params: {
-    handle: AcpRuntimeHandle;
-    meta: SessionAcpMeta;
-  }): boolean {
-    const identity = resolveSessionIdentityFromMeta(params.meta);
-    const expectedHandleIds = resolveRuntimeHandleIdentifiersFromIdentity(identity);
-    if ((params.handle.backendSessionId ?? "") !== (expectedHandleIds.backendSessionId ?? "")) {
-      return false;
-    }
-    if ((params.handle.agentSessionId ?? "") !== (expectedHandleIds.agentSessionId ?? "")) {
-      return false;
-    }
-
-    const expectedAcpxRecordId = identity?.acpxRecordId ?? "";
-    const actualAcpxRecordId =
-      normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId) ?? "";
-    return actualAcpxRecordId === expectedAcpxRecordId;
   }
 }
