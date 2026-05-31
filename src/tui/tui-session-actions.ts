@@ -421,6 +421,7 @@ export function createSessionActions(context: SessionActionContext) {
         fastMode?: boolean;
         verboseLevel?: string;
         traceLevel?: string;
+        inFlightRun?: { runId?: unknown; text?: unknown };
       };
       const sessionInfo = record.sessionInfo;
       if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
@@ -504,6 +505,24 @@ export function createSessionActions(context: SessionActionContext) {
             { isError: Boolean(message.isError) },
           );
         }
+      }
+      // Restore a run still streaming for this session+agent that the gateway
+      // reports as in-flight. Its live deltas were delivered to a per-agent key
+      // we stopped watching after switching away, so the persisted history above
+      // does not contain it; render the partial and re-adopt the run so further
+      // deltas (now that this session is active again) continue it.
+      const inFlight = record.inFlightRun;
+      const inFlightRunId = asString(inFlight?.runId, "");
+      const inFlightText = asString(inFlight?.text, "");
+      if (inFlightRunId) {
+        // Render any buffered partial (embedded runtimes); Codex has none mid-run.
+        if (inFlightText) {
+          chatLog.updateAssistant(inFlightText, inFlightRunId);
+        }
+        // Adopt the run regardless so its status shows `streaming` (not idle) and
+        // its completion is handled here instead of an unowned error path.
+        state.activeChatRunId = inFlightRunId;
+        setActivityStatus("streaming");
       }
       state.historyLoaded = true;
       void rememberSessionKey?.(state.currentSessionKey);

@@ -162,6 +162,81 @@ function normalizeActiveAgentId(agentId: string | undefined): string | undefined
   return trimmed || undefined;
 }
 
+/**
+ * Snapshot the live assistant text of any in-flight run for a session+agent. Used
+ * by chat.history so a run that kept streaming while the client was switched away
+ * — whose deltas the gateway delivered to a delivery key this client is no longer
+ * subscribed to — is restored on switch-back.
+ *
+ * Matches a run the same way sessions.list's active-run projection does: an abort
+ * entry can hold the requested key while chat run state holds the canonical store
+ * key, so accept a match on EITHER `requestedSessionKey` or `canonicalSessionKey`,
+ * scoping the shared "global" session by agent. Only runs still projected active
+ * (`projectSessionActive !== false`, matching sessions.list; the terminal lifecycle
+ * flips it to false) and not aborted are returned, so a finalized run — already in
+ * persisted history — is not duplicated and a stale run cannot leave the client
+ * stuck in `streaming`.
+ */
+export function resolveInFlightRunSnapshot(params: {
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatRunBuffers: Map<string, string>;
+  requestedSessionKey: string;
+  canonicalSessionKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): { runId: string; text: string } | undefined {
+  const matchesKey = (entry: ChatAbortControllerEntry, key: string): boolean => {
+    if (entry.sessionKey !== key) {
+      return false;
+    }
+    if (key !== "global" || params.agentId === undefined) {
+      return true;
+    }
+    const runAgentId =
+      normalizeActiveAgentId(entry.agentId) ?? normalizeActiveAgentId(params.defaultAgentId);
+    return runAgentId === normalizeActiveAgentId(params.agentId);
+  };
+  // Some callers/tests run without populated run state; guard like
+  // collectTrackedActiveSessionRuns so a missing map is a no-op, not a throw.
+  if (!(params.chatAbortControllers instanceof Map)) {
+    return undefined;
+  }
+  // Pick the newest matching run rather than the first iterated. If a fast
+  // restart/retry/stale-controller race leaves two active entries for the same
+  // (sessionKey, agentId), Map insertion order is not a meaningful selector;
+  // the latest `startedAtMs` is the run a switching-back client wants, and the
+  // runId tie-break keeps the choice deterministic when timestamps collide.
+  let best: { runId: string; startedAtMs: number } | undefined;
+  for (const [runId, entry] of params.chatAbortControllers) {
+    // Active unless explicitly projected inactive — mirrors sessions.list's
+    // collectTrackedActiveSessionRuns (`projectSessionActive !== false`), so a run
+    // that indicator shows active is never silently dropped here.
+    if (entry.projectSessionActive === false || entry.controller.signal.aborted) {
+      continue;
+    }
+    if (
+      !matchesKey(entry, params.requestedSessionKey) &&
+      !matchesKey(entry, params.canonicalSessionKey)
+    ) {
+      continue;
+    }
+    const newer = best === undefined || entry.startedAtMs > best.startedAtMs;
+    const tie = best !== undefined && entry.startedAtMs === best.startedAtMs && runId > best.runId;
+    if (newer || tie) {
+      best = { runId, startedAtMs: entry.startedAtMs };
+    }
+  }
+  if (best === undefined) {
+    return undefined;
+  }
+  // Adopt the run even when no assistant text is buffered yet. Some runtimes
+  // (e.g. Codex) do not stream incremental assistant text — the result exists
+  // only at completion — so there is nothing to show mid-run, but the client
+  // should still adopt the run and show a `streaming` status (not idle) and
+  // render the result cleanly when it lands.
+  return { runId: best.runId, text: params.chatRunBuffers?.get(best.runId) ?? "" };
+}
+
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;

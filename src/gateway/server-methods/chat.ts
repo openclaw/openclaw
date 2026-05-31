@@ -103,6 +103,7 @@ import {
   type ChatAbortOps,
   isChatStopCommandText,
   registerChatAbortController,
+  resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "../chat-abort.js";
 import {
@@ -2544,6 +2545,17 @@ export const chatHandlers: GatewayRequestHandlers = {
     const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     sessionInfo.verboseLevel = verboseLevel;
+    // Surface any run still streaming for this session+agent so a client that
+    // switched away (and stopped receiving the run's per-agent-delivered events)
+    // can restore the in-flight assistant text on switch-back.
+    const inFlightRun = resolveInFlightRunSnapshot({
+      chatAbortControllers: context.chatAbortControllers,
+      chatRunBuffers: context.chatRunBuffers,
+      requestedSessionKey: sessionKey,
+      canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
+      agentId: requestedAgentId,
+      defaultAgentId: resolveDefaultAgentId(cfg),
+    });
     respond(true, {
       sessionKey,
       sessionId,
@@ -2553,6 +2565,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
+      ...(inFlightRun ? { inFlightRun } : {}),
     });
   },
   "chat.message.get": async ({ params, respond, context }) => {
