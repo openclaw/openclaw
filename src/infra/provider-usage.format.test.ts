@@ -106,7 +106,7 @@ describe("provider-usage.format", () => {
       ],
     };
 
-    expect(formatUsageWindowSummary(summary.providers[0]!, { now })).toBe("Balance ¥42.50");
+    expect(formatUsageWindowSummary(summary.providers[0], { now })).toBe("Balance ¥42.50");
     expect(formatUsageSummaryLine(summary, { now })).toBe("📊 Usage: DeepSeek Balance ¥42.50");
     expect(formatUsageReportLines(summary, { now })).toEqual([
       "Usage:",

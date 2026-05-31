@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+const emptyUsageSummary = (): UsageSummary => ({ updatedAt: 0, providers: [] });
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -29,7 +32,7 @@ const mocks = vi.hoisted(() => ({
   buildAuthHealthSummary: vi.fn(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
-  loadProviderUsageSummary: vi.fn(async () => ({ updatedAt: 0, providers: [] })),
+  loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -216,7 +219,7 @@ describe("models.authStatus", () => {
       profiles: [],
       providers: [],
     });
-    mocks.loadProviderUsageSummary.mockResolvedValue({ updatedAt: 0, providers: [] });
+    mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
   });
 
   it("returns a serialisable snapshot on first call", async () => {
