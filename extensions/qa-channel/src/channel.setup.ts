@@ -12,6 +12,7 @@ import type { CoreConfig } from "./types.js";
 
 const CHANNEL_ID = "qa-channel" as const;
 const meta = {
+  ...getChatChannelMeta(CHANNEL_ID),
   id: CHANNEL_ID,
   label: "QA Channel",
   selectionLabel: "QA Channel (Synthetic)",
@@ -21,7 +22,6 @@ const meta = {
   detailLabel: "QA Channel",
   systemImage: "checklist",
   order: 999,
-  ...getChatChannelMeta(CHANNEL_ID),
 };
 
 export const qaChannelSetupPlugin: ChannelPlugin<ResolvedQaChannelAccount> = {
