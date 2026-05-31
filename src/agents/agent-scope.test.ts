@@ -344,14 +344,14 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "user",
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
@@ -368,7 +368,7 @@ describe("resolveAgentConfig", () => {
         modelOverrideSource: "user",
         hasAutoFallbackProvenance: true,
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai/gpt-5.4"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgNoOverride,
@@ -964,7 +964,7 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "user",
       }),
-    ).toStrictEqual([]);
+    ).toEqual(["openai-codex/gpt-5.4", "zai/glm-5"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
