@@ -84,11 +84,17 @@ type MediaUnderstandingProviderRequestTransportOverrides = {
   allowPrivateNetwork?: boolean;
 };
 
+export type MediaUnderstandingProviderRequestAuth =
+  | { kind: "api-key"; apiKey: string; source?: string }
+  | { kind: "none"; source: string };
+
 export type AudioTranscriptionRequest = {
   buffer: Buffer;
   fileName: string;
   mime?: string;
+  /** Compatibility field for existing providers; prefer auth.kind/apiKey. */
   apiKey: string;
+  auth?: MediaUnderstandingProviderRequestAuth;
   baseUrl?: string;
   headers?: Record<string, string>;
   request?: MediaUnderstandingProviderRequestTransportOverrides;
@@ -109,7 +115,9 @@ export type VideoDescriptionRequest = {
   buffer: Buffer;
   fileName: string;
   mime?: string;
+  /** Compatibility field for existing providers; prefer auth.kind/apiKey. */
   apiKey: string;
+  auth?: MediaUnderstandingProviderRequestAuth;
   baseUrl?: string;
   headers?: Record<string, string>;
   request?: MediaUnderstandingProviderRequestTransportOverrides;
@@ -218,11 +226,15 @@ export type MediaUnderstandingDocumentModelDefaults = {
   image?: string | false;
 };
 
-export type MediaUnderstandingProviderSyntheticAuthContext = {
+export type MediaUnderstandingProviderAuthContext = {
   config?: OpenClawConfig;
   provider: string;
   providerConfig?: ModelProviderConfig;
 };
+
+export type MediaUnderstandingProviderAuthResult =
+  | { kind: "none"; source: string }
+  | { kind: "api-key"; apiKey: string; source: string; mode?: "api-key" };
 
 export type MediaUnderstandingProviderSyntheticAuthResult = {
   apiKey: string;
@@ -237,8 +249,12 @@ export type MediaUnderstandingProvider = {
   autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
   documentModels?: Partial<Record<"pdf", MediaUnderstandingDocumentModelDefaults>>;
+  resolveAuth?: (
+    ctx: MediaUnderstandingProviderAuthContext,
+  ) => MediaUnderstandingProviderAuthResult | null | undefined;
+  /** @deprecated Use resolveAuth. */
   resolveSyntheticAuth?: (
-    ctx: MediaUnderstandingProviderSyntheticAuthContext,
+    ctx: MediaUnderstandingProviderAuthContext,
   ) => MediaUnderstandingProviderSyntheticAuthResult | null | undefined;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;

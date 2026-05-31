@@ -48,7 +48,7 @@ import {
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
-import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export {
@@ -58,6 +58,8 @@ export {
 } from "./auth-profiles.js";
 export {
   formatMissingAuthError,
+  isProviderAuthError,
+  ProviderAuthError,
   requireApiKey,
   resolveAwsSdkEnvVarName,
 } from "./model-auth-runtime-shared.js";
@@ -1264,7 +1266,9 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
-  throw new Error(
+  throw new ProviderAuthError(
+    "missing-provider-auth",
+    provider,
     [
       `No API key found for provider "${provider}".`,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,

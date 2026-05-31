@@ -662,18 +662,18 @@ API key auth, and dynamic model resolution.
         ```
 
         Local or self-hosted media providers that intentionally do not require
-        credentials can expose `resolveSyntheticAuth` and return a non-secret
-        marker. OpenClaw still keeps the normal auth gate for providers that do
-        not explicitly opt in.
+        credentials can expose `resolveAuth` and return `kind: "none"`.
+        OpenClaw still keeps the normal auth gate for providers that do not
+        explicitly opt in. Existing providers can keep reading `req.apiKey`;
+        new providers should prefer `req.auth`.
 
         ```typescript
         api.registerMediaUnderstandingProvider({
           id: "local-audio",
           capabilities: ["audio"],
-          resolveSyntheticAuth: () => ({
-            apiKey: "custom-local",
-            source: "local-audio plugin synthetic auth",
-            mode: "api-key",
+          resolveAuth: () => ({
+            kind: "none",
+            source: "local-audio plugin no-auth",
           }),
           transcribeAudio: async (req) => ({ text: "Transcript..." }),
         });

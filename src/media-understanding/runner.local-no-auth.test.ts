@@ -146,7 +146,7 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("regression #74644: plugin-only local no-auth audio provider can use synthetic auth", async () => {
+  it("regression #74644: plugin-only local no-auth audio provider can use no-auth", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture(
@@ -167,10 +167,9 @@ describe("runCapability local no-auth audio providers", () => {
               agentDir,
               providerRegistry: buildProviderRegistry({
                 "local-audio": createAudioProvider("local-audio", transcribeAudio, {
-                  resolveSyntheticAuth: () => ({
-                    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-                    source: "local-audio plugin synthetic auth",
-                    mode: "api-key",
+                  resolveAuth: () => ({
+                    kind: "none",
+                    source: "local-audio plugin no-auth",
                   }),
                 }),
               }),
@@ -186,13 +185,17 @@ describe("runCapability local no-auth audio providers", () => {
             expect(result.outputs[0]?.text).toBe("plugin local ok");
             expect(transcribeAudio).toHaveBeenCalledTimes(1);
             expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+            expect(transcribeAudio.mock.calls[0]?.[0].auth).toEqual({
+              kind: "none",
+              source: "local-audio plugin no-auth",
+            });
           },
         );
       });
     });
   });
 
-  it("prefers resolver env credentials over plugin-only media synthetic auth", async () => {
+  it("prefers resolver env credentials over plugin-only media no-auth", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync({ ...AUTH_ENV, OPENAI_API_KEY: "env-openai-audio-key" }, async () => {
         await withAudioFixture("openclaw-openai-audio-env-key", async ({ ctx, media, cache }) => {
@@ -211,10 +214,9 @@ describe("runCapability local no-auth audio providers", () => {
             agentDir,
             providerRegistry: buildProviderRegistry({
               openai: createAudioProvider("openai", transcribeAudio, {
-                resolveSyntheticAuth: () => ({
-                  apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-                  source: "openai plugin synthetic auth",
-                  mode: "api-key",
+                resolveAuth: () => ({
+                  kind: "none",
+                  source: "openai plugin no-auth",
                 }),
               }),
             }),
@@ -229,7 +231,7 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("prefers stored auth profile credentials over plugin-only media synthetic auth", async () => {
+  it("prefers stored auth profile credentials over plugin-only media no-auth", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await fs.writeFile(
@@ -263,10 +265,9 @@ describe("runCapability local no-auth audio providers", () => {
               agentDir,
               providerRegistry: buildProviderRegistry({
                 "local-audio": createAudioProvider("local-audio", transcribeAudio, {
-                  resolveSyntheticAuth: () => ({
-                    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-                    source: "local-audio plugin synthetic auth",
-                    mode: "api-key",
+                  resolveAuth: () => ({
+                    kind: "none",
+                    source: "local-audio plugin no-auth",
                   }),
                 }),
               }),
@@ -322,7 +323,7 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("prefers literal configured provider apiKey over media synthetic auth hook", async () => {
+  it("prefers literal configured provider apiKey over media no-auth hook", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture(
@@ -350,10 +351,9 @@ describe("runCapability local no-auth audio providers", () => {
               agentDir,
               providerRegistry: buildProviderRegistry({
                 "local-audio": createAudioProvider("local-audio", transcribeAudio, {
-                  resolveSyntheticAuth: () => ({
-                    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-                    source: "local-audio plugin synthetic auth",
-                    mode: "api-key",
+                  resolveAuth: () => ({
+                    kind: "none",
+                    source: "local-audio plugin no-auth",
                   }),
                 }),
               }),
@@ -368,7 +368,47 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("does not allow plugin-only media provider without explicit synthetic auth", async () => {
+  it("allows a media auth hook to provide an api key after normal auth misses", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await withAudioFixture("openclaw-local-audio-hook-key", async ({ ctx, media, cache }) => {
+          const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+            text: `hook:${req.apiKey}`,
+            model: req.model,
+          }));
+          const cfg = createAudioCfg({ provider: "local-audio", model: "whisper-local" });
+
+          const result = await runCapability({
+            capability: "audio",
+            cfg,
+            ctx,
+            attachments: cache,
+            media,
+            agentDir,
+            providerRegistry: buildProviderRegistry({
+              "local-audio": createAudioProvider("local-audio", transcribeAudio, {
+                resolveAuth: () => ({
+                  kind: "api-key",
+                  apiKey: "hook-key",
+                  source: "local-audio media auth hook",
+                }),
+              }),
+            }),
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(result.outputs[0]?.text).toBe("hook:hook-key");
+          expect(transcribeAudio.mock.calls[0]?.[0].auth).toEqual({
+            kind: "api-key",
+            apiKey: "hook-key",
+            source: "local-audio media auth hook",
+          });
+        });
+      });
+    });
+  });
+
+  it("does not allow plugin-only media provider without explicit no-auth", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture("openclaw-local-audio-no-hook", async ({ ctx, media, cache }) => {
@@ -400,7 +440,7 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("does not allow plugin-only media provider when synthetic auth hook returns null", async () => {
+  it("does not allow plugin-only media provider when no-auth hook returns null", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture("openclaw-local-audio-null-hook", async ({ ctx, media, cache }) => {
@@ -419,7 +459,7 @@ describe("runCapability local no-auth audio providers", () => {
             agentDir,
             providerRegistry: buildProviderRegistry({
               "local-audio": createAudioProvider("local-audio", transcribeAudio, {
-                resolveSyntheticAuth: () => null,
+                resolveAuth: () => null,
               }),
             }),
           });
@@ -434,7 +474,7 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("does not let plugin-only synthetic auth override an explicit missing profile", async () => {
+  it("does not let plugin-only no-auth override an explicit missing profile", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture(
@@ -459,10 +499,9 @@ describe("runCapability local no-auth audio providers", () => {
               agentDir,
               providerRegistry: buildProviderRegistry({
                 "local-audio": createAudioProvider("local-audio", transcribeAudio, {
-                  resolveSyntheticAuth: () => ({
-                    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-                    source: "local-audio plugin synthetic auth",
-                    mode: "api-key",
+                  resolveAuth: () => ({
+                    kind: "none",
+                    source: "local-audio plugin no-auth",
                   }),
                 }),
               }),
@@ -479,7 +518,7 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("does not let media synthetic auth override an explicit missing profile", async () => {
+  it("does not let media no-auth override an explicit missing profile", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withAudioFixture(
@@ -509,10 +548,9 @@ describe("runCapability local no-auth audio providers", () => {
               agentDir,
               providerRegistry: buildProviderRegistry({
                 "local-audio": createAudioProvider("local-audio", transcribeAudio, {
-                  resolveSyntheticAuth: () => ({
-                    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-                    source: "local-audio plugin synthetic auth",
-                    mode: "api-key",
+                  resolveAuth: () => ({
+                    kind: "none",
+                    source: "local-audio plugin no-auth",
                   }),
                 }),
               }),
@@ -529,14 +567,14 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("allows explicit synthetic auth for plugin-only no-auth video provider", async () => {
+  it("allows explicit no-auth for plugin-only no-auth video provider", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
         await withVideoFixture(
           "openclaw-local-video-plugin-only",
           async ({ ctx, media, cache }) => {
             const describeVideo = vi.fn(async (req: VideoDescriptionRequest) => ({
-              text: `video:${req.apiKey}`,
+              text: `video:${req.auth?.kind}`,
               model: req.model,
             }));
             const cfg = createVideoCfg({ provider: "local-video", model: "video-local" });
@@ -550,19 +588,22 @@ describe("runCapability local no-auth audio providers", () => {
               agentDir,
               providerRegistry: buildProviderRegistry({
                 "local-video": createVideoProvider("local-video", describeVideo, {
-                  resolveSyntheticAuth: () => ({
-                    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-                    source: "local-video plugin synthetic auth",
-                    mode: "api-key",
+                  resolveAuth: () => ({
+                    kind: "none",
+                    source: "local-video plugin no-auth",
                   }),
                 }),
               }),
             });
 
             expect(result.decision.outcome).toBe("success");
-            expect(result.outputs[0]?.text).toBe(`video:${CUSTOM_LOCAL_AUTH_MARKER}`);
+            expect(result.outputs[0]?.text).toBe("video:none");
             expect(describeVideo).toHaveBeenCalledTimes(1);
             expect(describeVideo.mock.calls[0]?.[0].apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+            expect(describeVideo.mock.calls[0]?.[0].auth).toEqual({
+              kind: "none",
+              source: "local-video plugin no-auth",
+            });
           },
         );
       });
