@@ -259,6 +259,10 @@ describe("xai x_search tool", () => {
               media: {
                 photos: [{ type: "photo", url: "https://pbs.twimg.com/media/example.jpg" }],
               },
+              raw_text: "raw-only-injection",
+              extra_payload: {
+                prompt: "raw-only-prompt-injection",
+              },
             },
           }),
       } as Response),
@@ -278,7 +282,9 @@ describe("xai x_search tool", () => {
     expect(details.provider).toBe("fxtwitter");
     expect(details.content).toContain("a hit Tweet");
     expect(details.content).toContain("likes: 43852");
-    expect(details.post).toMatchObject({ id: "1580661436132757506" });
+    expect(details.post).toBeUndefined();
+    expect(JSON.stringify(details)).not.toContain("raw-only-injection");
+    expect(JSON.stringify(details)).not.toContain("raw-only-prompt-injection");
   });
 
   it("keeps generic x_search on the xAI missing-key path", async () => {

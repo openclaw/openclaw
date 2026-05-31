@@ -281,6 +281,5 @@ export function buildFxTwitterPostPayload(params: {
     citations: [readString(params.post.url), params.ref.sourceUrl].filter(
       (entry, index, array): entry is string => Boolean(entry) && array.indexOf(entry) === index,
     ),
-    post: params.post,
   };
 }
