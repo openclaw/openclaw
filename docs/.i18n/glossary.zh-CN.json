@@ -1118,5 +1118,9 @@
   {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "SNES Studio",
+    "target": "SNES Studio"
   }
 ]
