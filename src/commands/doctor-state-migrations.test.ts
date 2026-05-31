@@ -880,6 +880,58 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("replaces existing plugin-state entries when a channel import plan asks for it", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test replace cache",
+        sourcePath,
+        targetPath: "plugin state:test.replace-cache",
+        pluginId: "telegram",
+        namespace: "test.replace-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [{ key: "existing", value: { offset: 20 } }],
+        shouldReplaceExistingEntry: (params: { existingValue: unknown; incomingValue: unknown }) =>
+          (params.incomingValue as { offset: number }).offset >
+          (params.existingValue as { offset: number }).offset,
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ offset: number }>("telegram", {
+        namespace: "test.replace-cache",
+        maxEntries: 4,
+      });
+      await store.register("existing", { offset: 10 });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 Test replace cache entry → plugin state");
+    expect(result.changes).toContain(
+      `Archived Test replace cache legacy source → ${sourcePath}.migrated`,
+    );
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ offset: number }>("telegram", {
+        namespace: "test.replace-cache",
+        maxEntries: 4,
+      });
+      expect(await store.lookup("existing")).toStrictEqual({ offset: 20 });
+    });
+  });
+
   it("keeps plugin-state import source when plugin cap eviction drops an imported row", async () => {
     const root = await makeTempRoot();
     const maxPluginStateEntries = 40;

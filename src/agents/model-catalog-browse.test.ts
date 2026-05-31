@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { loadModelCatalogForBrowse } from "./model-catalog-browse.js";
@@ -24,7 +24,12 @@ function config(params: { providerWildcard?: boolean } = {}): OpenClawConfig {
 }
 
 describe("loadModelCatalogForBrowse", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -65,6 +70,7 @@ describe("loadModelCatalogForBrowse", () => {
   });
 
   it("returns an empty catalog when read-only catalog loading times out", async () => {
+    vi.useFakeTimers();
     const onTimeout = vi.fn();
     const loadCatalog = vi.fn(
       () =>
@@ -80,9 +86,10 @@ describe("loadModelCatalogForBrowse", () => {
       onTimeout,
     });
 
+    await vi.advanceTimersByTimeAsync(5);
     await expect(resultPromise).resolves.toEqual([]);
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await vi.advanceTimersByTimeAsync(10);
   });
 
   it("uses the default timeout when timeoutMs is non-finite", async () => {

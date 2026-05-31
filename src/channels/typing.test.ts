@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createTypingCallbacks } from "./typing.js";
 
@@ -16,6 +16,7 @@ async function withFakeTimers(run: () => Promise<void>) {
   try {
     await run();
   } finally {
+    vi.clearAllTimers();
     vi.useRealTimers();
   }
 }
@@ -56,13 +57,26 @@ function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
 }
 
 describe("createTypingCallbacks", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
   it("invokes start on reply start", async () => {
     const { start, onStartError, callbacks } = createTypingHarness();
 
-    await callbacks.onReplyStart();
+    try {
+      await callbacks.onReplyStart();
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(onStartError).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(onStartError).not.toHaveBeenCalled();
+    } finally {
+      callbacks.onCleanup?.();
+    }
   });
 
   it("reports start errors", async () => {
@@ -70,10 +84,14 @@ describe("createTypingCallbacks", () => {
       start: vi.fn().mockRejectedValue(new Error("fail")),
     });
 
-    await callbacks.onReplyStart();
-    await flushMicrotasks();
+    try {
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
 
-    expect(onStartError).toHaveBeenCalledTimes(1);
+      expect(onStartError).toHaveBeenCalledTimes(1);
+    } finally {
+      callbacks.onCleanup?.();
+    }
   });
 
   it("does not block reply start on a pending typing request", async () => {
@@ -87,13 +105,17 @@ describe("createTypingCallbacks", () => {
       ),
     });
 
-    await callbacks.onReplyStart();
+    try {
+      await callbacks.onReplyStart();
 
-    expect(start).toHaveBeenCalledTimes(1);
-    if (!resolveStart) {
-      throw new Error("Expected typing start resolver to be initialized");
+      expect(start).toHaveBeenCalledTimes(1);
+      if (!resolveStart) {
+        throw new Error("Expected typing start resolver to be initialized");
+      }
+      resolveStart();
+    } finally {
+      callbacks.onCleanup?.();
     }
-    resolveStart();
   });
 
   it("invokes stop on idle and reports stop errors", async () => {

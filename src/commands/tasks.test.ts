@@ -31,6 +31,11 @@ function readFirstJsonLog(runtime: RuntimeEnv): unknown {
   return JSON.parse(String(message));
 }
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 const zeroTaskAuditCounts = {
   delivery_failed: 0,
   inconsistent_timestamps: 0,
@@ -137,7 +142,7 @@ describe("tasks commands", () => {
           ageMs: 45 * 60_000,
           status: "running",
           token: runningFlow.flowId,
-          flow: JSON.parse(JSON.stringify(runningFlow)),
+          flow: jsonRoundTrip(runningFlow),
         },
       ]);
     });
