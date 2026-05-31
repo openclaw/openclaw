@@ -796,6 +796,12 @@ describe("loadWebMedia", () => {
       contentType: "application/x-7z-compressed",
       buffer: Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0, 4]),
     },
+    {
+      label: "APK",
+      fileName: "archive.apk",
+      contentType: "application/vnd.android.package-archive",
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    },
   ])("allows host-read $label files", async ({ fileName, contentType, buffer }) => {
     const archiveFile = path.join(fixtureRoot, fileName);
     await fs.writeFile(archiveFile, buffer);
