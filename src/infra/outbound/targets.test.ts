@@ -127,6 +127,25 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("bootstraps configured channel plugins before reporting an unsupported channel", () => {
+    const cfg: OpenClawConfig = {
+      channels: { alpha: { allowFrom: ["room-one"] } },
+    };
+
+    resolveOutboundTarget({
+      channel: "alpha",
+      to: "room-one",
+      cfg,
+      mode: "explicit",
+    });
+
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg,
+      allowBootstrap: true,
+    });
+  });
+
   it("falls back to the active registry when the cached channel map is stale", () => {
     const registry = createTargetsTestRegistry([]);
     setActivePluginRegistry(registry, "stale-registry-test");

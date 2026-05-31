@@ -2326,6 +2326,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI-compatible providers: apply model-declared unsupported tool-schema keyword stripping to native OpenAI transport payloads and mark Fireworks Kimi K2.5 as rejecting `not` schemas. Fixes #75467.
 - OpenAI-compatible gateway: sanitize images supplied through request content even when the prompt text contains no image file references, preventing oversized attachment payloads from bypassing the resize/drop pipeline. Fixes #59913.
 - Auth profiles: normalize inline API keys and tokens loaded from `auth-profiles.json` so masked or rich-text credential artifacts fail as auth errors instead of crashing HTTP header construction. Fixes #77624.
+- Cron previews: bootstrap configured outbound channel plugins during target resolution so `openclaw cron list` no longer reports false `Unsupported channel` warnings for configured Feishu and other channel targets. Fixes #77712.
 - llm-task: resolve configured model aliases before embedded dispatch so `model="gemini-flash"` and other aliases route to the intended provider instead of the agent default. Fixes #54166.
 - Media generation: resolve slash-containing model-only overrides like `fal-ai/flux/dev` through registered provider model metadata so FAL image/video models do not get misparsed as provider `fal-ai`. Fixes #77444.
 - CLI backends: keep versioned OAuth identity matches reusable when auth profile ids rotate, so Claude CLI sessions do not reset and lose continuity during same-account OAuth refresh/profile alias changes. Fixes #78541.
