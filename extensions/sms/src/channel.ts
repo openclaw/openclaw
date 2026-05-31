@@ -254,12 +254,16 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
       },
     },
     status: {
-      buildAccountSnapshot: ({ account }) => ({
-        accountId: account.accountId,
-        name: account.fromNumber || account.messagingServiceSid || "SMS",
-        configured: isSmsAccountConfigured(account),
-        enabled: account.enabled,
-      }),
+      buildAccountSnapshot: ({ account }) => {
+        const configured = isSmsAccountConfigured(account);
+        return {
+          accountId: account.accountId,
+          name: account.fromNumber || account.messagingServiceSid || "SMS",
+          enabled: account.enabled,
+          configured,
+          statusState: !account.enabled ? "disabled" : configured ? "configured" : "unconfigured",
+        };
+      },
       buildCapabilitiesDiagnostics: async ({ account }) => ({
         lines: collectSmsStartupWarnings(account).map((text) => ({ text, tone: "warn" })),
       }),

@@ -27,6 +27,37 @@ afterEach(() => {
   vi.doUnmock("./twilio.js");
 });
 
+describe("smsPlugin status", () => {
+  it("builds a status snapshot for configured SMS accounts", async () => {
+    const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
+      cfg: {},
+      account: {
+        accountId: "support",
+        enabled: true,
+        accountSid: "AC123",
+        authToken: "secret",
+        fromNumber: "+15557654321",
+        messagingServiceSid: "",
+        defaultTo: "",
+        webhookPath: "/webhooks/sms",
+        publicWebhookUrl: "",
+        dangerouslyDisableSignatureValidation: false,
+        dmPolicy: "pairing",
+        allowFrom: [],
+        textChunkLimit: 1500,
+      },
+    });
+
+    expect(snapshot).toEqual({
+      accountId: "support",
+      name: "+15557654321",
+      enabled: true,
+      configured: true,
+      statusState: "configured",
+    });
+  });
+});
+
 describe("smsPlugin outbound", () => {
   it("declares an active text chunker and account-aware chunk limit", () => {
     expect(smsPlugin.configSchema).toBeDefined();
