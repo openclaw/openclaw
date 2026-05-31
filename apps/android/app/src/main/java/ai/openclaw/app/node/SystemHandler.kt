@@ -17,6 +17,7 @@ import kotlinx.serialization.json.contentOrNull
 
 private const val NOTIFICATION_CHANNEL_BASE_ID = "openclaw.system.notify"
 
+/** Parsed payload for system.notify invocations. */
 internal data class SystemNotifyRequest(
   val title: String,
   val body: String,
@@ -24,6 +25,7 @@ internal data class SystemNotifyRequest(
   val priority: String?,
 )
 
+/** Notification posting seam used by production Android and unit tests. */
 internal interface SystemNotificationPoster {
   fun isAuthorized(): Boolean
 
@@ -139,6 +141,8 @@ class SystemHandler private constructor(
 
   private fun parseNotifyRequest(paramsJson: String?): SystemNotifyRequest? {
     val params = parseParamsObject(paramsJson) ?: return null
+    // title/body are required by the gateway contract; optional fields only
+    // influence Android channel/silence behavior.
     val rawTitle =
       (params["title"] as? JsonPrimitive)
         ?.contentOrNull

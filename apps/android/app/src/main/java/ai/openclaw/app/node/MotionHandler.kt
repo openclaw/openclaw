@@ -25,17 +25,20 @@ import kotlin.math.sqrt
 private const val ACCELEROMETER_SAMPLE_TARGET = 20
 private const val ACCELEROMETER_SAMPLE_TIMEOUT_MS = 6_000L
 
+/** Gateway request for motion.activity after parsing and limit bounds. */
 internal data class MotionActivityRequest(
   val startISO: String?,
   val endISO: String?,
   val limit: Int,
 )
 
+/** Gateway request for motion.pedometer. */
 internal data class MotionPedometerRequest(
   val startISO: String?,
   val endISO: String?,
 )
 
+/** Motion activity sample returned in gateway-compatible boolean flags. */
 internal data class MotionActivityRecord(
   val startISO: String,
   val endISO: String,
@@ -48,6 +51,7 @@ internal data class MotionActivityRecord(
   val isUnknown: Boolean,
 )
 
+/** Pedometer sample returned from Android's cumulative step counter. */
 internal data class PedometerRecord(
   val startISO: String,
   val endISO: String,
@@ -57,6 +61,7 @@ internal data class PedometerRecord(
   val floorsDescended: Int?,
 )
 
+/** Motion data seam for Android sensors and tests. */
 internal interface MotionDataSource {
   fun isActivityAvailable(context: Context): Boolean
 
@@ -97,6 +102,8 @@ private object SystemMotionDataSource : MotionDataSource {
     request: MotionActivityRequest,
   ): MotionActivityRecord {
     if (!request.startISO.isNullOrBlank() || !request.endISO.isNullOrBlank()) {
+      // Android does not expose historical activity samples here; fail with a
+      // stable gateway code instead of pretending the range is empty.
       throw IllegalArgumentException("MOTION_RANGE_UNAVAILABLE: historical activity range not supported on Android")
     }
     val sensorManager =
@@ -130,6 +137,7 @@ private object SystemMotionDataSource : MotionDataSource {
     request: MotionPedometerRequest,
   ): PedometerRecord {
     if (!request.startISO.isNullOrBlank() || !request.endISO.isNullOrBlank()) {
+      // TYPE_STEP_COUNTER is cumulative since boot, not a historical query API.
       throw IllegalArgumentException("PEDOMETER_RANGE_UNAVAILABLE: historical pedometer range not supported on Android")
     }
     val sensorManager =
@@ -216,6 +224,8 @@ private object SystemMotionDataSource : MotionDataSource {
                 sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
                 count += 1
                 if (count >= ACCELEROMETER_SAMPLE_TARGET) {
+                  // Average gravity-adjusted magnitude across a short window so
+                  // one noisy sensor event cannot decide the activity label.
                   val result =
                     AccelerometerSample(
                       samples = count,
