@@ -119,7 +119,12 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-4.6": "claude-opus-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
-    return anthropicAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    const anthropicPrefix = "anthropic/";
+    const normalizedModel = normalizeLowercaseStringOrEmpty(model);
+    const providerModel = normalizedModel.startsWith(anthropicPrefix)
+      ? model.trim().slice(anthropicPrefix.length)
+      : model;
+    return anthropicAliases[normalizeLowercaseStringOrEmpty(providerModel)] ?? providerModel;
   }
   if (normalizedProvider === "vercel-ai-gateway") {
     const vercelAliases: Record<string, string> = {
