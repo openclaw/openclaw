@@ -935,7 +935,7 @@ async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Pro
   }
 }
 
-function formatRuntimeToolSchemaFindings(findings: readonly HealthFinding[]): string {
+function formatHealthFindings(findings: readonly HealthFinding[]): string {
   return findings
     .map((finding) => {
       const lines = [`- ${finding.message}`];
@@ -951,6 +951,31 @@ function formatRuntimeToolSchemaFindings(findings: readonly HealthFinding[]): st
       return lines.join("\n");
     })
     .join("\n");
+}
+
+async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
+  const { getHealthCheck } = await loadHealthCheckRegistryModule();
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
+  const { note } = await loadNoteModule();
+
+  registerCoreHealthChecks();
+  const check = getHealthCheck("core/doctor/provider-catalog-projection");
+  if (!check) {
+    return;
+  }
+  const findings = await check.detect({
+    mode: "doctor",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
+    configPath: ctx.configPath,
+  });
+  if (findings.length === 0) {
+    return;
+  }
+  ctx.healthOk = false;
+  note(formatHealthFindings(findings), "Doctor warnings");
 }
 
 async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -975,7 +1000,7 @@ async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promis
     return;
   }
   ctx.healthOk = false;
-  note(formatRuntimeToolSchemaFindings(findings), "Doctor warnings");
+  note(formatHealthFindings(findings), "Doctor warnings");
 }
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
@@ -1115,6 +1140,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:tool-result-cap",
       label: "Tool result cap",
       run: runToolResultCapHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:provider-catalog-projection",
+      label: "Provider catalog projection",
+      healthCheckIds: ["core/doctor/provider-catalog-projection"],
+      run: runProviderCatalogProjectionHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",

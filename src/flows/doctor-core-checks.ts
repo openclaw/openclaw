@@ -42,6 +42,9 @@ export type CoreHealthCheckDeps = {
   readonly collectRuntimeToolSchemaFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
+  readonly collectProviderCatalogProjectionFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
 };
 
 async function detectUnavailableSkillsWithRuntime(
@@ -79,11 +82,19 @@ async function collectRuntimeToolSchemaFindingsWithRuntime(
   return runtime.collectRuntimeToolSchemaFindings(ctx.cfg);
 }
 
+async function collectProviderCatalogProjectionFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
+  collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -417,6 +428,18 @@ function createRuntimeToolSchemaCheck(deps: CoreHealthCheckDeps): HealthCheck {
     source: "doctor",
     async detect(ctx) {
       return deps.collectRuntimeToolSchemaFindings(ctx);
+    },
+  };
+}
+
+function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): HealthCheck {
+  return {
+    id: "core/doctor/provider-catalog-projection",
+    kind: "core",
+    description: "Provider catalog hooks project into unified text model catalog rows.",
+    source: "doctor",
+    async detect(ctx) {
+      return deps.collectProviderCatalogProjectionFindings(ctx);
     },
   };
 }
@@ -896,6 +919,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
+    createProviderCatalogProjectionCheck(deps),
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
   ];

@@ -384,6 +384,49 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("reports provider catalog projection blockers during normal doctor runs", async () => {
+    const contribution = requireDoctorContribution("doctor:provider-catalog-projection");
+    mocks.getHealthCheck.mockReturnValue({
+      id: "core/doctor/provider-catalog-projection",
+      detect: vi.fn(async () => [
+        {
+          checkId: "core/doctor/provider-catalog-projection",
+          severity: "error",
+          message:
+            "Provider catalog mockplugin cannot be projected into the unified text model catalog.",
+          path: "plugins.entries.mockplugin",
+          target: "mockplugin",
+          requirement: "provider catalog entry read failed",
+          fixHint:
+            "Fix the plugin provider catalog hook or disable the plugin, then rerun doctor before relying on model discovery.",
+        },
+      ]),
+    });
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.healthOk).toBe(false);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Provider catalog mockplugin cannot be projected"),
+      "Doctor warnings",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("issue: provider catalog entry read failed"),
+      "Doctor warnings",
+    );
+  });
+
   it("skips doctor config writes under legacy update parents", () => {
     expect(
       shouldSkipLegacyUpdateDoctorConfigWrite({
