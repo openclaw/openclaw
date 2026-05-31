@@ -69,6 +69,7 @@ export type SkillWorkshopProps = {
   actionNotice: SkillWorkshopActionNotice | null;
   revisionKey: string | null;
   revisionDraft: string;
+  assistantName: string;
   counts: Record<SkillWorkshopStatusFilter, number>;
   onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
   onQueryChange: (query: string) => void;
@@ -530,6 +531,7 @@ function renderToday(
   const isPending = hero.status === "pending";
   const busy = props.actionBusy?.key === hero.key ? props.actionBusy.action : null;
   const disabled = Boolean(props.actionBusy);
+  const assistantName = props.assistantName.trim() || "agent";
 
   return html`
     <div class="sw-today">
@@ -574,7 +576,7 @@ function renderToday(
         <div class="sw-today__author">
           <span class="sw-today__avatar">v${hero.version}</span>
           <span>
-            Drafted by your <strong>agent</strong> · ${ageLabel}.
+            Drafted by <strong>${assistantName}</strong> · ${ageLabel}.
             ${hero.supportFiles.length > 0
               ? html`
                   <button
