@@ -152,7 +152,7 @@ describe("exec PATH login shell merge", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-xml-"));
     try {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      const result = await tool.execute("call-xml-suffix", {
+      const malformedArgs = {
         command: "echo ok</arg_value>>",
         workdir: `${tempDir}</arg_value>>`,
         host: "gateway</arg_value>>",
@@ -160,7 +160,8 @@ describe("exec PATH login shell merge", () => {
         ask: "off</arg_value>>",
         node: "ignored-node</arg_value>>",
         yieldMs: FOREGROUND_TEST_YIELD_MS,
-      });
+      } as unknown as Parameters<typeof tool.execute>[1];
+      const result = await tool.execute("call-xml-suffix", malformedArgs);
       const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
       expect(value).toBe("ok");
