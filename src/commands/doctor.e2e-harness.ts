@@ -156,13 +156,14 @@ const runChannelPluginStartupMaintenance = vi
   .fn()
   .mockResolvedValue(undefined) as unknown as MockFn;
 
-function defaultRunDoctorHealthContributions(ctx: {
+async function defaultRunDoctorHealthContributions(ctx: {
   cfg: Record<string, unknown>;
   runtime: { log: (message: string) => void; error: (message: string) => void };
   prompter?: { shouldRepair?: boolean };
 }) {
+  const result = { finalConfigInvalid: false };
   if (ctx.prompter?.shouldRepair !== true) {
-    return Promise.resolve();
+    return result;
   }
   const channels =
     ctx.cfg.channels && typeof ctx.cfg.channels === "object" && !Array.isArray(ctx.cfg.channels)
@@ -179,7 +180,7 @@ function defaultRunDoctorHealthContributions(ctx: {
           }),
         )
       : ctx.cfg.channels;
-  return runChannelPluginStartupMaintenance({
+  await runChannelPluginStartupMaintenance({
     cfg: {
       ...ctx.cfg,
       ...(channels !== undefined ? { channels } : {}),
@@ -192,6 +193,7 @@ function defaultRunDoctorHealthContributions(ctx: {
     trigger: "doctor-fix",
     logPrefix: "doctor",
   });
+  return result;
 }
 
 function createLegacyStateMigrationDetectionResult(params?: {

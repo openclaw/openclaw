@@ -971,6 +971,86 @@ describe("doctor health contributions", () => {
       });
     });
 
+    describe("final-config-validation invalid-state status (#77804)", () => {
+      function buildFinalConfigValidationCtx() {
+        const error = vi.fn();
+        const ctx = {
+          cfg: {},
+          cfgForPersistence: {},
+          configResult: { cfg: {} },
+          configPath: "/tmp/fake-openclaw.json",
+          sourceConfigValid: true,
+          prompter: buildDoctorPrompter(true),
+          runtime: { log: vi.fn(), error, exit: vi.fn() },
+          options: {},
+          env: {},
+        };
+        return { ctx, error };
+      }
+
+      async function runFinalConfigValidation(
+        ctx: ReturnType<typeof buildFinalConfigValidationCtx>["ctx"],
+      ) {
+        const contribution = requireDoctorContribution("doctor:final-config-validation");
+        await contribution.run(ctx as Parameters<(typeof contribution)["run"]>[0]);
+      }
+
+      it("marks the context invalid and reports details when the final config snapshot is invalid", async () => {
+        const { ctx, error } = buildFinalConfigValidationCtx();
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: true,
+          valid: false,
+          config: {},
+          issues: [
+            {
+              path: "models.providers.bailian.models.0.compat.thinkingFormat",
+              message: "Invalid input",
+            },
+          ],
+        });
+
+        await runFinalConfigValidation(ctx);
+
+        expect((ctx as { finalConfigInvalid?: boolean }).finalConfigInvalid).toBe(true);
+        // A regression that stops printing the invalid-config details must fail here,
+        // not just the status flag assertion.
+        expect(error).toHaveBeenCalledWith("Invalid config:");
+        expect(error).toHaveBeenCalledWith(
+          "- models.providers.bailian.models.0.compat.thinkingFormat: Invalid input",
+        );
+      });
+
+      it("does not mark the context invalid when the final config snapshot is valid", async () => {
+        const { ctx, error } = buildFinalConfigValidationCtx();
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: true,
+          valid: true,
+          config: {},
+          issues: [],
+        });
+
+        await runFinalConfigValidation(ctx);
+
+        expect((ctx as { finalConfigInvalid?: boolean }).finalConfigInvalid).toBeUndefined();
+        expect(error).not.toHaveBeenCalled();
+      });
+
+      it("does not mark the context invalid when the config file does not exist", async () => {
+        const { ctx, error } = buildFinalConfigValidationCtx();
+        mocks.readConfigFileSnapshot.mockResolvedValue({
+          exists: false,
+          valid: false,
+          config: {},
+          issues: [],
+        });
+
+        await runFinalConfigValidation(ctx);
+
+        expect((ctx as { finalConfigInvalid?: boolean }).finalConfigInvalid).toBeUndefined();
+        expect(error).not.toHaveBeenCalled();
+      });
+    });
+
     it("allows allowConfigSizeDrop when not in update", async () => {
       const ctx = buildWriteConfigCtx({});
       await writeConfigContribution.run(ctx);

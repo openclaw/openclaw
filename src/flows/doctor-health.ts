@@ -3,7 +3,10 @@ import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
+import type {
+  DoctorHealthFlowContext,
+  DoctorHealthResult,
+} from "./doctor-health-contributions.js";
 
 // Interactive doctor entrypoint; lazy imports keep normal CLI startup light.
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
@@ -18,7 +21,10 @@ function loadConfigModule(): Promise<ConfigModule> {
 }
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
-export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
+export async function doctorCommand(
+  runtime?: RuntimeEnv,
+  options: DoctorOptions = {},
+): Promise<DoctorHealthResult> {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
@@ -47,7 +53,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     outro,
   });
   if (updateResult.handled) {
-    return;
+    return { finalConfigInvalid: false };
   }
 
   // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
@@ -80,7 +86,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     configPath: configResult.path ?? CONFIG_PATH,
   };
   const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
-  await runDoctorHealthContributions(ctx);
+  const result = await runDoctorHealthContributions(ctx);
   if (ctx.postInstallDoctorResult) {
     const {
       UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -94,9 +100,10 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
         result: ctx.postInstallDoctorResult,
       });
       effectiveRuntime.exit(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
-      return;
+      return result;
     }
   }
 
   outro("Doctor complete.");
+  return result;
 }

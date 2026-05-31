@@ -857,7 +857,7 @@ describe("update-cli", () => {
     installCompletion.mockResolvedValue(undefined);
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
-    vi.mocked(doctorCommand).mockResolvedValue(undefined);
+    vi.mocked(doctorCommand).mockResolvedValue({ finalConfigInvalid: false });
     legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementation(
       async (params: { configSnapshot: ConfigFileSnapshot }) => ({
         snapshot: params.configSnapshot,
@@ -6140,7 +6140,7 @@ describe("update-cli", () => {
       await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
         vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
         vi.mocked(runDaemonRestart).mockResolvedValue(true);
-        vi.mocked(doctorCommand).mockResolvedValue(undefined);
+        vi.mocked(doctorCommand).mockResolvedValue({ finalConfigInvalid: false });
         vi.mocked(defaultRuntime.log).mockClear();
 
         await updateCommand({});
@@ -6188,6 +6188,7 @@ describe("update-cli", () => {
         let doctorEnv: NodeJS.ProcessEnv | undefined;
         vi.mocked(doctorCommand).mockImplementationOnce(async () => {
           doctorEnv = { ...process.env };
+          return { finalConfigInvalid: false };
         });
         vi.mocked(defaultRuntime.writeJson).mockClear();
 

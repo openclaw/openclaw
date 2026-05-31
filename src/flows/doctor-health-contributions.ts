@@ -47,6 +47,14 @@ export type DoctorHealthFlowContext = {
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
+  // Set by the final-config-validation contribution when the persisted config is
+  // invalid. The top-level CLI reads this to choose a non-zero exit; embedded
+  // callers (update finalization) ignore it so they keep their own exit policy.
+  finalConfigInvalid?: boolean;
+};
+
+export type DoctorHealthResult = {
+  finalConfigInvalid: boolean;
 };
 
 type DoctorHealthContribution = FlowContribution & {
@@ -983,6 +991,7 @@ async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Pro
       const path = issue.path || "<root>";
       ctx.runtime.error(`- ${path}: ${issue.message}`);
     }
+    ctx.finalConfigInvalid = true;
   }
 }
 
@@ -1288,8 +1297,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   ];
 }
 
-export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
+export async function runDoctorHealthContributions(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorHealthResult> {
   for (const contribution of resolveDoctorHealthContributions()) {
     await contribution.run(ctx);
   }
+  return { finalConfigInvalid: ctx.finalConfigInvalid === true };
 }
