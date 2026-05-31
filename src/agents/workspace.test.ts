@@ -150,6 +150,35 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS));
   });
 
+  it("refuses to re-seed a recently attested workspace after only generated remnants survive", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    const generatedAgents = await fs.readFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "utf-8");
+
+    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), generatedAgents);
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    );
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    await expectPathMissing(path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS));
+  });
+
+  it("accepts a recently attested workspace when customized AGENTS.md survives", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "custom instructions\n");
+    await fs.rm(path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS), { force: true });
+    await fs.rm(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), { force: true });
+
+    await expect(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    ).resolves.toMatchObject({ dir: tempDir });
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+  });
+
   it("refuses to recreate a skip-bootstrap workspace after the directory disappears", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await fs.writeFile(path.join(tempDir, "seed.txt"), "preseeded\n");

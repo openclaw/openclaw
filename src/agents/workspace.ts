@@ -317,6 +317,16 @@ async function workspaceProfileLooksConfigured(params: {
   );
 }
 
+async function workspaceRequiredBootstrapLooksCustomized(dir: string): Promise<boolean> {
+  const fileNames = [DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME, DEFAULT_HEARTBEAT_FILENAME];
+  const fileDiffs = await Promise.all(
+    fileNames.map(async (fileName) =>
+      fileContentDiffersFromTemplate(path.join(dir, fileName), await loadTemplate(fileName)),
+    ),
+  );
+  return fileDiffs.some(Boolean);
+}
+
 async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
   return await workspaceProfileLooksConfigured(params);
 }
@@ -738,6 +748,28 @@ export async function ensureAgentWorkspace(params?: {
     }
   }
 
+  if (recentAttestationPath && !isBrandNewWorkspace) {
+    const bootstrapExists = await pathExists(bootstrapPath);
+    const state = await readWorkspaceSetupState(statePath, {
+      persistLegacyMigration: true,
+    });
+    const hasSetupState = Boolean(state.bootstrapSeededAt || state.setupCompletedAt);
+    const hasWorkspaceEvidence =
+      hasSetupState ||
+      bootstrapExists ||
+      (await workspaceRequiredBootstrapLooksCustomized(dir)) ||
+      (await workspaceProfileLooksConfigured({
+        dir,
+        includeGitEvidence: true,
+      }));
+    if (!hasWorkspaceEvidence) {
+      throw new WorkspaceVanishedError({
+        workspaceDir: dir,
+        attestationPath: recentAttestationPath,
+      });
+    }
+  }
+
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
   const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
@@ -798,10 +830,11 @@ export async function ensureAgentWorkspace(params?: {
     // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
     // already-configured workspaces.
     if (
-      await workspaceProfileLooksConfigured({
+      (Boolean(recentAttestationPath) && (await workspaceRequiredBootstrapLooksCustomized(dir))) ||
+      (await workspaceProfileLooksConfigured({
         dir,
         includeGitEvidence: true,
-      })
+      }))
     ) {
       markState({ setupCompletedAt: nowIso() });
     } else {
