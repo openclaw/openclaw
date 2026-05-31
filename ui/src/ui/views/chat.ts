@@ -404,6 +404,8 @@ interface ChatEphemeralState {
   historyRenderMessagesRef: unknown[] | null;
   historyRenderMessageCount: number;
   historyRenderLimit: number;
+  historyRenderLastScrollTop: number | null;
+  historyRenderExpansionFrame: number | null;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -422,6 +424,8 @@ function createChatEphemeralState(): ChatEphemeralState {
     historyRenderMessagesRef: null,
     historyRenderMessageCount: 0,
     historyRenderLimit: 0,
+    historyRenderLastScrollTop: null,
+    historyRenderExpansionFrame: null,
   };
 }
 
@@ -525,6 +529,9 @@ function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>): string
  * Clears search/slash UI that should not survive navigation.
  */
 export function resetChatViewState() {
+  if (vs.historyRenderExpansionFrame != null) {
+    cancelAnimationFrame(vs.historyRenderExpansionFrame);
+  }
   Object.assign(vs, createChatEphemeralState());
   chatItemsBySession.clear();
   composerDraftMirrors.clear();
@@ -549,12 +556,16 @@ function resolveChatHistoryRenderWindow(props: ChatProps): number {
   const sessionChanged = vs.historyRenderSessionKey !== props.sessionKey;
   const refChanged = vs.historyRenderMessagesRef !== messages;
   const previousCount = vs.historyRenderMessageCount;
+  if (sessionChanged || (refChanged && previousCount === 0)) {
+    vs.historyRenderLastScrollTop = null;
+  }
 
   if (cap === 0) {
     vs.historyRenderSessionKey = props.sessionKey;
     vs.historyRenderMessagesRef = messages;
     vs.historyRenderMessageCount = messages.length;
     vs.historyRenderLimit = 0;
+    vs.historyRenderLastScrollTop = null;
     return 0;
   }
 
@@ -594,7 +605,18 @@ function maybeExpandChatHistoryRenderWindow(event: Event, requestUpdate: () => v
   if (!(target instanceof HTMLElement)) {
     return;
   }
-  if (target.scrollTop > CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX) {
+  const scrollTop = Math.max(0, target.scrollTop);
+  const previousScrollTop = vs.historyRenderLastScrollTop;
+  vs.historyRenderLastScrollTop = scrollTop;
+  const distanceFromBottom = Math.max(0, target.scrollHeight - scrollTop - target.clientHeight);
+  const isTop = scrollTop <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
+  const isBottomAutoScroll =
+    scrollTop > 0 && distanceFromBottom <= CHAT_HISTORY_RENDER_EXPAND_SCROLL_TOP_PX;
+  const isTopScrollUp =
+    isTop &&
+    (scrollTop === 0 ||
+      (!isBottomAutoScroll && (previousScrollTop == null || scrollTop < previousScrollTop)));
+  if (!isTopScrollUp) {
     return;
   }
   const cap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
@@ -603,6 +625,37 @@ function maybeExpandChatHistoryRenderWindow(event: Event, requestUpdate: () => v
   }
   vs.historyRenderLimit = Math.min(cap, vs.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH);
   requestUpdate();
+}
+
+function scheduleChatHistoryRenderWindowFill(
+  thread: HTMLElement | null,
+  requestUpdate: () => void,
+  scrollToBottom: () => void,
+) {
+  if (!thread || vs.historyRenderExpansionFrame != null) {
+    return;
+  }
+  const cap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
+  if (vs.historyRenderLimit >= cap) {
+    return;
+  }
+  vs.historyRenderExpansionFrame = requestAnimationFrame(() => {
+    vs.historyRenderExpansionFrame = null;
+    const nextCap = resolveChatHistoryRenderCap(vs.historyRenderMessageCount);
+    if (vs.historyRenderLimit >= nextCap) {
+      return;
+    }
+    const canScroll = thread.scrollHeight - thread.clientHeight > 1;
+    if (canScroll) {
+      return;
+    }
+    vs.historyRenderLimit = Math.min(
+      nextCap,
+      vs.historyRenderLimit + CHAT_HISTORY_RENDER_WINDOW_BATCH,
+    );
+    requestUpdate();
+    scrollToBottom();
+  });
 }
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
@@ -1467,6 +1520,13 @@ export function renderChat(props: ChatProps) {
       class="chat-thread"
       role="log"
       aria-live="polite"
+      ${ref((element) =>
+        scheduleChatHistoryRenderWindowFill(
+          element instanceof HTMLElement ? element : null,
+          requestUpdate,
+          props.onScrollToBottom ?? (() => {}),
+        ),
+      )}
       @scroll=${handleChatThreadScroll}
       @click=${handleCodeBlockCopy}
     >

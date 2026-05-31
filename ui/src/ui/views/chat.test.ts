@@ -630,14 +630,117 @@ describe("chat history render window", () => {
 
     const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
     const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    thread.scrollTop = 120;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(onChatScroll).toHaveBeenCalledTimes(2);
+
+    buildChatItemsMock.mockClear();
+    renderChatView({ messages, onRequestUpdate, onChatScroll });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 60,
+      }),
+    );
+  });
+
+  it("does not expand the history render window for bottom auto-scrolls inside the top threshold", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onChatScroll = vi.fn();
+
+    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
+    thread.scrollTop = 30;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(onChatScroll).toHaveBeenCalledTimes(1);
+
+    buildChatItemsMock.mockClear();
+    const rerenderedContainer = renderChatView({ messages, onRequestUpdate, onChatScroll });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 30,
+      }),
+    );
+
+    const rerenderedThread = requireElement(
+      rerenderedContainer,
+      ".chat-thread",
+      "chat thread",
+    ) as HTMLElement;
+    rerenderedThread.scrollTop = 0;
+    rerenderedThread.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(onChatScroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("expands the history render window when the thread is already at the top", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onChatScroll = vi.fn();
+
+    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
+    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
     thread.scrollTop = 0;
     thread.dispatchEvent(new Event("scroll", { bubbles: true }));
 
     expect(onRequestUpdate).toHaveBeenCalledTimes(1);
     expect(onChatScroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("expands the render window after render when the initial window cannot scroll", () => {
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message ${index}`,
+      timestamp: index,
+    }));
+    const onRequestUpdate = vi.fn();
+    const onScrollToBottom = vi.fn();
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    renderChatView({ messages, onRequestUpdate, onScrollToBottom });
+
+    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages,
+        historyRenderLimit: 30,
+      }),
+    );
+    expect(frameCallbacks).toHaveLength(1);
+
+    frameCallbacks[0](0);
+
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(onScrollToBottom).toHaveBeenCalledTimes(1);
 
     buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onChatScroll });
+    renderChatView({ messages, onRequestUpdate, onScrollToBottom });
 
     expect(buildChatItemsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
