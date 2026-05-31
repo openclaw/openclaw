@@ -1524,7 +1524,7 @@ describe("gateway session utils", () => {
     } as OpenClawConfig;
 
     const result = listAgentsForGateway(cfg, [
-      { provider: "local", id: "custom-reasoner", reasoning: true },
+      { provider: "local", id: "custom-reasoner", name: "Custom Reasoner", reasoning: true },
     ]);
     const agent = result.agents.find((row) => row.id === "main");
 
