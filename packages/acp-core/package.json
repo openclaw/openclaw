@@ -81,7 +81,6 @@
     }
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.22.1",
     "@openclaw/normalization-core": "workspace:*"
   },
   "scripts": {

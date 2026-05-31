@@ -1,7 +1,8 @@
-import type { SessionId } from "@agentclientprotocol/sdk";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 const ACP_PROVENANCE_MODE_VALUES = ["off", "meta", "meta+receipt"] as const;
+
+export type SessionId = string;
 
 export type AcpProvenanceMode = (typeof ACP_PROVENANCE_MODE_VALUES)[number];
 

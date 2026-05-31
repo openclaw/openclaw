@@ -1772,9 +1772,6 @@ importers:
 
   packages/acp-core:
     dependencies:
-      '@agentclientprotocol/sdk':
-        specifier: 0.22.1
-        version: 0.22.1(zod@4.4.3)
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core

@@ -1,7 +1,6 @@
-import { SessionId } from "@agentclientprotocol/sdk";
-
 //#region src/types.d.ts
 declare const ACP_PROVENANCE_MODE_VALUES: readonly ["off", "meta", "meta+receipt"];
+type SessionId = string;
 type AcpProvenanceMode = (typeof ACP_PROVENANCE_MODE_VALUES)[number];
 declare function normalizeAcpProvenanceMode(value: string | undefined): AcpProvenanceMode | undefined;
 type AcpSession = {
@@ -65,4 +64,4 @@ type SessionAcpMeta = {
   lastError?: string;
 };
 //#endregion
-export { AcpProvenanceMode, AcpServerOptions, AcpSession, AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpIdentitySource, SessionAcpIdentityState, SessionAcpMeta, normalizeAcpProvenanceMode };
+export { AcpProvenanceMode, AcpServerOptions, AcpSession, AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpIdentitySource, SessionAcpIdentityState, SessionAcpMeta, SessionId, normalizeAcpProvenanceMode };
