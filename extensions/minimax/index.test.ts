@@ -6,6 +6,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
@@ -373,6 +374,81 @@ describe("minimax provider hooks", () => {
     } as never);
 
     expect(result?.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
+  });
+
+  it("portal catalog resolves OAuth token via resolveProviderAuth with oauthMarker (#79731)", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+    const resolveProviderAuth = vi.fn(() => ({
+      apiKey: "resolved-oauth-access-token",
+      mode: "oauth" as const,
+      source: "profile" as const,
+    }));
+    const result = await portalProvider.catalog?.run({
+      config: {},
+      resolveProviderAuth,
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+    } as never);
+
+    expect(resolveProviderAuth).toHaveBeenCalledWith("minimax-portal", {
+      oauthMarker: MINIMAX_OAUTH_MARKER,
+    });
+    expect(result).not.toBeNull();
+    if (result && "provider" in result) {
+      // The catalog must return the live token resolved from the OAuth
+      // profile, not the bare MINIMAX_OAUTH_MARKER sentinel. Before #79731
+      // the marker reached the request layer, which then failed with
+      // "No API key found for provider 'minimax-portal'".
+      expect(result.provider.apiKey).toBe("resolved-oauth-access-token");
+    }
+  });
+
+  it("portal catalog still honors an explicit configured api key over the OAuth profile (#79731)", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+    const resolveProviderAuth = vi.fn(() => ({
+      apiKey: "resolved-oauth-access-token",
+      mode: "oauth" as const,
+      source: "profile" as const,
+    }));
+    const result = await portalProvider.catalog?.run({
+      config: { models: { providers: { "minimax-portal": { apiKey: "config-api-key" } } } },
+      resolveProviderAuth,
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+    } as never);
+
+    if (result && "provider" in result) {
+      expect(result.provider.apiKey).toBe("config-api-key");
+    } else {
+      throw new Error("expected portal catalog to return a provider");
+    }
+  });
+
+  it("portal catalog returns null when no api key is resolvable (#79731)", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+    const result = await portalProvider.catalog?.run({
+      config: {},
+      resolveProviderAuth: () => ({
+        apiKey: undefined,
+        mode: "none" as const,
+        source: "none" as const,
+      }),
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+    } as never);
+    expect(result).toBeNull();
   });
 
   it("writes api and authHeader into the MiniMax portal OAuth config patch", async () => {
