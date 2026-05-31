@@ -178,6 +178,12 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../subagent-capabilities.js";
+import {
+  ackPendingSubagentCompletionHandoffs,
+  leasePendingSubagentCompletionHandoffs,
+  prependSubagentHandoffPrompt,
+  releasePendingSubagentCompletionHandoffs,
+} from "../../subagent-registry.js";
 import { ensureSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
@@ -3323,6 +3329,23 @@ export async function runEmbeddedAttempt(
         }
       };
       let skipPromptSubmission = false;
+      let leasedSubagentHandoff:
+        | {
+            leaseId: string;
+            runIds: readonly string[];
+          }
+        | undefined;
+      const releaseLeasedSubagentHandoff = (error?: unknown) => {
+        if (!leasedSubagentHandoff) {
+          return;
+        }
+        releasePendingSubagentCompletionHandoffs({
+          runIds: leasedSubagentHandoff.runIds,
+          leaseId: leasedSubagentHandoff.leaseId,
+          error: error ? formatErrorMessage(error) : undefined,
+        });
+        leasedSubagentHandoff = undefined;
+      };
       try {
         const promptStartedAt = Date.now();
         if (emptyExplicitToolAllowlistError) {
@@ -3519,6 +3542,37 @@ export async function runEmbeddedAttempt(
             log.warn(orphanRepairMessage);
           } else {
             log.debug(orphanRepairMessage);
+          }
+        }
+        if (params.sessionKey && !isRawModelRun) {
+          const leaseId = `${params.runId}:subagent-next-turn-handoff`;
+          const leased = leasePendingSubagentCompletionHandoffs({
+            requesterSessionKey: params.sessionKey,
+            leaseId,
+          });
+          if (leased) {
+            leasedSubagentHandoff = {
+              leaseId,
+              runIds: leased.runIds,
+            };
+            effectivePrompt = prependSubagentHandoffPrompt({
+              handoffPrompt: leased.prompt,
+              prompt: effectivePrompt,
+            });
+            promptForRuntimeContextSplit = prependSubagentHandoffPrompt({
+              handoffPrompt: leased.prompt,
+              prompt: promptForRuntimeContextSplit,
+            });
+            if (transcriptPromptForRuntimeSplit !== undefined) {
+              transcriptPromptForRuntimeSplit = prependSubagentHandoffPrompt({
+                handoffPrompt: leased.prompt,
+                prompt: transcriptPromptForRuntimeSplit,
+              });
+            }
+            log.debug(
+              `subagent handoff: injected ${leased.runIds.length} completion(s) into parent turn ` +
+                `runId=${params.runId} sessionKey=${params.sessionKey}`,
+            );
           }
         }
         const promptForModelBeforeRuntimeContextSplit = effectivePrompt;
@@ -4110,12 +4164,22 @@ export async function runEmbeddedAttempt(
                   cleanupRuntimeContextMessage();
                 }
               }
+              if (leasedSubagentHandoff) {
+                ackPendingSubagentCompletionHandoffs({
+                  runIds: leasedSubagentHandoff.runIds,
+                  leaseId: leasedSubagentHandoff.leaseId,
+                });
+                leasedSubagentHandoff = undefined;
+              }
             } finally {
               cleanupProviderPromptHistoryTransform();
               cleanupModelPromptTransform();
             }
+          } else {
+            releaseLeasedSubagentHandoff(promptError ?? "prompt submission skipped");
           }
         } catch (err) {
+          releaseLeasedSubagentHandoff(err);
           yieldAborted =
             yieldDetected &&
             isRunnerAbortError(err) &&

@@ -24,6 +24,12 @@ import {
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
 import {
+  ackLeasedSubagentHandoffsFromRuns,
+  leasePendingSubagentHandoffsFromRuns,
+  prependSubagentHandoffPrompt,
+  releaseLeasedSubagentHandoffsFromRuns,
+} from "./subagent-handoff-queue.js";
+import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -1374,6 +1380,68 @@ export function listSubagentRunsForRequester(
 ): SubagentRunRecord[] {
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
+
+export function leasePendingSubagentCompletionHandoffs(params: {
+  requesterSessionKey: string;
+  leaseId: string;
+  now?: number;
+}) {
+  restoreSubagentRunsOnce();
+  const leased = leasePendingSubagentHandoffsFromRuns({
+    runs: subagentRuns,
+    requesterSessionKey: params.requesterSessionKey,
+    leaseId: params.leaseId,
+    now: params.now,
+  });
+  if (leased) {
+    persistSubagentRuns();
+  }
+  return leased;
+}
+
+export function ackPendingSubagentCompletionHandoffs(params: {
+  runIds: readonly string[];
+  leaseId: string;
+  now?: number;
+}): number {
+  const updated = ackLeasedSubagentHandoffsFromRuns({
+    runs: subagentRuns,
+    runIds: params.runIds,
+    leaseId: params.leaseId,
+    now: params.now,
+  });
+  if (updated > 0) {
+    persistSubagentRuns();
+    for (const runId of params.runIds) {
+      const entry = subagentRuns.get(runId);
+      if (!entry || typeof entry.cleanupCompletedAt === "number") {
+        continue;
+      }
+      entry.cleanupHandled = false;
+      startSubagentAnnounceCleanupFlow(runId, entry);
+    }
+  }
+  return updated;
+}
+
+export function releasePendingSubagentCompletionHandoffs(params: {
+  runIds: readonly string[];
+  leaseId: string;
+  error?: string;
+}): number {
+  const updated = releaseLeasedSubagentHandoffsFromRuns({
+    runs: subagentRuns,
+    runIds: params.runIds,
+    leaseId: params.leaseId,
+    error: params.error,
+  });
+  if (updated > 0) {
+    persistSubagentRuns();
+  }
+  return updated;
+}
+
+export { prependSubagentHandoffPrompt };
 
 export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(
