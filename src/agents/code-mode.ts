@@ -143,6 +143,7 @@ type CodeModeWorkerResult =
 
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
+let activeRunReservations = 0;
 let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
 let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
@@ -261,9 +262,22 @@ function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): numb
 
 function enforceActiveRunLimit(): void {
   removeExpiredRuns();
-  if (activeRuns.size >= MAX_ACTIVE_CODE_MODE_RUNS) {
+  if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
     throw new ToolInputError("too many suspended code mode runs.");
   }
+}
+
+function reserveActiveRunSlot(): () => void {
+  enforceActiveRunLimit();
+  activeRunReservations += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    activeRunReservations = Math.max(0, activeRunReservations - 1);
+  };
 }
 
 function toJsonSafe(value: unknown): unknown {
@@ -501,6 +515,7 @@ async function runBridgeRequest(params: {
         const options = isRecord(values[1]) ? values[1] : undefined;
         value = await params.runtime.search(query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
+          includeMcp: false,
         });
         break;
       }
@@ -509,7 +524,7 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("describe id must be a string.");
         }
-        value = await params.runtime.describe(id);
+        value = await params.runtime.describe(id, { includeMcp: false });
         break;
       }
       case "call": {
@@ -517,12 +532,7 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("call id must be a string.");
         }
-        const described = await params.runtime.describe(id);
-        if (described.source === "mcp") {
-          throw new ToolInputError(
-            "MCP tools are available in code mode only through the MCP namespace.",
-          );
-        }
+        const described = await params.runtime.describe(id, { includeMcp: false });
         value = await params.runtime.callExactId(described.id, values[1] ?? {}, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
@@ -711,13 +721,42 @@ function snapshotState(params: {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
+  enforceSnapshotStateLimits(params);
+  return storeSnapshotState({
+    ...params,
+    pending: createPendingBridgeStates(params),
+  });
+}
+
+function enforceSnapshotStateLimits(params: {
+  snapshotBytes: Uint8Array;
+  config: CodeModeConfig;
+  output: unknown[];
+}) {
   enforceActiveRunLimit();
+  enforceSnapshotPayloadLimits(params);
+}
+
+function enforceSnapshotPayloadLimits(params: {
+  snapshotBytes: Uint8Array;
+  config: CodeModeConfig;
+  output: unknown[];
+}) {
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
     throw new CodeModeLimitError("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
   enforceOutputLimit(params.output, params.config);
-  const runId = `cm_${randomUUID()}`;
-  const pending = params.pendingRequests.map((request) => {
+}
+
+function createPendingBridgeStates(params: {
+  pendingRequests: PendingBridgeRequest[];
+  runtime: ToolSearchRuntime;
+  namespaceRuntime: CodeModeNamespaceRuntime;
+  parentToolCallId: string;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback;
+}): PendingBridgeState[] {
+  return params.pendingRequests.map((request) => {
     const promise = runBridgeRequest({
       runtime: params.runtime,
       namespaceRuntime: params.namespaceRuntime,
@@ -732,6 +771,19 @@ function snapshotState(params: {
     });
     return state;
   });
+}
+
+function storeSnapshotState(params: {
+  pending: PendingBridgeState[];
+  snapshotBytes: Uint8Array;
+  parentToolCallId: string;
+  ctx: ToolSearchToolContext;
+  config: CodeModeConfig;
+  runtime: ToolSearchRuntime;
+  namespaceRuntime: CodeModeNamespaceRuntime;
+  output: unknown[];
+}) {
+  const runId = `cm_${randomUUID()}`;
   const now = Date.now();
   const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
   if (expiresAt === undefined) {
@@ -743,7 +795,7 @@ function snapshotState(params: {
     ctx: params.ctx,
     config: params.config,
     snapshotBytes: params.snapshotBytes,
-    pending,
+    pending: params.pending,
     output: params.output,
     createdAt: now,
     expiresAt,
@@ -753,8 +805,8 @@ function snapshotState(params: {
   return {
     status: "waiting" as const,
     runId,
-    reason: codeModeWaitingReason(pending),
-    pendingToolCalls: pendingToolCalls(pending),
+    reason: codeModeWaitingReason(params.pending),
+    pendingToolCalls: pendingToolCalls(params.pending),
     output: params.output,
     telemetry: telemetry(params.runtime),
   };
@@ -805,7 +857,7 @@ async function runExec(params: {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
-  const catalog = runtime.all();
+  const catalog = runtime.all({ includeMcp: false });
   const namespaceRuntime = await createCodeModeNamespaceRuntime(
     params.ctx,
     runtime.namespaceEntries(),
@@ -835,29 +887,17 @@ async function runExec(params: {
         config.timeoutMs + 1000,
       ),
     );
-    if (result.status === "waiting") {
-      return snapshotState({
-        pendingRequests: result.pendingRequests,
-        snapshotBytes: result.snapshotBytes,
-        parentToolCallId: params.toolCallId,
-        ctx: params.ctx,
-        config,
-        runtime,
-        namespaceRuntime,
-        output: result.output,
-        signal: params.signal,
-        onUpdate: params.onUpdate,
-      });
-    }
-    enforceResultLimit({
+    return await settleCodeModeResult({
+      result,
       output: result.output,
-      value: result.status === "completed" ? result.value : undefined,
+      parentToolCallId: params.toolCallId,
+      ctx: params.ctx,
       config,
+      runtime,
+      namespaceRuntime,
+      signal: params.signal,
+      onUpdate: params.onUpdate,
     });
-    return {
-      ...result,
-      telemetry: telemetry(runtime),
-    };
   } catch (error) {
     return {
       status: "failed" as const,
@@ -887,6 +927,107 @@ async function waitForPending(pending: PendingBridgeState[], timeoutMs: number):
       clearTimeout(timer);
     }
   }
+}
+
+async function settleCodeModeResult(params: {
+  result: CodeModeWorkerResult;
+  output: unknown[];
+  parentToolCallId: string;
+  ctx: ToolSearchToolContext;
+  config: CodeModeConfig;
+  runtime: ToolSearchRuntime;
+  namespaceRuntime: CodeModeNamespaceRuntime;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback;
+}) {
+  let result = params.result;
+  const output = params.output;
+  let namespaceRounds = 0;
+  const settleDeadline = Date.now() + params.config.timeoutMs;
+  while (
+    result.status === "waiting" &&
+    result.pendingRequests.length > 0 &&
+    result.pendingRequests.every((request) => request.method === "namespace") &&
+    namespaceRounds < params.config.maxPendingToolCalls
+  ) {
+    const remainingMs = settleDeadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    enforceSnapshotPayloadLimits({
+      snapshotBytes: result.snapshotBytes,
+      config: params.config,
+      output,
+    });
+    const releaseReservation = reserveActiveRunSlot();
+    try {
+      const pending = createPendingBridgeStates({
+        pendingRequests: result.pendingRequests,
+        runtime: params.runtime,
+        namespaceRuntime: params.namespaceRuntime,
+        parentToolCallId: params.parentToolCallId,
+        signal: params.signal,
+        onUpdate: params.onUpdate,
+      });
+      const ready = await waitForPending(pending, remainingMs);
+      if (!ready) {
+        return storeSnapshotState({
+          pending,
+          snapshotBytes: result.snapshotBytes,
+          parentToolCallId: params.parentToolCallId,
+          ctx: params.ctx,
+          config: params.config,
+          runtime: params.runtime,
+          namespaceRuntime: params.namespaceRuntime,
+          output,
+        });
+      }
+      const settledRequests: SettledBridgeRequest[] = [];
+      for (const entry of pending) {
+        settledRequests.push(entry.settled ?? (await entry.promise));
+      }
+      result = normalizeCodeModeWorkerResult(
+        await runCodeModeWorker(
+          {
+            kind: "resume",
+            snapshotBytes: result.snapshotBytes,
+            config: params.config,
+            settledRequests,
+          },
+          Math.max(1, settleDeadline - Date.now()) + 1000,
+        ),
+      );
+    } finally {
+      releaseReservation();
+    }
+    output.push(...result.output);
+    enforceOutputLimit(output, params.config);
+    namespaceRounds += 1;
+  }
+  if (result.status === "waiting") {
+    return snapshotState({
+      pendingRequests: result.pendingRequests,
+      snapshotBytes: result.snapshotBytes,
+      parentToolCallId: params.parentToolCallId,
+      ctx: params.ctx,
+      config: params.config,
+      runtime: params.runtime,
+      namespaceRuntime: params.namespaceRuntime,
+      output,
+      signal: params.signal,
+      onUpdate: params.onUpdate,
+    });
+  }
+  enforceResultLimit({
+    output,
+    value: result.status === "completed" ? result.value : undefined,
+    config: params.config,
+  });
+  return {
+    ...result,
+    output,
+    telemetry: telemetry(params.runtime),
+  };
 }
 
 async function runWait(params: {
@@ -949,30 +1090,17 @@ async function runWait(params: {
     );
     const output = [...state.output, ...result.output];
     enforceOutputLimit(output, state.config);
-    if (result.status === "waiting") {
-      return snapshotState({
-        pendingRequests: result.pendingRequests,
-        snapshotBytes: result.snapshotBytes,
-        parentToolCallId: params.toolCallId,
-        ctx: state.ctx,
-        config: state.config,
-        runtime: state.runtime,
-        namespaceRuntime: state.namespaceRuntime,
-        output,
-        signal: params.signal,
-        onUpdate: params.onUpdate,
-      });
-    }
-    enforceResultLimit({
+    return await settleCodeModeResult({
+      result,
       output,
-      value: result.status === "completed" ? result.value : undefined,
+      parentToolCallId: params.toolCallId,
+      ctx: state.ctx,
       config: state.config,
+      runtime: state.runtime,
+      namespaceRuntime: state.namespaceRuntime,
+      signal: params.signal,
+      onUpdate: params.onUpdate,
     });
-    return {
-      ...result,
-      output,
-      telemetry: telemetry(state.runtime),
-    };
   } catch (error) {
     return {
       status: "failed" as const,

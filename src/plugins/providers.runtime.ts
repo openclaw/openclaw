@@ -10,7 +10,7 @@ import {
   loadOpenClawPlugins,
   type PluginLoadOptions,
 } from "./loader.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { hasExplicitPluginIdScope } from "./plugin-scope.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
@@ -159,6 +159,24 @@ function resolvePluginProviderLoadBase(
   };
 }
 
+function resolveProviderMetadataLookup(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+}) {
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const snapshot =
+    params.pluginMetadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      config: params.config ?? {},
+      workspaceDir,
+      env,
+    });
+  return { env, workspaceDir, snapshot };
+}
+
 function resolveSetupProviderPluginLoadState(
   params: Parameters<typeof resolvePluginProviders>[0],
   base: ReturnType<typeof resolvePluginProviderLoadBase>,
@@ -290,15 +308,7 @@ function resolveRuntimeProviderPluginLoadState(
 export function isPluginProvidersLoadInFlight(
   params: Parameters<typeof resolvePluginProviders>[0],
 ): boolean {
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
-  const snapshot =
-    params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
-      config: params.config ?? {},
-      workspaceDir,
-      env,
-    });
+  const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
   const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
   const loadState =
     params.mode === "setup"
@@ -327,15 +337,7 @@ export function resolvePluginProviders(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
-  const snapshot =
-    params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
-      config: params.config ?? {},
-      workspaceDir,
-      env,
-    });
+  const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
   const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
   if (params.mode === "setup") {
     const loadState = resolveSetupProviderPluginLoadState(params, base, snapshot);

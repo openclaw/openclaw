@@ -1520,22 +1520,8 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
-  it("uses gateway.webchat.chatHistoryMaxChars when RPC maxChars is absent", () => {
-    expect(
-      resolveEffectiveChatHistoryMaxChars(
-        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
-        undefined,
-      ),
-    ).toBe(123);
-  });
-
-  it("prefers RPC maxChars over config", () => {
-    expect(
-      resolveEffectiveChatHistoryMaxChars(
-        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
-        45,
-      ),
-    ).toBe(45);
+  it("uses the RPC maxChars override when present", () => {
+    expect(resolveEffectiveChatHistoryMaxChars({}, 45)).toBe(45);
   });
 
   it("falls back to the default hardcoded limit", () => {

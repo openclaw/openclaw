@@ -174,6 +174,7 @@ const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill 
 const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
+const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -1804,6 +1805,38 @@ async function buildResponsesPayload(
     }
     if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
+    }
+  }
+  if (QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+      return buildToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        code: [
+          "const rootApi = await MCP.$api();",
+          'const api = await MCP.fixture.$api("lookupNote", { schema: true });',
+          'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+          "return {",
+          '  marker: "MCP_CODE_MODE_TOOL_RESULT",',
+          "  rootServers: rootApi.servers,",
+          "  headerHasLookup: api.header.includes('function lookupNote'),",
+          "  schemaKeys: Object.keys(api.schemas),",
+          "  resultText: result.content?.[0]?.text,",
+          "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+          "};",
+        ].join("\n"),
+      });
+    }
+    if (
+      toolJson?.status === "waiting" &&
+      typeof toolJson.runId === "string" &&
+      hasDeclaredTool(body, "wait")
+    ) {
+      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+    }
+    if (/MCP_CODE_MODE_TOOL_RESULT|fixture-note-alpha/.test(toolOutput)) {
+      return buildAssistantEvents(
+        "MCP_CODE_MODE_OK unclear=none improvement=virtual-header-files-would-avoid-the-first-api-call",
+      );
     }
   }
   if (

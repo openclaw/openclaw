@@ -1302,7 +1302,7 @@ public final class OpenClawChatViewModel {
 
     private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {
         if let sessionKey = payload.sessionKey,
-           !self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey)
+           !self.matchesCurrentSessionKey(incoming: sessionKey, agentId: payload.agentId, current: self.sessionKey)
         {
             return
         }

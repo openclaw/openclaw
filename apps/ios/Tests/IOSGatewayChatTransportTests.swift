@@ -95,6 +95,7 @@ import Testing
     @Test func mapsSessionMessageEventToSessionMessage() {
         let payload = AnyCodable([
             "sessionKey": AnyCodable("agent:main:main"),
+            "agentId": AnyCodable("main"),
             "messageId": AnyCodable("msg-1"),
             "messageSeq": AnyCodable(7),
             "message": AnyCodable([
@@ -119,6 +120,7 @@ import Testing
         switch mapped {
         case let .sessionMessage(message):
             #expect(message.sessionKey == "agent:main:main")
+            #expect(message.agentId == "main")
             #expect(message.messageId == "msg-1")
             #expect(message.messageSeq == 7)
             #expect(message.message?.role == "assistant")

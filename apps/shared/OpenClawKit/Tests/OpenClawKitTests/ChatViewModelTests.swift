@@ -1092,6 +1092,75 @@ extension TestChatTransportState {
         }
     }
 
+    @Test func appendsGlobalSessionUserMessageForSelectedAgent() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:work:global",
+            historyResponses: [historyPayload(sessionKey: "agent:work:global")])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "global",
+                    agentId: "work",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "global transcript",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now),
+                    messageId: "msg-global-work",
+                    messageSeq: 1)))
+
+        try await waitUntil("selected agent global transcript visible") {
+            await MainActor.run {
+                vm.messages.count == 1 &&
+                    vm.messages.first?.role == "user" &&
+                    vm.messages.first?.content.first?.text == "global transcript"
+            }
+        }
+    }
+
+    @Test func ignoresGlobalSessionUserMessageForDifferentAgent() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:work:global",
+            historyResponses: [historyPayload(sessionKey: "agent:work:global")])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "global",
+                    agentId: "main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "wrong global transcript",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now),
+                    messageId: "msg-global-main",
+                    messageSeq: 1)))
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await MainActor.run { vm.messages.isEmpty })
+    }
+
     @Test func ignoresAgentMainSessionMessageForDifferentCurrentMainAlias() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
