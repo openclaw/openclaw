@@ -139,6 +139,7 @@ export async function assembleHarnessContextEngine(params: {
   runtimeId?: string | null;
   providerId?: string | null;
   requestedModelId?: string | null;
+  modelFamily?: string | null;
   maxOutputTokens?: number | null;
   fallbackActive?: boolean;
   fallbackReason?: string | null;

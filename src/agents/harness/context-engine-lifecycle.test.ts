@@ -108,6 +108,41 @@ describe("harness context engine lifecycle", () => {
     });
   });
 
+  it("never derives model.family from the model id (defaults to null)", async () => {
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages: [textMessage("user", "ask", 1)],
+      modelId: "anthropic/claude-opus-4-8",
+      providerId: "anthropic",
+    });
+
+    const noFamily = assemble.mock.calls.at(0)?.[0]?.runtimeSettings?.model;
+    // Regression: model.family must not mirror the model id.
+    expect(noFamily?.resolved).toBe("anthropic/claude-opus-4-8");
+    expect(noFamily?.family).toBeNull();
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages: [textMessage("user", "ask", 1)],
+      modelId: "anthropic/claude-opus-4-8",
+      providerId: "anthropic",
+      modelFamily: "claude",
+    });
+
+    const withFamily = assemble.mock.calls.at(1)?.[0]?.runtimeSettings?.model;
+    // When a real family is supplied, it is carried through verbatim.
+    expect(withFamily?.family).toBe("claude");
+  });
+
   it("keeps hidden runtime-context custom messages out of afterTurn hooks", async () => {
     const beforePromptUser = textMessage("user", "old ask", 1);
     const beforePromptRuntimeContext = runtimeContextMessage("old hidden context", 2);
