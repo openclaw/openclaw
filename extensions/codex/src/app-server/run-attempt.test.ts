@@ -1162,6 +1162,61 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {
+    const sessionFile = path.join(tempDir, "session-tool-events.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-tool-events");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const onRunAgentEvent = vi.fn();
+    params.timeoutMs = 60_000;
+    params.onAgentEvent = onRunAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    await expect(
+      harness.handleServerRequest({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "python",
+          arguments: { code: "print('hi')" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: python" }],
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(onRunAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: {
+        phase: "start",
+        name: "python",
+        toolCallId: "call-1",
+        args: { code: "print('hi')" },
+      },
+    });
+    expect(onRunAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "python",
+        toolCallId: "call-1",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "Unknown OpenClaw tool: python" }],
+        },
+      },
+    });
+  });
+
   it("keeps leading delivery hints out of the Codex current user request", async () => {
     const sessionFile = path.join(tempDir, "session-delivery-hint.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-delivery-hint");

@@ -199,6 +199,7 @@ import type {
   CodexTurnEnvironmentParams,
   CodexServerNotification,
   CodexDynamicToolCallParams,
+  CodexDynamicToolCallOutputContentItem,
   CodexDynamicToolCallResponse,
   CodexTurnStartResponse,
   JsonObject,
@@ -307,6 +308,26 @@ function emitCodexAppServerEvent(
     // canonical app-server turn lifecycle.
     embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
   }
+}
+
+function toTranscriptToolResult(response: CodexDynamicToolCallResponse): Record<string, unknown> {
+  const sanitized = sanitizeCodexToolResponse(response);
+  const result: Record<string, unknown> = {
+    ...sanitized,
+    content: response.contentItems.map(toTranscriptToolResultContentItem),
+  };
+  delete result.contentItems;
+  delete result.success;
+  return result;
+}
+
+function toTranscriptToolResultContentItem(
+  item: CodexDynamicToolCallOutputContentItem,
+): Record<string, unknown> {
+  if (item.type === "inputText") {
+    return { type: "text", text: item.text };
+  }
+  return "imageUrl" in item ? { type: "image", url: item.imageUrl } : { type: "text", text: "" };
 }
 
 type CodexAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
@@ -1717,7 +1738,7 @@ export async function runCodexAppServerAttempt(
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
               isError: !protocolResponse.success,
-              result: sanitizeCodexToolResponse(progressResponse),
+              result: toTranscriptToolResult(progressResponse),
             },
           });
         }
