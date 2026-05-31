@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -296,7 +296,7 @@ async function expectBuiltArtifactNodeRequireFastPath(
   }
 }
 
-function runCompiledEsmSidecarFastPathProbe(): ReturnType<typeof spawnSync> {
+function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
   tempDirs.push(tempRoot);
   const probePath = path.join(tempRoot, "probe.mjs");
@@ -358,7 +358,7 @@ function runCompiledEsmSidecarFastPathProbe(): ReturnType<typeof spawnSync> {
 }
 
 describe("loadBundledEntryExportSync", () => {
-  let compiledEsmSidecarFastPathResult: ReturnType<typeof spawnSync>;
+  let compiledEsmSidecarFastPathResult: SpawnSyncReturns<string>;
 
   beforeAll(() => {
     compiledEsmSidecarFastPathResult = runCompiledEsmSidecarFastPathProbe();
