@@ -28,7 +28,7 @@ export function resolveConfiguredProviderFallback(params: {
     return null;
   }
 
-  // If a specific model was requested, try to find a configured provider that
+  // When a specific model was requested, try to find a configured provider that
   // carries that exact model. This preserves the user's model choice and only
   // switches the provider — which is the correct behavior when the default
   // provider doesn't carry the model but another provider does.
@@ -45,18 +45,17 @@ export function resolveConfiguredProviderFallback(params: {
     if (providerWithModel) {
       return { provider: providerWithModel[0], model: defaultModel };
     }
+    // The default provider is not configured and no other provider has the
+    // requested model. Return null so the caller preserves the explicitly-
+    // specified provider/model pair rather than silently replacing it with
+    // an unrelated provider's first model.
+    if (!defaultProviderConfig) {
+      return null;
+    }
   }
 
-  // If the default provider is NOT configured at all (e.g., "openai" when only
-  // "openai-codex" exists), return null so the caller preserves the explicitly-
-  // specified provider/model pair rather than silently replacing it with an
-  // unrelated provider's first model.
-  if (!defaultProviderConfig) {
-    return null;
-  }
-
-  // The default provider exists but doesn't have the requested model, and no
-  // other provider has it either. Fall back to the first provider that has
+  // No specific model was requested (or the default provider IS configured
+  // but doesn't carry the model). Fall back to the first provider that has
   // any models configured.
   const availableProvider = Object.entries(configuredProviders).find(
     ([, providerCfg]) =>
