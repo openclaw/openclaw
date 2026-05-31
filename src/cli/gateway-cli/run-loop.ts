@@ -120,6 +120,7 @@ export async function runGatewayLoop(params: {
   // here pulls the whole re-export graph (lifecycle.runtime.ts is a 36-line
   // re-export hub) into memory, immune to later disk rotation.
   const eagerLifecycleRuntime = await loadGatewayLifecycleRuntimeModule();
+  const supervisor = eagerLifecycleRuntime.detectRespawnSupervisor();
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
@@ -718,7 +719,14 @@ export async function runGatewayLoop(params: {
     request("stop", "SIGINT");
   };
   const onSighup = () => {
-    gatewayLog.info("signal SIGHUP received; ignoring terminal hangup");
+    if (supervisor) {
+      gatewayLog.info(
+        `signal SIGHUP received; ignoring (${supervisor} supervised daemon survives terminal hangup)`,
+      );
+      return;
+    }
+    gatewayLog.info("signal SIGHUP received");
+    request("stop", "SIGHUP");
   };
   const onSigusr1 = () => {
     gatewayLog.info("signal SIGUSR1 received");

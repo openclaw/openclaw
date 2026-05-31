@@ -394,8 +394,9 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("ignores SIGHUP unconditionally", async () => {
+  it("ignores SIGHUP when running under a supervisor", async () => {
     vi.clearAllMocks();
+    detectRespawnSupervisor.mockReturnValue("launchd");
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { runtime, exited } = await createSignaledLoopHarness();
@@ -406,9 +407,9 @@ describe("runGatewayLoop", () => {
 
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(gatewayLog.info).toHaveBeenCalledWith(
-        "signal SIGHUP received; ignoring terminal hangup",
+        "signal SIGHUP received; ignoring (launchd supervised daemon survives terminal hangup)",
       );
-      expect(detectRespawnSupervisor).not.toHaveBeenCalled();
+      expect(detectRespawnSupervisor).toHaveBeenCalledTimes(1);
 
       const sigterm = captureSignal("SIGTERM");
       sigterm();
@@ -418,24 +419,25 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("handles SIGHUP without supervisor detection", async () => {
+  it("gracefully stops on SIGHUP in foreground (no supervisor)", async () => {
     vi.clearAllMocks();
+    detectRespawnSupervisor.mockReturnValue(null);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
-      const { runtime, exited } = await createSignaledLoopHarness();
+      const { close, runtime, exited } = await createSignaledLoopHarness();
       const sighup = captureSignal("SIGHUP");
 
       sighup();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(detectRespawnSupervisor).not.toHaveBeenCalled();
-
-      const sigterm = captureSignal("SIGTERM");
-      sigterm();
 
       await expect(exited).resolves.toBe(0);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
       expect(runtime.exit).toHaveBeenCalledWith(0);
+      expect(gatewayLog.info).toHaveBeenCalledWith("signal SIGHUP received");
+      expect(gatewayLog.info).toHaveBeenCalledWith("received SIGHUP; shutting down");
+      expect(detectRespawnSupervisor).toHaveBeenCalledTimes(1);
     });
   });
 

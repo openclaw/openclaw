@@ -127,16 +127,16 @@ openclaw gateway restart --force
 
 The Gateway installs handlers for the signals that are part of the OpenClaw lifecycle contract. Use `openclaw gateway restart` for managed-service restarts; it routes to the Gateway restart path and avoids relying on platform-specific hangup behavior.
 
-| Signal    | Foreground Gateway             | Supervised Gateway (`launchd`, `systemd`, `schtasks`) |
-| --------- | ------------------------------ | ----------------------------------------------------- |
-| `SIGTERM` | Graceful shutdown.             | Graceful shutdown.                                    |
-| `SIGINT`  | Graceful shutdown.             | Graceful shutdown.                                    |
-| `SIGUSR1` | Authorized in-process restart. | Authorized in-process restart.                        |
-| `SIGHUP`  | Logged and ignored.            | Logged and ignored.                                   |
+| Signal    | Foreground Gateway             | Supervised Gateway (`launchd`, `systemd`, `schtasks`)                 |
+| --------- | ------------------------------ | --------------------------------------------------------------------- |
+| `SIGTERM` | Graceful shutdown.             | Graceful shutdown.                                                    |
+| `SIGINT`  | Graceful shutdown.             | Graceful shutdown.                                                    |
+| `SIGUSR1` | Authorized in-process restart. | Authorized in-process restart.                                        |
+| `SIGHUP`  | Graceful shutdown.             | Ignored so terminal hangups do not stop a supervisor-managed Gateway. |
 
 `SIGUSR1` restart requires restart commands to be authorized. `commands.restart` is enabled by default; set `commands.restart: false` to block manual restart while gateway tool, config apply, and update restart paths remain allowed.
 
-On non-Windows platforms, the `SIGHUP` handler removes Node.js default hangup termination, so terminal hangup does not stop the Gateway.
+On non-Windows platforms, the foreground `SIGHUP` handler triggers graceful shutdown instead of Node.js default hangup termination.
 On Windows, Node.js may still be terminated after a console close even when a `SIGHUP` listener runs.
 
 <Warning>
