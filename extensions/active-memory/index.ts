@@ -88,7 +88,6 @@ const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "web_search",
   "write",
 ]);
-const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
@@ -287,49 +286,15 @@ type CachedActiveRecallResult = {
 
 type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
 
-type ActiveMemoryToggleStore = {
-  sessions?: Record<string, { disabled?: boolean; updatedAt?: number }>;
-};
-
 type ActiveMemoryToggleEntry = {
   sessionKey: string;
   disabled: true;
   updatedAt: number;
 };
-
-type AsyncLock = <T>(task: () => Promise<T>) => Promise<T>;
-
-const toggleStoreLocks = new Map<string, AsyncLock>();
 let lastActiveRecallCacheSweepAt = 0;
 let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
 let setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
 let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
-
-function createAsyncLock(): AsyncLock {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(task: () => Promise<T>): Promise<T> {
-    const previous = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await task();
-    } finally {
-      release?.();
-    }
-  };
-}
-
-function withToggleStoreLock<T>(statePath: string, task: () => Promise<T>): Promise<T> {
-  let withLock = toggleStoreLocks.get(statePath);
-  if (!withLock) {
-    withLock = createAsyncLock();
-    toggleStoreLocks.set(statePath, withLock);
-  }
-  return withLock(task);
-}
 
 type ActiveMemoryThinkingLevel =
   | "off"
@@ -702,15 +667,6 @@ function resolveRecallRunChannelContext(params: {
   }
 }
 
-function resolveToggleStatePath(api: OpenClawPluginApi): string {
-  return path.join(
-    api.runtime.state.resolveStateDir(),
-    "plugins",
-    "active-memory",
-    TOGGLE_STATE_FILE,
-  );
-}
-
 function activeMemoryToggleKey(sessionKey: string): string {
   return crypto.createHash("sha256").update(sessionKey, "utf8").digest("hex");
 }
@@ -720,59 +676,6 @@ function openActiveMemoryToggleStore(api: OpenClawPluginApi) {
     namespace: "session-toggles",
     maxEntries: 10_000,
   });
-}
-
-async function readLegacyToggleStore(statePath: string): Promise<ActiveMemoryToggleStore> {
-  try {
-    const raw = await fs.readFile(statePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const sessions = (parsed as { sessions?: unknown }).sessions;
-    if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
-      return {};
-    }
-    const nextSessions: NonNullable<ActiveMemoryToggleStore["sessions"]> = {};
-    for (const [sessionKey, value] of Object.entries(sessions)) {
-      if (!sessionKey.trim() || !value || typeof value !== "object" || Array.isArray(value)) {
-        continue;
-      }
-      const disabled = (value as { disabled?: unknown }).disabled === true;
-      const updatedAt =
-        typeof (value as { updatedAt?: unknown }).updatedAt === "number"
-          ? (value as { updatedAt: number }).updatedAt
-          : undefined;
-      if (disabled) {
-        nextSessions[sessionKey] = { disabled, updatedAt };
-      }
-    }
-    return Object.keys(nextSessions).length > 0 ? { sessions: nextSessions } : {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    return {};
-  }
-}
-
-async function importLegacyToggleStore(params: {
-  api: OpenClawPluginApi;
-  statePath: string;
-}): Promise<void> {
-  const legacy = await readLegacyToggleStore(params.statePath);
-  const sessions = Object.entries(legacy.sessions ?? {});
-  const store = openActiveMemoryToggleStore(params.api);
-  for (const [sessionKey, value] of sessions) {
-    if (value.disabled === true) {
-      await store.register(activeMemoryToggleKey(sessionKey), {
-        sessionKey,
-        disabled: true,
-        updatedAt: value.updatedAt ?? Date.now(),
-      });
-    }
-  }
-  await fs.rm(params.statePath, { force: true }).catch(() => undefined);
 }
 
 async function isSessionActiveMemoryDisabled(params: {
@@ -790,9 +693,7 @@ async function isSessionActiveMemoryDisabled(params: {
     if (stored?.disabled === true) {
       return true;
     }
-    const statePath = resolveToggleStatePath(params.api);
-    await importLegacyToggleStore({ api: params.api, statePath });
-    return (await store.lookup(key))?.disabled === true;
+    return false;
   } catch (error) {
     params.api.logger.debug?.(
       `active-memory: failed to read session toggle (${error instanceof Error ? error.message : String(error)})`,
@@ -806,21 +707,16 @@ async function setSessionActiveMemoryDisabled(params: {
   sessionKey: string;
   disabled: boolean;
 }): Promise<void> {
-  const statePath = resolveToggleStatePath(params.api);
-  await withToggleStoreLock(statePath, async () => {
-    const store = openActiveMemoryToggleStore(params.api);
-    await importLegacyToggleStore({ api: params.api, statePath });
-    if (params.disabled) {
-      await store.register(activeMemoryToggleKey(params.sessionKey), {
-        sessionKey: params.sessionKey,
-        disabled: true,
-        updatedAt: Date.now(),
-      });
-    } else {
-      await store.delete(activeMemoryToggleKey(params.sessionKey));
-    }
-    await fs.rm(statePath, { force: true }).catch(() => undefined);
-  });
+  const store = openActiveMemoryToggleStore(params.api);
+  if (params.disabled) {
+    await store.register(activeMemoryToggleKey(params.sessionKey), {
+      sessionKey: params.sessionKey,
+      disabled: true,
+      updatedAt: Date.now(),
+    });
+  } else {
+    await store.delete(activeMemoryToggleKey(params.sessionKey));
+  }
 }
 
 function resolveCommandSessionKey(params: {

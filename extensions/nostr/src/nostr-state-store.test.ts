@@ -96,55 +96,6 @@ describe("nostr bus state store", () => {
       expect(stateB?.lastProcessedAt).toBe(2000);
     });
   });
-
-  it("upgrades v1 bus state files on read", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "bus-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 1,
-          lastProcessedAt: 1700000000,
-          gatewayStartedAt: 1700000100,
-        }),
-        "utf-8",
-      );
-
-      const state = await readNostrBusState({ accountId: "test-bot" });
-      expect(state).toEqual({
-        version: 2,
-        lastProcessedAt: 1700000000,
-        gatewayStartedAt: 1700000100,
-        recentEventIds: [],
-      });
-    });
-  });
-
-  it("drops malformed recent event ids while keeping the state", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "bus-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 2,
-          lastProcessedAt: 1700000000,
-          gatewayStartedAt: 1700000100,
-          recentEventIds: ["evt-1", 2, null],
-        }),
-        "utf-8",
-      );
-
-      const state = await readNostrBusState({ accountId: "test-bot" });
-      expect(state).toEqual({
-        version: 2,
-        lastProcessedAt: 1700000000,
-        gatewayStartedAt: 1700000100,
-        recentEventIds: ["evt-1"],
-      });
-    });
-  });
 });
 
 describe("nostr profile state store", () => {
@@ -167,34 +118,6 @@ describe("nostr profile state store", () => {
         lastPublishResults: {
           "wss://relay.example": "ok",
         },
-      });
-    });
-  });
-
-  it("drops malformed relay results while keeping valid state fields", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "profile-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 1,
-          lastPublishedAt: 1700000000,
-          lastPublishedEventId: "evt-1",
-          lastPublishResults: {
-            "wss://relay.example": "ok",
-            "wss://relay.bad": "unknown",
-          },
-        }),
-        "utf-8",
-      );
-
-      const state = await readNostrProfileState({ accountId: "test-bot" });
-      expect(state).toEqual({
-        version: 1,
-        lastPublishedAt: 1700000000,
-        lastPublishedEventId: "evt-1",
-        lastPublishResults: null,
       });
     });
   });

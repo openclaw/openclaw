@@ -1,9 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
-import { z } from "zod";
 import { getNostrRuntime } from "./runtime.js";
 
 const STORE_VERSION = 2;
@@ -30,54 +24,12 @@ type NostrProfileState = {
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
 };
 
-const NullableFiniteNumberSchema = z.number().finite().nullable().catch(null);
-const NostrBusStateV1Schema = z.object({
-  version: z.literal(1),
-  lastProcessedAt: NullableFiniteNumberSchema,
-  gatewayStartedAt: NullableFiniteNumberSchema,
-});
-
-const NostrBusStateSchema = z.object({
-  version: z.literal(2),
-  lastProcessedAt: NullableFiniteNumberSchema,
-  gatewayStartedAt: NullableFiniteNumberSchema,
-  recentEventIds: z
-    .array(z.unknown())
-    .catch([])
-    .transform((ids) => ids.filter((id): id is string => typeof id === "string")),
-});
-
-const NostrProfileStateSchema = z.object({
-  version: z.literal(1),
-  lastPublishedAt: NullableFiniteNumberSchema,
-  lastPublishedEventId: z.string().nullable().catch(null),
-  lastPublishResults: z
-    .record(z.string(), z.enum(["ok", "failed", "timeout"]))
-    .nullable()
-    .catch(null),
-});
-
 function normalizeAccountId(accountId?: string): string {
   const trimmed = accountId?.trim();
   if (!trimmed) {
     return "default";
   }
   return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
-}
-
-function resolveNostrStatePath(accountId?: string, env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
-  const normalized = normalizeAccountId(accountId);
-  return path.join(stateDir, "nostr", `bus-state-${normalized}.json`);
-}
-
-function resolveNostrProfileStatePath(
-  accountId?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
-  const normalized = normalizeAccountId(accountId);
-  return path.join(stateDir, "nostr", `profile-state-${normalized}.json`);
 }
 
 function openNostrBusStateStore(env?: NodeJS.ProcessEnv) {
@@ -96,52 +48,13 @@ function openNostrProfileStateStore(env?: NodeJS.ProcessEnv) {
   });
 }
 
-function safeParseState(raw: string): NostrBusState | null {
-  const parsedV2 = safeParseJsonWithSchema(NostrBusStateSchema, raw);
-  if (parsedV2) {
-    return parsedV2;
-  }
-
-  const parsedV1 = safeParseJsonWithSchema(NostrBusStateV1Schema, raw);
-  if (!parsedV1) {
-    return null;
-  }
-
-  // Back-compat: v1 state files
-  return {
-    version: 2,
-    lastProcessedAt: parsedV1.lastProcessedAt,
-    gatewayStartedAt: parsedV1.gatewayStartedAt,
-    recentEventIds: [],
-  };
-}
-
 export async function readNostrBusState(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrBusState | null> {
-  const key = normalizeAccountId(params.accountId);
-  const stored = await openNostrBusStateStore(params.env).lookup(key);
-  if (stored) {
-    return stored;
-  }
-  const filePath = resolveNostrStatePath(params.accountId, params.env);
-  try {
-    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
-      path.basename(filePath),
-    );
-    if (raw === null) {
-      return null;
-    }
-    const parsed = safeParseState(raw);
-    if (parsed) {
-      await openNostrBusStateStore(params.env).register(key, parsed);
-      await fs.rm(filePath, { force: true }).catch(() => undefined);
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
+  return (
+    (await openNostrBusStateStore(params.env).lookup(normalizeAccountId(params.accountId))) ?? null
+  );
 }
 
 export async function writeNostrBusState(params: {
@@ -151,7 +64,6 @@ export async function writeNostrBusState(params: {
   recentEventIds?: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const filePath = resolveNostrStatePath(params.accountId, params.env);
   const payload: NostrBusState = {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
@@ -159,12 +71,11 @@ export async function writeNostrBusState(params: {
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
   await openNostrBusStateStore(params.env).register(normalizeAccountId(params.accountId), payload);
-  await fs.rm(filePath, { force: true }).catch(() => undefined);
 }
 
 /**
  * Determine the `since` timestamp for subscription.
- * Returns the later of: lastProcessedAt or gatewayStartedAt (both from disk),
+ * Returns the later of: lastProcessedAt or gatewayStartedAt (both from state),
  * falling back to `now` for fresh starts.
  */
 export function computeSinceTimestamp(
@@ -190,36 +101,14 @@ export function computeSinceTimestamp(
 // Profile State Management
 // ============================================================================
 
-function safeParseProfileState(raw: string): NostrProfileState | null {
-  return safeParseJsonWithSchema(NostrProfileStateSchema, raw);
-}
-
 export async function readNostrProfileState(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrProfileState | null> {
-  const key = normalizeAccountId(params.accountId);
-  const stored = await openNostrProfileStateStore(params.env).lookup(key);
-  if (stored) {
-    return stored;
-  }
-  const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
-  try {
-    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
-      path.basename(filePath),
-    );
-    if (raw === null) {
-      return null;
-    }
-    const parsed = safeParseProfileState(raw);
-    if (parsed) {
-      await openNostrProfileStateStore(params.env).register(key, parsed);
-      await fs.rm(filePath, { force: true }).catch(() => undefined);
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
+  return (
+    (await openNostrProfileStateStore(params.env).lookup(normalizeAccountId(params.accountId))) ??
+    null
+  );
 }
 
 export async function writeNostrProfileState(params: {
@@ -229,7 +118,6 @@ export async function writeNostrProfileState(params: {
   lastPublishResults: Record<string, "ok" | "failed" | "timeout">;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
   const payload: NostrProfileState = {
     version: PROFILE_STATE_VERSION,
     lastPublishedAt: params.lastPublishedAt,
@@ -240,5 +128,4 @@ export async function writeNostrProfileState(params: {
     normalizeAccountId(params.accountId),
     payload,
   );
-  await fs.rm(filePath, { force: true }).catch(() => undefined);
 }

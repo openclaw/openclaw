@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -189,12 +189,19 @@ describe("loadSessionLearnings", () => {
     expect(learnings).toStrictEqual([]);
   });
 
-  it("reads existing learnings", async () => {
+  it("reads persisted learnings from plugin state", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
     process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const safeKey = Buffer.from("msteams:user1", "utf8").toString("base64url");
-    const filePath = path.join(tmpDir, `${safeKey}.learnings.json`);
-    await writeFile(filePath, JSON.stringify(["Be concise", "Use examples"]), "utf-8");
+    await storeSessionLearning({
+      storePath: tmpDir,
+      sessionKey: "msteams:user1",
+      learning: "Be concise",
+    });
+    await storeSessionLearning({
+      storePath: tmpDir,
+      sessionKey: "msteams:user1",
+      learning: "Use examples",
+    });
 
     const learnings = await loadSessionLearnings(tmpDir, "msteams:user1");
     expect(learnings).toEqual(["Be concise", "Use examples"]);
@@ -217,38 +224,5 @@ describe("loadSessionLearnings", () => {
 
     await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual(["Use bullets"]);
     await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual(["Avoid bullets"]);
-  });
-
-  it("reads and migrates legacy sanitized session learning files", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const legacyFile = path.join(tmpDir, "msteams_user1.learnings.json");
-    await writeFile(legacyFile, JSON.stringify(["Legacy learning"]), "utf-8");
-
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
-      "Legacy learning",
-    ]);
-
-    await storeSessionLearning({
-      storePath: tmpDir,
-      sessionKey: "msteams:user1",
-      learning: "New learning",
-    });
-
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
-      "Legacy learning",
-      "New learning",
-    ]);
-    await expect(rm(legacyFile, { force: false })).rejects.toHaveProperty("code", "ENOENT");
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
-      "Legacy learning",
-      "New learning",
-    ]);
-    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toStrictEqual([]);
-    await expect(
-      import("node:fs/promises").then((fs) =>
-        fs.access(path.join(tmpDir, "state", "openclaw.sqlite")),
-      ),
-    ).resolves.toBeUndefined();
   });
 });

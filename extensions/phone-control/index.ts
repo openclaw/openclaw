@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asDateTimestampMs,
@@ -39,7 +37,6 @@ type ArmStateFileV2 = {
 type ArmStateFile = ArmStateFileV1 | ArmStateFileV2;
 
 const STATE_VERSION = 2;
-const STATE_REL_PATH = ["plugins", "phone-control", "armed.json"] as const;
 const ARM_STATE_NAMESPACE = "armed";
 const ARM_STATE_KEY = "current";
 const PHONE_ADMIN_SCOPE = "operator.admin";
@@ -101,10 +98,6 @@ function formatDuration(ms: number): string {
   return `${d}d`;
 }
 
-function resolveStatePath(stateDir: string): string {
-  return path.join(stateDir, ...STATE_REL_PATH);
-}
-
 function openArmStateStore(api: OpenClawPluginApi) {
   return api.runtime.state.openKeyedStore<ArmStateFile>({
     namespace: ARM_STATE_NAMESPACE,
@@ -112,90 +105,17 @@ function openArmStateStore(api: OpenClawPluginApi) {
   });
 }
 
-async function readLegacyArmState(statePath: string): Promise<ArmStateFile | null> {
-  try {
-    const raw = await fs.readFile(statePath, "utf8");
-    // Type as unknown record first to allow property access during validation
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (parsed.version !== 1 && parsed.version !== 2) {
-      return null;
-    }
-    if (typeof parsed.armedAtMs !== "number") {
-      return null;
-    }
-    if (!(parsed.expiresAtMs === null || typeof parsed.expiresAtMs === "number")) {
-      return null;
-    }
-
-    if (parsed.version === 1) {
-      if (
-        !Array.isArray(parsed.removedFromDeny) ||
-        !parsed.removedFromDeny.every((v: unknown) => typeof v === "string")
-      ) {
-        return null;
-      }
-      return parsed as unknown as ArmStateFile;
-    }
-
-    const group = typeof parsed.group === "string" ? parsed.group : "";
-    if (group !== "camera" && group !== "screen" && group !== "writes" && group !== "all") {
-      return null;
-    }
-    if (
-      !Array.isArray(parsed.armedCommands) ||
-      !parsed.armedCommands.every((v: unknown) => typeof v === "string")
-    ) {
-      return null;
-    }
-    if (
-      !Array.isArray(parsed.addedToAllow) ||
-      !parsed.addedToAllow.every((v: unknown) => typeof v === "string")
-    ) {
-      return null;
-    }
-    if (
-      !Array.isArray(parsed.removedFromDeny) ||
-      !parsed.removedFromDeny.every((v: unknown) => typeof v === "string")
-    ) {
-      return null;
-    }
-    return parsed as unknown as ArmStateFile;
-  } catch {
-    return null;
-  }
+async function readArmState(api: OpenClawPluginApi): Promise<ArmStateFile | null> {
+  return (await openArmStateStore(api).lookup(ARM_STATE_KEY)) ?? null;
 }
 
-async function readArmState(
-  api: OpenClawPluginApi,
-  statePath: string,
-): Promise<ArmStateFile | null> {
-  const store = openArmStateStore(api);
-  const stored = await store.lookup(ARM_STATE_KEY);
-  if (stored) {
-    return stored;
-  }
-  const legacy = await readLegacyArmState(statePath);
-  if (!legacy) {
-    return null;
-  }
-  await store.register(ARM_STATE_KEY, legacy);
-  await fs.rm(statePath, { force: true }).catch(() => undefined);
-  return legacy;
-}
-
-async function writeArmState(
-  api: OpenClawPluginApi,
-  statePath: string,
-  state: ArmStateFile | null,
-): Promise<void> {
+async function writeArmState(api: OpenClawPluginApi, state: ArmStateFile | null): Promise<void> {
   const store = openArmStateStore(api);
   if (!state) {
     await store.delete(ARM_STATE_KEY);
-    await fs.rm(statePath, { force: true }).catch(() => undefined);
     return;
   }
   await store.register(ARM_STATE_KEY, state);
-  await fs.rm(statePath, { force: true }).catch(() => undefined);
 }
 
 function normalizeDenyList(cfg: OpenClawPluginApi["config"]): string[] {
@@ -225,12 +145,10 @@ function patchConfigNodeLists(
 
 async function disarmNow(params: {
   api: OpenClawPluginApi;
-  stateDir: string;
-  statePath: string;
   reason: string;
 }): Promise<{ changed: boolean; restored: string[]; removed: string[] }> {
-  const { api, stateDir, statePath, reason } = params;
-  const state = await readArmState(api, statePath);
+  const { api, reason } = params;
+  const state = await readArmState(api);
   if (!state) {
     return { changed: false, restored: [], removed: [] };
   }
@@ -273,8 +191,8 @@ async function disarmNow(params: {
       },
     });
   }
-  await writeArmState(api, statePath, null);
-  api.logger.info(`phone-control: disarmed (${reason}) stateDir=${stateDir}`);
+  await writeArmState(api, null);
+  api.logger.info(`phone-control: disarmed (${reason})`);
   return {
     changed: removed.length > 0 || restored.length > 0,
     removed: uniqSorted(removed),
@@ -375,10 +293,9 @@ export default definePluginEntry({
 
     const timerService: OpenClawPluginService = {
       id: "phone-control-expiry",
-      start: async (ctx) => {
-        const statePath = resolveStatePath(ctx.stateDir);
+      start: async () => {
         const tick = async () => {
-          const state = await readArmState(api, statePath);
+          const state = await readArmState(api);
           if (!state || state.expiresAtMs == null) {
             return;
           }
@@ -387,8 +304,6 @@ export default definePluginEntry({
           }
           await disarmNow({
             api,
-            stateDir: ctx.stateDir,
-            statePath,
             reason: "expired",
           });
         };
@@ -421,16 +336,13 @@ export default definePluginEntry({
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = normalizeLowercaseStringOrEmpty(tokens[0]);
 
-        const stateDir = api.runtime.state.resolveStateDir();
-        const statePath = resolveStatePath(stateDir);
-
         if (!action || action === "help") {
-          const state = await readArmState(api, statePath);
+          const state = await readArmState(api);
           return { text: `${formatStatus(state)}\n\n${formatHelp()}` };
         }
 
         if (action === "status") {
-          const state = await readArmState(api, statePath);
+          const state = await readArmState(api);
           return { text: formatStatus(state) };
         }
 
@@ -447,8 +359,6 @@ export default definePluginEntry({
           }
           const res = await disarmNow({
             api,
-            stateDir,
-            statePath,
             reason: "manual",
           });
           if (!res.changed) {
@@ -516,7 +426,7 @@ export default definePluginEntry({
             },
           });
 
-          await writeArmState(api, statePath, {
+          await writeArmState(api, {
             version: STATE_VERSION,
             armedAtMs,
             expiresAtMs,

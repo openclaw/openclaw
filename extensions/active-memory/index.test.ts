@@ -516,57 +516,6 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("imports all legacy active-memory session toggles before writing one session", async () => {
-    const command = registeredCommands["active-memory"];
-    const currentSessionKey = "agent:main:legacy-current";
-    const otherSessionKey = "agent:main:legacy-other";
-    const legacyPath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      `${JSON.stringify(
-        {
-          sessions: {
-            [currentSessionKey]: { disabled: true, updatedAt: 10 },
-            [otherSessionKey]: { disabled: true, updatedAt: 20 },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-
-    const onResult = await command.handler({
-      channel: "webchat",
-      isAuthorizedSender: true,
-      sessionKey: currentSessionKey,
-      args: "on",
-      commandBody: "/active-memory on",
-      config: {},
-      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-      detachConversationBinding: async () => ({ removed: false }),
-      getCurrentConversationBinding: async () => null,
-    });
-
-    expect(onResult.text).toContain("on for this session");
-    await expectPathMissing(legacyPath);
-
-    const otherStatus = await command.handler({
-      channel: "webchat",
-      isAuthorizedSender: true,
-      sessionKey: otherSessionKey,
-      args: "status",
-      commandBody: "/active-memory status",
-      config: {},
-      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-      detachConversationBinding: async () => ({ removed: false }),
-      getCurrentConversationBinding: async () => null,
-    });
-
-    expect(otherStatus.text).toBe("Active Memory: off for this session.");
-  });
-
   it("reports session status off when the current agent is outside the active-memory allowlist (#78986)", async () => {
     api.pluginConfig = {
       agents: ["sandbox"],
