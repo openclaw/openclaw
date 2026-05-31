@@ -20,14 +20,34 @@ OpenClaw can receive and send SMS through a Twilio phone number or Messaging Ser
   </Card>
 </CardGroup>
 
-## Quick setup
+## Before you begin
+
+You need:
+
+- A Twilio account with an SMS-capable phone number, or a Twilio Messaging Service.
+- The Twilio Account SID and Auth Token.
+- A public HTTPS URL that reaches your OpenClaw Gateway.
+- A sender policy choice: `pairing` for private use, `allowlist` for preapproved phone numbers, or `open` only for intentionally public SMS access.
+
+Use one Twilio number for both SMS and Voice Call if the number has both capabilities. Configure the SMS webhook and Voice webhook separately in Twilio; this page only covers the SMS webhook.
+
+## Quick Setup
 
 <Steps>
   <Step title="Create or choose a Twilio sender">
-    In Twilio, choose an SMS-capable phone number or Messaging Service. Save the Account SID, Auth Token, and sender value.
+    In Twilio, open **Phone Numbers > Manage > Active numbers** and choose an SMS-capable number. Save:
+
+    - Account SID, for example `ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+    - Auth Token
+    - Sender phone number, for example `+15551234567`
+
+    If you use a Messaging Service instead of a fixed sender number, save the Messaging Service SID, for example `MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`.
+
   </Step>
 
   <Step title="Configure the SMS channel">
+
+Save this as `sms.patch.json5` and change the placeholders:
 
 ```json5
 {
@@ -44,13 +64,17 @@ OpenClaw can receive and send SMS through a Twilio phone number or Messaging Ser
 }
 ```
 
-    Env fallbacks for the default account:
-    `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` or `TWILIO_SMS_FROM` or `TWILIO_MESSAGING_SERVICE_SID`, and `SMS_PUBLIC_WEBHOOK_URL`.
+Apply it:
+
+```bash
+openclaw config patch --file ./sms.patch.json5 --dry-run
+openclaw config patch --file ./sms.patch.json5
+```
 
   </Step>
 
   <Step title="Point Twilio at the Gateway webhook">
-    Set the Twilio Messaging webhook for incoming messages to:
+    In the Twilio phone number settings, open **Messaging** and set **A message comes in** to:
 
 ```text
 https://gateway.example.com/webhooks/sms
@@ -64,6 +88,11 @@ https://gateway.example.com/webhooks/sms
 
 ```bash
 openclaw gateway
+```
+
+Send a text message to the Twilio number. The first message creates a pairing request. Approve it:
+
+```bash
 openclaw pairing list sms
 openclaw pairing approve sms <CODE>
 ```
@@ -72,6 +101,113 @@ openclaw pairing approve sms <CODE>
 
   </Step>
 </Steps>
+
+## Configuration Examples
+
+### Config file
+
+Use config-file setup when you want the channel definition to travel with the Gateway config:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      fromNumber: "+15551234567",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+### Environment variables
+
+Use env setup for single-account deployments where secrets come from the host environment:
+
+```bash
+export TWILIO_ACCOUNT_SID="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+export TWILIO_AUTH_TOKEN="<twilio-auth-token>"
+export TWILIO_PHONE_NUMBER="+15551234567"
+export SMS_PUBLIC_WEBHOOK_URL="https://gateway.example.com/webhooks/sms"
+```
+
+Then enable the channel in config:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+`TWILIO_SMS_FROM` is accepted as an alias for `TWILIO_PHONE_NUMBER`. Use `TWILIO_MESSAGING_SERVICE_SID` instead of a phone-number sender when Twilio should choose the sender from a Messaging Service.
+
+### Allowlist-only private number
+
+Use `allowlist` when only known phone numbers should be able to talk to the agent:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      fromNumber: "+15551234567",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dmPolicy: "allowlist",
+      allowFrom: ["+15557654321"],
+    },
+  },
+}
+```
+
+### Messaging Service sender
+
+Use `messagingServiceSid` instead of `fromNumber` when Twilio should choose the sender through a Messaging Service:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      messagingServiceSid: "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+      dmPolicy: "pairing",
+    },
+  },
+}
+```
+
+If both `fromNumber` and `messagingServiceSid` are present after config and env resolution, `fromNumber` is used.
+
+### Default outbound target
+
+Set `defaultTo` when automation or agent-initiated delivery should have a default destination if a send flow omits an explicit target:
+
+```json5
+{
+  channels: {
+    sms: {
+      enabled: true,
+      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      authToken: "twilio-auth-token",
+      fromNumber: "+15551234567",
+      defaultTo: "+15557654321",
+      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+    },
+  },
+}
+```
 
 ## Access control
 
@@ -94,26 +230,31 @@ openclaw message send --channel sms --target sms:+15551234567 --message "hello"
 
 When channel selection is implicit, `twilio-sms:+15551234567` selects this channel without taking over the existing channel-owned `sms:` service prefix used by iMessage.
 
-Agent replies from inbound SMS conversations automatically go back to the sender through the configured Twilio sender.
-
-Set `channels.sms.defaultTo` when operator-initiated sends should have a default phone number if no explicit target is provided.
-
-Use `messagingServiceSid` instead of `fromNumber` when Twilio should choose the sender through a Messaging Service:
-
-```json5
-{
-  channels: {
-    sms: {
-      accountSid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      authToken: "twilio-auth-token",
-      messagingServiceSid: "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    },
-  },
-}
+```bash
+openclaw message send --target twilio-sms:+15551234567 --message "hello"
 ```
 
-If both are present after defaults/env resolution, `fromNumber` is used.
+The CLI requires an explicit `--target`. `defaultTo` is for automation and agent-initiated delivery paths where the target can be resolved from channel config.
+
+Agent replies from inbound SMS conversations automatically go back to the sender through the configured Twilio sender.
+
+SMS output is plain text. OpenClaw strips markdown, flattens fenced code blocks, preserves readable links, and chunks long replies before sending them through Twilio.
+
+## Verify Setup
+
+After the Gateway starts:
+
+1. Confirm the Gateway log shows the SMS webhook route.
+2. Send an SMS to the Twilio number from your phone.
+3. Run `openclaw pairing list sms`.
+4. Approve the pairing code with `openclaw pairing approve sms <CODE>`.
+5. Send another SMS and confirm the agent replies.
+
+For outbound-only testing, use:
+
+```bash
+openclaw message send --channel sms --target sms:+15557654321 --message "OpenClaw SMS test"
+```
 
 ## Webhook security
 
@@ -159,3 +300,21 @@ Use `accounts` when you operate more than one Twilio number:
 ```
 
 Each account should use a distinct `webhookPath`.
+
+## Troubleshooting
+
+### Twilio returns 403 or OpenClaw rejects the webhook
+
+Check that `publicWebhookUrl` exactly matches the URL configured in Twilio, including scheme, host, path, and query string. Twilio signs the public URL string, so proxy rewrites and alternate hostnames can break signature validation.
+
+### No pairing request appears
+
+Check the Twilio number's **Messaging** webhook URL and method. It must point to the SMS webhook URL and use `POST`. Also confirm the Gateway is reachable from the public internet or through your tunnel.
+
+### Outbound sends fail
+
+Confirm `accountSid`, `authToken`, and either `fromNumber` or `messagingServiceSid` are resolved. If you use a trial Twilio account, the destination number may need to be verified in Twilio before outbound SMS will send.
+
+### Messages arrive but the agent does not answer
+
+Check `dmPolicy` and `allowFrom`. With the default `pairing` policy, the sender must be approved before normal agent turns are processed.
