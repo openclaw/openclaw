@@ -569,6 +569,40 @@ describe("connectGateway", () => {
     });
   });
 
+  it("does not flush queued follow-up sends after gateway scope changes", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = requireGatewayClient();
+    host.chatRunId = "old-run";
+    host.chatQueue = [
+      {
+        id: "queued-follow-up",
+        text: "do not send to another gateway",
+        createdAt: 1,
+        sessionKey: "main",
+      },
+    ];
+    host.settings = {
+      ...host.settings,
+      gatewayUrl: "ws://127.0.0.1:18790",
+    };
+    connectGateway(host);
+    const secondClient = requireGatewayClient(1);
+    secondClient.emitHello();
+    await Promise.resolve();
+
+    expect(firstClient.stop).toHaveBeenCalledWith({ retryablePending: false });
+    expect(secondClient.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ message: "do not send to another gateway" }),
+    );
+    expect(host.chatQueue[0]).toMatchObject({
+      id: "queued-follow-up",
+      text: "do not send to another gateway",
+    });
+  });
+
   it("routes exec approval requested events with command spans", () => {
     const { host, client } = connectHostGateway();
 
@@ -1140,6 +1174,59 @@ describe("connectGateway", () => {
       expect(host.chatQueueBySession.main).toBeUndefined();
       expect(host.chatMessages).toStrictEqual([]);
       expect(host.chatRunId).toBeNull();
+    });
+  });
+
+  it("flushes active-session queued follow-up sends after ordinary reconnect hello", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const firstClient = requireGatewayClient();
+    firstClient.emitHello();
+    await Promise.resolve();
+
+    host.chatRunId = "old-run";
+    host.chatQueue = [
+      {
+        id: "queued-follow-up",
+        text: "send after interrupted run",
+        createdAt: 1,
+        sessionKey: "main",
+      },
+    ];
+
+    connectGateway(host);
+    const secondClient = requireGatewayClient(1);
+    secondClient.request.mockImplementation(async (method: string) => {
+      if (method === "chat.send") {
+        return { runId: "run-follow-up", status: "started" };
+      }
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
+      if (method === "models.authStatus") {
+        return { ts: 0, providers: [] };
+      }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
+      }
+      return {};
+    });
+
+    secondClient.emitHello();
+
+    await vi.waitFor(() => {
+      expect(secondClient.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "send after interrupted run",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe("run-follow-up");
     });
   });
 

@@ -2,7 +2,6 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
-import { GatewayRequestError } from "./gateway.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
@@ -11,6 +10,7 @@ import {
   resetChatAttachmentPayloadStoreForTest,
 } from "./chat/attachment-payload-store.ts";
 import type { executeSlashCommand } from "./chat/slash-command-executor.ts";
+import { GatewayRequestError } from "./gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
