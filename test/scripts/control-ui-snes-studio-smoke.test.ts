@@ -203,7 +203,10 @@ describe("control-ui-snes-studio-smoke milestone gates", () => {
     };
 
     expect(document.on?.workflow_dispatch?.inputs?.rerun_group?.options).toContain("dashboard");
-    expect(document.jobs?.release_checks?.needs).toEqual(["resolve_target"]);
+    expect(document.jobs?.release_checks?.needs).toEqual([
+      "resolve_target",
+      "docker_runtime_assets_preflight",
+    ]);
     expect(document.jobs?.release_checks?.if).toContain('"dashboard"');
     expect(document.jobs?.release_checks?.if).toContain("inputs.rerun_group");
   });
