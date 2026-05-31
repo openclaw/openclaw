@@ -106,6 +106,9 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   if (!("type" in entry) && typeof entry["mode"] === "string") {
     entry["type"] = entry["mode"];
   }
+  if (entry.type === "apiKey") {
+    entry.type = "api_key";
+  }
   if (!("key" in entry) && typeof entry["apiKey"] === "string") {
     entry["key"] = entry["apiKey"];
   }

@@ -420,6 +420,9 @@ async function persistProviderAuthResult(params: {
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
     : undefined;
   const profiles = params.profiles ?? params.result.profiles;
+  const shouldUpdateConfig = Boolean(
+    params.result.configPatch || (params.setDefault && defaultModel),
+  );
 
   for (const profile of profiles) {
     await upsertAuthProfileWithLockOrThrow({
@@ -434,46 +437,51 @@ async function persistProviderAuthResult(params: {
     });
   }
 
-  const updated = await updateConfig((cfg) => {
-    const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
-    let next = cfg;
-    if (params.result.configPatch) {
-      next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
-        replaceDefaultModels: params.result.replaceDefaultModels,
+  // Auth login owns the credential store. Keep openclaw.json untouched unless
+  // the provider explicitly returns a config patch or the user opts into a
+  // default-model write.
+  if (shouldUpdateConfig) {
+    const updated = await updateConfig((cfg) => {
+      const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
+      let next = cfg;
+      if (params.result.configPatch) {
+        next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
+          replaceDefaultModels: params.result.replaceDefaultModels,
+        });
+      }
+      for (const profile of profiles) {
+        next = applyAuthProfileConfig(next, {
+          profileId: profile.profileId,
+          provider: profile.credential.provider,
+          mode: credentialMode(profile.credential),
+        });
+      }
+      next = restorePriorAgentsDefaultsModelUnlessOptIn({
+        cfg: next,
+        priorAgentsDefaultsModel,
+        setDefault: params.setDefault,
       });
-    }
-    for (const profile of profiles) {
-      next = applyAuthProfileConfig(next, {
-        profileId: profile.profileId,
-        provider: profile.credential.provider,
-        mode: credentialMode(profile.credential),
+      if (params.setDefault && defaultModel) {
+        next = applyDefaultModel(next, defaultModel);
+      }
+      return next;
+    });
+    if (defaultModel) {
+      const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+        cfg: updated,
+        model: defaultModel,
       });
+      const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
+        cfg: updated,
+        model: defaultModel,
+      });
+      for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+        params.runtime.error?.(warning);
+      }
     }
-    next = restorePriorAgentsDefaultsModelUnlessOptIn({
-      cfg: next,
-      priorAgentsDefaultsModel,
-      setDefault: params.setDefault,
-    });
-    if (params.setDefault && defaultModel) {
-      next = applyDefaultModel(next, defaultModel);
-    }
-    return next;
-  });
-  if (defaultModel) {
-    const repaired = await repairCodexRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: defaultModel,
-    });
-    const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: defaultModel,
-    });
-    for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
-      params.runtime.error?.(warning);
-    }
+    logConfigUpdated(params.runtime);
   }
 
-  logConfigUpdated(params.runtime);
   for (const profile of profiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,

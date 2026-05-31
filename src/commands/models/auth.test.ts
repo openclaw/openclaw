@@ -485,9 +485,9 @@ describe("modelsAuthLoginCommand", () => {
       provider: "openai",
       profileId: "openai:user@example.com",
     });
-    const savedProfile = lastUpdatedConfig?.auth?.profiles?.["openai:user@example.com"];
-    expect(savedProfile?.provider).toBe("openai");
-    expect(savedProfile?.mode).toBe("oauth");
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
+    expect(lastUpdatedConfig).toBeNull();
     expect(runtime.log).toHaveBeenCalledWith(
       "Auth profile: openai:user@example.com (openai/oauth)",
     );

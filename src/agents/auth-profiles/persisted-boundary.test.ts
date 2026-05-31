@@ -8,9 +8,9 @@ describe("persisted auth profile boundary", () => {
       version: "not-a-version",
       profiles: {
         "openai:default": {
-          type: "api_key",
+          type: "apiKey",
           provider: " OpenAI ",
-          key: 42,
+          apiKey: "demo-openai-key",
           keyRef: { source: "env", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123", bad: 123 },
           copyToAgents: "yes",
@@ -66,6 +66,7 @@ describe("persisted auth profile boundary", () => {
         "openai:default": {
           type: "api_key",
           provider: "openai",
+          key: "demo-openai-key",
           keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123" },
           displayName: "Work",
@@ -98,7 +99,6 @@ describe("persisted auth profile boundary", () => {
       },
     });
     expect(store?.profiles["broken:array"]).toBeUndefined();
-    expect(store?.profiles["openai:default"]).not.toHaveProperty("key");
     expect(store?.profiles["openai:default"]).not.toHaveProperty("copyToAgents");
     expect(store?.profiles["openai:oauth"]).not.toHaveProperty("oauthRef");
   });
