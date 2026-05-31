@@ -570,27 +570,6 @@ export async function gatherDaemonStatus(
           .catch(() => [])
       : [];
 
-  // Plugin version drift detection (deep-only).
-  // Compares each externalized (npm/ClawHub) plugin's installed version
-  // against the running gateway VERSION. Bundled plugins ship inside the
-  // gateway package and never drift. Best-effort: a failure to read the
-  // install records is logged via lastError and the report is omitted.
-  let pluginVersionDrift: PluginVersionDriftReport | undefined;
-  if (opts.deep) {
-    try {
-      const installRecords = await loadInstalledPluginIndexInstallRecords();
-      pluginVersionDrift = detectPluginVersionDrift({
-        gatewayVersion: VERSION,
-        installRecords,
-        config: daemonCfg,
-      });
-    } catch {
-      // Non-fatal: status output should still render even if the install
-      // index is unreadable. Drift detection is purely advisory.
-      pluginVersionDrift = undefined;
-    }
-  }
-
   const timeoutMs =
     parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
     Math.max(10_000, daemonCfg.gateway?.handshakeTimeoutMs ?? 0);
@@ -665,6 +644,34 @@ export async function gatherDaemonStatus(
   let lastError: string | undefined;
   if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
+  }
+
+  // Plugin version drift detection (deep-only).
+  // Compares each externalized (npm/ClawHub) plugin's installed version
+  // against the *running* gateway version reported by the probe handshake,
+  // falling back to the invoking CLI VERSION only when no gateway version is
+  // available (e.g. probe skipped or gateway down). Reading the install
+  // records with the merged daemon environment ensures we inspect the managed
+  // service's profile/state dir rather than the invoking CLI process's, so a
+  // CLI run under a different profile does not produce false drift. Bundled
+  // plugins ship inside the gateway package and never drift. Best-effort: a
+  // failure to read the install records is non-fatal and the report is omitted.
+  let pluginVersionDrift: PluginVersionDriftReport | undefined;
+  if (opts.deep) {
+    try {
+      const installRecords = await loadInstalledPluginIndexInstallRecords({
+        env: mergedDaemonEnv as NodeJS.ProcessEnv,
+      });
+      pluginVersionDrift = detectPluginVersionDrift({
+        gatewayVersion: gatewayVersion ?? VERSION,
+        installRecords,
+        config: daemonCfg,
+      });
+    } catch {
+      // Non-fatal: status output should still render even if the install
+      // index is unreadable. Drift detection is purely advisory.
+      pluginVersionDrift = undefined;
+    }
   }
 
   return {
