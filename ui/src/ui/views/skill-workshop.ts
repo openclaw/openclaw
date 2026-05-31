@@ -108,6 +108,9 @@ const STATUS_LABEL: Record<SkillWorkshopStatusFilter, string> = {
   stale: "Stale",
 };
 
+const TODAY_PREVIEW_MAX_ITEMS = 3;
+const TODAY_PREVIEW_MAX_ITEM_CHARS = 120;
+
 const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
   today: "Today",
   yesterday: "Yesterday",
@@ -710,31 +713,136 @@ function renderToday(
 }
 
 function renderTodayDoesBlock(hero: SkillWorkshopProposal) {
-  const bullets = extractDoesBullets(hero.body);
-  if (bullets.length === 0) {
+  const preview = extractTodayProposalPreview(hero.body);
+  if (!preview) {
     return nothing;
   }
   return html`
     <div class="sw-today__does">
-      <div class="sw-today__does-h">What it'll do when you trigger it</div>
+      <div class="sw-today__does-h">${preview.heading}</div>
       <ul>
-        ${bullets.slice(0, 5).map((b) => html`<li>${renderInline(b)}</li>`)}
+        ${preview.items.map((item) => html`<li>${item}</li>`)}
       </ul>
     </div>
   `;
 }
 
-function extractDoesBullets(body: string): string[] {
-  const lines = body.split("\n");
+type TodayProposalPreview = {
+  heading: string;
+  items: string[];
+};
+
+type ProposalBodySection = {
+  title: string;
+  lines: string[];
+};
+
+function extractTodayProposalPreview(body: string): TodayProposalPreview | null {
+  const sections = splitProposalBodySections(body);
+  const workflow = findProposalSection(sections, [
+    "workflow",
+    "procedure",
+    "steps",
+    "agent workflow",
+    "process",
+  ]);
+  const workflowItems = workflow ? extractTopLevelListItems(workflow.lines) : [];
+  if (workflowItems.length > 0) {
+    return {
+      heading: "How the agent will use it",
+      items: workflowItems.slice(0, TODAY_PREVIEW_MAX_ITEMS),
+    };
+  }
+
+  const applicability = findProposalSection(sections, [
+    "when to use",
+    "use when",
+    "applies when",
+    "trigger",
+    "triggers",
+  ]);
+  const applicabilityItems = applicability ? extractTopLevelListItems(applicability.lines) : [];
+  if (applicabilityItems.length > 0) {
+    return {
+      heading: "When the agent should use it",
+      items: applicabilityItems.slice(0, TODAY_PREVIEW_MAX_ITEMS),
+    };
+  }
+
+  return null;
+}
+
+function splitProposalBodySections(body: string): ProposalBodySection[] {
+  const sections: ProposalBodySection[] = [];
+  let current: ProposalBodySection | null = null;
+  let inCode = false;
+
+  for (const raw of body.split("\n")) {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("```")) {
+      inCode = !inCode;
+    }
+    const heading = !inCode ? /^(#{2,4})\s+(.+?)\s*$/.exec(trimmed) : null;
+    if (heading) {
+      current = { title: normalizeSectionTitle(heading[2]), lines: [] };
+      sections.push(current);
+      continue;
+    }
+    current?.lines.push(raw);
+  }
+
+  return sections;
+}
+
+function findProposalSection(
+  sections: readonly ProposalBodySection[],
+  names: readonly string[],
+): ProposalBodySection | undefined {
+  const wanted = new Set(names.map(normalizeSectionTitle));
+  return sections.find((section) => wanted.has(section.title));
+}
+
+function normalizeSectionTitle(title: string): string {
+  return title
+    .replace(/[#*_`[\]().:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function extractTopLevelListItems(lines: readonly string[]): string[] {
   const out: string[] = [];
   for (const raw of lines) {
+    if (/^\s{2,}/.test(raw)) {
+      continue;
+    }
     const line = raw.trim();
     const m = /^(?:[-*]|\d+\.)\s+(.+)/.exec(line);
     if (m) {
-      out.push(m[1].replace(/^\*\*[^*]+\*\*\s*/, ""));
+      out.push(cleanTodayPreviewItem(m[1]));
     }
   }
-  return out;
+  return out.filter(Boolean);
+}
+
+function cleanTodayPreviewItem(item: string): string {
+  const cleaned = item
+    .replace(/^\*\*[^*]+\*\*\s*/, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  return truncateAtWord(cleaned, TODAY_PREVIEW_MAX_ITEM_CHARS);
+}
+
+function truncateAtWord(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  const clipped = value.slice(0, maxChars - 1);
+  const boundary = clipped.lastIndexOf(" ");
+  const base = boundary > 48 ? clipped.slice(0, boundary) : clipped;
+  return `${base.trimEnd()}…`;
 }
 
 function formatTodayDate(ms: number): string {
