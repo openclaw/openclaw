@@ -2517,6 +2517,39 @@ describe("applySessionsChangedEvent", () => {
     ]);
   });
 
+  it("merges canonical global chat history rows into selected global alias rows", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:work:main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:work:main", kind: "global", updatedAt: 1, status: "running" }],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "global",
+      kind: "global",
+      updatedAt: 2,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.count).toBe(1);
+    expect(state.sessionsResult?.sessions).toEqual([
+      expect.objectContaining({
+        key: "agent:work:main",
+        kind: "global",
+        updatedAt: 2,
+        status: "done",
+        hasActiveRun: false,
+      }),
+    ]);
+  });
+
   it("clears current global runs even when the visible list is scoped elsewhere", () => {
     const state = createState(async () => undefined, {
       sessionKey: "global",

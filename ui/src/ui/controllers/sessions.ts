@@ -549,6 +549,20 @@ function historyRowIsStaleForActiveSession(
   return existingStartedAt > incomingUpdatedAt;
 }
 
+function sessionRowMatchesChatHistoryRow(
+  state: SessionsState,
+  existing: GatewaySessionRow,
+  incoming: GatewaySessionRow,
+): boolean {
+  if (areUiSessionKeysEquivalent(existing.key, incoming.key)) {
+    return true;
+  }
+  return (
+    isGlobalSessionKey(incoming.key) &&
+    resolveSelectedGlobalAliasAgentId(state, existing.key) === resolveSelectedGlobalAgentId(state)
+  );
+}
+
 function checkpointSummarySignature(
   row:
     | {
@@ -907,7 +921,7 @@ export function applyChatHistorySessionInfo(
     return true;
   }
   const existingVisibleSession = state.sessionsResult.sessions.find((existing) =>
-    areUiSessionKeysEquivalent(existing.key, session.key),
+    sessionRowMatchesChatHistoryRow(state, existing, session),
   );
   if (defaults) {
     state.sessionsResult = {
