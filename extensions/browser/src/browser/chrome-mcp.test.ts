@@ -909,6 +909,112 @@ describe("chrome MCP page parsing", () => {
     expect(closeMock).not.toHaveBeenCalled();
   });
 
+  it("starts a fresh shared session when a ready-pending session loses its transport", async () => {
+    let factoryCalls = 0;
+    let firstSession: ChromeMcpSession | undefined;
+    let releaseFirstReady: (() => void) | undefined;
+    const firstReadyGate = new Promise<void>((resolve) => {
+      releaseFirstReady = resolve;
+    });
+    const firstReadyThen = vi.spyOn(firstReadyGate, "then");
+    if (!releaseFirstReady) {
+      throw new Error("Expected Chrome MCP ready release callback to be initialized");
+    }
+
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      closeMocks.push(closeMock);
+      session.client.close = closeMock as typeof session.client.close;
+      if (factoryCalls === 1) {
+        firstSession = session;
+        session.ready = firstReadyGate;
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const ctrl = new AbortController();
+    const firstTabsPromise = listChromeMcpTabs("chrome-live", undefined, {
+      signal: ctrl.signal,
+    });
+    const firstTabsExpectation = expect(firstTabsPromise).rejects.toThrow(/first waiter cancelled/);
+
+    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await vi.waitFor(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
+    if (!firstSession) {
+      throw new Error("Expected first Chrome MCP session to be created");
+    }
+    (firstSession.transport as { pid: number | null }).pid = null;
+
+    const tabsPromise = listChromeMcpTabs("chrome-live");
+    await vi.waitFor(() => expect(factoryCalls).toBe(2));
+    await expect(tabsPromise).resolves.toHaveLength(2);
+
+    ctrl.abort(new Error("first waiter cancelled"));
+    releaseFirstReady();
+    await firstTabsExpectation;
+    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+    expect(closeMocks[1]).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a stale ready-pending session for ephemeral probes", async () => {
+    let factoryCalls = 0;
+    let firstSession: ChromeMcpSession | undefined;
+    let releaseFirstReady: (() => void) | undefined;
+    const firstReadyGate = new Promise<void>((resolve) => {
+      releaseFirstReady = resolve;
+    });
+    const firstReadyThen = vi.spyOn(firstReadyGate, "then");
+    if (!releaseFirstReady) {
+      throw new Error("Expected Chrome MCP ready release callback to be initialized");
+    }
+
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      closeMocks.push(closeMock);
+      session.client.close = closeMock as typeof session.client.close;
+      if (factoryCalls === 1) {
+        firstSession = session;
+        session.ready = firstReadyGate;
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const ctrl = new AbortController();
+    const firstAvailablePromise = ensureChromeMcpAvailable("chrome-live", undefined, {
+      signal: ctrl.signal,
+    });
+    const firstAvailableExpectation =
+      expect(firstAvailablePromise).rejects.toThrow(/first waiter cancelled/);
+
+    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    await vi.waitFor(() => expect(firstReadyThen).toHaveBeenCalledTimes(1));
+    if (!firstSession) {
+      throw new Error("Expected first Chrome MCP session to be created");
+    }
+    (firstSession.transport as { pid: number | null }).pid = null;
+
+    await expect(
+      ensureChromeMcpAvailable("chrome-live", undefined, {
+        ephemeral: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(factoryCalls).toBe(2);
+    await vi.waitFor(() => expect(closeMocks[1]).toHaveBeenCalledTimes(1));
+
+    ctrl.abort(new Error("first waiter cancelled"));
+    releaseFirstReady();
+    await firstAvailableExpectation;
+    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+  });
+
   it("preserves session after tool-level errors (isError)", async () => {
     let factoryCalls = 0;
     const factory: ChromeMcpSessionFactory = async () => {
