@@ -368,6 +368,7 @@ describe("bundle manifest parsing", () => {
         description: "Secure, one-time-use payment credentials from Link",
         bundleFormat: "codex",
         skills: ["./skills/"],
+        settingsFiles: [],
         hooks: [],
         capabilities: expect.arrayContaining(["skills", "mcpServers"]),
       },
