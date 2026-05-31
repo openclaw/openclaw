@@ -168,7 +168,7 @@ describe("buildMinimaxSpeechProvider", () => {
               model: "speech-01-240228",
               voiceId: "Chinese (Mandarin)_Warm_Girl",
               speed: 1.5,
-              vol: 2.0,
+              vol: 2,
               pitch: 3,
             },
           },
@@ -180,7 +180,7 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(config.model).toBe("speech-01-240228");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Warm_Girl");
       expect(config.speed).toBe(1.5);
-      expect(config.vol).toBe(2.0);
+      expect(config.vol).toBe(2);
       expect(config.pitch).toBe(3);
     });
 

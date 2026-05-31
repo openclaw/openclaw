@@ -421,14 +421,17 @@ function createPreferredProviderMatcher(params: {
     if (cached !== undefined) {
       return cached;
     }
+    const preferredOwners = preferredOwnerPluginIdSet;
     const value =
-      !!preferredOwnerPluginIdSet &&
-      !!resolveOwningPluginIdsForProviderRef({
-        provider: normalizedEntryProvider,
-        config: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      })?.some((pluginId) => preferredOwnerPluginIdSet.has(pluginId));
+      preferredOwners !== undefined &&
+      Boolean(
+        resolveOwningPluginIdsForProviderRef({
+          provider: normalizedEntryProvider,
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        })?.some((pluginId) => preferredOwners.has(pluginId)),
+      );
     entryProviderCache.set(normalizedEntryProvider, value);
     return value;
   };
@@ -487,7 +490,7 @@ async function maybeFilterModelsByProvider(params: {
 }): Promise<typeof params.models> {
   let next = params.models.filter((entry) => params.isVisibleProvider(entry.provider));
   const providerIds = sortUniqueStrings(next.map((entry) => entry.provider));
-  const hasPreferredProvider = !!params.preferredProvider;
+  const hasPreferredProvider = Boolean(params.preferredProvider);
   const shouldPromptProvider =
     !hasPreferredProvider && providerIds.length > 1 && next.length > PROVIDER_FILTER_THRESHOLD;
   const matchesPreferredProvider = params.preferredProvider

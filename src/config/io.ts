@@ -1205,7 +1205,7 @@ function restoreAuthoredTildePathsForWrite(
 
   const out: Record<string, unknown> = { ...next };
   for (const [childKey, childValue] of Object.entries(out)) {
-    if (Object.prototype.hasOwnProperty.call(authored, childKey)) {
+    if (Object.hasOwn(authored, childKey)) {
       out[childKey] = restoreAuthoredTildePathsForWrite(
         childValue,
         authored[childKey],

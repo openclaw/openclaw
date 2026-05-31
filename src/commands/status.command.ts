@@ -7,7 +7,7 @@ import {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { withProgress } from "../cli/progress.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
-import { type RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";

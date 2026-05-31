@@ -55,8 +55,8 @@ function isFeishuConfigured(cfg: OpenClawConfig): boolean {
     if (!account || typeof account !== "object") {
       return false;
     }
-    const hasOwnAppId = Object.prototype.hasOwnProperty.call(account, "appId");
-    const hasOwnAppSecret = Object.prototype.hasOwnProperty.call(account, "appSecret");
+    const hasOwnAppId = Object.hasOwn(account, "appId");
+    const hasOwnAppSecret = Object.hasOwn(account, "appSecret");
     const accountAppIdConfigured = hasOwnAppId
       ? isAppIdConfigured((account as Record<string, unknown>).appId)
       : isAppIdConfigured(feishuCfg?.appId);

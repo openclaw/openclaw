@@ -574,8 +574,8 @@ describe("loadBundledEntryExportSync", () => {
 
     expect(result.status).toBe(0);
     expect(String(result.stdout).trim()).toBe("adapter");
-    expect(result.stderr).toMatch(/sourceLoaderCreateMs=0(?:\.0+)?(?:\s|$)/u);
-    expect(result.stderr).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);
+    expect(String(result.stderr)).toMatch(/sourceLoaderCreateMs=0(?:\.0+)?(?:\s|$)/u);
+    expect(String(result.stderr)).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);
   });
 
   it("can disable source-tree fallback for dist bundled entry checks", () => {

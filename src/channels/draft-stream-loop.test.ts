@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
@@ -29,6 +29,14 @@ async function captureUnhandledRejections(
 }
 
 describe("createDraftStreamLoop", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("contains immediate background flush rejections and preserves pending text", async () => {
     await captureUnhandledRejections(async (rejections) => {
       const error = new Error("send failed");

@@ -1224,7 +1224,9 @@ function shouldUseFineGrainedToolStreamingBeta(
   model: Model<"anthropic-messages">,
   context: Context,
 ): boolean {
-  return !!context.tools?.length && !getAnthropicCompat(model).supportsEagerToolInputStreaming;
+  return (
+    Boolean(context.tools?.length) && !getAnthropicCompat(model).supportsEagerToolInputStreaming
+  );
 }
 
 function convertTools(

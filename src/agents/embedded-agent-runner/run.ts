@@ -360,7 +360,7 @@ function createScopedAuthProfileStore(
   const profiles = store.profiles ?? {};
   const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
     .map((profileId) => profileId?.trim())
-    .filter((profileId): profileId is string => !!profileId);
+    .filter((profileId): profileId is string => Boolean(profileId));
   const scopedProfiles = Object.fromEntries(
     normalizedProfileIds.flatMap((profileId) => {
       const credential = profiles[profileId];

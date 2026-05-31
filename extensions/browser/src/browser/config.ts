@@ -5,11 +5,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  type BrowserConfig,
-  type BrowserProfileConfig,
-  type OpenClawConfig,
-} from "../config/config.js";
+import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
   DEFAULT_BROWSER_CONTROL_PORT,

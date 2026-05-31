@@ -1277,10 +1277,8 @@ export function describeTtsAutoApplyContract() {
         expect(fetchMock).toHaveBeenCalledTimes(params.expectedFetchCalls);
         if (params.expectSamePayload) {
           expect(result).toBe(params.payload);
-        } else {
-          if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
-            throw new Error("expected auto TTS to attach mediaUrl");
-          }
+        } else if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
+          throw new Error("expected auto TTS to attach mediaUrl");
         }
       });
     }

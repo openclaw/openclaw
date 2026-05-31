@@ -1182,7 +1182,9 @@ async function sampleWindowsPidWithTasklist(pid, run) {
     if (!line) {
       return null;
     }
-    const [, processIdRaw, , , memoryRaw] = parseTasklistCsvLine(line);
+    const tasklistFields = parseTasklistCsvLine(line);
+    const processIdRaw = tasklistFields[1];
+    const memoryRaw = tasklistFields[4];
     const processId = Number.parseInt(processIdRaw ?? "", 10);
     const memoryKiB = Number.parseInt((memoryRaw ?? "").replace(/[^\d]/gu, ""), 10);
     if (!Number.isFinite(memoryKiB)) {

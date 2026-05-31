@@ -164,8 +164,7 @@ function estimateBase64Size(value: string | undefined): number | undefined {
   }
   let encodedLength = 0;
   let padding = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
+  for (const char of value) {
     if (!char || isBase64Whitespace(char)) {
       continue;
     }

@@ -314,15 +314,12 @@ function restoreReboundChannelConfig(params: {
     return params.updated;
   }
   const nextChannels = { ...params.updated.channels };
-  if (Object.prototype.hasOwnProperty.call(nextChannels, params.sourceChannelId)) {
+  if (Object.hasOwn(nextChannels, params.sourceChannelId)) {
     nextChannels[params.targetChannelId] = nextChannels[params.sourceChannelId];
   } else {
     delete nextChannels[params.targetChannelId];
   }
-  if (
-    params.original.channels &&
-    Object.prototype.hasOwnProperty.call(params.original.channels, params.sourceChannelId)
-  ) {
+  if (params.original.channels && Object.hasOwn(params.original.channels, params.sourceChannelId)) {
     nextChannels[params.sourceChannelId] = params.original.channels[params.sourceChannelId];
   } else {
     delete nextChannels[params.sourceChannelId];
@@ -475,7 +472,7 @@ function buildManifestChannelPlugin(params: {
 
 function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: string): boolean {
   const hasChannelConfig = Boolean(
-    record.channelConfigs && Object.prototype.hasOwnProperty.call(record.channelConfigs, channelId),
+    record.channelConfigs && Object.hasOwn(record.channelConfigs, channelId),
   );
   if (hasChannelConfig) {
     return record.setup?.requiresRuntime === false || !record.setupSource;

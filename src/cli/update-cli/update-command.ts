@@ -261,7 +261,7 @@ function normalizeChannelConfigMap(value: unknown): Record<string, unknown> | nu
 
 function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string, unknown> | null {
   const channels = normalizeChannelConfigMap(value);
-  if (!channels || Object.prototype.hasOwnProperty.call(channels, "$include")) {
+  if (!channels || Object.hasOwn(channels, "$include")) {
     return null;
   }
   return channels;

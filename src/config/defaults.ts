@@ -285,7 +285,7 @@ export function applyModelDefaults(
         return agent;
       }
       let nextAgent = agent;
-      if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+      if (Object.hasOwn(agent, "model")) {
         const normalizedModel = normalizeAgentModelConfigForDefaults(agent.model);
         if (normalizedModel !== agent.model) {
           nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };

@@ -286,8 +286,7 @@ export async function writeCliImages(params: {
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
   const store = privateFileStore(imageRoot);
   const paths: string[] = [];
-  for (let i = 0; i < params.images.length; i += 1) {
-    const image = params.images[i];
+  for (const image of params.images) {
     const fileName = path.basename(resolveCliImagePath(image));
     const buffer = Buffer.from(image.data, "base64");
     await store.writeText(fileName, buffer);

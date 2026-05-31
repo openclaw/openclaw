@@ -221,7 +221,7 @@ describe("bundled channel entry shape guards", () => {
     );
     realBundledSourceTreeProbe = {
       hasAccountInspect: bundled.hasBundledChannelEntryFeature("slack", "accountInspect"),
-      pluginIds: bundled.listBundledChannelPluginIds(),
+      pluginIds: [...bundled.listBundledChannelPluginIds()],
     };
   });
 

@@ -18,7 +18,7 @@ import {
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
-import { type SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 
 export type NormalizedOutboundPayload = {

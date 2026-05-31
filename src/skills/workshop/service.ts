@@ -980,8 +980,8 @@ function proposalMatchesName(
     }
     const normalizedCandidate = normalizeSkillIndexName(candidate);
     return (
-      !!normalizedName &&
-      !!normalizedCandidate &&
+      Boolean(normalizedName) &&
+      Boolean(normalizedCandidate) &&
       (normalizedCandidate === normalizedName ||
         normalizedCandidate.includes(normalizedName) ||
         normalizedName.includes(normalizedCandidate))

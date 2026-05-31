@@ -391,8 +391,7 @@ function hasExplicitDisabledRunFlag(argv) {
 }
 
 function hasSeparateVitestOptionValueArg(argv) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (const arg of argv) {
     if (arg === "--") {
       return false;
     }

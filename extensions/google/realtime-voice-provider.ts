@@ -770,10 +770,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.config.onTranscript?.("assistant", part.text, content.turnComplete ?? false);
       }
     }
-
-    if (!emittedAssistantText && content.turnComplete && content.waitingForInput === false) {
-      return;
-    }
   }
 
   private handleToolCall(toolCall: LiveServerToolCall): void {

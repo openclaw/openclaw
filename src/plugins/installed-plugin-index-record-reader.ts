@@ -209,7 +209,7 @@ function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   if (!isRecord(index)) {
     return null;
   }
-  if (Object.prototype.hasOwnProperty.call(index, "installRecords")) {
+  if (Object.hasOwn(index, "installRecords")) {
     return readRecordMap(index.installRecords) ?? {};
   }
   if (!Array.isArray(index.plugins)) {

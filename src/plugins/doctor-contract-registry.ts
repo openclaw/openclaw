@@ -218,7 +218,7 @@ function hasLegacyElevenLabsTalkFields(raw: unknown): boolean {
     return false;
   }
   return ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
-    Object.prototype.hasOwnProperty.call(talk, key),
+    Object.hasOwn(talk, key),
   );
 }
 

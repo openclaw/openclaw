@@ -21,7 +21,7 @@ async function writeConfig(
   home: string,
   dirname: ".openclaw",
   port: number,
-  filename: string = "openclaw.json",
+  filename = "openclaw.json",
 ) {
   const dir = path.join(home, dirname);
   await fs.mkdir(dir, { recursive: true });

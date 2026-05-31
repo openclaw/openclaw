@@ -1076,7 +1076,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now: MAX_DATE_TIMESTAMP_MS, reason: "unknown" });
 
-    expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(MAX_DATE_TIMESTAMP_MS);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(MAX_DATE_TIMESTAMP_MS);
   });
 
   it.each([

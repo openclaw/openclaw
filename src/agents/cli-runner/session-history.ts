@@ -172,7 +172,7 @@ export function buildCliSessionHistoryPrompt(params: {
   // alone exceeds the cap.
   const firstEntry = params.messages[0];
   const firstIsCompaction =
-    !!firstEntry &&
+    Boolean(firstEntry) &&
     typeof firstEntry === "object" &&
     (firstEntry as HistoryMessage).role === "compactionSummary";
   const summaryRendered = firstIsCompaction ? renderHistoryMessage(firstEntry) : undefined;

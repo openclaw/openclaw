@@ -342,7 +342,7 @@ export class FeishuStreamingSession {
       sequence: 1,
       currentText: "",
       sentText: "",
-      hasNote: !!options?.note,
+      hasNote: Boolean(options?.note),
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }

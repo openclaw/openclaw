@@ -510,11 +510,11 @@ function resolveMutableSessionStoreKey(
   if (!trimmed) {
     return undefined;
   }
-  if (Object.prototype.hasOwnProperty.call(store, trimmed)) {
+  if (Object.hasOwn(store, trimmed)) {
     return trimmed;
   }
   const normalized = normalizeStoreSessionKey(trimmed);
-  if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+  if (Object.hasOwn(store, normalized)) {
     return normalized;
   }
   return Object.keys(store).find((key) => normalizeStoreSessionKey(key) === normalized);
@@ -1235,8 +1235,7 @@ export async function updateLastRoute(params: {
     );
     const explicitDeliveryContext = params.deliveryContext;
     const explicitThreadFromDeliveryContext =
-      explicitDeliveryContext != null &&
-      Object.prototype.hasOwnProperty.call(explicitDeliveryContext, "threadId")
+      explicitDeliveryContext != null && Object.hasOwn(explicitDeliveryContext, "threadId")
         ? explicitDeliveryContext.threadId
         : undefined;
     const explicitThreadValue =

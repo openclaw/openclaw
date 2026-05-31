@@ -108,7 +108,7 @@ export function normalizeAgentModelMapForConfig<T extends Record<string, unknown
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(models)) {
     const normalizedKey = normalizeAgentModelRefForConfig(key);
-    if (normalizedKey !== key || Object.prototype.hasOwnProperty.call(next, normalizedKey)) {
+    if (normalizedKey !== key || Object.hasOwn(next, normalizedKey)) {
       mutated = true;
     }
     next[normalizedKey] = mergeAgentModelEntryForConfig(next[normalizedKey], entry);

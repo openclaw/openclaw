@@ -238,7 +238,7 @@ function createResetAwareSessionStore(
         ...(record as Record<string, unknown>),
         openclawLeaseId: lease.leaseId,
         openclawGatewayInstanceId: lease.gatewayInstanceId,
-      } as AcpLoadedSessionRecord;
+      } as unknown as AcpLoadedSessionRecord;
     },
     async save(record: AcpSessionRecord): Promise<void> {
       let recordToSave = record;
@@ -273,7 +273,7 @@ function createResetAwareSessionStore(
           agentCommand: stableAgentCommand,
           openclawLeaseId: launch.leaseId,
           openclawGatewayInstanceId: launch.gatewayInstanceId,
-        } as AcpSessionRecord;
+        } as unknown as AcpSessionRecord;
       }
       await baseStore.save(recordToSave);
       if (sessionName) {
@@ -549,16 +549,15 @@ function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelO
 function createModelScopedAgentRegistry(params: {
   agentRegistry: AcpAgentRegistry;
   scope: AsyncLocalStorage<CodexAcpModelOverride | undefined>;
-  leaseCommand: (command: string | undefined) => string | undefined;
+  leaseCommand: (command: string) => string;
 }): AcpAgentRegistry {
   return {
-    resolve(agentName: string): string | undefined {
+    resolve(agentName: string): string {
       const command = params.agentRegistry.resolve(agentName);
       const override = params.scope.getStore();
       if (
         !override ||
         normalizeAgentName(agentName) !== CODEX_ACP_AGENT_ID ||
-        typeof command !== "string" ||
         !isCodexAcpCommand(command)
       ) {
         return params.leaseCommand(command);
@@ -700,9 +699,9 @@ export class AcpxRuntime implements AcpRuntime {
     });
   }
 
-  private commandWithLaunchLease(command: string | undefined): string | undefined {
+  private commandWithLaunchLease(command: string): string {
     const launch = this.launchLeaseScope.getStore();
-    if (!command || !launch) {
+    if (!launch) {
       return command;
     }
     launch.stableCommand = command;

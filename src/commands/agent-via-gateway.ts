@@ -334,7 +334,7 @@ function isAgentCliProcessLike(value: unknown): value is AgentCliProcessLike {
 }
 
 function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliProcessLike {
-  if (!deps || !Object.prototype.hasOwnProperty.call(deps, "process")) {
+  if (!deps || !Object.hasOwn(deps, "process")) {
     return process;
   }
   const processLike = (deps as { process?: unknown }).process;

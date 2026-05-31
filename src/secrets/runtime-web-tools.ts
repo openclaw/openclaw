@@ -550,7 +550,7 @@ export async function resolveRuntimeWebTools(params: {
   if (
     legacyXSearchSource &&
     legacyXSearchResolved &&
-    Object.prototype.hasOwnProperty.call(legacyXSearchSource, "apiKey")
+    Object.hasOwn(legacyXSearchSource, "apiKey")
   ) {
     const legacyXSearchSourceRecord = legacyXSearchSource as Record<string, unknown>;
     const legacyXSearchResolvedRecord = legacyXSearchResolved as Record<string, unknown>;

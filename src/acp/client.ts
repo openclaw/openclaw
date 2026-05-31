@@ -97,10 +97,8 @@ function printSessionUpdate(notification: SessionNotification): void {
       if (names) {
         console.log(`\n[commands] ${names}`);
       }
-      return;
     }
     default:
-      return;
   }
 }
 

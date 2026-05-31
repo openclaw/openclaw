@@ -76,6 +76,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
         fireStop();
       }
     }, maxDurationMs);
+    ttlTimer.unref?.();
   };
 
   const clearTtlTimer = () => {

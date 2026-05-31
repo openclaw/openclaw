@@ -154,7 +154,8 @@ function isInsidePath(baseDir: string, candidatePath: string): boolean {
   const pathApi = baseIsWindows ? path.win32 : path;
   const relative = pathApi.relative(pathApi.resolve(baseDir), pathApi.resolve(candidatePath));
   return (
-    relative === "" || (!!relative && !relative.startsWith("..") && !pathApi.isAbsolute(relative))
+    relative === "" ||
+    (relative !== "" && !relative.startsWith("..") && !pathApi.isAbsolute(relative))
   );
 }
 function joinPathForRoot(root: string, ...segments: string[]): string {

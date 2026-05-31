@@ -16,7 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import type { OpenAICompletionsOptions } from "../llm/providers/openai-completions.js";
 import { complete } from "../llm/stream.js";
-import { type Context, type Model, type Tool } from "../llm/types.js";
+import type { Context, Model, Tool } from "../llm/types.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
