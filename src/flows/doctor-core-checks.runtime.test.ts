@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   disposeBundleRuntime: vi.fn(),
   loadModelCatalog: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
   normalizeProviderToolSchemasWithPlugin: vi.fn(),
-  resolvePluginProviders: vi.fn(() => []),
+  resolvePluginProviders: vi.fn((): Array<Record<string, unknown>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
 }));
 
@@ -117,7 +117,7 @@ describe("doctor runtime tool schema checks", () => {
   });
 
   it("preserves direct OpenAI catalog transport while building doctor runtime models", async () => {
-    mocks.loadModelCatalog.mockReturnValueOnce([
+    mocks.loadModelCatalog.mockResolvedValueOnce([
       {
         provider: "openai",
         id: "gpt-5.5",
@@ -147,7 +147,7 @@ describe("doctor runtime tool schema checks", () => {
   });
 
   it("preserves ChatGPT OpenAI catalog transport while building doctor runtime models", async () => {
-    mocks.loadModelCatalog.mockReturnValueOnce([
+    mocks.loadModelCatalog.mockResolvedValueOnce([
       {
         provider: "openai",
         id: "gpt-5.5",
