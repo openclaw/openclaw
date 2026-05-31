@@ -1,4 +1,5 @@
 import { expect, vi } from "vitest";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { SessionManager } from "./sessions/index.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
@@ -12,6 +13,7 @@ export type SanitizeSessionHistoryFn = (params: {
   sessionManager: SessionManager;
   sessionId: string;
   modelId?: string;
+  model?: ProviderRuntimeModel;
   policy?: TranscriptPolicy;
   preserveLatestAssistantThinking?: boolean;
 }) => Promise<AgentMessage[]>;
