@@ -22,6 +22,7 @@ export type CronSessionTarget = "main" | "isolated" | "current" | `session:${str
 /** Wake policy for main-session jobs waiting on heartbeat/user activity. */
 export type CronWakeMode = "next-heartbeat" | "now";
 
+/** Messaging channel id accepted by cron delivery settings. */
 export type CronMessageChannel = ChannelId;
 
 /** Delivery mode for job completion output. */
@@ -43,6 +44,7 @@ export type CronDelivery = {
   failureDestination?: CronFailureDestination;
 };
 
+/** Webhook completion destination used alongside chat delivery. */
 export type CronCompletionDestination = {
   mode: "webhook";
   to?: string;
@@ -56,6 +58,7 @@ export type CronFailureDestination = {
   mode?: "announce" | "webhook";
 };
 
+/** Partial failure-destination update shape; null clears individual override fields. */
 export type CronFailureDestinationPatch = {
   channel?: CronMessageChannel | null;
   to?: string | null;
@@ -63,6 +66,7 @@ export type CronFailureDestinationPatch = {
   mode?: "announce" | "webhook" | null;
 };
 
+/** Partial delivery update shape; null clears optional delivery destinations or fields. */
 export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort">> & {
   channel?: CronMessageChannel | null;
   to?: string | null;
@@ -78,6 +82,7 @@ export type CronRunStatus = "ok" | "error" | "skipped";
 /** Delivery outcome for completion or failure-notification sends. */
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
+/** Delivery target snapshot recorded for audit/debug output. */
 export type CronDeliveryTraceTarget = {
   channel?: string;
   to?: string | null;
@@ -86,6 +91,7 @@ export type CronDeliveryTraceTarget = {
   source?: "explicit" | "last";
 };
 
+/** Message-tool target that already sent to the cron delivery destination. */
 export type CronDeliveryTraceMessageTarget = {
   channel: string;
   to?: string;
@@ -93,6 +99,7 @@ export type CronDeliveryTraceMessageTarget = {
   threadId?: string;
 };
 
+/** Trace of intended, resolved, and already-sent delivery decisions for one run. */
 export type CronDeliveryTrace = {
   intended?: CronDeliveryTraceTarget;
   resolved?: CronDeliveryTraceTarget & { ok: boolean; error?: string };
@@ -109,11 +116,13 @@ export type CronFailureNotificationDelivery = {
   error?: string;
 };
 
+/** Human-readable delivery target preview for list/detail surfaces. */
 export type CronDeliveryPreview = {
   label: string;
   detail: string;
 };
 
+/** Token usage summary copied from the agent runner when available. */
 export type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;
@@ -122,14 +131,17 @@ export type CronUsageSummary = {
   cache_write_tokens?: number;
 };
 
+/** Model/provider/usage telemetry attached to cron run results and logs. */
 export type CronRunTelemetry = {
   model?: string;
   provider?: string;
   usage?: CronUsageSummary;
 };
 
+/** Severity level for persisted cron run diagnostics. */
 export type CronRunDiagnosticSeverity = "info" | "warn" | "error";
 
+/** Subsystem that produced a cron run diagnostic entry. */
 export type CronRunDiagnosticSource =
   | "cron-preflight"
   | "cron-setup"
@@ -139,6 +151,7 @@ export type CronRunDiagnosticSource =
   | "exec"
   | "delivery";
 
+/** Timestamped diagnostic entry preserved for cron run troubleshooting. */
 export type CronRunDiagnostic = {
   ts: number;
   source: CronRunDiagnosticSource;
@@ -149,6 +162,7 @@ export type CronRunDiagnostic = {
   truncated?: boolean;
 };
 
+/** Bounded diagnostic bundle stored on the run outcome. */
 export type CronRunDiagnostics = {
   summary?: string;
   entries: CronRunDiagnostic[];
@@ -185,10 +199,12 @@ export type CronAgentExecutionStarted = {
   firstModelCallStarted?: boolean;
 };
 
+/** Watchdog update that requires the new execution phase. */
 export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
   phase: CronAgentExecutionPhase;
 };
 
+/** Failure alert policy persisted on a cron job. */
 export type CronFailureAlert = {
   after?: number;
   channel?: CronMessageChannel;
@@ -205,6 +221,7 @@ export type CronFailureAlert = {
 /** Payload variants cron can execute in main-session or isolated-agent modes. */
 export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
 
+/** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
