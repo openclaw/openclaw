@@ -76,6 +76,7 @@ export type MemoryFlushPlan = {
 
 export type MemoryFlushPlanResolver = (params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   nowMs?: number;
 }) => MemoryFlushPlan | null;
 
@@ -270,6 +271,7 @@ export function registerMemoryFlushPlanResolverForPlugin(
 
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   nowMs?: number;
 }): MemoryFlushPlan | null {
   return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;

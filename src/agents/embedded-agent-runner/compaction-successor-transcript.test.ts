@@ -502,4 +502,18 @@ describe("shouldRotateCompactionTranscript", () => {
       }),
     ).toBe(true);
   });
+
+  it("honors a per-agent truncateAfterCompaction override", () => {
+    expect(
+      shouldRotateCompactionTranscript(
+        {
+          agents: {
+            defaults: { compaction: { truncateAfterCompaction: false } },
+            list: [{ id: "main", compaction: { truncateAfterCompaction: true } }],
+          },
+        },
+        "main",
+      ),
+    ).toBe(true);
+  });
 });

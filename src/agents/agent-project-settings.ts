@@ -51,6 +51,7 @@ export function createPreparedEmbeddedAgentSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string | null;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Resolved context window budget so reserve-token floor can be capped for small models. */
   contextTokenBudget?: number;
@@ -61,6 +62,7 @@ export function createPreparedEmbeddedAgentSettingsManager(params: {
   applyAgentCompactionSettingsFromConfig({
     settingsManager,
     cfg: params.cfg,
+    agentId: params.agentId,
     contextTokenBudget: params.contextTokenBudget,
   });
   // Disable the session runtime auto-retry. OpenClaw has its own comprehensive

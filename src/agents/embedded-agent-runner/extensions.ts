@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
@@ -8,6 +9,10 @@ import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import { setContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../agent-hooks/context-pruning/tools.js";
+import {
+  resolveAgentCompactionConfig,
+  resolveAgentContextPruningConfig,
+} from "../agent-scope-config.js";
 import {
   ensureAgentCompactionReserveTokens,
   resolveEffectiveCompactionMode,
@@ -19,6 +24,7 @@ import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -102,6 +108,36 @@ function resolveContextWindowTokens(params: {
   }).tokens;
 }
 
+function resolveSafeguardRuntimeModel(params: {
+  cfg: OpenClawConfig | undefined;
+  agentId?: string | null;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel | undefined;
+  modelRegistry?: ModelRegistry;
+}): {
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel | undefined;
+} {
+  const target = resolveEmbeddedCompactionTarget({
+    config: params.cfg,
+    agentId: params.agentId,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
+  const provider = target.provider ?? params.provider;
+  const modelId = target.model ?? params.modelId;
+  if (provider === params.provider && modelId === params.modelId) {
+    return { provider, modelId, model: params.model };
+  }
+  if (!params.modelRegistry) {
+    return { provider, modelId, model: params.model };
+  }
+  const model = params.modelRegistry.find(provider, modelId) as ProviderRuntimeModel | null;
+  return { provider, modelId, model: model ?? params.model };
+}
+
 function buildContextPruningFactory(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -145,20 +181,23 @@ export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   workspaceDir?: string;
+  agentId?: string | null;
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  modelRegistry?: ModelRegistry;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const compactionCfg = resolveAgentCompactionConfig(params.cfg, params.agentId);
+  if (resolveEffectiveCompactionMode(params.cfg, params.agentId) === "safeguard") {
     const qualityGuardCfg = compactionCfg?.qualityGuard;
+    const runtimeModel = resolveSafeguardRuntimeModel(params);
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelContextTokens: params.model?.contextTokens,
-      modelContextWindow: params.model?.contextWindow,
+      provider: runtimeModel.provider,
+      modelId: runtimeModel.modelId,
+      modelContextTokens: runtimeModel.model?.contextTokens,
+      modelContextWindow: runtimeModel.model?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
@@ -169,7 +208,7 @@ export function buildEmbeddedExtensionFactories(params: {
       customInstructions: compactionCfg?.customInstructions,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
-      model: params.model,
+      model: runtimeModel.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       workspaceDir: params.workspaceDir,
       postCompactionSections: compactionCfg?.postCompactionSections,

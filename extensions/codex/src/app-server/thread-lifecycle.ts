@@ -253,7 +253,11 @@ export async function startOrResumeThread(params: {
     fingerprintDynamicTools(params.dynamicTools),
   );
   const contextEngineBinding = lifecycleTiming.measureSync("context_engine_binding", () =>
-    buildContextEngineBinding(params.params, params.contextEngineProjection),
+    buildContextEngineBinding(
+      params.params,
+      params.contextEngineProjection,
+      params.agentId ?? params.params.agentId,
+    ),
   );
   const userMcpServersConfigPatch =
     params.userMcpServersEnabled === false
@@ -272,7 +276,7 @@ export async function startOrResumeThread(params: {
       config: params.params.config,
     }),
   );
-  let preserveExistingBinding = false;
+  let preserveExistingBinding = params.nativeCodeModeEnabled === false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
   if (binding?.threadId && params.nativeCodeModeEnabled === false) {
@@ -665,6 +669,7 @@ export async function startOrResumeThread(params: {
 export function buildContextEngineBinding(
   params: EmbeddedRunAttemptParams,
   projection?: CodexContextEngineThreadBootstrapProjection,
+  activeAgentId?: string | null,
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -688,6 +693,7 @@ export function buildContextEngineBinding(
         contextTokenBudget: params.contextTokenBudget,
         reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
           config: params.config,
+          activeAgentId,
         }),
       }),
     }),

@@ -80,6 +80,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
+import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import {
   applyAgentAutoCompactionGuard,
@@ -1824,7 +1825,7 @@ export async function runEmbeddedAttempt(
     let systemPromptText = attemptSystemPrompt.systemPrompt;
     prepStages.mark("system-prompt");
 
-    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config, sessionAgentId);
     const sessionWriteLockOptions = resolveEmbeddedAttemptSessionWriteLockOptions({
       config: params.config,
       compactionTimeoutMs,
@@ -1948,13 +1949,14 @@ export async function runEmbeddedAttempt(
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
+        agentId: sessionAgentId,
         pluginMetadataSnapshot: getCurrentAttemptPluginMetadataSnapshot(),
         contextTokenBudget: params.contextTokenBudget,
       });
       const autoCompactionGuardArgs = {
         settingsManager,
         contextEngineInfo: activeContextEngine?.info,
-        compactionMode: resolveEffectiveCompactionMode(params.config),
+        compactionMode: resolveEffectiveCompactionMode(params.config, sessionAgentId),
         silentOverflowProneProvider: isSilentOverflowProneModel({
           provider: params.provider,
           modelId: params.modelId,
@@ -1968,9 +1970,12 @@ export async function runEmbeddedAttempt(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
+        agentId: sessionAgentId,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        modelRegistry: params.modelRegistry,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
         cwd: effectiveCwd,
@@ -1986,6 +1991,7 @@ export async function runEmbeddedAttempt(
       applyAgentCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
+        agentId: sessionAgentId,
         contextTokenBudget: params.contextTokenBudget,
       });
       applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
@@ -2237,7 +2243,11 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       });
       const midTurnPrecheckEnabled =
-        params.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true;
+        (params.config && sessionAgentId
+          ? (resolveAgentConfig(params.config, sessionAgentId)?.compaction ??
+            params.config.agents?.defaults?.compaction)
+          : params.config?.agents?.defaults?.compaction
+        )?.midTurnPrecheck?.enabled === true;
       let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
       const onMidTurnPrecheck = (request: MidTurnPrecheckRequest) => {
         pendingMidTurnPrecheckRequest = request;
@@ -2275,6 +2285,7 @@ export async function runEmbeddedAttempt(
               cwd: effectiveCwd,
               agentDir,
               tokenBudget: params.contextTokenBudget,
+              activeAgentId: sessionAgentId,
               promptCache:
                 promptCache ??
                 buildLoopPromptCacheInfo({
@@ -3136,7 +3147,7 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+      const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config, sessionAgentId);
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
       const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
@@ -4197,6 +4208,7 @@ export async function runEmbeddedAttempt(
             timedOutDuringCompaction,
             compactionOccurredThisAttempt,
             config: params.config,
+            agentId: sessionAgentId,
             provider: params.provider,
             modelId: params.modelId,
             modelApi: params.model.api,
@@ -4366,7 +4378,7 @@ export async function runEmbeddedAttempt(
             !timedOut &&
             !idleTimedOut &&
             !timedOutDuringCompaction &&
-            shouldRotateCompactionTranscript(params.config)
+            shouldRotateCompactionTranscript(params.config, sessionAgentId)
           ) {
             try {
               const rotation = await rotateTranscriptAfterCompaction({

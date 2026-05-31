@@ -235,6 +235,34 @@ describe("projectContextEngineAssemblyForCodex", () => {
     ).toBe(0);
   });
 
+  it("maps active-agent compaction reserve config onto Codex projection reserves", () => {
+    const config = {
+      agents: {
+        defaults: {
+          compaction: { reserveTokens: 12_000, reserveTokensFloor: 0 },
+        },
+        list: [
+          { id: "main", compaction: { reserveTokens: 16_000 } },
+          { id: "worker", compaction: { reserveTokens: 48_000 } },
+          { id: "partial", compaction: { keepRecentTokens: 4_000 } },
+        ],
+      },
+    };
+
+    expect(
+      resolveCodexContextEngineProjectionReserveTokens({
+        config,
+        activeAgentId: "worker",
+      }),
+    ).toBe(48_000);
+    expect(
+      resolveCodexContextEngineProjectionReserveTokens({
+        config,
+        activeAgentId: "partial",
+      }),
+    ).toBe(12_000);
+  });
+
   it("applies configured reserve tokens to the scaled projection cap", () => {
     expect(
       resolveCodexContextEngineProjectionMaxChars({

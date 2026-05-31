@@ -336,6 +336,29 @@ Read WORKFLOW.md on startup.
       expect(result).not.toContain("Default section");
     });
 
+    it("prefers per-agent section names over defaults when agentId is provided", async () => {
+      const content = `## Session Startup\n\nDefault startup.\n\n## Critical Rules\n\nAgent-specific rules.\n\n## Red Lines\n\nDefault section.\n`;
+      fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+      const cfg = {
+        agents: {
+          defaults: {
+            compaction: { postCompactionSections: ["Session Startup"] },
+          },
+          list: [
+            {
+              id: "main",
+              compaction: { postCompactionSections: ["Critical Rules"] },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+      const result = await readPostCompactionContext(tmpDir, { cfg, agentId: "main" });
+      expect(result).toContain("Critical Rules");
+      expect(result).toContain("Agent-specific rules");
+      expect(result).not.toContain("Default startup");
+      expect(result).not.toContain("Default section");
+    });
+
     it("supports multiple custom section names", async () => {
       const content = `## Onboarding\n\nOnboard things.\n\n## Safety\n\nSafe things.\n\n## Noise\n\nIgnore.\n`;
       fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);

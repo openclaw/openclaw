@@ -179,6 +179,7 @@ export async function compactEmbeddedAgentSession(
       : params.agentId;
   const policyCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
+    agentId: agentIds.sessionAgentId,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
@@ -203,6 +204,7 @@ export async function compactEmbeddedAgentSession(
   const selectedHarnessRuntime = params.agentHarnessId ?? configuredHarnessRuntime;
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
+    agentId: agentIds.sessionAgentId,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
@@ -366,7 +368,7 @@ export async function compactEmbeddedAgentSession(
               force: params.trigger === "manual",
               runtimeContext,
             },
-            resolveCompactionTimeoutMs(params.config),
+            resolveCompactionTimeoutMs(params.config, sessionAgentId),
             params.abortSignal,
           );
         } catch (compactErr) {
@@ -388,7 +390,10 @@ export async function compactEmbeddedAgentSession(
         let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
         let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
-          if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
+          if (
+            shouldRotateCompactionTranscript(params.config, agentIds.sessionAgentId) &&
+            !delegatedRotatedTranscript
+          ) {
             try {
               const rotation = await rotateTranscriptFileAfterCompaction({
                 sessionFile: params.sessionFile,
@@ -445,6 +450,7 @@ export async function compactEmbeddedAgentSession(
             reason: "compaction",
             runtimeContext,
             config: params.config,
+            agentId: agentIds.sessionAgentId,
           });
         }
         if (engineOwnsCompaction && result.ok && result.compacted) {
@@ -453,6 +459,7 @@ export async function compactEmbeddedAgentSession(
             sessionKey: params.sessionKey,
             agentId: sessionAgentId,
             sessionFile: postCompactionSessionFile,
+            agentId: agentIds.sessionAgentId,
           });
         }
         if (
@@ -542,6 +549,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       messageChannel: params.params.messageChannel,
       messageProvider: params.params.messageProvider,
       agentAccountId: params.params.agentAccountId,
+      agentId: sessionAgentId,
       currentChannelId: params.params.currentChannelId,
       currentThreadTs: params.params.currentThreadTs,
       currentMessageId: params.params.currentMessageId,
@@ -558,6 +566,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       harnessRuntime: params.harnessRuntime,
       modelFallbacksOverride: params.params.modelFallbacksOverride,
       thinkLevel: params.params.thinkLevel,
+      useCompactionThinkingLevel: true,
       reasoningLevel: params.params.reasoningLevel,
       bashElevated: params.params.bashElevated,
       extraSystemPrompt: params.params.extraSystemPrompt,

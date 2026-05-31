@@ -5,6 +5,7 @@ import { createProcessSessionFixture } from "../bash-process-registry.test-helpe
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
+  resolveEmbeddedCompactionThinkingLevel,
 } from "./compaction-runtime-context.js";
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
@@ -115,6 +116,129 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:p1");
   });
 
+  it("prefers a per-agent compaction.model override over defaults", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "gpt-4o",
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              compaction: {
+                model: "anthropic/claude-opus-4-6",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-3.5-turbo",
+      authProfileId: "openai:p1",
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("uses default compaction.thinkingLevel for compaction runtime context", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { thinkingLevel: "low" } } },
+      } as OpenClawConfig,
+      thinkLevel: "high",
+      useCompactionThinkingLevel: true,
+    });
+
+    expect(result.thinkLevel).toBe("low");
+  });
+
+  it("prefers per-agent compaction.thinkingLevel over defaults", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: { compaction: { thinkingLevel: "low" } },
+          list: [{ id: "worker", compaction: { thinkingLevel: "off" } }],
+        },
+      } as OpenClawConfig,
+      thinkLevel: "high",
+      useCompactionThinkingLevel: true,
+    });
+
+    expect(result.thinkLevel).toBe("off");
+  });
+
+  it("falls back to active session thinking level when compaction.thinkingLevel is unset", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {} as OpenClawConfig,
+        thinkLevel: "medium",
+      }),
+    ).toBe("medium");
+  });
+
+  it("inherits default model override when per-agent compaction is empty", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "anthropic/claude-opus-4-6",
+            },
+          },
+          list: [{ id: "worker", compaction: {} }],
+        },
+      } as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:p1",
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("inherits default model override when partial per-agent compaction omits model", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "anthropic/claude-opus-4-6",
+            },
+          },
+          list: [{ id: "worker", compaction: { keepRecentTokens: 12_000 } }],
+        },
+      } as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:p1",
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.authProfileId).toBeUndefined();
+  });
+
   it("uses session model when no compaction.model override configured", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
@@ -208,6 +332,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       }),
     ).toEqual({
       provider: "anthropic",
+      runtimeProvider: undefined,
       model: "gpt-5.4",
       authProfileId: undefined,
     });
@@ -392,5 +517,26 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "claude-opus-4-5",
     });
     expect(result.provider).toBe("anthropic");
+  });
+
+  it("uses caller thinking level for compaction runtime contexts", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      thinkLevel: "high",
+      useCompactionThinkingLevel: true,
+    });
+
+    expect(result.thinkLevel).toBe("high");
+  });
+
+  it("keeps ordinary runtime contexts on the caller thinking level", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      thinkLevel: "high",
+    });
+
+    expect(result.thinkLevel).toBe("high");
   });
 });

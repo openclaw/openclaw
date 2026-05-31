@@ -1489,6 +1489,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+  "agents.defaults.compaction.thinkingLevel":
+    'Optional thinking-level override used only for compaction summarization. Valid values are "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", and "max". Leave unset to use the active session thinking level, or set "off" to disable reasoning for compaction.',
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
@@ -1509,6 +1511,66 @@ export const FIELD_HELP: Record<string, string> = {
     "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
   "agents.defaults.compaction.memoryFlush.systemPrompt":
     "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
+  "agents.list[].compaction":
+    "Optional per-agent compaction block. Omit it to inherit agents.defaults.compaction; set only the fields that should differ. Per-agent compaction deep-merges over the default block.",
+  "agents.list[].compaction.mode":
+    'Use this per-agent compaction mode override to select "default" or "safeguard" behavior for the matching agent.',
+  "agents.list[].compaction.provider":
+    "Use this per-agent compaction provider override to control provider routing. Setting a provider forces safeguard compaction for that agent.",
+  "agents.list[].compaction.reserveTokens":
+    "Use this per-agent compaction reserve-token override to keep extra prompt budget for the matching agent.",
+  "agents.list[].compaction.keepRecentTokens":
+    "Use this per-agent keep-recent-tokens override for compaction when the matching agent needs a larger verbatim tail.",
+  "agents.list[].compaction.reserveTokensFloor":
+    "Use this per-agent lower bound to keep compaction reserve tokens from shrinking too far on the matching agent.",
+  "agents.list[].compaction.maxHistoryShare":
+    "Use this per-agent maximum transcript-history share to control how much old transcript content compaction may keep.",
+  "agents.list[].compaction.identifierPolicy":
+    "Use this per-agent identifier-preservation strategy to control how compaction summaries handle names, ids, and literal tokens.",
+  "agents.list[].compaction.identifierInstructions":
+    "Use these per-agent custom identifier-preservation instructions when identifierPolicy is custom.",
+  "agents.list[].compaction.recentTurnsPreserve":
+    "Keep this many recent turns verbatim during compaction for the matching agent before older content is summarized.",
+  "agents.list[].compaction.qualityGuard":
+    "Use these per-agent quality-guard settings to control retry behavior when compaction output fails validation or quality checks.",
+  "agents.list[].compaction.qualityGuard.enabled":
+    "Enable per-agent quality-guard compaction retries when the matching agent needs stricter summary validation.",
+  "agents.list[].compaction.qualityGuard.maxRetries":
+    "Use this maximum compaction retry count when per-agent quality guard is enabled for the matching agent.",
+  "agents.list[].compaction.midTurnPrecheck":
+    "Use these per-agent mid-turn precheck settings to control safeguard handling before continuing long tool loops.",
+  "agents.list[].compaction.midTurnPrecheck.enabled":
+    "Enable this per-agent mid-turn compaction precheck before continuing long tool loops for the matching agent.",
+  "agents.list[].compaction.postIndexSync":
+    "Use this per-agent post-compaction memory index sync mode to control whether index refresh happens after compaction.",
+  "agents.list[].compaction.postCompactionSections":
+    "Use this per-agent list of context sections to control which sections are restored after compaction.",
+  "agents.list[].compaction.timeoutSeconds":
+    "Use this per-agent compaction timeout override in seconds when the matching agent needs a different compaction budget.",
+  "agents.list[].compaction.model":
+    "Use this per-agent exact compaction model override when one agent should compact on a different model. This stays exact instead of inheriting session fallback chains.",
+  "agents.list[].compaction.thinkingLevel":
+    "Use this per-agent compaction thinking-level override when one agent's summarization should use a different reasoning budget than its normal session turns.",
+  "agents.list[].compaction.truncateAfterCompaction":
+    "Use this per-agent transcript rotation override to control whether the matching agent truncates transcript files after successful compaction.",
+  "agents.list[].compaction.maxActiveTranscriptBytes":
+    "Use this per-agent transcript byte threshold to force compaction even when token counters are stale or unavailable.",
+  "agents.list[].compaction.notifyUser":
+    "Use this per-agent toggle to control whether visible compaction events notify the user for the matching agent.",
+  "agents.list[].compaction.memoryFlush":
+    "Use these per-agent memory-flush settings to control pre-compaction extraction behavior for the matching agent.",
+  "agents.list[].compaction.memoryFlush.enabled":
+    "Enable this per-agent pre-compaction memory flush when the matching agent should opportunistically extract memory before compaction.",
+  "agents.list[].compaction.memoryFlush.model":
+    "Use this per-agent exact memory-flush model override when pre-compaction extraction should run on a different model.",
+  "agents.list[].compaction.memoryFlush.softThresholdTokens":
+    "Use this per-agent token threshold to opportunistically trigger memory flush before compaction.",
+  "agents.list[].compaction.memoryFlush.forceFlushTranscriptBytes":
+    "Use this per-agent transcript-size threshold to force memory flush before compaction.",
+  "agents.list[].compaction.memoryFlush.prompt":
+    "Use this per-agent user prompt template to control memory flush turns before compaction.",
+  "agents.list[].compaction.memoryFlush.systemPrompt":
+    "Use this per-agent system prompt override to control memory flush turns before compaction.",
   "agents.defaults.runRetries":
     "Outer run loop retry iteration boundaries for the embedded OpenClaw runner to prevent infinite execution loops during failure recovery.",
   "agents.defaults.runRetries.base":
@@ -1872,7 +1934,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.groupChat.unmentionedInbound":
     'Controls how unmentioned always-on group chatter is submitted. "user_request" treats it as a user request; "room_event" submits it as quiet context where visible output requires the message tool.',
   "messages.groupChat.visibleReplies":
-    'Overrides visible source replies for group/channel conversations. Defaults to "automatic" when no global visible reply policy is set. "message_tool" requires message(action=send) for room output and keeps normal final text private. "automatic" posts normal replies as before.',
+    'Overrides visible source replies for group/channel conversations. Defaults to "automatic" for normal group/channel user requests when no more specific policy is set. "message_tool" requires message(action=send) for room output and keeps normal final text private. "automatic" posts normal replies as before.',
   "messages.queue":
     "Queue strategy for inbound messages that arrive while a session run is active. Use this to tune steering, deferred followups, batching, or interruption.",
   "messages.queue.mode":

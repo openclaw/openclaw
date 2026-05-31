@@ -895,6 +895,59 @@ describe("selectAgentHarness", () => {
     expect(compact).toHaveBeenCalledTimes(1);
   });
 
+  it("selects harness compaction from the explicit agent for legacy session keys", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/*": { agentRuntime: { id: "pi" } },
+          },
+        },
+        list: [
+          {
+            id: "legacy-owner",
+            models: {
+              "openai/*": { agentRuntime: { id: "codex" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "legacy-session-key",
+        agentId: "legacy-owner",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        config,
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      compacted: false,
+    });
+    expect(compact).toHaveBeenCalledOnce();
+    expect(compact.mock.calls[0]?.[0]?.agentId).toBe("legacy-owner");
+  });
+
   it.each([
     { provider: "anthropic", modelId: "sonnet-4.6", alias: "claude-cli" },
     { provider: "google", modelId: "gemini-3-pro-preview", alias: "google-gemini-cli" },

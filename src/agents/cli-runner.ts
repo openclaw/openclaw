@@ -238,9 +238,11 @@ async function finalizeCliContextEngineTurn(params: {
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
     config: context.contextEngineConfig,
+    agentId: runParams.agentId,
     runMaintenance: async (maintenanceParams) =>
       await runHarnessContextEngineMaintenance({
         ...maintenanceParams,
+        agentId: runParams.agentId,
         onDeferredMaintenance: (promise) => {
           deferredTurnMaintenance = promise;
         },
@@ -643,6 +645,7 @@ export async function runPreparedCliAgent(
       sessionKey: params.sessionKey,
       sessionFile: params.sessionFile,
       config: context.contextEngineConfig,
+      agentId: params.agentId,
       warn: (message) => log.warn(message),
     });
     const contextEngineHistoryMessages = context.contextEngine

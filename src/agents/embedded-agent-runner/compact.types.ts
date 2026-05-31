@@ -11,7 +11,7 @@ export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
   runId?: string;
   sessionKey?: string;
-  /** Caller-resolved owner agent for global session aliases. */
+  /** Caller-resolved owner agent for global, legacy, or non-agent session aliases. */
   agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;

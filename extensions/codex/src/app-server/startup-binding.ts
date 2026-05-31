@@ -5,6 +5,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import { clearCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -251,16 +252,14 @@ function toNonNegativeInt(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
-function readCompactionConfig(config: EmbeddedRunAttemptParams["config"] | undefined) {
-  return isJsonObject(config?.agents?.defaults?.compaction)
-    ? config.agents.defaults.compaction
-    : undefined;
-}
-
 function resolveCodexAppServerNativeThreadReserveTokens(
-  config: EmbeddedRunAttemptParams["config"] | undefined,
+  compaction:
+    | {
+        reserveTokens?: unknown;
+        reserveTokensFloor?: unknown;
+      }
+    | undefined,
 ): number {
-  const compaction = readCompactionConfig(config);
   const reserveTokens = toNonNegativeInt(compaction?.reserveTokens);
   const reserveTokensFloor = toNonNegativeInt(compaction?.reserveTokensFloor);
   if (reserveTokens !== undefined) {
@@ -326,6 +325,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   agentDir: string;
   codexHome?: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
+  sessionAgentId?: string | null;
   contextEngineActive?: boolean;
   projectedTurnTokens?: number;
 }): Promise<CodexAppServerThreadBinding | undefined> {
@@ -333,33 +333,50 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   if (!binding?.threadId) {
     return binding;
   }
+  const compactionConfig =
+    params.config && params.sessionAgentId
+      ? (resolveAgentConfig(params.config, params.sessionAgentId)?.compaction ??
+        params.config.agents?.defaults?.compaction)
+      : params.config?.agents?.defaults?.compaction;
+  const shouldDeferByteGuard =
+    compactionConfig?.truncateAfterCompaction === true &&
+    params.contextEngineActive === true &&
+    hasContextEngineThreadBootstrapProjection(binding);
+  if (shouldDeferByteGuard) {
+    embeddedAgentLog.debug(
+      "codex app-server deferring native transcript byte guard for context-engine thread bootstrap",
+      {
+        threadId: binding.threadId,
+        engineId: binding.contextEngine?.engineId,
+        epoch: binding.contextEngine?.projection?.epoch,
+        fingerprint: binding.contextEngine?.projection?.fingerprint,
+      },
+    );
+  }
   const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,
     params.codexHome,
   );
-  const compaction = readCompactionConfig(params.config);
-  const shouldDeferByteGuard =
-    compaction?.truncateAfterCompaction === true &&
-    params.contextEngineActive === true &&
-    hasContextEngineThreadBootstrapProjection(binding);
-  if (compaction?.truncateAfterCompaction === true && !shouldDeferByteGuard) {
-    const maxBytes = parseCodexAppServerByteLimit(compaction.maxActiveTranscriptBytes);
-    if (maxBytes !== undefined) {
-      const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
-      if (oversizedFiles.length > 0) {
-        embeddedAgentLog.warn(
-          "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
-          {
-            threadId: binding.threadId,
-            maxBytes,
-            files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
-          },
-        );
-        await clearCodexAppServerBinding(params.sessionFile);
-        return undefined;
-      }
+  const maxBytes = parseCodexAppServerByteLimit(compactionConfig?.maxActiveTranscriptBytes);
+  if (
+    compactionConfig?.truncateAfterCompaction === true &&
+    !shouldDeferByteGuard &&
+    maxBytes !== undefined
+  ) {
+    const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
+    if (oversizedFiles.length > 0) {
+      embeddedAgentLog.warn(
+        "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
+        {
+          threadId: binding.threadId,
+          maxBytes,
+          files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
+        },
+      );
+      await clearCodexAppServerBinding(params.sessionFile);
+      return undefined;
     }
   }
   const nativeTokenSnapshots = await Promise.all(
@@ -377,7 +394,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     sessionRecord.contextTokens > 0
       ? Math.floor(sessionRecord.contextTokens)
       : undefined;
-  const reserveTokens = resolveCodexAppServerNativeThreadReserveTokens(params.config);
+  const reserveTokens = resolveCodexAppServerNativeThreadReserveTokens(compactionConfig);
   const maxTokens = resolveCodexAppServerNativeThreadTokenFuse({
     modelContextWindow: minFiniteNumber([nativeModelContextWindow, sessionModelContextWindow]),
     reserveTokens,
@@ -407,21 +424,6 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     );
     await clearCodexAppServerBinding(params.sessionFile);
     return undefined;
-  }
-  if (compaction?.truncateAfterCompaction !== true) {
-    return binding;
-  }
-  if (shouldDeferByteGuard) {
-    embeddedAgentLog.debug(
-      "codex app-server deferring native transcript byte guard for context-engine thread bootstrap",
-      {
-        threadId: binding.threadId,
-        engineId: binding.contextEngine?.engineId,
-        epoch: binding.contextEngine?.projection?.epoch,
-        fingerprint: binding.contextEngine?.projection?.fingerprint,
-      },
-    );
-    return binding;
   }
   return binding;
 }

@@ -9,6 +9,7 @@ import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
@@ -1014,6 +1015,97 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
+const NonNegativeByteSizeSchema = z.union([
+  z.number().int().nonnegative(),
+  z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+]);
+
+export const AgentContextPruningSchema = z
+  .object({
+    mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),
+    ttl: z.string().optional(),
+    keepLastAssistants: z.number().int().nonnegative().optional(),
+    softTrimRatio: z.number().min(0).max(1).optional(),
+    hardClearRatio: z.number().min(0).max(1).optional(),
+    minPrunableToolChars: z.number().int().nonnegative().optional(),
+    tools: z
+      .object({
+        allow: z.array(z.string()).optional(),
+        deny: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    softTrim: z
+      .object({
+        maxChars: z.number().int().nonnegative().optional(),
+        headChars: z.number().int().nonnegative().optional(),
+        tailChars: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
+    hardClear: z
+      .object({
+        enabled: z.boolean().optional(),
+        placeholder: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
+export const AgentCompactionSchema = z
+  .object({
+    mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+    provider: z.string().optional(),
+    reserveTokens: z.number().int().nonnegative().optional(),
+    keepRecentTokens: z.number().int().positive().optional(),
+    reserveTokensFloor: z.number().int().nonnegative().optional(),
+    maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
+    customInstructions: z.string().optional(),
+    identifierPolicy: z
+      .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
+      .optional(),
+    identifierInstructions: z.string().optional(),
+    recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
+    qualityGuard: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxRetries: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
+    midTurnPrecheck: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    postIndexSync: z.enum(["off", "async", "await"]).optional(),
+    postCompactionSections: z.array(z.string()).optional(),
+    model: z.string().optional(),
+    thinkingLevel: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    memoryFlush: z
+      .object({
+        enabled: z.boolean().optional(),
+        model: z.string().optional(),
+        softThresholdTokens: z.number().int().nonnegative().optional(),
+        forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
+        prompt: z.string().optional(),
+        systemPrompt: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    truncateAfterCompaction: z.boolean().optional(),
+    maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
+    notifyUser: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentEmbeddedHarnessSchema = z
   .object({
     runtime: z.string().optional(),
@@ -1046,6 +1138,7 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    compaction: AgentCompactionSchema,
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
@@ -1079,7 +1172,17 @@ export const AgentEntrySchema = z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
-        model: AgentModelSchema.optional(),
+        model: z
+          .union([
+            z.string(),
+            z
+              .object({
+                primary: z.string().optional(),
+                fallbacks: z.array(z.string()).optional(),
+              })
+              .strict(),
+          ])
+          .optional(),
         thinking: z.string().optional(),
         requireAgentId: z.boolean().optional(),
       })

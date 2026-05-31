@@ -345,6 +345,10 @@ OpenClaw also enforces a safety floor for embedded runs:
   and keeps OpenClaw runtime's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- Set `agents.defaults.compaction.thinkingLevel` to pin the reasoning budget used
+  by compaction summarization. When unset, compaction uses the active session
+  thinking level. Per-agent `agents.list[].compaction.thinkingLevel` deep-merges
+  over the default compaction block.
 - Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
   optional tool-loop precheck after new tool results and before the next model
   call. This is a trigger only; summary generation still uses the configured
