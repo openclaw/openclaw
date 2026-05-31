@@ -2026,7 +2026,18 @@ export default definePluginEntry({
             // are created with restrictive modes so the audit trail is not
             // world-readable on multi-user hosts where the process umask is
             // permissive (e.g. 0o022).
-            const auditLogPath = path.join(homedir(), ".openclaw", "memory", "refresh-audit.jsonl");
+            //
+            // Prefer $HOME over os.homedir() so tests can redirect the audit
+            // trail to a temp dir; libuv's uv_os_homedir() ignores env mutations
+            // inside Vitest worker threads, but $HOME is the canonical POSIX
+            // override and reading it directly works in every context.
+            const homeForAudit = process.env.HOME ?? homedir();
+            const auditLogPath = path.join(
+              homeForAudit,
+              ".openclaw",
+              "memory",
+              "refresh-audit.jsonl",
+            );
             try {
               await mkdir(path.dirname(auditLogPath), { recursive: true, mode: 0o700 });
               // Detect first-time creation so we can explicitly chmod after
