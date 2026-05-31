@@ -39,8 +39,8 @@ describe("sendSmsTextChunks", () => {
   });
 
   it("flattens markdown before sending SMS chunks", async () => {
-    expect(toSmsPlainText("**Hi** [docs](https://example.com)\n\n\nthere")).toBe(
-      "Hi docs (https://example.com)\n\nthere",
-    );
+    expect(
+      toSmsPlainText("**Hi** [docs](https://example.com)\n\n```bash\napprove 123\n```\nthere"),
+    ).toBe("Hi docs (https://example.com)\n\napprove 123\nthere");
   });
 });

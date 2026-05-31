@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeSmsPhoneNumber } from "./phone.js";
 import { sendSmsTextChunks } from "./send.js";
-import { sendSmsViaTwilio } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "sms";
@@ -68,7 +67,7 @@ async function issueSmsPairingChallenge(params: {
     senderId: params.from,
     senderIdLine: `Your SMS phone number: ${params.from}`,
     sendPairingReply: async (text) => {
-      await sendSmsViaTwilio({
+      await sendSmsTextChunks({
         account: params.account,
         to: params.from,
         text,

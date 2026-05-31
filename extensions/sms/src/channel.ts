@@ -29,7 +29,6 @@ import {
   normalizeSmsPhoneNumber,
 } from "./phone.js";
 import { sendSmsTextChunks, toSmsPlainText } from "./send.js";
-import { sendSmsViaTwilio } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
 const CHANNEL_ID = "sms";
@@ -231,7 +230,7 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
       }),
     },
     messaging: {
-      targetPrefixes: ["sms"],
+      targetPrefixes: ["twilio-sms"],
       normalizeTarget: (target) => normalizeSmsPhoneNumber(target),
       targetResolver: {
         looksLikeId: looksLikeSmsPhoneNumber,
@@ -275,7 +274,7 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount> = createChatChannelPlu
       normalizeAllowEntry: normalizeSmsAllowFrom,
       notify: async ({ cfg, id, message, accountId }) => {
         const account = resolveSmsAccount(cfg, accountId);
-        await sendSmsViaTwilio({
+        await sendSmsTextChunks({
           account,
           to: normalizeSmsPhoneNumber(id),
           text: message,

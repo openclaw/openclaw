@@ -86,11 +86,13 @@ openclaw pairing approve sms <CODE>
 
 ## Sending SMS
 
-Outbound SMS targets use the `sms:` prefix:
+Outbound SMS targets use the `sms:` service prefix with the SMS channel selected:
 
 ```bash
-openclaw message --to sms:+15551234567 "hello"
+openclaw message send --channel sms --target sms:+15551234567 --message "hello"
 ```
+
+When channel selection is implicit, `twilio-sms:+15551234567` selects this channel without taking over the existing channel-owned `sms:` service prefix used by iMessage.
 
 Agent replies from inbound SMS conversations automatically go back to the sender through the configured Twilio sender.
 

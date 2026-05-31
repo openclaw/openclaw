@@ -17,6 +17,7 @@ vi.mock("./twilio.js", () => ({
 describe("smsPlugin outbound", () => {
   it("declares an active text chunker and account-aware chunk limit", () => {
     expect(smsPlugin.configSchema).toBeDefined();
+    expect(smsPlugin.messaging?.targetPrefixes).toEqual(["twilio-sms"]);
     expect(smsPlugin.outbound?.chunker?.("alpha beta", 6)).toEqual(["alpha", "beta"]);
     expect(
       resolveSmsTextChunkLimit({

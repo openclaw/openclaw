@@ -1,9 +1,13 @@
 import { chunkTextForOutbound, stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { sendSmsViaTwilio } from "./twilio.js";
-import type { ResolvedSmsAccount } from "./types.js";
+import type { ResolvedSmsAccount, SmsSendResult } from "./types.js";
 
 export function toSmsPlainText(text: string): string {
-  const withReadableLinks = text.replace(
+  const withoutFencedCodeMarkers = text.replace(
+    /```[^\n]*\n?([\s\S]*?)```/g,
+    (_match, body: string) => body.trim(),
+  );
+  const withReadableLinks = withoutFencedCodeMarkers.replace(
     /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
     (_match, label: string, url: string) => {
       const cleanLabel = label.trim();
@@ -21,14 +25,14 @@ export async function sendSmsTextChunks(params: {
   account: ResolvedSmsAccount;
   to: string;
   text: string;
-}): Promise<Array<{ sid: string; to: string }>> {
+}): Promise<SmsSendResult[]> {
   const text = toSmsPlainText(params.text);
   if (!text) {
     throw new Error("SMS send requires non-empty text.");
   }
   const chunks = chunkTextForOutbound(text, params.account.textChunkLimit).filter(Boolean);
   const sendChunks = chunks.length ? chunks : [text];
-  const results: Array<{ sid: string; to: string }> = [];
+  const results: SmsSendResult[] = [];
   for (const text of sendChunks) {
     results.push(
       await sendSmsViaTwilio({

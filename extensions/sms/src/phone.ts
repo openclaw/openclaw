@@ -1,5 +1,5 @@
 export function normalizeSmsPhoneNumber(raw: string): string {
-  const trimmed = raw.trim().replace(/^sms:/i, "");
+  const trimmed = raw.trim().replace(/^(?:sms|twilio-sms):/i, "");
   if (!trimmed) {
     return "";
   }
