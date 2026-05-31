@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
+import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -578,7 +579,7 @@ function resolveCollapsedToolSummaryParts(params: {
   isError: boolean;
 }): { label: string; name?: string } {
   if (params.isError) {
-    return { label: "Tool error", name: params.displayLabel };
+    return { label: t("chat.toolCards.toolError"), name: params.displayLabel };
   }
 
   const displayDetail = params.displayDetail?.trim();

@@ -214,7 +214,9 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("keeps the full profile aligned with the declared steps", () => {
-    expect(resolveBuildAllSteps("full")).toEqual(BUILD_ALL_STEPS);
+    expect(resolveBuildAllSteps("full").map((step) => step.label)).toEqual(
+      BUILD_ALL_STEPS.map((step) => step.label),
+    );
     expect(BUILD_ALL_PROFILES.full).toEqual(BUILD_ALL_STEPS.map((step) => step.label));
   });
 
@@ -246,7 +248,7 @@ describe("resolveBuildAllSteps", () => {
         throw new Error(`Missing ${profile} tsdown step`);
       }
 
-      expect(BUILD_ALL_PROFILE_STEP_ENV[profile].tsdown).toEqual({
+      expect(BUILD_ALL_PROFILE_STEP_ENV[profile].tsdown).toMatchObject({
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       });
       expect(
@@ -254,6 +256,30 @@ describe("resolveBuildAllSteps", () => {
       ).toMatchObject({
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       });
+    }
+  });
+
+  it("preserves startup metadata only for profiles that regenerate it", () => {
+    for (const profile of ["full", "ciArtifacts", "cliStartup"]) {
+      const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
+      if (!tsdown) {
+        throw new Error(`Missing ${profile} tsdown step`);
+      }
+
+      expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).toMatchObject({
+        OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+      });
+    }
+
+    for (const profile of ["gatewayWatch", "qaRuntime"]) {
+      const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
+      if (!tsdown) {
+        throw new Error(`Missing ${profile} tsdown step`);
+      }
+
+      expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).not.toHaveProperty(
+        "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA",
+      );
     }
   });
 
