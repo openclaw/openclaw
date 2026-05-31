@@ -81,6 +81,24 @@ describe("SMS account config", () => {
     });
   });
 
+  it("normalizes numeric allowFrom entries accepted by config schema", () => {
+    const cfg = {
+      channels: {
+        sms: {
+          accountSid: "AC-parent",
+          authToken: "parent-token",
+          fromNumber: "+15550000000",
+          allowFrom: [1_555_333_4444],
+        },
+      },
+    };
+
+    expect(SmsConfigSchema.parse(cfg.channels.sms).allowFrom).toEqual([1_555_333_4444]);
+    expect(resolveSmsAccount(cfg)).toMatchObject({
+      allowFrom: ["+15553334444"],
+    });
+  });
+
   it("uses the configured default account when accountId is omitted", () => {
     const cfg = {
       channels: {
