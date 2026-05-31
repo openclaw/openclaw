@@ -479,7 +479,11 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
   provider: string;
   store: AuthProfileStore;
 }): ProviderEntryApiKeyProfileReference {
-  const perEntryRawKey = getCustomProviderApiKey(params.cfg, params.provider);
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (coerceSecretRef(providerConfig?.apiKey)) {
+    return { kind: "none" };
+  }
+  const perEntryRawKey = normalizeOptionalSecretInput(providerConfig?.apiKey);
   if (!perEntryRawKey) {
     return { kind: "none" };
   }
@@ -1042,6 +1046,12 @@ export async function resolveApiKeyForProvider(params: {
     agentDir,
   });
   if (providerEntryBinding.kind === "profile-resolved") {
+    assertAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      profileId: providerEntryBinding.auth.profileId ?? provider,
+      mode: providerEntryBinding.auth.mode,
+    });
     return providerEntryBinding.auth;
   }
   if (providerEntryBinding.kind === "profile-incompatible") {

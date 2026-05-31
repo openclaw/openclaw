@@ -1623,6 +1623,43 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     expect(resolved.source).toBe("models.json");
   });
 
+  it("does not treat env SecretRef ids as profile references", async () => {
+    await withEnvAsync({ OPENROUTER_PROFILE: "sk-or-env-secret" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openrouter-minimax",
+        cfg: {
+          models: {
+            providers: {
+              "openrouter-minimax": {
+                api: "openai-completions" as const,
+                baseUrl: "https://openrouter.ai/api/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENROUTER_PROFILE",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            OPENROUTER_PROFILE: {
+              type: "api_key",
+              provider: "openrouter",
+              key: "sk-or-wrong-profile",
+            },
+          },
+        },
+      });
+
+      expect(resolved.apiKey).toBe("sk-or-env-secret");
+      expect(resolved.source).toContain("OPENROUTER_PROFILE");
+    });
+  });
+
   it("does not bleed auth.order canonical provider profiles into a per-entry provider", async () => {
     // auth.order.openrouter should not be selected when resolving openrouter-minimax
     // that has its own per-entry apiKey = "openrouter:key-b" profile reference.
@@ -1717,6 +1754,37 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     expect(resolved.apiKey).toBe("sk-or-actual-key-b");
     expect(resolved.profileId).toBe("openrouter:key-b");
     expect(resolved.source).toBe("profile:openrouter:key-b");
+  });
+
+  it("applies model auth-mode guards to per-entry token profile references", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "openai",
+        modelApi: "openai-responses",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses" as const,
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "openai:token",
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "openai:token": {
+              type: "token",
+              provider: "openai",
+              token: "oauth-token",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/requires an OpenAI API key profile/);
   });
 
   it("throws when matched profile is an OAuth credential routed to an api-key provider (clawsweeper P1)", async () => {
