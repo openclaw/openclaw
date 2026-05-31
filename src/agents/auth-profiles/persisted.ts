@@ -109,7 +109,7 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   if (entry.type === "apiKey") {
     entry.type = "api_key";
   }
-  if (!("key" in entry) && typeof entry["apiKey"] === "string") {
+  if (!("key" in entry) && !("keyRef" in entry) && typeof entry["apiKey"] === "string") {
     entry["key"] = entry["apiKey"];
   }
   normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
@@ -122,11 +122,10 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     const key = normalizeOptionalCredentialString(entry.key);
     const keyRef = coerceSecretRef(entry.keyRef);
     const metadata = normalizeCredentialMetadata(entry.metadata);
-    if (key !== undefined) {
-      normalized.key = key;
-    }
     if (keyRef) {
       normalized.keyRef = keyRef;
+    } else if (key !== undefined) {
+      normalized.key = key;
     }
     if (metadata) {
       normalized.metadata = metadata;

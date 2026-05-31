@@ -17,6 +17,11 @@ describe("persisted auth profile boundary", () => {
           email: ["wrong"],
           displayName: "Work",
         },
+        "openai:legacy-api-key": {
+          type: "apiKey",
+          provider: "openai",
+          apiKey: "legacy-openai-key",
+        },
         "minimax:default": {
           type: "token",
           provider: "minimax",
@@ -66,10 +71,14 @@ describe("persisted auth profile boundary", () => {
         "openai:default": {
           type: "api_key",
           provider: "openai",
-          key: "demo-openai-key",
           keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123" },
           displayName: "Work",
+        },
+        "openai:legacy-api-key": {
+          type: "api_key",
+          provider: "openai",
+          key: "legacy-openai-key",
         },
         "minimax:default": {
           type: "token",
