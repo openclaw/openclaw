@@ -58,6 +58,8 @@ For direct chats and any other source event, use `messages.visibleReplies: "mess
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, the prompt does not define a `NO_REPLY` contract. Doing nothing visible simply means not calling the message tool.
 
+Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
+
 Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
 
 Sessions suppress verbose tool/progress summaries by default. Use `/verbose on`
