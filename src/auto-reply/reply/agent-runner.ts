@@ -94,6 +94,10 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import {
+  shouldWarnAboutPrivateMessageToolFinal,
+  warnPrivateMessageToolFinal,
+} from "./private-message-tool-final.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
@@ -109,10 +113,6 @@ import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js"
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
-import {
-  isStrandedMessageToolReply,
-  warnStrandedMessageToolReply,
-} from "./stranded-source-reply.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -2281,20 +2281,19 @@ export async function runReplyAgent(params: {
         opts,
       });
       const finalDeliveryText = buildPendingFinalDeliveryText(finalPayloads);
-      // #85714: detect a stranded reply from the actual assistant final text,
-      // not finalDeliveryText — the latter also bundles verbose notices, plugin
-      // status, raw trace, and the usage line, none of which should trip the
-      // warn (e.g. an intentional NO_REPLY turn with trace/usage enabled).
+      // #85714: warn only for unusually substantive private final text. In
+      // message_tool_only, no tool call can be intentional silence, and
+      // finalDeliveryText also includes verbose/status/usage metadata.
       const assistantFinalText = rawAssistantText ?? "";
       if (
-        isStrandedMessageToolReply({
+        shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
           successfulSideEffectDelivery,
           finalText: assistantFinalText,
         })
       ) {
-        warnStrandedMessageToolReply({
+        warnPrivateMessageToolFinal({
           sessionKey,
           channel:
             sessionCtx.OriginatingChannel ??

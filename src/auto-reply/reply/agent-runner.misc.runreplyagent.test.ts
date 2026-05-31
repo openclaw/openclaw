@@ -190,12 +190,12 @@ vi.mock("../../agents/subagent-registry.js", () => ({
   markSubagentRunTerminated: () => 0,
 }));
 
-// #85714: keep the real stranded-reply decision but spy the WARN emitter so we
-// can assert it fires through the real runReplyAgent suppression branch.
-const warnStrandedSpy = vi.hoisted(() => vi.fn());
-vi.mock("./stranded-source-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./stranded-source-reply.js")>();
-  return { ...actual, warnStrandedMessageToolReply: warnStrandedSpy };
+// #85714: keep the real private-final decision but spy the WARN emitter so we
+// can assert it fires only through the substantive text suppression branch.
+const warnPrivateFinalSpy = vi.hoisted(() => vi.fn());
+vi.mock("./private-message-tool-final.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./private-message-tool-final.js")>();
+  return { ...actual, warnPrivateMessageToolFinal: warnPrivateFinalSpy };
 });
 
 import { runReplyAgent } from "./agent-runner.js";
@@ -252,7 +252,7 @@ beforeEach(() => {
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedAgentMock.mockClear();
-  warnStrandedSpy.mockClear();
+  warnPrivateFinalSpy.mockClear();
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
@@ -2994,8 +2994,8 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
   });
 });
 
-describe("runReplyAgent stranded message_tool_only reply (#85714)", () => {
-  async function runStrandedCase(params: {
+describe("runReplyAgent private message_tool_only final warning (#85714)", () => {
+  async function runPrivateFinalCase(params: {
     messagingToolSentTargets?: unknown[];
     finalAssistantText?: string;
     payloadText?: string;
@@ -3007,7 +3007,8 @@ describe("runReplyAgent stranded message_tool_only reply (#85714)", () => {
     await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
 
     const finalAssistantText =
-      params.finalAssistantText ?? "Here is the answer the user asked for.";
+      params.finalAssistantText ??
+      "Here is the answer the user asked for. It includes enough detail to read like a user-facing response rather than a short private note. This should have been sent with the message tool if the channel expected a visible reply.";
     runEmbeddedAgentMock.mockResolvedValue({
       // payloadText can differ from the assistant text to simulate metadata-only
       // payloads (verbose notices, usage line) that must NOT trigger the warn —
@@ -3080,27 +3081,32 @@ describe("runReplyAgent stranded message_tool_only reply (#85714)", () => {
     });
   }
 
-  it("warns when a real final reply is stranded (model never called the message tool)", async () => {
-    await runStrandedCase({});
-    expect(warnStrandedSpy).toHaveBeenCalledTimes(1);
-    expect(warnStrandedSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
+  it("warns when a substantive private final reply never used the message tool", async () => {
+    await runPrivateFinalCase({});
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
+  });
+
+  it("does not warn for a short private final reply", async () => {
+    await runPrivateFinalCase({ finalAssistantText: "Nothing to send here." });
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
   });
 
   it("does not warn when the message tool delivered this turn", async () => {
-    await runStrandedCase({
+    await runPrivateFinalCase({
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
     });
-    expect(warnStrandedSpy).not.toHaveBeenCalled();
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
   });
 
   it("does not warn on an intentional NO_REPLY turn even when metadata payloads remain", async () => {
     // Assistant went silent (NO_REPLY), but a verbose/usage metadata payload
     // survives in finalPayloads. The warn must key off the assistant text, not
-    // the payload bundle, so no stranded warning should fire.
-    await runStrandedCase({
-      finalAssistantText: "NO_REPLY",
-      payloadText: "🧹 Auto-compaction complete (count 1).",
+    // the payload bundle, so no private-final warning should fire.
+    await runPrivateFinalCase({
+      finalAssistantText: "no_reply",
+      payloadText: "Auto-compaction complete (count 1).",
     });
-    expect(warnStrandedSpy).not.toHaveBeenCalled();
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
   });
 });

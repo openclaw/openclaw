@@ -1,8 +1,8 @@
-# Message-tool-only stranded final reply
+# Message-tool-only private final reply warning
 
 ```yaml qa-scenario
 id: message-tool-stranded-final-reply
-title: Message-tool-only stranded final reply
+title: Message-tool-only private final reply warning
 surface: channel
 coverage:
   primary:
@@ -10,34 +10,34 @@ coverage:
   secondary:
     - channels.qa-channel
     - tools.message
-objective: Reproduce #85714 — under messages.visibleReplies=message_tool a real final reply that never calls the message tool is kept private and silently dropped (no outbound), and the gateway emits the stranded-reply WARN.
+objective: Reproduce #85714 — under messages.visibleReplies=message_tool a long private final reply that never calls the message tool is kept private (no outbound), and the gateway emits the private-final WARN.
 gatewayConfigPatch:
   messages:
     visibleReplies: message_tool
 successCriteria:
-  - The mock provider returns a normal final answer and does not plan the message tool.
+  - The mock provider returns a long normal final answer and does not plan the message tool.
   - Under message_tool_only delivery the reply is kept private, so the direct conversation receives no outbound message.
-  - The gateway logs the stranded-reply WARN from source-reply/stranded.
+  - The gateway logs the private-final WARN from source-reply/private-final.
 docsRefs:
   - docs/channels/qa-channel.md
 codeRefs:
   - src/auto-reply/reply/agent-runner.ts
-  - src/auto-reply/reply/stranded-source-reply.ts
+  - src/auto-reply/reply/private-message-tool-final.ts
   - src/auto-reply/reply/dispatch-from-config.ts
 execution:
   kind: flow
-  summary: Send a direct message_tool_only turn whose model reply omits the message tool, and verify the reply is stranded with no outbound delivery.
+  summary: Send a direct message_tool_only turn whose model reply omits the message tool, and verify a substantive private final warns without outbound delivery.
   config:
     conversationId: qa-stranded-dm
-    promptSnippet: qa stranded final reply check
-    prompt: "qa stranded final reply check. Reply to me directly in plain text with exactly `QA-STRANDED-85714`. Do NOT call any tool. Do NOT use the message tool."
+    promptSnippet: qa private final reply warning check
+    prompt: "qa private final reply warning check. Reply to me directly in two complete sentences with `QA-STRANDED-85714` in the first sentence and a short explanation in the second sentence. Do NOT call any tool. Do NOT use the message tool."
     expectedMarker: QA-STRANDED-85714
-    strandedLogNeedle: "source-reply/stranded"
+    privateFinalLogNeedle: "source-reply/private-final"
 ```
 
 ```yaml qa-flow
 steps:
-  - name: strands a real final reply when the model omits the message tool
+  - name: warns for substantive private final text when the model omits the message tool
     actions:
       - call: waitForGatewayHealthy
         args:
@@ -78,15 +78,15 @@ steps:
           expr: "!env.mock || scenarioRequests.every((request) => request.plannedToolName !== 'message')"
           message:
             expr: "`model should not have planned the message tool, saw ${JSON.stringify(scenarioRequests.map((request) => request.plannedToolName ?? null))}`"
-      - set: strandedLog
+      - set: privateFinalLog
         value:
           expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
-      - set: strandedLine
+      - set: privateFinalLine
         value:
-          expr: "(strandedLog.split('\\n').find((line) => line.includes(config.strandedLogNeedle)) ?? '').trim()"
+          expr: "(privateFinalLog.split('\\n').find((line) => line.includes(config.privateFinalLogNeedle)) ?? '').trim()"
       - assert:
-          expr: "strandedLog.includes(config.strandedLogNeedle)"
+          expr: "privateFinalLog.includes(config.privateFinalLogNeedle)"
           message:
-            expr: "`expected the gateway to log ${config.strandedLogNeedle} after a stranded message_tool_only reply, but it was absent`"
-    detailsExpr: "`no-outbound stranded reply; WARN logged=${strandedLog.includes(config.strandedLogNeedle)}; mock requests=${scenarioRequests.length}; gateway log: ${strandedLine}`"
+            expr: "`expected the gateway to log ${config.privateFinalLogNeedle} after a substantive private message_tool_only reply, but it was absent`"
+    detailsExpr: "`no-outbound private final; WARN logged=${privateFinalLog.includes(config.privateFinalLogNeedle)}; mock requests=${scenarioRequests.length}; gateway log: ${privateFinalLine}`"
 ```
