@@ -12,12 +12,7 @@ type ChatComposerPersistenceState = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
   hello?: {
-    snapshot?: {
-      sessionDefaults?: {
-        defaultAgentId?: string | null;
-        mainKey?: string | null;
-      } | null;
-    } | null;
+    snapshot?: unknown;
   } | null;
   sessionKey: string;
   chatMessage: string;
@@ -46,7 +41,18 @@ function storageKeyForGateway(gatewayUrl: string | null | undefined): string {
 }
 
 function readHelloDefaultAgentId(state: Pick<ChatComposerPersistenceState, "hello">) {
-  return state.hello?.snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
+  const snapshot = state.hello?.snapshot;
+  if (!snapshot || typeof snapshot !== "object") {
+    return undefined;
+  }
+  const defaults = (snapshot as { sessionDefaults?: unknown }).sessionDefaults;
+  if (!defaults || typeof defaults !== "object") {
+    return undefined;
+  }
+  const defaultAgentId = (defaults as { defaultAgentId?: unknown }).defaultAgentId;
+  return typeof defaultAgentId === "string" && defaultAgentId.trim()
+    ? defaultAgentId.trim()
+    : undefined;
 }
 
 function resolveComposerAgentScope(
