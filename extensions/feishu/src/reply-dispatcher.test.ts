@@ -162,6 +162,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
           resolveMarkdownTableMode: vi.fn(() => "preserve"),
           convertMarkdownTables: vi.fn((text) => text),
           chunkTextWithMode: vi.fn((text) => [text]),
+          chunkMarkdownTextWithMode: vi.fn((text) => [text]),
         },
         reply: {
           createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
@@ -431,13 +432,15 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("keeps oversized auto mode markdown final text on the chunked card path", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
 
     const { options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
     await options.deliver({ text: "```ts\nconst x = 1\n```\ntail" }, { kind: "final" });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(0);
+    expect(runtime.channel.text.chunkMarkdownTextWithMode).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.text.chunkTextWithMode).not.toHaveBeenCalled();
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(2);
     expectMockArgFields(sendStructuredCardFeishuMock, "first card send params", {
       text: "```ts\nx\n```",

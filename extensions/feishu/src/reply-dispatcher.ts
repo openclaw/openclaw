@@ -463,9 +463,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
       : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
+    const chunkText = paramsLocal.useCard
+      ? core.channel.text.chunkMarkdownTextWithMode
+      : core.channel.text.chunkTextWithMode;
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
-      core.channel.text.chunkTextWithMode(chunkSource, textChunkLimit, chunkMode),
+      chunkText(chunkSource, textChunkLimit, chunkMode),
     );
     for (const [index, chunk] of chunks.entries()) {
       await paramsLocal.sendChunk({
