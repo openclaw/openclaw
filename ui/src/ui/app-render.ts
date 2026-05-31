@@ -487,7 +487,11 @@ let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 const SKILL_WORKSHOP_REVIEWED_KEY = "openclaw:control-ui:skill-workshop-reviewed:v1";
+const SKILL_WORKSHOP_QUEUE_WIDTH_KEY = "openclaw:control-ui:skill-workshop-queue-width:v1";
 const MAX_SKILL_WORKSHOP_REVIEWED_KEYS = 500;
+const DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH = 360;
+const MIN_SKILL_WORKSHOP_QUEUE_WIDTH = 280;
+const MAX_SKILL_WORKSHOP_QUEUE_WIDTH = 560;
 const CRON_THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 const CRON_TIMEZONE_SUGGESTIONS = [
   "UTC",
@@ -567,6 +571,40 @@ function saveSkillWorkshopReviewedKeys(keys: string[]): void {
     );
   } catch {
     // Ignore browser storage failures; the dots still work for the current render state.
+  }
+}
+
+export function loadSkillWorkshopQueueWidth(): number {
+  const raw = getSafeLocalStorage()?.getItem(SKILL_WORKSHOP_QUEUE_WIDTH_KEY);
+  if (!raw) {
+    return DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH;
+  }
+  return clampSkillWorkshopQueueWidth(Number(raw));
+}
+
+function clampSkillWorkshopQueueWidth(width: number): number {
+  if (!Number.isFinite(width)) {
+    return DEFAULT_SKILL_WORKSHOP_QUEUE_WIDTH;
+  }
+  return Math.min(
+    MAX_SKILL_WORKSHOP_QUEUE_WIDTH,
+    Math.max(MIN_SKILL_WORKSHOP_QUEUE_WIDTH, Math.round(width)),
+  );
+}
+
+function setSkillWorkshopQueueWidth(
+  state: AppViewState,
+  width: number,
+  options?: { persist?: boolean },
+): void {
+  const next = clampSkillWorkshopQueueWidth(width);
+  state.skillWorkshopQueueWidth = next;
+  if (options?.persist) {
+    try {
+      getSafeLocalStorage()?.setItem(SKILL_WORKSHOP_QUEUE_WIDTH_KEY, String(next));
+    } catch {
+      // Width persistence is a convenience; the current drag state still applies.
+    }
   }
 }
 
@@ -2956,10 +2994,14 @@ export function renderApp(state: AppViewState) {
                 query: state.skillWorkshopQuery,
                 filePreviewKey: state.skillWorkshopFilePreviewKey,
                 filePreviewQuery: state.skillWorkshopFilePreviewQuery,
+                queueWidth: state.skillWorkshopQueueWidth,
                 counts,
                 onStatusFilterChange: (next) => (state.skillWorkshopStatusFilter = next),
                 onQueryChange: (next) => (state.skillWorkshopQuery = next),
                 onFilePreviewQueryChange: (next) => (state.skillWorkshopFilePreviewQuery = next),
+                onQueueWidthChange: (width) => setSkillWorkshopQueueWidth(state, width),
+                onQueueWidthCommit: (width) =>
+                  setSkillWorkshopQueueWidth(state, width, { persist: true }),
                 onSelect: (key) => {
                   const proposal = proposals.find((p) => p.key === key);
                   state.skillWorkshopSelectedKey = key;

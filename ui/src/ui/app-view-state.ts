@@ -431,6 +431,7 @@ export type AppViewState = {
     skillWorkshopFilePreviewKey: string | null;
     skillWorkshopFilePreviewQuery: string;
     skillWorkshopReviewedKeys: string[];
+    skillWorkshopQueueWidth: number;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

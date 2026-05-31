@@ -75,7 +75,7 @@
 /* ── Triage two-pane card ───────────────────────────────────────────── */
 .sw-triage {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: minmax(260px, var(--sw-queue-width, 360px)) 8px minmax(0, 1fr);
   gap: 0;
   flex: 1;
   min-height: 0;
@@ -89,12 +89,25 @@
 
 /* ── Queue (left) ───────────────────────────────────────────────────── */
 .sw-queue {
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   align-self: stretch;
+}
+
+.sw-queue-resizer {
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  cursor: col-resize;
+  min-width: 8px;
+  touch-action: none;
+}
+
+.sw-queue-resizer:hover,
+.sw-queue-resizer:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  outline: none;
 }
 
 .sw-queue__head {
@@ -524,4 +537,14 @@
 .sw-detail__meta-link:hover {
   color: var(--text-strong);
   text-decoration-color: var(--accent);
+}
+
+@media (max-width: 760px) {
+  .sw-triage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sw-queue-resizer {
+    display: none;
+  }
 }

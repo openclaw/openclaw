@@ -42,7 +42,11 @@ import {
 } from "./app-lifecycle.ts";
 import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
-import { loadSkillWorkshopReviewedKeys, renderApp } from "./app-render.ts";
+import {
+  loadSkillWorkshopQueueWidth,
+  loadSkillWorkshopReviewedKeys,
+  renderApp,
+} from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
   handleActivityScroll as handleActivityScrollInternal,
@@ -634,6 +638,7 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopFilePreviewKey: string | null = null;
   @state() skillWorkshopFilePreviewQuery = "";
   @state() skillWorkshopReviewedKeys = loadSkillWorkshopReviewedKeys();
+  @state() skillWorkshopQueueWidth = loadSkillWorkshopQueueWidth();
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;

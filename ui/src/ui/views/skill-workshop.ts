@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import "../components/file-preview-modal.ts";
 
 export type SkillWorkshopProposalStatus =
@@ -40,10 +41,13 @@ export type SkillWorkshopProps = {
   query: string;
   filePreviewKey: string | null;
   filePreviewQuery: string;
+  queueWidth: number;
   counts: Record<SkillWorkshopStatusFilter, number>;
   onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
   onQueryChange: (query: string) => void;
   onFilePreviewQueryChange: (query: string) => void;
+  onQueueWidthChange: (width: number) => void;
+  onQueueWidthCommit: (width: number) => void;
   onSelect: (key: string) => void;
   onPrev: () => void;
   onNext: () => void;
@@ -90,8 +94,8 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
   return html`
     <section class="skill-workshop">
       ${renderLifecycleTabs(props)}
-      <div class="sw-triage">
-        ${renderQueue(props, groups, selected)}
+      <div class="sw-triage" style=${styleMap({ "--sw-queue-width": `${props.queueWidth}px` })}>
+        ${renderQueue(props, groups, selected)} ${renderQueueResizer(props)}
         ${selected ? renderDetail(props, selected) : renderEmpty()}
       </div>
     </section>
@@ -111,6 +115,65 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
         `
       : nothing}
   `;
+}
+
+function renderQueueResizer(props: SkillWorkshopProps) {
+  return html`
+    <div
+      class="sw-queue-resizer"
+      role="separator"
+      aria-label="Resize proposal list"
+      aria-orientation="vertical"
+      tabindex="0"
+      @pointerdown=${(event: PointerEvent) => startQueueResize(event, props)}
+      @keydown=${(event: KeyboardEvent) => resizeQueueWithKeyboard(event, props)}
+    ></div>
+  `;
+}
+
+function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const startX = event.clientX;
+  const startWidth = props.queueWidth;
+  let currentWidth = startWidth;
+  const body = document.body;
+  const previousCursor = body.style.cursor;
+  const previousUserSelect = body.style.userSelect;
+  body.style.cursor = "col-resize";
+  body.style.userSelect = "none";
+
+  const cleanup = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onUp);
+    body.style.cursor = previousCursor;
+    body.style.userSelect = previousUserSelect;
+  };
+
+  const onMove = (moveEvent: PointerEvent) => {
+    currentWidth = startWidth + moveEvent.clientX - startX;
+    props.onQueueWidthChange(currentWidth);
+  };
+
+  const onUp = () => {
+    cleanup();
+    props.onQueueWidthCommit(currentWidth);
+  };
+
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onUp);
+}
+
+function resizeQueueWithKeyboard(event: KeyboardEvent, props: SkillWorkshopProps): void {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+    return;
+  }
+  event.preventDefault();
+  const delta = event.key === "ArrowLeft" ? -24 : 24;
+  props.onQueueWidthCommit(props.queueWidth + delta);
 }
 
 function renderLifecycleTabs(props: SkillWorkshopProps) {
