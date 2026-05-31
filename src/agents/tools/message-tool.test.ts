@@ -2245,6 +2245,24 @@ describe("message tool internal-runtime-context sanitization", () => {
     },
   );
 
+  it("strips internal-runtime-context blocks from poll creation text before dispatch", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        action: "poll",
+        target: "telegram:123",
+        pollQuestion: `Choose one\n${internalContext}`,
+        pollOption: [`Yes\n${internalContext}`, "No"],
+      },
+    });
+
+    expect(call?.params?.pollQuestion).toBe("Choose one");
+    expect(call?.params?.pollOption).toEqual(["Yes", "No"]);
+  });
+
   it("suppresses pure internal-runtime-context sends before generic raw-params logging can see original args", async () => {
     const { call, result } = await executeSendWithResult({
       action: {

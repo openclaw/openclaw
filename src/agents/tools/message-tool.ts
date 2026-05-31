@@ -109,6 +109,45 @@ function sanitizeUserVisibleToolTextResult(
   };
 }
 
+function sanitizeStringParam(
+  params: Record<string, unknown>,
+  field: string,
+  bootPrompt: string | undefined,
+): boolean {
+  if (typeof params[field] !== "string") {
+    return false;
+  }
+  const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPrompt);
+  params[field] = sanitized.text;
+  return sanitized.suppressed;
+}
+
+function sanitizeStringArrayParam(
+  params: Record<string, unknown>,
+  field: string,
+  bootPrompt: string | undefined,
+): boolean {
+  const value = params[field];
+  if (typeof value === "string") {
+    const sanitized = sanitizeUserVisibleToolTextResult(value, bootPrompt);
+    params[field] = sanitized.text;
+    return sanitized.suppressed;
+  }
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  let suppressed = false;
+  params[field] = value.map((entry) => {
+    if (typeof entry !== "string") {
+      return entry;
+    }
+    const sanitized = sanitizeUserVisibleToolTextResult(entry, bootPrompt);
+    suppressed ||= sanitized.suppressed;
+    return sanitized.text;
+  });
+  return suppressed;
+}
+
 function sanitizePresentationTextFieldsResult(
   value: unknown,
   bootPrompt: string | undefined,
@@ -1077,11 +1116,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayload = false;
       for (const field of ["text", "content", "message", "caption", "SendMessage"]) {
-        if (typeof params[field] === "string") {
-          const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPromptForSession);
-          params[field] = sanitized.text;
-          suppressedVisiblePayload ||= sanitized.suppressed;
-        }
+        suppressedVisiblePayload ||= sanitizeStringParam(params, field, bootPromptForSession);
+      }
+      for (const field of ["pollQuestion", "poll_question"]) {
+        suppressedVisiblePayload ||= sanitizeStringParam(params, field, bootPromptForSession);
+      }
+      for (const field of ["pollOption", "poll_option"]) {
+        suppressedVisiblePayload ||= sanitizeStringArrayParam(params, field, bootPromptForSession);
       }
       const sanitizedPresentation = sanitizePresentationTextFieldsResult(
         params.presentation,
