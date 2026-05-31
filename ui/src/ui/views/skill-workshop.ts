@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import "../components/file-preview-modal.ts";
 
 export type SkillWorkshopProposalStatus =
   | "pending"
@@ -96,14 +97,19 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
       </div>
     </section>
     ${preview && selected
-      ? renderFilePreview(
-          selected,
-          preview,
-          props.filePreviewQuery,
-          props.onFilePreviewQueryChange,
-          props.onClosePreview,
-          (path) => props.onPreviewFile(selected.key, path),
-        )
+      ? html`
+          <openclaw-file-preview-modal
+            .files=${selected.supportFiles}
+            .activePath=${preview.path}
+            .query=${props.filePreviewQuery}
+            .contextLabel=${`in ${selected.slug}`}
+            @file-preview-query-change=${(event: CustomEvent<string>) =>
+              props.onFilePreviewQueryChange(event.detail)}
+            @file-preview-select=${(event: CustomEvent<string>) =>
+              props.onPreviewFile(selected.key, event.detail)}
+            @file-preview-close=${props.onClosePreview}
+          ></openclaw-file-preview-modal>
+        `
       : nothing}
   `;
 }
@@ -282,122 +288,6 @@ function renderEmpty() {
       </p>
     </div>
   `;
-}
-
-function renderFilePreview(
-  proposal: SkillWorkshopProposal,
-  file: SkillWorkshopFile,
-  query: string,
-  onQueryChange: (query: string) => void,
-  onClose: () => void,
-  onSelect: (path: string) => void,
-) {
-  const filteredFiles = filterSupportFiles(proposal.supportFiles, query);
-  const activeFile = filteredFiles.some((f) => f.path === file.path) ? file : filteredFiles[0];
-
-  return html`
-    <div class="sw-modal-backdrop" @click=${onClose}></div>
-    <div class="sw-modal" role="dialog" aria-label="Support files">
-      <header class="sw-modal__head">
-        <span class="sw-modal__search-icon">⌕</span>
-        <input
-          class="sw-modal__search"
-          placeholder="Search files…"
-          .value=${query}
-          @input=${(event: Event) => onQueryChange((event.target as HTMLInputElement).value ?? "")}
-          autofocus
-        />
-        <span class="sw-modal__state">
-          ${filteredFiles.length === proposal.supportFiles.length
-            ? `${proposal.supportFiles.length} files`
-            : `${filteredFiles.length}/${proposal.supportFiles.length} files`}
-          <span class="sw-modal__esc">esc</span>
-        </span>
-      </header>
-      <div class="sw-modal__body">
-        <aside class="sw-modal__list">
-          <div class="sw-modal__list-section">FILES · ${filteredFiles.length}</div>
-          ${filteredFiles.length === 0
-            ? html`<div class="sw-modal__empty">No files match.</div>`
-            : filteredFiles.map((f) => {
-                const isActive = f.path === activeFile?.path;
-                return html`
-                  <button
-                    class="sw-modal__item ${isActive ? "is-active" : ""}"
-                    @click=${() => onSelect(f.path)}
-                  >
-                    <span class="sw-modal__item-dot"></span>
-                    <span class="sw-modal__item-name">${f.path}</span>
-                    <span class="sw-modal__item-meta">${f.size}</span>
-                  </button>
-                `;
-              })}
-        </aside>
-        ${activeFile
-          ? html`
-              <section class="sw-modal__detail">
-                <div class="sw-modal__detail-head">
-                  <h2 class="sw-modal__detail-title">${activeFile.path}</h2>
-                  <div class="sw-modal__chips">
-                    <span class="sw-modal__chip sw-modal__chip--accent"
-                      >${fileKind(activeFile.path)}</span
-                    >
-                    <span class="sw-modal__chip">${activeFile.size}</span>
-                    <span class="sw-modal__chip">read-only</span>
-                    <span class="sw-modal__chip sw-modal__chip--ok">in ${proposal.slug}</span>
-                  </div>
-                </div>
-                <div class="sw-modal__detail-body">
-                  <pre class="sw-modal__pre">${activeFile.contents}</pre>
-                </div>
-              </section>
-            `
-          : html`
-              <section class="sw-modal__detail sw-modal__detail--empty">
-                <p class="sw-empty__title">No files match</p>
-                <p class="sw-empty__sub">Try another file name or content search.</p>
-              </section>
-            `}
-      </div>
-      <footer class="sw-modal__foot">
-        <span class="sw-modal__foot-group"><span class="sw-modal__kbd">↑↓</span> navigate</span>
-        <span class="sw-modal__foot-group"><span class="sw-modal__kbd">↵</span> open</span>
-        <span class="sw-modal__foot-group"><span class="sw-modal__kbd">⌘C</span> copy</span>
-        <span class="sw-modal__foot-group"><span class="sw-modal__kbd">⌘E</span> edit</span>
-        <span class="sw-action-bar__spacer"></span>
-        <button class="sw-btn sw-btn--ghost" @click=${onClose}>
-          Close <span class="sw-kbd">esc</span>
-        </button>
-      </footer>
-    </div>
-  `;
-}
-
-function filterSupportFiles(files: SkillWorkshopFile[], query: string): SkillWorkshopFile[] {
-  const q = query.trim().toLowerCase();
-  if (!q) {
-    return files;
-  }
-  return files.filter((file) => {
-    const haystack = `${file.path}\n${file.contents}`.toLowerCase();
-    return haystack.includes(q);
-  });
-}
-
-function fileKind(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
-    md: "Markdown",
-    txt: "Text",
-    json: "JSON",
-    yaml: "YAML",
-    yml: "YAML",
-    ts: "TypeScript",
-    js: "JavaScript",
-    py: "Python",
-    sh: "Shell",
-  };
-  return map[ext] ?? (ext ? ext.toUpperCase() : "File");
 }
 
 function renderProposalBody(body: string) {
