@@ -1253,6 +1253,9 @@ export const zh_CN: TranslationMap = {
       model: "聊天模型",
       thinkingLevel: "聊天思考级别",
     },
+    toolCards: {
+      toolError: "Tool error",
+    },
   },
   languages: {
     en: "英语",
