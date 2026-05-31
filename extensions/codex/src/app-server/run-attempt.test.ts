@@ -1726,12 +1726,8 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
-    await sessionManager.appendMessage(
-      userMessage("we are fixing the Opik default project", Date.now()),
-    );
-    await sessionManager.appendMessage(
-      assistantMessage("Opik default project context", Date.now() + 1),
-    );
+    sessionManager.appendMessage(userMessage("we are fixing the Opik default project", Date.now()));
+    sessionManager.appendMessage(assistantMessage("Opik default project context", Date.now() + 1));
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "make the default webpage openclaw";
@@ -1769,8 +1765,8 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
-    await sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
-    await sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
+    sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
+    sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -1802,10 +1798,10 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error("expected valid Codex binding timestamp");
     }
     const sessionManager = SessionManager.open(sessionFile);
-    await sessionManager.appendMessage(
+    sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt - 2_000),
     );
-    await sessionManager.appendMessage(
+    sessionManager.appendMessage(
       assistantMessage("David Ondrej was mentioned in that prior thread", bindingUpdatedAt - 1_000),
     );
     const harness = createResumeHarness();
@@ -1841,19 +1837,18 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error("expected valid Codex binding timestamp");
     }
     const sessionManager = SessionManager.open(sessionFile);
-    await sessionManager.appendMessage(
-      userMessage("old native-owned context", bindingUpdatedAt - 2_000),
-    );
-    await sessionManager.appendMessage(
+    sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
+    sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
     );
-    await sessionManager.appendMessage(
+    sessionManager.appendMessage(
       assistantMessage("David Ondrej was mentioned in that prior thread", bindingUpdatedAt + 2_000),
     );
-    await sessionManager.appendMessage({
+    const copilotMirrorMessage = {
       ...assistantMessage("copilot mirror context also matters", bindingUpdatedAt + 3_000),
       __openclaw: { mirrorIdentity: "copilot:assistant-1" },
-    });
+    } as ReturnType<typeof assistantMessage> & { __openclaw: { mirrorIdentity: string } };
+    sessionManager.appendMessage(copilotMirrorMessage);
     const harness = createResumeHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "is the previous message trustworthy?";
@@ -1889,14 +1884,16 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error("expected valid Codex binding timestamp");
     }
     const sessionManager = SessionManager.open(sessionFile);
-    await sessionManager.appendMessage({
+    const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
       idempotencyKey: "codex-app-server:user-1",
-    });
-    await sessionManager.appendMessage({
+    } as ReturnType<typeof userMessage> & { idempotencyKey: string };
+    sessionManager.appendMessage(codexMirrorUserMessage);
+    const codexMirrorAssistantMessage = {
       ...assistantMessage("codex mirrored assistant echo", bindingUpdatedAt + 2_000),
       __openclaw: { mirrorIdentity: "codex-app-server:assistant-1" },
-    });
+    } as ReturnType<typeof assistantMessage> & { __openclaw: { mirrorIdentity: string } };
+    sessionManager.appendMessage(codexMirrorAssistantMessage);
     const harness = createResumeHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "continue from the real user message";
@@ -1934,7 +1931,7 @@ describe("runCodexAppServerAttempt", () => {
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await firstHarness.waitForMethod("turn/start");
-    await sessionManager.appendMessage(userMessage("steered into active native turn", Date.now()));
+    sessionManager.appendMessage(userMessage("steered into active native turn", Date.now()));
     await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await firstRun;
     const completedBinding = await readCodexAppServerBinding(sessionFile);
@@ -1970,10 +1967,10 @@ describe("runCodexAppServerAttempt", () => {
     bindingPayload.updatedAt = new Date(oldBindingUpdatedAt).toISOString();
     await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
     const sessionManager = SessionManager.open(sessionFile);
-    await sessionManager.appendMessage(
+    sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
     );
-    await sessionManager.appendMessage(
+    sessionManager.appendMessage(
       assistantMessage(
         "David Ondrej was mentioned in that prior thread",
         oldBindingUpdatedAt + 2_000,
@@ -4048,10 +4045,10 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error("expected valid Codex binding timestamp");
     }
     const sessionManager = SessionManager.open(sessionFile);
-    await sessionManager.appendMessage(
+    sessionManager.appendMessage(
       userMessage("post-binding user context", bindingUpdatedAt + 1_000),
     );
-    await sessionManager.appendMessage(
+    sessionManager.appendMessage(
       assistantMessage("post-binding assistant context", bindingUpdatedAt + 2_000),
     );
     await fs.writeFile(
