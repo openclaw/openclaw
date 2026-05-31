@@ -17,14 +17,38 @@ async function withPackageManagerRoot<T>(
 }
 
 describe("detectPackageManager", () => {
-  it("prefers packageManager from package.json when supported", async () => {
+  it("prefers lock files over package.json packageManager field", async () => {
+    // package.json says pnpm, but an npm lock file is present → npm wins.
+    // This protects npm global installs of pnpm-authored packages.
     await withPackageManagerRoot(
       [
         { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@10.8.1" }) },
         { path: "package-lock.json", content: "" },
       ],
       async (root) => {
-        await expect(detectPackageManager(root)).resolves.toBe("pnpm");
+        await expect(detectPackageManager(root)).resolves.toBe("npm");
+      },
+    );
+  });
+
+  it("detects npm from npm-shrinkwrap.json without package-lock.json", async () => {
+    // npm global installs produce npm-shrinkwrap.json but not package-lock.json.
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@11.2.2" }) },
+        { path: "npm-shrinkwrap.json", content: "" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("npm");
+      },
+    );
+  });
+
+  it("falls back to package.json when no lock file exists", async () => {
+    await withPackageManagerRoot(
+      [{ path: "package.json", content: JSON.stringify({ packageManager: "bun@1.2.0" }) }],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("bun");
       },
     );
   });
@@ -41,14 +65,11 @@ describe("detectPackageManager", () => {
       expected: "bun",
     },
     {
-      name: "falls back to npm lockfiles for unsupported packageManager values",
-      files: [
-        { path: "package.json", content: JSON.stringify({ packageManager: "yarn@4.0.0" }) },
-        { path: "package-lock.json", content: "" },
-      ],
+      name: "detects npm from package-lock.json",
+      files: [{ path: "package-lock.json", content: "" }],
       expected: "npm",
     },
-  ])("falls back to lockfiles when $name", async ({ files, expected }) => {
+  ])("detects package manager from $name", async ({ files, expected }) => {
     await withPackageManagerRoot(files, async (root) => {
       await expect(detectPackageManager(root)).resolves.toBe(expected);
     });
