@@ -85,4 +85,32 @@ export type McpConfig = {
    * Defaults to 10 minutes. Set to 0 to disable idle eviction.
    */
   sessionIdleTtlMs?: number;
+  /**
+   * Channel-mediated approvals for MCP tool calls.
+   *
+   * When an MCP server returns the standard consent envelope
+   * (`{ok: false, requires_confirmation: true, action_id, summary}`)
+   * OpenClaw gates the call through the same plugin-approval pipeline
+   * that backs `/approve <id> allow-once|allow-always|deny` for shell
+   * exec. The model never sees `action_id`, so it cannot self-approve.
+   *
+   * Servers that don't return the envelope are unaffected.
+   */
+  approvals?: {
+    /**
+     * Master switch for the consent gate. Defaults to true (gating is
+     * triggered only by MCP servers that opt in via the envelope, so
+     * leaving it on is the conservative default).
+     */
+    enabled?: boolean;
+    /**
+     * How long to wait for a `/approve` reply when the MCP envelope
+     * does not specify its own `expires_in_seconds`. Defaults to 5min
+     * (300_000ms), tuned for mobile reply channels (WhatsApp/Telegram/
+     * SMS) where notification → unlock → context → tap is realistically
+     * 60–180s. Hard-capped at 10min (600_000ms); envelope-provided TTLs
+     * are also capped at 10min.
+     */
+    defaultTimeoutMs?: number;
+  };
 };

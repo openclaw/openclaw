@@ -423,6 +423,16 @@ const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
     sessionIdleTtlMs: z.number().finite().min(0).optional(),
+    approvals: z
+      .object({
+        enabled: z.boolean().optional(),
+        // Out-of-range values are clamped at runtime to [1000, 600_000]
+        // (see resolveConsentTimeoutMs in pi-bundle-mcp-consent.ts), so the
+        // schema must accept them rather than reject before the clamp.
+        defaultTimeoutMs: z.number().finite().int().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

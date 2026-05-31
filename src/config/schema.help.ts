@@ -1586,6 +1586,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Codex-native spelling for the same per-server MCP tool approval mode. Prefer defaultToolsApprovalMode in OpenClaw config.",
   "mcp.sessionIdleTtlMs":
     "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
+  "mcp.approvals":
+    "Channel-mediated approvals for MCP tool calls. When an MCP server returns the standard consent envelope (`{ok: false, requires_confirmation: true, action_id, summary}`), OpenClaw routes the call through the plugin-approval pipeline that backs `/approve <id> allow-once|deny` for shell exec. Servers that don't return the envelope are unaffected.",
+  "mcp.approvals.enabled":
+    "Master switch for the MCP consent gate. Defaults to true. Gating is only triggered by MCP servers that opt in via the consent envelope, so leaving it on is the conservative default. Set to false to disable channel-mediated approvals entirely — the consent envelope is then surfaced to the model verbatim (legacy behavior).",
+  "mcp.approvals.defaultTimeoutMs":
+    "Fallback wait window (milliseconds) for `/approve` replies when the MCP envelope omits its own `expires_in_seconds`. Defaults to 300000 (5 min), tuned for mobile reply channels (WhatsApp/Telegram/SMS). Clamped at runtime to [1000, 600000] (envelope-supplied TTLs are also capped at 10 minutes).",
   session:
     "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
   "session.scope":

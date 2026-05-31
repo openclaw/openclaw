@@ -107,6 +107,14 @@ export function buildPluginApprovalRequestMessage(
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
+  // Advertise the explicit-id form. The reply parser also accepts bare
+  // `/approve <decision>` as a hidden convenience, but it is filtered to
+  // the initiating chat/account surface — and current plugin/MCP approvals
+  // are routed by `agentId`/`sessionKey` rather than turn-source channel,
+  // so the implicit form is not yet reliable for these. Keep the
+  // user-facing instruction on the explicit form until session-binding
+  // visibility is queryable from the chat command handler. Decisions list
+  // is dynamic per upstream `request.allowedDecisions`.
   lines.push(
     `Reply with: /approve ${request.id} ${resolvePluginApprovalRequestAllowedDecisions(
       request.request,

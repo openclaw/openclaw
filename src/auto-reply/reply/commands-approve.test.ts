@@ -16,9 +16,14 @@ import { handleApproveCommand } from "./commands-approve.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
+const callGatewayMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/approval-gateway-resolver.js", () => ({
   resolveApprovalOverGateway: resolveApprovalOverGatewayMock,
+}));
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: callGatewayMock,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -409,6 +414,7 @@ function buildApproveParams(
     SenderId?: string;
     GatewayClientScopes?: string[];
     AccountId?: string;
+    To?: string;
   },
 ): HandleCommandsParams {
   const provider = ctxOverrides?.Provider ?? "whatsapp";
@@ -428,6 +434,7 @@ function buildApproveParams(
       senderId: ctxOverrides?.SenderId ?? "owner",
       channel: provider,
       channelId: provider,
+      ...(ctxOverrides?.To !== undefined ? { to: ctxOverrides.To } : {}),
     },
   } as unknown as HandleCommandsParams;
 }
@@ -1069,5 +1076,173 @@ describe("handleApproveCommand", () => {
         });
       }
     }
+  });
+
+  describe("implicit /approve cross-surface scoping (PR #78303 review fix)", () => {
+    // Regression for ClawSweeper [P1] finding on PR #78303 head fb8d0c29:
+    // bare `/approve <decision>` was picking the only pending approval
+    // visible to the backend client, regardless of which chat/account it
+    // belonged to. An authorized sender on chat A could resolve a pending
+    // approval that originated on chat B if it happened to be the only
+    // one visible. Candidates must be filtered to the initiating surface.
+    function mockListAndResolve(pending: {
+      plugin?: Array<{ id: string; request?: Record<string, unknown> }>;
+      exec?: Array<{ id: string; request?: Record<string, unknown> }>;
+    }) {
+      callGatewayMock.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === "plugin.approval.list") {
+          return pending.plugin ?? [];
+        }
+        if (method === "exec.approval.list") {
+          return pending.exec ?? [];
+        }
+        return { ok: true };
+      });
+    }
+
+    it("rejects implicit /approve when the only pending approval is on a different channel", async () => {
+      // Pending approval belongs to telegram; the /approve comes from whatsapp.
+      mockListAndResolve({
+        plugin: [
+          {
+            id: "plugin:abc-from-telegram",
+            request: { turnSourceChannel: "telegram", turnSourceAccountId: "tg-1" },
+          },
+        ],
+      });
+      const params = buildApproveParams(
+        "/approve allow-once",
+        {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        { Provider: "whatsapp", Surface: "whatsapp", SenderId: "+10000000000" },
+      );
+      const result = await handleApproveCommand(params, true);
+      expect(result?.reply?.text).toContain("No pending approval to act on");
+      // Critically: no resolve call was made — the cross-surface request stayed pending.
+      expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects implicit /approve when the only pending approval has no bound surface", async () => {
+      // Dashboard-issued approval (no turn-source-channel) is not eligible
+      // for implicit-id resolution from a chat.
+      mockListAndResolve({
+        plugin: [{ id: "plugin:dashboard-issued", request: {} }],
+      });
+      const params = buildApproveParams(
+        "/approve allow-once",
+        {
+          commands: { text: true },
+          channels: { telegram: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        { Provider: "telegram", Surface: "telegram", SenderId: "123" },
+      );
+      const result = await handleApproveCommand(params, true);
+      expect(result?.reply?.text).toContain("No pending approval to act on");
+    });
+
+    it("accepts implicit /approve when the pending approval matches the initiating channel", async () => {
+      // Slack with allowFrom: ["*"] accepts authorized exec /approve from
+      // any sender. The bare-decision form must accept the slack-originated
+      // pending request because turnSourceChannel matches the command.
+      mockListAndResolve({
+        exec: [
+          {
+            id: "abc-same-channel",
+            request: { turnSourceChannel: "slack" },
+          },
+        ],
+      });
+      const params = buildApproveParams(
+        "/approve allow-once",
+        { commands: { text: true }, channels: { slack: { allowFrom: ["*"] } } } as OpenClawConfig,
+        { Provider: "slack", Surface: "slack", SenderId: "U123" },
+      );
+      resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+      const result = await handleApproveCommand(params, true);
+      expect(result?.reply?.text).toContain("Approval allow-once submitted");
+      expectApprovalResolverCall({
+        callIndex: resolveApprovalOverGatewayMock.mock.calls.length - 1,
+        method: "exec.approval.resolve",
+        id: "abc-same-channel",
+      });
+    });
+
+    it("rejects implicit /approve when channels match but account bindings differ", async () => {
+      mockListAndResolve({
+        plugin: [
+          {
+            id: "plugin:other-account",
+            request: { turnSourceChannel: "telegram", turnSourceAccountId: "ACCT-B" },
+          },
+        ],
+      });
+      const params = buildApproveParams(
+        "/approve allow-once",
+        {
+          commands: { text: true },
+          channels: { telegram: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        {
+          Provider: "telegram",
+          Surface: "telegram",
+          SenderId: "123",
+          AccountId: "ACCT-A",
+        },
+      );
+      const result = await handleApproveCommand(params, true);
+      expect(result?.reply?.text).toContain("No pending approval to act on");
+    });
+
+    it("rejects implicit /approve when the pending approval targets a different conversation", async () => {
+      // MCP consent records bind to a turn-source target (turnSourceTo) but
+      // carry no account id. A bare /approve from another conversation on the
+      // same channel must NOT resolve it, even though channel + account checks
+      // pass — the conversation target has to match.
+      mockListAndResolve({
+        plugin: [
+          {
+            id: "plugin:mcp-from-chat-b",
+            request: { turnSourceChannel: "telegram", turnSourceTo: "chat-B" },
+          },
+        ],
+      });
+      const params = buildApproveParams(
+        "/approve allow-once",
+        {
+          commands: { text: true },
+          channels: { telegram: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        { Provider: "telegram", Surface: "telegram", SenderId: "123", To: "chat-A" },
+      );
+      const result = await handleApproveCommand(params, true);
+      expect(result?.reply?.text).toContain("No pending approval to act on");
+      expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts implicit /approve when the pending approval targets the initiating conversation", async () => {
+      mockListAndResolve({
+        exec: [
+          {
+            id: "mcp-from-chat-a",
+            request: { turnSourceChannel: "slack", turnSourceTo: "chat-A" },
+          },
+        ],
+      });
+      const params = buildApproveParams(
+        "/approve allow-once",
+        { commands: { text: true }, channels: { slack: { allowFrom: ["*"] } } } as OpenClawConfig,
+        { Provider: "slack", Surface: "slack", SenderId: "U123", To: "chat-A" },
+      );
+      resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+      const result = await handleApproveCommand(params, true);
+      expect(result?.reply?.text).toContain("Approval allow-once submitted");
+      expectApprovalResolverCall({
+        callIndex: resolveApprovalOverGatewayMock.mock.calls.length - 1,
+        method: "exec.approval.resolve",
+        id: "mcp-from-chat-a",
+      });
+    });
   });
 });

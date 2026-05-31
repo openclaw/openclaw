@@ -76,6 +76,10 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
+// Pure config reader imported from the materializer module directly, not the
+// agent-bundle-mcp-tools barrel below: runner tests mock that barrel to stub
+// the MCP runtime, so importing this from there would leave it undefined.
+import { resolveMcpApprovalsConfig } from "../../agent-bundle-mcp-materialize.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
@@ -1436,6 +1440,7 @@ export async function runEmbeddedAttempt(
           cfg: params.config,
         })
       : undefined;
+    const mcpApprovals = resolveMcpApprovalsConfig(params.config);
     bundleMcpRuntime = bundleMcpSessionRuntime
       ? await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
@@ -1443,6 +1448,18 @@ export async function runEmbeddedAttempt(
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
           ],
+          // Plumb session identity through so plugin.approval.request can
+          // resolve the correct delivery channel (WhatsApp, Telegram,
+          // gateway dashboard, …) for the user who triggered this run.
+          // Without these, the forwarder has no session binding and the
+          // approval prompt silently auto-cancels — the boundary becomes
+          // a permanent deny gate.
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          channel: params.messageChannel ?? params.messageProvider,
+          channelTarget: params.messageTo,
+          consentEnabled: mcpApprovals.consentEnabled,
+          consentDefaultTimeoutMs: mcpApprovals.consentDefaultTimeoutMs,
         })
       : undefined;
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({

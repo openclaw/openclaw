@@ -849,6 +849,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: tools.map((tool) => tool.name),
+          // Plumb session identity through so plugin.approval.request can
+          // resolve the right delivery channel for any compaction-time
+          // tool call that returns a consent envelope.
+          agentId: effectiveSkillAgentId,
+          sessionKey: params.sessionKey,
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
