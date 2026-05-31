@@ -375,7 +375,6 @@ function listProposalEntries(params: {
       if (!query) {
         return true;
       }
-      const normalizedSearch = normalizedQuery;
       return [
         proposal.id,
         proposal.title,
