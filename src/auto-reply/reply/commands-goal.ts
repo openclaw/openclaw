@@ -12,6 +12,7 @@ import {
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
+import { notifySessionMetadataChanged } from "./commands-session-store.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -60,16 +61,46 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
   };
 }
 
-function syncGoalSessionEntry(params: HandleCommandsParams): void {
-  if (!params.sessionStore || !params.sessionKey) {
-    return;
+function syncGoalSessionEntry(params: HandleCommandsParams): boolean {
+  if (!params.sessionKey) {
+    return false;
   }
   const entry = getSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
   if (!entry) {
+    return false;
+  }
+  if (params.sessionStore) {
+    params.sessionStore[params.sessionKey] = entry;
+  }
+  params.sessionEntry = entry;
+  return true;
+}
+
+async function syncChangedGoalSessionEntry(params: HandleCommandsParams): Promise<void> {
+  if (syncGoalSessionEntry(params)) {
+    await notifySessionMetadataChanged(params);
+  }
+}
+
+function readStoredGoalFingerprint(params: HandleCommandsParams): string | undefined {
+  if (!params.sessionKey) {
+    return undefined;
+  }
+  const entry = getSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
+  return JSON.stringify(entry?.goal ?? null);
+}
+
+async function syncPotentiallyChangedGoalSessionEntry(
+  params: HandleCommandsParams,
+  previousGoalFingerprint: string | undefined,
+): Promise<void> {
+  if (!syncGoalSessionEntry(params)) {
     return;
   }
-  params.sessionStore[params.sessionKey] = entry;
-  params.sessionEntry = entry;
+  const nextGoalFingerprint = JSON.stringify(params.sessionEntry?.goal ?? null);
+  if (nextGoalFingerprint !== previousGoalFingerprint) {
+    await notifySessionMetadataChanged(params);
+  }
 }
 
 function goalReply(text: string): CommandHandlerResult {
@@ -167,11 +198,12 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
   try {
     switch (parsed.action) {
       case "status": {
+        const previousGoalFingerprint = readStoredGoalFingerprint(params);
         const snapshot = await getSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
         });
-        syncGoalSessionEntry(params);
+        await syncPotentiallyChangedGoalSessionEntry(params, previousGoalFingerprint);
         return goalReply(formatSessionGoalStatus(snapshot.goal));
       }
       case "start":
@@ -187,7 +219,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           objective,
           fallbackEntry: params.sessionEntry,
         });
-        syncGoalSessionEntry(params);
+        await syncChangedGoalSessionEntry(params);
         applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
         return goalContinuation();
       }
@@ -198,7 +230,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           status: "paused",
           ...(parsed.text ? { note: parsed.text } : {}),
         });
-        syncGoalSessionEntry(params);
+        await syncChangedGoalSessionEntry(params);
         return goalReply(`Goal paused: ${goal.objective}`);
       }
       case "resume": {
@@ -208,7 +240,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           status: "active",
           ...(parsed.text ? { note: parsed.text } : {}),
         });
-        syncGoalSessionEntry(params);
+        await syncChangedGoalSessionEntry(params);
         const message = formatGoalResumeContinuationPrompt(parsed.text);
         applyGoalContinuationPrompt(params, message);
         return goalContinuation();
@@ -221,7 +253,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           status: "complete",
           ...(parsed.text ? { note: parsed.text } : {}),
         });
-        syncGoalSessionEntry(params);
+        await syncChangedGoalSessionEntry(params);
         return goalReply(`Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`);
       }
       case "block":
@@ -232,7 +264,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           status: "blocked",
           ...(parsed.text ? { note: parsed.text } : {}),
         });
-        syncGoalSessionEntry(params);
+        await syncChangedGoalSessionEntry(params);
         return goalReply(`Goal blocked: ${goal.objective}`);
       }
       case "clear": {
@@ -240,7 +272,10 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
         });
-        syncGoalSessionEntry(params);
+        const synced = syncGoalSessionEntry(params);
+        if (removed && synced) {
+          await notifySessionMetadataChanged(params);
+        }
         return goalReply(removed ? "Goal cleared." : "No goal to clear.");
       }
       default:

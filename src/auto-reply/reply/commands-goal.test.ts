@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSessionEntry, upsertSessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   formatGoalContinuationPrompt,
   handleGoalCommand,
@@ -110,6 +111,111 @@ describe("goal commands", () => {
     expect(params.command.commandBodyNormalized).toBe("build a 3d game");
     expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe("build a 3d game");
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.objective).toBe("build a 3d game");
+  });
+
+  it("notifies subscribers when goal commands mutate session metadata", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+    const onSessionMetadataChanged = vi.fn();
+    const params = {
+      ...buildGoalParams("/goal start refresh dashboard state", storePath),
+      opts: { onSessionMetadataChanged },
+    } as HandleCommandsParams;
+
+    const result = await handleGoalCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(true);
+    expect(onSessionMetadataChanged).toHaveBeenCalledWith({
+      sessionKey,
+      agentId: "main",
+      reason: "command-metadata",
+    });
+  });
+
+  it("emits a shared lifecycle event when no direct session metadata subscriber is installed", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+    const events: Array<{ sessionKey: string; reason: string }> = [];
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      events.push({ sessionKey: event.sessionKey, reason: event.reason });
+    });
+    try {
+      const params = buildGoalParams("/goal start refresh channel state", storePath);
+
+      const result = await handleGoalCommand(params, true);
+
+      expect(result?.shouldContinue).toBe(true);
+      expect(events).toEqual([{ sessionKey, reason: "command-metadata" }]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("does not notify subscribers for no-op goal status", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "sess-main", updatedAt: 1 },
+    });
+    const onSessionMetadataChanged = vi.fn();
+    const params = {
+      ...buildGoalParams("/goal status", storePath),
+      opts: { onSessionMetadataChanged },
+    } as HandleCommandsParams;
+
+    await handleGoalCommand(params, true);
+
+    expect(onSessionMetadataChanged).not.toHaveBeenCalled();
+  });
+
+  it("notifies subscribers when goal status persists usage accounting", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 20,
+        totalTokensFresh: true,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "stay within budget",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 0,
+          tokenBudget: 10,
+          continuationTurns: 0,
+        },
+      },
+    });
+    const onSessionMetadataChanged = vi.fn();
+    const params = {
+      ...buildGoalParams("/goal status", storePath),
+      opts: { onSessionMetadataChanged },
+    } as HandleCommandsParams;
+
+    await handleGoalCommand(params, true);
+
+    expect(getSessionEntry({ storePath, sessionKey })?.goal?.status).toBe("budget_limited");
+    expect(onSessionMetadataChanged).toHaveBeenCalledWith({
+      sessionKey,
+      agentId: "main",
+      reason: "command-metadata",
+    });
   });
 
   it("wraps command-prefixed goal objectives before continuing", async () => {

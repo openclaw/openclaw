@@ -3,6 +3,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GetReplyOptions } from "../types.js";
 import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
@@ -48,6 +49,9 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   gatewayClientScopes?: string[];
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
+  agentId?: string;
+  onSessionMetadataChanged?: GetReplyOptions["onSessionMetadataChanged"];
+  suppressSessionMetadataChanged?: boolean;
 };
 
 /** Inputs for applying inline directives before the full reply run is prepared. */
@@ -57,6 +61,7 @@ export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams 
   ctx: MsgContext;
   workspaceDir?: string;
   agentId?: string;
+  onSessionMetadataChanged?: GetReplyOptions["onSessionMetadataChanged"];
   isGroup: boolean;
   agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];
   modelState: {

@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { emitSessionsChanged } from "./server-methods/session-change-events.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -491,6 +492,41 @@ test("sessions.changed mutation events include live usage metadata", async () =>
     modelProvider: "openai",
     model: "gpt-5.3-codex-spark",
   });
+});
+
+test("sessions.changed command metadata excludes only the command run from active state", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const broadcastToConnIds = vi.fn();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  emitSessionsChanged(
+    {
+      broadcastToConnIds,
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      getRuntimeConfig,
+      chatAbortControllers: new Map([
+        ["command-run", { sessionKey: "agent:main:main" }],
+        ["other-run", { sessionKey: "agent:main:main" }],
+      ]),
+    } as never,
+    {
+      sessionKey: "agent:main:main",
+      reason: "command-metadata",
+      excludeActiveRunIds: ["command-run"],
+    },
+  );
+
+  const payload = expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "command-metadata",
+    hasActiveRun: true,
+  });
+  expect(payload.excludeActiveRunIds).toBeUndefined();
 });
 
 test("sessions.changed mutation events include live session setting metadata", async () => {

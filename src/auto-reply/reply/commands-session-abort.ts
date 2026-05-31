@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import type { GetReplyOptions } from "../types.js";
 import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
@@ -85,6 +86,8 @@ async function applyAbortTarget(params: {
   storePath?: string;
   abortKey?: string;
   abortCutoff?: AbortCutoff;
+  agentId?: string;
+  onSessionMetadataChanged?: GetReplyOptions["onSessionMetadataChanged"];
 }) {
   const { abortTarget } = params;
   abortSessionRunTarget({ key: abortTarget.key, sessionId: abortTarget.sessionId });
@@ -95,6 +98,8 @@ async function applyAbortTarget(params: {
     sessionStore: params.sessionStore,
     storePath: params.storePath,
     abortCutoff: params.abortCutoff,
+    agentId: params.agentId,
+    onSessionMetadataChanged: params.onSessionMetadataChanged,
   });
   if (!persisted && params.abortKey) {
     setAbortMemory(params.abortKey, true);
@@ -110,6 +115,8 @@ function buildAbortTargetApplyParams(
     sessionStore: params.sessionStore,
     storePath: params.storePath,
     abortKey: params.command.abortKey,
+    agentId: params.agentId,
+    onSessionMetadataChanged: params.opts?.onSessionMetadataChanged,
     abortCutoff: resolveAbortCutoffForTarget({
       ctx: params.ctx,
       commandSessionKey: params.sessionKey,

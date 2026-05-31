@@ -46,6 +46,12 @@ export type QueuedReplyLifecycle = {
   onComplete?: () => void;
 };
 
+export type SessionMetadataChangedEvent = {
+  sessionKey: string;
+  agentId?: string;
+  reason: "command-metadata";
+};
+
 /** Partial assistant payload emitted during streaming or replacement updates. */
 export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   delta?: string;
@@ -193,6 +199,8 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Called after an in-chat command mutates visible session metadata. */
+  onSessionMetadataChanged?: (event: SessionMetadataChangedEvent) => Promise<void> | void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
    * the source conversation. `message_tool_only` prefers message-tool visible

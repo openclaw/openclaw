@@ -42,6 +42,8 @@ command handling is enabled for the surface.
       persist to the session and reply with an acknowledgement.
     - In **normal chat** messages with other text, they act as inline hints and
       do **not** persist session settings.
+    - Session metadata updates from command-only turns, such as `/goal` state
+      changes, refresh subscribed clients without requiring a session reload.
     - Directives only apply for **authorized senders**. If `commands.allowFrom`
       is set, it is the only allowlist used; otherwise authorization comes from
       channel allowlists/pairing plus `commands.useAccessGroups`. Unauthorized

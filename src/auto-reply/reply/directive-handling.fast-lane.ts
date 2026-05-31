@@ -91,11 +91,13 @@ export async function applyInlineDirectivesFastLane(
     currentReasoningLevel,
     currentElevatedLevel,
     ctx,
+    agentId,
     messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
     commandAuthorized,
     senderIsOwner: params.senderIsOwner,
+    onSessionMetadataChanged: params.onSessionMetadataChanged,
     workspaceDir: params.workspaceDir,
   });
 

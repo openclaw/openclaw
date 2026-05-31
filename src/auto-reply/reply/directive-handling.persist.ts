@@ -17,6 +17,8 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thinking.js";
+import type { GetReplyOptions } from "../types.js";
+import { dispatchSessionMetadataChanged } from "./commands-session-store.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
@@ -100,6 +102,8 @@ export async function persistInlineDirectives(params: {
   senderIsOwner?: boolean;
   markLiveSwitchPending?: boolean;
   thinkingCatalog?: ModelCatalogEntry[];
+  agentId?: string;
+  onSessionMetadataChanged?: GetReplyOptions["onSessionMetadataChanged"];
 }): Promise<{
   provider: string;
   model: string;
@@ -378,6 +382,14 @@ export async function persistInlineDirectives(params: {
         elevatedChanged,
         reasoningChanged,
       });
+      await dispatchSessionMetadataChanged(
+        {
+          sessionKey,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          reason: "command-metadata",
+        },
+        params.onSessionMetadataChanged,
+      );
     }
   }
 

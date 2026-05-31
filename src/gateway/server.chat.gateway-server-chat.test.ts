@@ -1031,6 +1031,65 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send broadcasts sessions.changed when in-chat command metadata changes", async () => {
+    await withMainSessionStore(async () => {
+      const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+      expect(subscribeRes.ok).toBe(true);
+      const changedPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "sessions.changed" &&
+          o.payload?.reason === "command-metadata",
+        8000,
+      );
+
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            replyOptions?: {
+              onSessionMetadataChanged?: (event: {
+                sessionKey: string;
+                reason: "command-metadata";
+              }) => Promise<void> | void;
+            };
+          },
+        ];
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId: "sess-main",
+              updatedAt: 99,
+              label: "Command label",
+            },
+          },
+        });
+        await params.replyOptions?.onSessionMetadataChanged?.({
+          sessionKey: "agent:main:main",
+          reason: "command-metadata",
+        });
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      });
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/goal clear",
+        idempotencyKey: "idem-command-metadata-1",
+      });
+
+      expect(res.ok).toBe(true);
+      const changed = await changedPromise;
+      expectRecordFields(changed.payload, {
+        sessionKey: "agent:main:main",
+        reason: "command-metadata",
+        sessionId: "sess-main",
+        label: "Command label",
+        goal: null,
+        hasActiveRun: false,
+      });
+    });
+  });
+
   test("routes /btw replies through side-result events without transcript injection", async () => {
     await withMainSessionStore(async (dir) => {
       await fs.writeFile(

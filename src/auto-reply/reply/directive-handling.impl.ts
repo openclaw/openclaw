@@ -16,6 +16,7 @@ import {
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import { dispatchSessionMetadataChanged } from "./commands-session-store.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
@@ -479,6 +480,16 @@ export async function handleDirectiveOnly(
       await updateSessionStore(storePath, (store) => {
         store[sessionKey] = sessionEntry;
       });
+    }
+    if (!params.suppressSessionMetadataChanged) {
+      await dispatchSessionMetadataChanged(
+        {
+          sessionKey,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          reason: "command-metadata",
+        },
+        params.onSessionMetadataChanged,
+      );
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
       triggerSessionPatchHook({

@@ -190,6 +190,26 @@ describe("handleStopCommand target fallback", () => {
     );
   });
 
+  it("passes session metadata notifications through abort target persistence", async () => {
+    const params = buildStopParams();
+    const onSessionMetadataChanged = vi.fn();
+    params.agentId = "main";
+    params.opts = { onSessionMetadataChanged } as never;
+
+    await handleStopCommand(params, true);
+
+    const [[persistAbortTargetParams]] = persistAbortTargetEntryMock.mock.calls as unknown as Array<
+      [
+        {
+          agentId?: string;
+          onSessionMetadataChanged?: unknown;
+        },
+      ]
+    >;
+    expect(persistAbortTargetParams?.agentId).toBe("main");
+    expect(persistAbortTargetParams?.onSessionMetadataChanged).toBe(onSessionMetadataChanged);
+  });
+
   it("rejects native stop commands from non-owner senders when the plugin enforces owner-only commands", async () => {
     registerOwnerEnforcingTelegramPlugin();
     const params = buildStopParams();

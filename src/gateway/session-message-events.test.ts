@@ -225,6 +225,46 @@ describe("session.message websocket events", () => {
     });
   });
 
+  test("broadcasts command metadata lifecycle changes to session subscribers", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          label: "Updated by command",
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const changedEvent = onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "sessions.changed" &&
+          (message.payload as { reason?: string; sessionKey?: string } | undefined)?.reason ===
+            "command-metadata" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+      );
+
+      emitSessionLifecycleEvent({
+        sessionKey: "agent:main:main",
+        reason: "command-metadata",
+      });
+
+      const event = await changedEvent;
+      expectRecordFields(event.payload, {
+        sessionKey: "agent:main:main",
+        reason: "command-metadata",
+        sessionId: "sess-main",
+        label: "Updated by command",
+      });
+    });
+  });
+
   test("only sends transcript events to subscribed operator clients", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({

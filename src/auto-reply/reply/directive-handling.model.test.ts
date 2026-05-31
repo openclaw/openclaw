@@ -295,6 +295,7 @@ import type { ElevatedLevel } from "../thinking.js";
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
 let cliBackendsTesting: typeof import("../../agents/cli-backends.js").testing;
 let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
+let onSessionLifecycleEvent: typeof import("../../sessions/session-lifecycle-events.js").onSessionLifecycleEvent;
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model.js").resolveModelSelectionFromDirective;
 let parseInlineDirectives: typeof import("./directive-handling.parse.js").parseInlineDirectives;
 let persistInlineDirectives: typeof import("./directive-handling.persist.js").persistInlineDirectives;
@@ -302,6 +303,7 @@ let persistInlineDirectives: typeof import("./directive-handling.persist.js").pe
 beforeAll(async () => {
   ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.js"));
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
+  ({ onSessionLifecycleEvent } = await import("../../sessions/session-lifecycle-events.js"));
   ({ maybeHandleModelDirectiveInfo, resolveModelSelectionFromDirective } =
     await import("./directive-handling.model.js"));
   ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
@@ -1550,6 +1552,54 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
+  it("notifies subscribed clients when directive-only handling mutates session metadata", async () => {
+    const onSessionMetadataChanged = vi.fn();
+    const sessionEntry = createSessionEntry();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think high"),
+        sessionEntry,
+        agentId: "main",
+        onSessionMetadataChanged,
+      }),
+    );
+
+    expect(sessionEntry.thinkingLevel).toBe("high");
+    expect(onSessionMetadataChanged).toHaveBeenCalledWith({
+      sessionKey,
+      agentId: "main",
+      reason: "command-metadata",
+    });
+  });
+
+  it("honors explicit session metadata notification suppression", async () => {
+    const onSessionMetadataChanged = vi.fn();
+    const lifecycleEvents: unknown[] = [];
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      lifecycleEvents.push(event);
+    });
+    const sessionEntry = createSessionEntry();
+
+    try {
+      await handleDirectiveOnly(
+        createHandleParams({
+          directives: parseInlineDirectives("/think high"),
+          sessionEntry,
+          agentId: "main",
+          onSessionMetadataChanged,
+          suppressSessionMetadataChanged: true,
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(sessionEntry.thinkingLevel).toBe("high");
+    expect(onSessionMetadataChanged).not.toHaveBeenCalled();
+    expect(lifecycleEvents).toHaveLength(0);
+  });
+
   it("keeps xhigh when switching to OpenCode Claude Opus 4.7", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
     const sessionStore = { [sessionKey]: sessionEntry };
@@ -2144,6 +2194,21 @@ describe("persistInlineDirectives session directive persistence policy", () => {
     });
 
     expect(sessionEntry.verboseLevel).toBe("full");
+  });
+
+  it("notifies subscribed clients when directive persistence mutates session metadata", async () => {
+    const onSessionMetadataChanged = vi.fn();
+
+    await persistInternalOperatorWriteDirective("/think high", {
+      agentId: "main",
+      onSessionMetadataChanged,
+    });
+
+    expect(onSessionMetadataChanged).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      reason: "command-metadata",
+    });
   });
 
   it("skips exec persistence for non-webchat channel callers without gateway scopes", async () => {

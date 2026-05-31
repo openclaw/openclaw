@@ -51,11 +51,12 @@ describe("mixed inline directives", () => {
     vi.clearAllMocks();
   });
 
-  it("emits directive ack while persisting inline reasoning in mixed messages", async () => {
+  it("emits directive ack and metadata notification for mixed inline reasoning", async () => {
     const directives = parseInlineDirectives("please reply\n/reasoning on");
     const cfg = createConfig();
     const sessionEntry = createSessionEntry();
     const sessionStore = { "agent:main:dm:1": sessionEntry };
+    const onSessionMetadataChanged = vi.fn();
 
     const fastLane = await applyInlineDirectivesFastLane({
       directives,
@@ -64,6 +65,7 @@ describe("mixed inline directives", () => {
       ctx: { Surface: "whatsapp" } as never,
       cfg,
       agentId: "main",
+      onSessionMetadataChanged,
       isGroup: false,
       sessionEntry,
       sessionStore,
@@ -96,6 +98,12 @@ describe("mixed inline directives", () => {
     expect(fastLane.directiveAck).toEqual({
       text: "⚙️ Reasoning visibility enabled.",
     });
+    expect(onSessionMetadataChanged).toHaveBeenCalledTimes(1);
+    expect(onSessionMetadataChanged).toHaveBeenCalledWith({
+      sessionKey: "agent:main:dm:1",
+      agentId: "main",
+      reason: "command-metadata",
+    });
 
     const persisted = await persistInlineDirectives({
       directives,
@@ -118,11 +126,65 @@ describe("mixed inline directives", () => {
       messageProvider: "whatsapp",
       surface: "whatsapp",
       gatewayClientScopes: [],
+      agentId: "main",
+      onSessionMetadataChanged,
     });
 
     expect(sessionEntry.reasoningLevel).toBe("on");
+    expect(onSessionMetadataChanged).toHaveBeenCalledTimes(2);
     expect(persisted.provider).toBe("anthropic");
     expect(persisted.model).toBe("claude-opus-4-6");
+  });
+
+  it("scopes global-session fast-lane metadata notifications to the active agent", async () => {
+    const directives = parseInlineDirectives("please reply\n/reasoning on");
+    const cfg = createConfig();
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { global: sessionEntry };
+    const onSessionMetadataChanged = vi.fn();
+
+    await applyInlineDirectivesFastLane({
+      directives,
+      commandAuthorized: true,
+      senderIsOwner: false,
+      ctx: { Surface: "whatsapp" } as never,
+      cfg,
+      agentId: "ops",
+      onSessionMetadataChanged,
+      isGroup: false,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "global",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      elevatedFailures: [],
+      messageProviderKey: "whatsapp",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      initialModelLabel: "anthropic/claude-opus-4-6",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: cfg.agents?.defaults,
+      modelState: {
+        resolveDefaultThinkingLevel: async () => "off",
+        resolveThinkingCatalog: async () => [],
+        allowedModelKeys: new Set(),
+        allowedModelCatalog: [],
+        resetModelOverride: false,
+      },
+    });
+
+    expect(onSessionMetadataChanged).toHaveBeenCalledWith({
+      sessionKey: "global",
+      agentId: "ops",
+      reason: "command-metadata",
+    });
   });
 
   it("persists reasoning off and emits the disabled ack", async () => {
