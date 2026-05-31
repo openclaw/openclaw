@@ -11,7 +11,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
-import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { defaultSlotIdForKey, resolvePluginSlotOwner } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -68,8 +68,8 @@ function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
   }
   const reasons: string[] = [];
   const plugins = cfg.plugins;
-  const slotRaw = plugins?.slots?.memory;
-  const slotDisabled = slotRaw === null || normalizeOptionalLowercaseString(slotRaw) === "none";
+  const slotOwner = resolvePluginSlotOwner(plugins?.slots?.memory);
+  const slotDisabled = slotOwner === null;
   const pluginsDisabled = plugins?.enabled === false;
   const defaultDisabled = isTestDefaultMemorySlotDisabled(cfg);
 
@@ -77,7 +77,7 @@ function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
     reasons.push("plugins.enabled=false");
   }
   if (slotDisabled) {
-    reasons.push(slotRaw === null ? "plugins.slots.memory=null" : 'plugins.slots.memory="none"');
+    reasons.push('plugins.slots.memory="none"');
   }
   if (!pluginsDisabled && !slotDisabled && defaultDisabled) {
     reasons.push("memory plugin disabled by test default");

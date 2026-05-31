@@ -16,6 +16,7 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
+import { resolvePluginSlotOwner } from "../../../plugins/slots.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 
 type CodexRouteHit = {
@@ -1989,7 +1990,7 @@ function maybeMigrateLegacyLosslessCompactionConfig(params: {
     entries[LOSSLESS_CONTEXT_ENGINE_ID] = entry;
   }
   const config = ensureMutablePath(entry, ["config"]);
-  if (slots.contextEngine !== LOSSLESS_CONTEXT_ENGINE_ID) {
+  if (resolvePluginSlotOwner(slots.contextEngine) !== LOSSLESS_CONTEXT_ENGINE_ID) {
     slots.contextEngine = LOSSLESS_CONTEXT_ENGINE_ID;
     changes.push(
       `Set plugins.slots.contextEngine to "${LOSSLESS_CONTEXT_ENGINE_ID}" for legacy Lossless compaction config.`,

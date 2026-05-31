@@ -15,7 +15,7 @@ import {
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
-import { hasKind } from "../plugins/slots.js";
+import { hasKind, resolvePluginSlotOwner } from "../plugins/slots.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -64,7 +64,8 @@ function isWorkspacePluginTrustedForProviderEnvVars(
     config,
     isImplicitlyAllowed: (pluginId) =>
       hasKind(plugin.kind, "context-engine") &&
-      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+      normalizePluginConfigId(resolvePluginSlotOwner(config?.plugins?.slots?.contextEngine)) ===
+        pluginId,
     plugin,
   });
 }

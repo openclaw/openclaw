@@ -7,7 +7,10 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginSlotOwner } from "../plugins/slots.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
@@ -340,7 +343,7 @@ export function resolveMemoryDreamingPluginId(
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  const configuredSlot = resolvePluginSlotOwner(slots?.memory);
   if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
     return configuredSlot;
   }

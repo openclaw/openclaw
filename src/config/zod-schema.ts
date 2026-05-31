@@ -272,6 +272,15 @@ const PluginEntrySchema = z
   })
   .strict();
 
+const PluginSlotValueSchema = z.union([
+  z.string(),
+  z
+    .object({
+      owner: z.string(),
+    })
+    .passthrough(),
+]);
+
 const TalkProviderEntrySchema = z
   .object({
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -1253,8 +1262,8 @@ export const OpenClawSchema = z
           .optional(),
         slots: z
           .object({
-            memory: z.string().optional(),
-            contextEngine: z.string().optional(),
+            memory: PluginSlotValueSchema.optional(),
+            contextEngine: PluginSlotValueSchema.optional(),
           })
           .strict()
           .optional(),

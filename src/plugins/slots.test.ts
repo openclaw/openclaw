@@ -174,6 +174,15 @@ describe("applyExclusiveSlotSelection", () => {
       registry: { plugins: [{ id: "memory", kind: "memory" }] },
     },
     {
+      name: "does nothing when an owner record already matches",
+      config: createMemoryConfig({
+        slots: { memory: { owner: "memory", claimed_by_version: "1.0.0" } },
+      }),
+      selectedId: "memory",
+      selectedKind: "memory",
+      registry: { plugins: [{ id: "memory", kind: "memory" }] },
+    },
+    {
       name: "skips changes when no exclusive slot applies",
       config: {} as OpenClawConfig,
       selectedId: "custom",
@@ -212,6 +221,27 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.config.plugins?.slots?.contextEngine).toBe("dual-plugin");
     expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.legacy?.enabled).toBe(false);
+  });
+
+  it("switches an owner-record slot by its owner id", () => {
+    const result = runMemorySelection(
+      createMemoryConfig({
+        slots: { memory: { owner: "memory-core", claimed_at: "2026-04-23T21:14:00Z" } },
+        entries: { "memory-core": { enabled: true } },
+      }),
+    );
+
+    expectMemorySelectionState(result, {
+      changed: true,
+      selectedId: "memory",
+      disabledCompetingPlugin: false,
+    });
+    expectSelectionWarnings(result.warnings, {
+      expected: [
+        'Exclusive slot "memory" switched from "memory-core" to "memory".',
+        'Disabled other "memory" slot plugins: memory-core.',
+      ],
+    });
   });
 
   it("does not disable a dual-kind plugin that still owns another slot", () => {

@@ -108,14 +108,16 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     return cursor;
   }
 
+  type ResolveManifestContractOwnerPluginId = NonNullable<
+    Parameters<
+      typeof commandSecretGatewayTesting.setDepsForTest
+    >[0]["resolveManifestContractOwnerPluginId"]
+  >;
+
   function setSingleSecretTargetDeps(params: {
     path: string;
     pathSegments: readonly string[];
-    resolveManifestContractOwnerPluginId?: NonNullable<
-      Parameters<
-        typeof commandSecretGatewayTesting.setDepsForTest
-      >[0]["resolveManifestContractOwnerPluginId"]
-    >;
+    resolveManifestContractOwnerPluginId?: ResolveManifestContractOwnerPluginId;
   }): () => void {
     const deps: Parameters<typeof commandSecretGatewayTesting.setDepsForTest>[0] = {
       analyzeCommandSecretAssignmentsFromSnapshot: ({ inactiveRefPaths, resolvedConfig }) => {

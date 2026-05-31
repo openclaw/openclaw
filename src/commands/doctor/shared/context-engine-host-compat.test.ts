@@ -45,7 +45,7 @@ function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): st
   return id;
 }
 
-function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawConfig {
+function configWithEngine(engineId: unknown, cfg: OpenClawConfig = {}): OpenClawConfig {
   return {
     ...cfg,
     plugins: {
@@ -55,7 +55,7 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
         contextEngine: engineId,
       },
     },
-  };
+  } as OpenClawConfig;
 }
 
 describe("doctor context-engine host compatibility", () => {
@@ -111,6 +111,31 @@ describe("doctor context-engine host compatibility", () => {
           },
         },
       }),
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.config.plugins?.slots?.contextEngine).toBe("legacy");
+    expect(result.changes).toEqual([
+      `Set plugins.slots.contextEngine to "legacy" because context engine "${engineId}" is incompatible with every configured agent-run host.`,
+    ]);
+  });
+
+  it("resolves object-form context engine slot owners before host compatibility checks", async () => {
+    const engineId = registerEngine(["assemble-before-prompt"]);
+    const result = await maybeRepairContextEngineHostCompatibility({
+      cfg: configWithEngine(
+        { owner: engineId, claimed_by_version: "0.9.10" },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-sonnet-4-6",
+              models: {
+                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          },
+        },
+      ),
       doctorFixCommand: "openclaw doctor --fix",
     });
 

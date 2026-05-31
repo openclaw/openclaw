@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginInstallRecord, PluginSlotValue } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
@@ -49,7 +49,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, resolvePluginSlotOwner } from "./slots.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -766,6 +766,19 @@ function replacePluginIdInList(
   return next;
 }
 
+function replacePluginSlotOwner(
+  value: PluginSlotValue | undefined,
+  fromId: string,
+  toId: string,
+): PluginSlotValue | undefined {
+  if (resolvePluginSlotOwner(value) !== fromId) {
+    return value;
+  }
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...value, owner: toId }
+    : toId;
+}
+
 function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string): OpenClawConfig {
   if (fromId === toId) {
     return cfg;
@@ -803,8 +816,8 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
   const nextSlots = slots
     ? {
         ...slots,
-        ...(slots.memory === fromId ? { memory: toId } : {}),
-        ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
+        memory: replacePluginSlotOwner(slots.memory, fromId, toId),
+        contextEngine: replacePluginSlotOwner(slots.contextEngine, fromId, toId),
       }
     : undefined;
 
@@ -881,13 +894,13 @@ function resetDisabledPluginSlots(
     return slots;
   }
   let next = slots;
-  if (next.memory === pluginId) {
+  if (resolvePluginSlotOwner(next.memory) === pluginId) {
     next = {
       ...next,
       memory: defaultSlotIdForKey("memory"),
     };
   }
-  if (next.contextEngine === pluginId) {
+  if (resolvePluginSlotOwner(next.contextEngine) === pluginId) {
     next = {
       ...next,
       contextEngine: defaultSlotIdForKey("contextEngine"),
