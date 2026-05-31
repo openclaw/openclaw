@@ -30,10 +30,12 @@ import {
   requestChatSend,
   sendDetachedChatMessage,
   sendSteerChatMessage,
+  type ChatHistoryResult,
   type ChatState,
 } from "./controllers/chat.ts";
 import { loadModels } from "./controllers/models.ts";
 import {
+  applyChatHistorySessionInfo,
   loadSessions,
   type LoadSessionsOverrides,
   type SessionsState,
@@ -48,7 +50,7 @@ import {
 } from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
-import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { ChatModelOverride, GatewaySessionRow, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -247,7 +249,7 @@ function resolveGlobalAliasAgentId(
   const configuredMainKey = normalizeLowercaseStringOrEmpty(
     host.agentsList?.mainKey ?? readHelloMainKey(host) ?? "main",
   );
-  return rest === "main" || rest === configuredMainKey
+  return rest === "global" || rest === "main" || rest === configuredMainKey
     ? normalizeAgentId(parsed.agentId)
     : undefined;
 }
@@ -974,10 +976,66 @@ function isSelectedSessionKnownIdle(
   return Boolean(row && !isSessionRunActive(row));
 }
 
+function isHistorySessionInfoForRequestedSession(
+  host: ChatHost,
+  historySessionKey: string | undefined,
+  requestedSessionKey: string,
+): boolean {
+  if (areUiSessionKeysEquivalent(historySessionKey, requestedSessionKey)) {
+    return true;
+  }
+  return Boolean(
+    historySessionKey &&
+    isGlobalSessionKey(historySessionKey) &&
+    resolveGlobalAliasAgentId(host, requestedSessionKey),
+  );
+}
+
+function findSelectedSessionRow(
+  host: ChatHost,
+  sessionsResult: SessionsListResult | null | undefined,
+  sessionKey: string,
+  historySessionKey: string | undefined,
+): GatewaySessionRow | undefined {
+  const requestedGlobalAgentId =
+    historySessionKey && isGlobalSessionKey(historySessionKey)
+      ? resolveGlobalAliasAgentId(host, sessionKey)
+      : undefined;
+  return sessionsResult?.sessions.find((session) => {
+    if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
+      return true;
+    }
+    return (
+      requestedGlobalAgentId != null &&
+      resolveGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
+    );
+  });
+}
+
+function historyIdleProofIsStaleForSelectedRow(
+  historySessionInfo: GatewaySessionRow,
+  selectedRow: GatewaySessionRow | undefined,
+): boolean {
+  if (!selectedRow || !isSessionRunActive(selectedRow) || isSessionRunActive(historySessionInfo)) {
+    return false;
+  }
+  const historyUpdatedAt =
+    typeof historySessionInfo.updatedAt === "number" ? historySessionInfo.updatedAt : null;
+  if (historyUpdatedAt == null) {
+    return true;
+  }
+  const selectedUpdatedAt = typeof selectedRow.updatedAt === "number" ? selectedRow.updatedAt : 0;
+  if (selectedUpdatedAt >= historyUpdatedAt) {
+    return true;
+  }
+  const selectedStartedAt = typeof selectedRow.startedAt === "number" ? selectedRow.startedAt : 0;
+  return selectedStartedAt >= historyUpdatedAt;
+}
+
 function flushChatQueueAfterIdleSessionReconciliation(
   host: ChatHost,
   sessionKey: string,
-  historyRefresh: Promise<unknown>,
+  historyRefresh: Promise<ChatHistoryResult | undefined>,
   sessionsRefresh: Promise<unknown>,
   previousSessionsResult: SessionsListResult | null | undefined,
 ) {
@@ -985,16 +1043,36 @@ function flushChatQueueAfterIdleSessionReconciliation(
     return;
   }
   void Promise.allSettled([historyRefresh, sessionsRefresh]).then((results) => {
+    const historyRefreshSettled = results[0];
     const sessionsRefreshSettled = results[1];
     const freshSessionsResult = host.sessionsResult;
+    const historySessionInfo =
+      historyRefreshSettled.status === "fulfilled"
+        ? historyRefreshSettled.value?.sessionInfo
+        : null;
+    const selectedSessionRow = findSelectedSessionRow(
+      host,
+      freshSessionsResult,
+      sessionKey,
+      historySessionInfo?.key,
+    );
+    const historySessionKnownIdle = Boolean(
+      historySessionInfo &&
+      isHistorySessionInfoForRequestedSession(host, historySessionInfo.key, sessionKey) &&
+      !isSessionRunActive(historySessionInfo) &&
+      !historyIdleProofIsStaleForSelectedRow(historySessionInfo, selectedSessionRow),
+    );
+    const sessionsResultKnownIdle = freshSessionsResult
+      ? isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
+      : false;
     if (
       sessionsRefreshSettled.status !== "fulfilled" ||
       host.chatQueue.length === 0 ||
       !areUiSessionKeysEquivalent(host.sessionKey, sessionKey) ||
-      !freshSessionsResult ||
-      freshSessionsResult === previousSessionsResult ||
-      host.sessionsError ||
-      !isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
+      (!freshSessionsResult && !historySessionKnownIdle) ||
+      (freshSessionsResult === previousSessionsResult && !historySessionKnownIdle) ||
+      (host.sessionsError && !historySessionKnownIdle) ||
+      !(historySessionKnownIdle || sessionsResultKnownIdle)
     ) {
       return;
     }
@@ -1379,15 +1457,21 @@ export async function refreshChat(
   const refreshedSessionKey = host.sessionKey;
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
+  const historyLoad = loadChatHistory(host as unknown as ChatState);
+  const historyRefresh = historyLoad.finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     }
     requestUpdate();
   });
-  const sessionsRefresh = loadSessions(host as unknown as SessionsState, {
-    ...createChatSessionsLoadOverrides(host),
-    ...scopedAgentListParamsForSession(host, refreshedSessionKey),
+  const sessionsRefresh = historyLoad.then((history) => {
+    if (history?.sessionInfo) {
+      applyChatHistorySessionInfo(
+        host as unknown as SessionsState,
+        history.sessionInfo,
+        history.defaults,
+      );
+    }
   });
   flushChatQueueAfterIdleSessionReconciliation(
     host,

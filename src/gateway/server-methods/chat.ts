@@ -133,11 +133,12 @@ import { resolveSessionHistoryTailReadOptions } from "../session-history-state.j
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
+  buildGatewaySessionInfo,
+  getSessionDefaults,
   loadSessionEntry,
   readSessionMessageByIdAsync,
   readSessionMessagesAsync,
   resolveGatewayModelSupportsImages,
-  resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
   readRecentSessionMessagesAsync,
   resolveSessionModelRef,
@@ -156,6 +157,8 @@ import {
   buildWebchatAssistantMessageFromReplyPayloads,
   buildWebchatAudioContentBlocksFromReplyPayloads,
 } from "./chat-webchat-media.js";
+import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { loadOptionalSessionMetadataModelCatalog } from "./session-model-catalog.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -2418,7 +2421,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: agentIdOverride,
     });
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey, sessionLoadOptions);
+    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+      sessionKey,
+      sessionLoadOptions,
+    );
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: sessionKey,
@@ -2508,20 +2514,42 @@ export const chatHandlers: GatewayRequestHandlers = {
         `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
       );
     }
-    let thinkingLevel = entry?.thinkingLevel;
-    if (!thinkingLevel) {
-      thinkingLevel = resolveGatewaySessionThinkingDefault({
-        cfg,
-        agentId: sessionAgentId,
-        provider: resolvedSessionModel.provider,
-        model: resolvedSessionModel.model,
-      });
-    }
+    const modelCatalog = await measureDiagnosticsTimelineSpan(
+      "gateway.chat.history.model_catalog",
+      () => loadOptionalSessionMetadataModelCatalog(context, "chat.history"),
+      {
+        config: cfg,
+        phase: "chat.history",
+      },
+    );
+    const sessionInfo = buildGatewaySessionInfo({
+      cfg,
+      storePath,
+      store,
+      key: canonicalKey,
+      entry,
+      agentId: selectedAgent.agentId,
+      modelCatalog,
+    });
+    sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
+      context,
+      requestedKey: sessionKey,
+      canonicalKey,
+      ...(canonicalKey === "global" && selectedAgent.agentId
+        ? { agentId: selectedAgent.agentId }
+        : {}),
+      defaultAgentId: resolveDefaultAgentId(cfg),
+    });
+    const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
+    const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    sessionInfo.verboseLevel = verboseLevel;
     respond(true, {
       sessionKey,
       sessionId,
       messages: bounded.messages,
+      defaults,
+      sessionInfo,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,

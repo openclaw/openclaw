@@ -120,6 +120,8 @@ import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
+import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { loadOptionalSessionMetadataModelCatalog } from "./session-model-catalog.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -197,44 +199,10 @@ function inheritSessionRuntimeSelection(
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
 let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
-let loggedSlowSessionsListCatalog = false;
-
-const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
   return sessionsRuntimeModulePromise;
-}
-
-async function loadOptionalSessionsListModelCatalog(
-  context: GatewayRequestContext,
-): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
-  let timeout: NodeJS.Timeout | undefined;
-  const timedOut = Symbol("sessions-list-model-catalog-timeout");
-  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
-    timeout = setTimeout(() => resolve(timedOut), SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-  try {
-    const result = await Promise.race([
-      context.loadGatewayModelCatalog().catch(() => undefined),
-      timeoutPromise,
-    ]);
-    if (result === timedOut) {
-      if (!loggedSlowSessionsListCatalog) {
-        loggedSlowSessionsListCatalog = true;
-        context.logGateway.debug(
-          `sessions.list continuing without model catalog after ${SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
-        );
-      }
-      return undefined;
-    }
-    return Array.isArray(result) ? result : undefined;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
 }
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -723,74 +691,6 @@ function resolveScopedAbortKey(params: {
   });
 }
 
-type TrackedActiveSessionRun = {
-  sessionKey: string;
-  agentId?: string;
-};
-
-function collectTrackedActiveSessionRuns(
-  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
-): TrackedActiveSessionRun[] {
-  const runs: TrackedActiveSessionRun[] = [];
-  if (!(context.chatAbortControllers instanceof Map)) {
-    return runs;
-  }
-  for (const active of context.chatAbortControllers.values()) {
-    if (
-      active.projectSessionActive !== false &&
-      typeof active.sessionKey === "string" &&
-      active.sessionKey.trim()
-    ) {
-      runs.push({
-        sessionKey: active.sessionKey,
-        agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
-      });
-    }
-  }
-  return runs;
-}
-
-function isTrackedActiveSessionRunForKey(
-  active: TrackedActiveSessionRun,
-  key: string,
-  agentId?: string,
-  defaultAgentId?: string,
-): boolean {
-  if (active.sessionKey !== key) {
-    return false;
-  }
-  if (key !== "global" || agentId === undefined) {
-    return true;
-  }
-  const activeAgentId = active.agentId ?? defaultAgentId;
-  return activeAgentId ? normalizeAgentId(activeAgentId) === normalizeAgentId(agentId) : false;
-}
-
-function hasTrackedActiveSessionRun(params: {
-  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
-  requestedKey: string;
-  canonicalKey: string;
-  agentId?: string;
-  defaultAgentId?: string;
-}): boolean {
-  const activeRuns = collectTrackedActiveSessionRuns(params.context);
-  return activeRuns.some(
-    (active) =>
-      isTrackedActiveSessionRunForKey(
-        active,
-        params.canonicalKey,
-        params.agentId,
-        params.defaultAgentId,
-      ) ||
-      isTrackedActiveSessionRunForKey(
-        active,
-        params.requestedKey,
-        params.agentId,
-        params.defaultAgentId,
-      ),
-  );
-}
-
 function resolveSessionMessageSubscriptionKey(params: {
   canonicalKey: string;
   agentId?: string;
@@ -1142,7 +1042,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           : store;
         const modelCatalog = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.model_catalog",
-          () => loadOptionalSessionsListModelCatalog(context),
+          () => loadOptionalSessionMetadataModelCatalog(context, "sessions.list"),
           {
             config: cfg,
             phase: "sessions.list",
@@ -1169,17 +1069,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const sessions = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.active_run_flags",
           () => {
-            const activeRuns = collectTrackedActiveSessionRuns(context);
             return result.sessions.map((session) =>
               Object.assign({}, session, {
-                hasActiveRun: activeRuns.some((active) =>
-                  isTrackedActiveSessionRunForKey(
-                    active,
-                    session.key,
-                    session.key === "global" ? p.agentId : undefined,
-                    resolveDefaultAgentId(cfg),
-                  ),
-                ),
+                hasActiveRun: hasTrackedActiveSessionRun({
+                  context,
+                  requestedKey: session.key,
+                  canonicalKey: session.key,
+                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+                  defaultAgentId: resolveDefaultAgentId(cfg),
+                }),
               }),
             );
           },

@@ -404,6 +404,13 @@ describe("tui session actions", () => {
     });
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-2",
+      sessionInfo: {
+        key: "agent:main:other",
+        sessionId: "session-2",
+        model: "session-model",
+        modelProvider: "openai",
+        updatedAt: 50,
+      },
       messages: [],
     });
     const btw = createBtwPresenter();
@@ -439,7 +446,47 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.model).toBe("session-model");
     expect(state.sessionInfo.modelProvider).toBe("openai");
     expect(state.sessionInfo.updatedAt).toBe(50);
+    expect(listSessions).not.toHaveBeenCalled();
     expect(btw.clear).toHaveBeenCalled();
+  });
+
+  it("clears stale token counts when history supplies lightweight session metadata", async () => {
+    const listSessions = vi.fn().mockResolvedValue({ sessions: [] });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-2",
+      sessionInfo: {
+        key: "agent:main:other",
+        sessionId: "session-2",
+        model: "session-model",
+        modelProvider: "openai",
+        updatedAt: 50,
+      },
+      messages: [],
+    });
+    const state = createBaseState({
+      historyLoaded: true,
+      sessionInfo: {
+        inputTokens: 1,
+        outputTokens: 2,
+        totalTokens: 3,
+        updatedAt: 500,
+      },
+    });
+
+    const { setSession } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+    });
+
+    await setSession("agent:main:other");
+
+    expect(state.sessionInfo.inputTokens).toBeNull();
+    expect(state.sessionInfo.outputTokens).toBeNull();
+    expect(state.sessionInfo.totalTokens).toBeNull();
+    expect(listSessions).not.toHaveBeenCalled();
   });
 
   it("applies default model info when the current session has no persisted entry yet", async () => {
@@ -534,6 +581,7 @@ describe("tui session actions", () => {
 
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
+    expect(listSessions).toHaveBeenCalled();
   });
 
   it("clears optimistic pending state when switching sessions", async () => {
@@ -955,6 +1003,75 @@ describe("tui session actions", () => {
 
     expect(state.currentSessionId).toBe("session-main");
     expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("hydrates session info from chat history without listing sessions", async () => {
+    const listSessions = vi.fn();
+    const loadHistory = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionInfo: {
+        key: "agent:main:main",
+        sessionId: "session-main",
+        modelProvider: "openai",
+        model: "gpt-5",
+        contextTokens: 120_000,
+        thinkingLevel: "medium",
+        updatedAt: 200,
+      },
+      defaults: {
+        modelProvider: "openai",
+        model: "gpt-5",
+        contextTokens: 120_000,
+      },
+    });
+    const state = createBaseState();
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+    });
+
+    await runLoadHistory();
+
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(state.currentSessionId).toBe("session-main");
+    expect(state.sessionInfo.model).toBe("gpt-5");
+    expect(state.sessionInfo.contextTokens).toBe(120_000);
+    expect(state.sessionInfo.thinkingLevel).toBe("medium");
+  });
+
+  it("uses top-level chat history thinking level when session info inherits it", async () => {
+    const listSessions = vi.fn();
+    const loadHistory = vi.fn().mockResolvedValue({
+      messages: [],
+      thinkingLevel: "medium",
+      sessionInfo: {
+        key: "agent:main:main",
+        sessionId: "session-main",
+        modelProvider: "openai",
+        model: "gpt-5",
+        contextTokens: 120_000,
+        thinkingDefault: "medium",
+        updatedAt: 200,
+      },
+    });
+    const state = createBaseState();
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+    });
+
+    await runLoadHistory();
+
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(state.sessionInfo.thinkingLevel).toBe("medium");
   });
 
   it("loads selected-agent global history with the selected agent id", async () => {

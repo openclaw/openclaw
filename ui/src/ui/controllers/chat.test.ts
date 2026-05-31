@@ -1161,6 +1161,32 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessages).toEqual(messages);
   });
 
+  it("applies current session metadata from chat history", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionId: "legacy-session",
+      thinkingLevel: "low",
+      sessionInfo: {
+        key: "main",
+        sessionId: "session-main",
+        thinkingLevel: "medium",
+        modelProvider: "openai",
+        model: "gpt-5",
+        updatedAt: 123,
+      },
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    const result = await loadChatHistory(state);
+
+    expect(result?.sessionInfo?.sessionId).toBe("session-main");
+    expect(state.currentSessionId).toBe("session-main");
+    expect(state.chatThinkingLevel).toBe("medium");
+  });
+
   it("omits literal global agentId until selected/default agent is known", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const state = createState({
