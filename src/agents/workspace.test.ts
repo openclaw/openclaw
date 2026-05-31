@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -19,9 +19,25 @@ import {
   reconcileWorkspaceBootstrapCompletion,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
+  resolveWorkspaceAttestationPath,
   WORKSPACE_VANISHED_ERROR_CODE,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
+
+let testStateDir: string | undefined;
+
+beforeEach(async () => {
+  testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-state-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", testStateDir);
+});
+
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  if (testStateDir) {
+    await fs.rm(testStateDir, { recursive: true, force: true });
+    testStateDir = undefined;
+  }
+});
 
 describe("resolveDefaultAgentWorkspaceDir", () => {
   it("uses OPENCLAW_HOME for default workspace resolution", () => {
@@ -69,10 +85,14 @@ async function expectPathMissing(filePath: string): Promise<void> {
   await expect(fs.access(filePath)).rejects.toHaveProperty("code", "ENOENT");
 }
 
-async function expectWorkspaceVanished(action: Promise<unknown>): Promise<void> {
+async function expectWorkspaceVanished(
+  action: Promise<unknown>,
+  expected?: { attestationPath?: string },
+): Promise<void> {
   await expect(action).rejects.toMatchObject({
     code: WORKSPACE_VANISHED_ERROR_CODE,
     name: "WorkspaceVanishedError",
+    ...expected,
   });
 }
 
@@ -106,7 +126,7 @@ describe("ensureAgentWorkspace", () => {
   it("refuses to re-seed a recently attested workspace after the directory disappears", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-    await expect(fs.access(`${tempDir}.attested`)).resolves.toBeUndefined();
+    await expect(fs.access(resolveWorkspaceAttestationPath(tempDir))).resolves.toBeUndefined();
 
     await fs.rm(tempDir, { recursive: true, force: true });
 
@@ -132,11 +152,13 @@ describe("ensureAgentWorkspace", () => {
 
   it("keeps ISO-only attestation markers from the previous branch format effective", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    await fs.writeFile(`${tempDir}.attested`, `${new Date().toISOString()}\n`);
+    const legacyAttestationPath = `${tempDir}.attested`;
+    await fs.writeFile(legacyAttestationPath, `${new Date().toISOString()}\n`);
     await fs.rm(tempDir, { recursive: true, force: true });
 
     await expectWorkspaceVanished(
       ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+      { attestationPath: legacyAttestationPath },
     );
   });
 
@@ -145,7 +167,7 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await fs.rm(tempDir, { recursive: true, force: true });
     const staleDate = new Date(Date.now() - 25 * 60 * 60 * 1000);
-    await fs.utimes(`${tempDir}.attested`, staleDate, staleDate);
+    await fs.utimes(resolveWorkspaceAttestationPath(tempDir), staleDate, staleDate);
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
@@ -177,12 +199,51 @@ describe("ensureAgentWorkspace", () => {
   });
 
   it.skipIf(process.platform === "win32")(
+    "refuses to re-seed when a recent owned marker becomes unreadable",
+    async () => {
+      const tempDir = await makeTempWorkspace("openclaw-workspace-");
+      const attestationPath = resolveWorkspaceAttestationPath(tempDir);
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      await fs.chmod(attestationPath, 0o000);
+      await fs.rm(tempDir, { recursive: true, force: true });
+
+      try {
+        await expectWorkspaceVanished(
+          ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+        );
+      } finally {
+        await fs.chmod(attestationPath, 0o600);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses to re-seed when the state marker directory is unreadable",
+    async () => {
+      const tempDir = await makeTempWorkspace("openclaw-workspace-");
+      const attestationDir = path.dirname(resolveWorkspaceAttestationPath(tempDir));
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      await fs.chmod(attestationDir, 0o000);
+      await fs.rm(tempDir, { recursive: true, force: true });
+
+      try {
+        await expectWorkspaceVanished(
+          ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+        );
+      } finally {
+        await fs.chmod(attestationDir, 0o700);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "ignores symlinked attestation markers without overwriting the target",
     async () => {
       const tempDir = await makeTempWorkspace("openclaw-workspace-");
-      const attestationPath = `${tempDir}.attested`;
-      const symlinkTargetPath = `${tempDir}.attested-target`;
+      const attestationPath = resolveWorkspaceAttestationPath(tempDir);
+      const symlinkTargetPath = `${attestationPath}-target`;
       const targetContent = "outside-marker\n";
+      await fs.mkdir(path.dirname(attestationPath), { recursive: true });
       await fs.writeFile(symlinkTargetPath, targetContent);
       await fs.symlink(symlinkTargetPath, attestationPath);
 

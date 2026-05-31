@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
@@ -33,6 +35,7 @@ const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
 const WORKSPACE_ATTESTATION_SUFFIX = ".attested";
+const WORKSPACE_ATTESTATION_DIRNAME = "workspace-attestations";
 const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 const WORKSPACE_ATTESTATION_HEADER = "openclaw-workspace-attestation:v1";
 const WORKSPACE_ATTESTATION_MAX_BYTES = 256;
@@ -180,6 +183,7 @@ type WorkspaceSetupState = {
   bootstrapSeededAt?: string;
   setupCompletedAt?: string;
 };
+type WorkspaceAttestationMarkerStatus = "marker" | "not-marker" | "missing" | "unknown";
 
 /** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
@@ -350,49 +354,85 @@ function resolveWorkspaceStatePath(dir: string): string {
 }
 
 export function resolveWorkspaceAttestationPath(dir: string): string {
+  return resolveWorkspaceAttestationPathInStateDir(dir, resolveStateDir());
+}
+
+function resolveWorkspaceAttestationPathInStateDir(dir: string, stateDir: string): string {
+  const key = createHash("sha256").update(path.resolve(dir)).digest("hex");
+  return path.join(stateDir, WORKSPACE_ATTESTATION_DIRNAME, `${key}.attested`);
+}
+
+function resolveLegacyWorkspaceAttestationPath(dir: string): string {
   return `${dir}${WORKSPACE_ATTESTATION_SUFFIX}`;
 }
 
-async function hasRecentWorkspaceAttestation(attestationPath: string): Promise<boolean> {
+export function resolveWorkspaceAttestationPaths(dir: string): string[] {
+  const stateAttestationPaths = [resolveStateDir(), ...resolveLegacyStateDirs()].map((stateDir) =>
+    resolveWorkspaceAttestationPathInStateDir(dir, stateDir),
+  );
+  const legacy = resolveLegacyWorkspaceAttestationPath(dir);
+  return [...new Set([...stateAttestationPaths, legacy])];
+}
+
+async function findRecentWorkspaceAttestationPath(
+  attestationPaths: string[],
+): Promise<string | null> {
+  for (const [index, attestationPath] of attestationPaths.entries()) {
+    if (await hasRecentWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
+      return attestationPath;
+    }
+  }
+  return null;
+}
+
+export async function hasRecentWorkspaceAttestation(
+  attestationPath: string,
+  opts?: { trustUnknown?: boolean },
+): Promise<boolean> {
   try {
     const stat = await fs.lstat(attestationPath);
-    if (!stat.isFile()) {
+    if (
+      !stat.isFile() ||
+      stat.size > WORKSPACE_ATTESTATION_MAX_BYTES ||
+      Date.now() - stat.mtimeMs > WORKSPACE_ATTESTATION_RECENT_MS
+    ) {
       return false;
     }
-    if (!(await isWorkspaceAttestationMarker(attestationPath))) {
-      return false;
-    }
-    return Date.now() - stat.mtimeMs <= WORKSPACE_ATTESTATION_RECENT_MS;
+    const status = await readWorkspaceAttestationMarkerStatus(attestationPath);
+    return status === "marker" || (opts?.trustUnknown === true && status === "unknown");
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code !== "ENOENT") {
-      throw err;
+      return opts?.trustUnknown === true;
     }
     return false;
   }
 }
 
 export async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
+  return (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker";
+}
+
+async function readWorkspaceAttestationMarkerStatus(
+  attestationPath: string,
+): Promise<WorkspaceAttestationMarkerStatus> {
   try {
     const stat = await fs.lstat(attestationPath);
     if (!stat.isFile() || stat.size > WORKSPACE_ATTESTATION_MAX_BYTES) {
-      return false;
+      return "not-marker";
     }
     const raw = await fs.readFile(attestationPath, "utf-8");
     if (raw.startsWith(`${WORKSPACE_ATTESTATION_HEADER}\n`)) {
-      return true;
+      return "marker";
     }
     const trimmed = raw.trim();
-    return (
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(trimmed) &&
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(trimmed) &&
       !Number.isNaN(Date.parse(trimmed))
-    );
+      ? "marker"
+      : "not-marker";
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
-      throw err;
-    }
-    return false;
+    return anyErr.code === "ENOENT" ? "missing" : "unknown";
   }
 }
 
@@ -400,20 +440,16 @@ async function writeWorkspaceAttestation(attestationPath: string): Promise<void>
   await fs.mkdir(path.dirname(attestationPath), { recursive: true });
   const now = new Date();
   try {
-    const stat = await fs.lstat(attestationPath);
-    if (!stat.isFile()) {
+    const status = await readWorkspaceAttestationMarkerStatus(attestationPath);
+    if (status === "marker") {
+      await fs.utimes(attestationPath, now, now);
       return;
     }
-    if (!(await isWorkspaceAttestationMarker(attestationPath))) {
+    if (status !== "missing") {
       return;
     }
-    await fs.utimes(attestationPath, now, now);
+  } catch {
     return;
-  } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
-      throw err;
-    }
   }
 
   const noFollowFlag =
@@ -612,14 +648,17 @@ export async function ensureAgentWorkspace(params?: {
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
-  const attestationPath = resolveWorkspaceAttestationPath(dir);
+  const [attestationPath, ...legacyAttestationPaths] = resolveWorkspaceAttestationPaths(dir);
+  const attestationPaths = [attestationPath, ...legacyAttestationPaths];
 
-  if (
-    params?.ensureBootstrapFiles &&
-    !(await pathExists(dir)) &&
-    (await hasRecentWorkspaceAttestation(attestationPath))
-  ) {
-    throw new WorkspaceVanishedError({ workspaceDir: dir, attestationPath });
+  if (params?.ensureBootstrapFiles && !(await pathExists(dir))) {
+    const recentAttestationPath = await findRecentWorkspaceAttestationPath(attestationPaths);
+    if (recentAttestationPath) {
+      throw new WorkspaceVanishedError({
+        workspaceDir: dir,
+        attestationPath: recentAttestationPath,
+      });
+    }
   }
 
   await fs.mkdir(dir, { recursive: true });
@@ -655,8 +694,14 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v) && !hasCanonicalRootMemory;
   })();
 
-  if (isBrandNewWorkspace && (await hasRecentWorkspaceAttestation(attestationPath))) {
-    throw new WorkspaceVanishedError({ workspaceDir: dir, attestationPath });
+  if (isBrandNewWorkspace) {
+    const recentAttestationPath = await findRecentWorkspaceAttestationPath(attestationPaths);
+    if (recentAttestationPath) {
+      throw new WorkspaceVanishedError({
+        workspaceDir: dir,
+        attestationPath: recentAttestationPath,
+      });
+    }
   }
 
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);

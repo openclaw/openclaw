@@ -14,8 +14,9 @@ import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
+  hasRecentWorkspaceAttestation,
   isWorkspaceAttestationMarker,
-  resolveWorkspaceAttestationPath,
+  resolveWorkspaceAttestationPaths,
 } from "../agents/workspace.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
@@ -306,16 +307,25 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);
-    const attestationPath = resolveWorkspaceAttestationPath(workspaceDir);
-    if (await shouldMoveWorkspaceAttestation(attestationPath)) {
-      await moveToTrash(attestationPath, runtime);
+    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+      workspaceDir,
+    ).entries()) {
+      if (await shouldMoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
+        await moveToTrash(attestationPath, runtime);
+      }
     }
   }
 }
 
-async function shouldMoveWorkspaceAttestation(attestationPath: string): Promise<boolean> {
+async function shouldMoveWorkspaceAttestation(
+  attestationPath: string,
+  opts?: { trustUnknown?: boolean },
+): Promise<boolean> {
   try {
-    return await isWorkspaceAttestationMarker(attestationPath);
+    return (
+      (await isWorkspaceAttestationMarker(attestationPath)) ||
+      (await hasRecentWorkspaceAttestation(attestationPath, opts))
+    );
   } catch {
     return false;
   }

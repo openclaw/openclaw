@@ -157,7 +157,7 @@ describe("handleReset", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "does not abort full reset for an unreadable sibling attestation path",
+    "does not abort full reset for an unreadable legacy attestation path",
     async () => {
       const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
       const profileStateDir = path.join(homeDir, ".openclaw-work");
@@ -181,6 +181,7 @@ describe("handleReset", () => {
       vi.stubEnv("OPENCLAW_CONFIG_PATH", profileConfigPath);
 
       const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+      const unreadableAttestationTrashPath = expectedTrashSourcePath(workspaceAttestationPath);
 
       try {
         await expect(handleReset("full", workspaceDir, runtime)).resolves.toBeUndefined();
@@ -188,6 +189,9 @@ describe("handleReset", () => {
         fs.chmodSync(workspaceAttestationPath, 0o600);
         fs.rmSync(homeDir, { recursive: true, force: true });
       }
+
+      const trashedPaths = mocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).not.toContain(unreadableAttestationTrashPath);
     },
   );
 });
