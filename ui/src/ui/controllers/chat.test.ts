@@ -187,6 +187,21 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBeNull();
   });
 
+  it("ignores canonical global events for another selected agent global alias", () => {
+    const state = createState({
+      sessionKey: "agent:work:global",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBeNull();
+  });
+
   it("treats unscoped global events as default-agent events only", () => {
     const state = createState({
       sessionKey: "global",
@@ -224,6 +239,30 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("delta");
     expect(state.chatRunId).toBe("run-work-global");
     expect(state.chatStream).toBe("Work reply");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+  });
+
+  it("adopts canonical global deltas for the selected agent global alias", () => {
+    const state = createState({
+      sessionKey: "agent:work:global",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-work-global",
+      sessionKey: "global",
+      agentId: "work",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Work global reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatRunId).toBe("run-work-global");
+    expect(state.chatStream).toBe("Work global reply");
     expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
   });
 

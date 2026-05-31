@@ -446,7 +446,8 @@ function isSelectedGlobalEventSessionKey(sessionKey: string | undefined | null):
     return true;
   }
   const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest) === "main";
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest);
+  return rest === "main" || rest === "global";
 }
 
 function resolveSelectedAgentId(state: ChatState): string | undefined {

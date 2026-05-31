@@ -450,18 +450,19 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const messages = bounded.messages;
 
+    let modelCatalog: Awaited<ReturnType<typeof loadEmbeddedTuiModelCatalog>> | undefined;
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await loadEmbeddedTuiModelCatalog(cfg);
+      modelCatalog = await loadEmbeddedTuiModelCatalog(cfg);
       thinkingLevel = resolveThinkingDefault({
         cfg,
         provider: resolvedSessionModel.provider,
         model: resolvedSessionModel.model,
-        catalog,
+        catalog: modelCatalog,
       });
     }
 
-    const defaults = getSessionDefaults(cfg, undefined, { allowPluginNormalization: false });
+    const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
     const sessionInfo = buildGatewaySessionInfo({
       cfg,
       storePath,
@@ -469,6 +470,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       key: canonicalKey,
       entry,
       agentId: opts.agentId,
+      modelCatalog,
     });
     sessionInfo.thinkingLevel = thinkingLevel;
     sessionInfo.verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;

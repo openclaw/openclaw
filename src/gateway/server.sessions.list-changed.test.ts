@@ -180,7 +180,7 @@ function expectMainPatchBroadcast(
   expected: Record<string, unknown>,
 ) {
   expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
-  expectChangedBroadcast(result.broadcastToConnIds, {
+  return expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
     ...expected,
@@ -616,6 +616,7 @@ test("sessions.changed command metadata marks selected global runs active", asyn
 
 test("sessions.changed mutation events include live session setting metadata", async () => {
   const sessionSettings = {
+    thinkingLevel: "high",
     verboseLevel: "on",
     responseUsage: "full",
     fastMode: true,
@@ -631,7 +632,14 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
   });
 
-  expectMainPatchBroadcast(result, sessionSettings);
+  const changedPayload = expectMainPatchBroadcast(result, sessionSettings);
+  expect(requireArray(changedPayload.thinkingLevels, "broadcast thinking levels")).toContainEqual(
+    expect.objectContaining({ id: "high" }),
+  );
+  expect(requireArray(changedPayload.thinkingOptions, "broadcast thinking options")).toContain(
+    "high",
+  );
+  expect(changedPayload.thinkingDefault).toEqual(expect.any(String));
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {

@@ -176,6 +176,9 @@ export function emitSessionsChanged(
             responseUsage: sessionRow.responseUsage,
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
+            thinkingLevels: sessionRow.thinkingLevels,
+            thinkingOptions: sessionRow.thinkingOptions,
+            thinkingDefault: sessionRow.thinkingDefault,
             status: sessionRow.status,
             hasActiveRun:
               payload.hasActiveRun ??
