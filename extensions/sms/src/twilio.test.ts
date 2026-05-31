@@ -246,7 +246,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("throws structured Twilio errors from JSON error bodies", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(
           JSON.stringify({
@@ -276,7 +276,9 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("includes non-JSON Twilio error text in send failures", async () => {
-    const fetchImpl = vi.fn(async () => new Response("upstream unavailable", { status: 503 }));
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () => new Response("upstream unavailable", { status: 503 }),
+    );
 
     await expect(
       sendSmsViaTwilio({
@@ -289,7 +291,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("rejects malformed JSON from successful Twilio sends", async () => {
-    const fetchImpl = vi.fn(async () => new Response("not json", { status: 201 }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("not json", { status: 201 }));
 
     await expect(
       sendSmsViaTwilio({
@@ -314,7 +316,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("requires successful Twilio sends to include a Message SID", async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify({ status: "queued" }), { status: 201 }),
     );
 

@@ -34,7 +34,20 @@ function createRuntime() {
   const readAllowFromStore = vi.fn(async () => [] as string[]);
   const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR123", created: true }));
   const resolveAgentRoute = vi.fn();
-  const run = vi.fn();
+  const run = vi.fn<
+    (params: {
+      adapter: {
+        ingest: (msg: {
+          from: string;
+          to: string;
+          body: string;
+          messageSid: string;
+          accountSid: string;
+        }) => unknown;
+        resolveTurn: (ingested: unknown) => Promise<{ routeSessionKey: string }>;
+      };
+    }) => void
+  >();
   const buildContext = vi.fn();
   const resolveStorePath = vi.fn();
   const runtime = {
