@@ -683,6 +683,40 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 
+  it("reports invalid provider catalog orders without aborting doctor", async () => {
+    mocks.resolvePluginProviders.mockReturnValueOnce([
+      {
+        id: "mockplugin",
+        pluginId: "mockplugin",
+        label: "Mock",
+        auth: [],
+        staticCatalog: {
+          order: "middle" as never,
+          run: async () => ({
+            providers: {
+              mockplugin: {
+                api: "openai-completions" as const,
+                baseUrl: "https://mockplugin.test/v1",
+                models: [{ id: "mock-model" }],
+              },
+            },
+          }),
+        },
+      },
+    ]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message: "Provider catalog mockplugin order is invalid during doctor validation.",
+        requirement: "order must be simple, profile, paired, or late",
+      }),
+    );
+  });
+
   it("reports revoked provider catalog result proxies without crashing doctor", async () => {
     const { proxy, revoke } = Proxy.revocable(
       {

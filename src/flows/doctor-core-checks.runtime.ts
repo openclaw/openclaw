@@ -34,11 +34,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
+import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../skills/discovery/status.js";
 import type { HealthFinding } from "./health-checks.js";
 
 type BundleMcpToolRuntime = Awaited<ReturnType<typeof createBundleMcpToolRuntime>>;
+const PROVIDER_CATALOG_ORDERS = ["simple", "profile", "paired", "late"] as const;
+const PROVIDER_CATALOG_ORDER_SET = new Set<ProviderCatalogOrder>(PROVIDER_CATALOG_ORDERS);
 
 export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[] {
   const agentId = resolveDefaultAgentId(cfg);
@@ -355,11 +358,66 @@ function collectProviderCatalogResultFindings(params: {
   return findings;
 }
 
+function readProviderCatalogOrder(
+  provider: ProviderPlugin,
+): { ok: true; order: ProviderCatalogOrder } | { ok: false; finding: HealthFinding } {
+  let order: unknown;
+  try {
+    order = (provider.catalog ?? provider.discovery ?? provider.staticCatalog)?.order ?? "late";
+  } catch (error) {
+    return {
+      ok: false,
+      finding: providerCatalogProjectionFinding({
+        providerId: provider.id,
+        pluginId: provider.pluginId,
+        message: `Provider catalog ${provider.id} order cannot be read during doctor validation.`,
+        error,
+      }),
+    };
+  }
+  if (PROVIDER_CATALOG_ORDER_SET.has(order as ProviderCatalogOrder)) {
+    return { ok: true, order: order as ProviderCatalogOrder };
+  }
+  return {
+    ok: false,
+    finding: providerCatalogProjectionFinding({
+      providerId: provider.id,
+      pluginId: provider.pluginId,
+      message: `Provider catalog ${provider.id} order is invalid during doctor validation.`,
+      error: new Error("order must be simple, profile, paired, or late"),
+    }),
+  };
+}
+
+function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
+  findings: HealthFinding[];
+  byOrder: Record<ProviderCatalogOrder, ProviderPlugin[]>;
+} {
+  const findings: HealthFinding[] = [];
+  const byOrder: Record<ProviderCatalogOrder, ProviderPlugin[]> = {
+    simple: [],
+    profile: [],
+    paired: [],
+    late: [],
+  };
+  for (const provider of providers) {
+    const order = readProviderCatalogOrder(provider);
+    if (!order.ok) {
+      findings.push(order.finding);
+      continue;
+    }
+    byOrder[order.order].push(provider);
+  }
+  for (const order of PROVIDER_CATALOG_ORDERS) {
+    byOrder[order].sort((a, b) => a.label.localeCompare(b.label));
+  }
+  return { findings, byOrder };
+}
+
 export async function collectProviderCatalogProjectionFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
-  const { groupPluginDiscoveryProvidersByOrder, runProviderStaticCatalog } =
-    await import("../plugins/provider-discovery.js");
+  const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
   const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
   const env = process.env;
   const agentDir = resolveDefaultAgentDir(cfg);
@@ -385,9 +443,10 @@ export async function collectProviderCatalogProjectionFindings(
   }
 
   const findings: HealthFinding[] = [];
-  const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
-  for (const order of ["simple", "profile", "paired", "late"] as const) {
-    for (const provider of byOrder[order] ?? []) {
+  const grouped = groupProviderCatalogsForDoctor(providers);
+  findings.push(...grouped.findings);
+  for (const order of PROVIDER_CATALOG_ORDERS) {
+    for (const provider of grouped.byOrder[order]) {
       if (typeof provider.staticCatalog?.run !== "function") {
         continue;
       }
