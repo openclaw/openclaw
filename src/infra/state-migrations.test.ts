@@ -327,4 +327,39 @@ describe("state migrations", () => {
       "legacy-direct",
     );
   });
+
+  it("archives a corrupt target session store before explicit recovery", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    const corruptBytes = `${JSON.stringify({
+      "agent:worker-1:desk:target-only": { sessionId: "target-only-session", updatedAt: 99 },
+    })}\n<<<corrupt trailing garbage>>>`;
+    await fs.writeFile(targetStorePath, corruptBytes, "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+      recoverCorruptTargetStore: true,
+    });
+
+    const archivedPath = `${targetStorePath}.corrupt-1234`;
+    await expect(fs.readFile(archivedPath, "utf8")).resolves.toBe(corruptBytes);
+
+    const recoveredStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(recoveredStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
+    expect(recoveredStore["agent:worker-1:desk:target-only"]).toBeUndefined();
+    expect(result.changes).toContain(`Archived corrupt target sessions store → ${archivedPath}`);
+    expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
+    expect(result.warnings).toStrictEqual([]);
+    await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
+  });
 });

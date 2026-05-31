@@ -2084,6 +2084,7 @@ export async function detectLegacyStateMigrations(params: {
 async function migrateLegacySessions(
   detected: LegacyStateDetection,
   now: () => number,
+  options: { recoverCorruptTargetStore?: boolean } = {},
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -2143,11 +2144,25 @@ async function migrateLegacySessions(
     );
   }
 
-  const targetReadable = !fileExists(detected.sessions.targetStorePath) || targetParsed.ok;
+  const targetExists = fileExists(detected.sessions.targetStorePath);
+  let targetReadable = !targetExists || targetParsed.ok;
   if (!targetReadable) {
-    warnings.push(
-      `Target sessions store unreadable; left untouched to avoid overwriting at ${detected.sessions.targetStorePath}`,
-    );
+    if (options.recoverCorruptTargetStore) {
+      const archivedTargetPath = `${detected.sessions.targetStorePath}.corrupt-${now()}`;
+      try {
+        fs.renameSync(detected.sessions.targetStorePath, archivedTargetPath);
+        changes.push(`Archived corrupt target sessions store → ${archivedTargetPath}`);
+        targetReadable = true;
+      } catch (err) {
+        warnings.push(
+          `Target sessions store unreadable; failed to archive ${detected.sessions.targetStorePath}: ${String(err)}`,
+        );
+      }
+    } else {
+      warnings.push(
+        `Target sessions store unreadable; left untouched to avoid overwriting at ${detected.sessions.targetStorePath}. Run openclaw doctor --fix to archive it and retry the legacy merge.`,
+      );
+    }
   }
 
   if (
@@ -2303,6 +2318,7 @@ export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   config?: OpenClawConfig;
   now?: () => number;
+  recoverCorruptTargetStore?: boolean;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
@@ -2319,7 +2335,9 @@ export async function runLegacyStateMigrations(params: {
     detected,
     config: params.config ?? ({} as OpenClawConfig),
   });
-  const sessions = await migrateLegacySessions(detected, now);
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -2524,6 +2542,7 @@ export async function autoMigrateLegacyState(params: {
   homedir?: () => string;
   log?: MigrationLogger;
   now?: () => number;
+  recoverCorruptTargetStore?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -2647,7 +2666,9 @@ export async function autoMigrateLegacyState(params: {
     detected,
     config: params.cfg,
   });
-  const sessions = await migrateLegacySessions(detected, now);
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
