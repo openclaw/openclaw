@@ -275,7 +275,7 @@ function parseJsonColumn(value: string): unknown {
 
 function readPersistedInstalledPluginIndexForRecords(
   options: InstalledPluginIndexStoreOptions = {},
-): unknown | null {
+): unknown {
   const storePath = resolveInstalledPluginIndexStorePath(options);
   if (!fs.existsSync(storePath)) {
     return null;
