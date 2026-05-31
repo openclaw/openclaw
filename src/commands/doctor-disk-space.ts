@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { tryReadDiskSpace } from "../infra/disk-space.js";
-import { note } from "../terminal/note.js";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { shortenHomePath } from "../utils.js";
 
 // 100 MB — below this, config writes and session transcripts are likely to

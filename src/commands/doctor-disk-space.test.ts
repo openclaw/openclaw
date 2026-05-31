@@ -5,7 +5,7 @@ import {
   noteDiskSpace,
 } from "./doctor-disk-space.js";
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
 
@@ -115,7 +115,7 @@ describe("buildDiskSpaceWarnings", () => {
 
 describe("noteDiskSpace", () => {
   it("calls note when space is below warning threshold", async () => {
-    const { note: mockNote } = await import("../terminal/note.js");
+    const { note: mockNote } = await import("../../packages/terminal-core/src/note.js");
     vi.mocked(mockNote).mockClear();
 
     noteDiskSpace({ gateway: { mode: "local" } } as never, {
@@ -130,7 +130,7 @@ describe("noteDiskSpace", () => {
   });
 
   it("calls note with CRITICAL when space is very low", async () => {
-    const { note: mockNote } = await import("../terminal/note.js");
+    const { note: mockNote } = await import("../../packages/terminal-core/src/note.js");
     vi.mocked(mockNote).mockClear();
 
     noteDiskSpace({ gateway: { mode: "local" } } as never, {
@@ -144,7 +144,7 @@ describe("noteDiskSpace", () => {
   });
 
   it("does not call note when space is sufficient", async () => {
-    const { note: mockNote } = await import("../terminal/note.js");
+    const { note: mockNote } = await import("../../packages/terminal-core/src/note.js");
     vi.mocked(mockNote).mockClear();
 
     noteDiskSpace({ gateway: { mode: "local" } } as never, {
@@ -156,7 +156,7 @@ describe("noteDiskSpace", () => {
   });
 
   it("does not call note when disk space cannot be read", async () => {
-    const { note: mockNote } = await import("../terminal/note.js");
+    const { note: mockNote } = await import("../../packages/terminal-core/src/note.js");
     vi.mocked(mockNote).mockClear();
 
     noteDiskSpace({ gateway: { mode: "local" } } as never, {
