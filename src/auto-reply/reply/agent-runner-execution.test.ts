@@ -225,6 +225,13 @@ type FallbackRunnerParams = {
 
 type EmbeddedAgentParams = {
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onPartialReply?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+    delta?: string;
+    replace?: true;
+    phase?: "commentary" | "final_answer";
+  }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onItemEvent?: (payload: {
     itemId?: string;
@@ -2152,12 +2159,12 @@ describe("runAgentTurnWithFallback", () => {
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
         stream: "assistant",
-        data: { text: "Hello", delta: "Hello" },
+        data: { text: "Hello", delta: "Hello", phase: "final_answer" },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
         stream: "assistant",
-        data: { text: "Hello world", delta: " world" },
+        data: { text: "Hello world", delta: " world", phase: "final_answer" },
       });
       return { payloads: [{ text: "Hello world" }], meta: {} };
     });
@@ -2195,6 +2202,50 @@ describe("runAgentTurnWithFallback", () => {
 
     const partialTexts = onPartialReply.mock.calls.map((call) => call[0].text);
     expect(partialTexts).toEqual(["Hello", "Hello world"]);
+    expect(onPartialReply.mock.calls.map((call) => call[0].delta)).toEqual(["Hello", " world"]);
+    expect(onPartialReply.mock.calls.map((call) => call[0].phase)).toEqual([
+      "final_answer",
+      "final_answer",
+    ]);
+  });
+
+  it("preserves embedded assistant partial metadata for channel previews", async () => {
+    state.isCliProviderMock.mockReturnValue(false);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude-sonnet-4-7"),
+      provider: "anthropic",
+      model: "claude-sonnet-4-7",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onPartialReply?.({
+        text: "Hello",
+        delta: "Hello",
+        phase: "final_answer",
+      });
+      await params.onPartialReply?.({
+        text: "Hello world",
+        delta: " world",
+        phase: "final_answer",
+      });
+      return { payloads: [{ text: "Hello world" }], meta: {} };
+    });
+
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+      async (_payload) => undefined,
+    );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        opts: { onPartialReply },
+      }),
+    );
+
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "Hello", delta: "Hello", phase: "final_answer" },
+      { text: "Hello world", delta: " world", phase: "final_answer" },
+    ]);
   });
 
   it("serializes and drains bridged CLI assistant previews before completing (#76869)", async () => {

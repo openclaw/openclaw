@@ -2072,12 +2072,21 @@ export async function runAgentTurnWithFallback(params: {
                   provider: cliExecutionProvider,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
-                  onAssistantText: async (text) => {
-                    const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
+                  onAssistantText: async (payload) => {
+                    const textForTyping = await handlePartialForTyping({
+                      text: payload.text,
+                    } as ReplyPayload);
                     if (textForTyping === undefined || !params.opts?.onPartialReply) {
                       return;
                     }
-                    await params.opts.onPartialReply({ text: textForTyping });
+                    await params.opts.onPartialReply({
+                      text: textForTyping,
+                      ...(payload.delta !== undefined && textForTyping === payload.text
+                        ? { delta: payload.delta }
+                        : {}),
+                      ...(payload.replace === true ? { replace: true as const } : {}),
+                      ...(payload.phase ? { phase: payload.phase } : {}),
+                    });
                   },
                   onReasoningText: async (text) => {
                     await params.opts?.onReasoningStream?.({ text });
@@ -2302,6 +2311,9 @@ export async function runAgentTurnWithFallback(params: {
                       await params.opts.onPartialReply({
                         text: textForTyping,
                         mediaUrls: payload.mediaUrls,
+                        ...(payload.delta !== undefined ? { delta: payload.delta } : {}),
+                        ...(payload.replace === true ? { replace: true as const } : {}),
+                        ...(payload.phase ? { phase: payload.phase } : {}),
                       });
                     },
                     onAssistantMessageStart: async () => {

@@ -12,9 +12,11 @@ import {
   formatMattermostFinalDeliveryOutcomeLog,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
+  resolveMattermostPreviewFinalText,
   resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
+  resolveMattermostStreamingDeliveryPolicy,
   resolveMattermostThreadSessionContext,
   shouldFinalizeMattermostPreviewAfterDispatch,
   shouldClearMattermostDraftPreview,
@@ -365,6 +367,111 @@ describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveMattermostStreamingDeliveryPolicy", () => {
+  it("keeps regular draft preview mode isolated from block streaming", () => {
+    expect(
+      resolveMattermostStreamingDeliveryPolicy({
+        account: { streamingMode: "partial" },
+        cfg: {},
+      }),
+    ).toEqual({
+      draftPreviewEnabled: true,
+      disableBlockStreaming: true,
+    });
+  });
+
+  it("keeps an active draft preview even when the agent block streaming default is on", () => {
+    expect(
+      resolveMattermostStreamingDeliveryPolicy({
+        account: { streamingMode: "partial" },
+        cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
+      }),
+    ).toEqual({
+      draftPreviewEnabled: true,
+      disableBlockStreaming: true,
+    });
+  });
+
+  it("lets explicit block streaming create normal block posts instead of draft edits", () => {
+    expect(
+      resolveMattermostStreamingDeliveryPolicy({
+        account: { streamingMode: "partial", blockStreaming: true },
+        cfg: {},
+      }),
+    ).toEqual({
+      draftPreviewEnabled: false,
+      disableBlockStreaming: false,
+    });
+  });
+
+  it("honors the agent block streaming default when the account is unset", () => {
+    expect(
+      resolveMattermostStreamingDeliveryPolicy({
+        account: { streamingMode: "off" },
+        cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
+      }),
+    ).toEqual({
+      draftPreviewEnabled: false,
+      disableBlockStreaming: false,
+    });
+  });
+});
+
+describe("resolveMattermostPreviewFinalText", () => {
+  it("preserves accumulated block preview text when the final is only the last segment", () => {
+    expect(
+      resolveMattermostPreviewFinalText({
+        streamingMode: "block",
+        finalText: "final answer",
+        lastPartialText: "first block\n\nTool finished\n\nfinal answer",
+        allowAccumulatedPreviewText: true,
+      }),
+    ).toBe("first block\n\nTool finished\n\nfinal answer");
+  });
+
+  it("does not preserve accumulated block preview text when the final matches earlier text", () => {
+    expect(
+      resolveMattermostPreviewFinalText({
+        streamingMode: "block",
+        finalText: "Tool finished",
+        lastPartialText: "first block\n\nTool finished\n\nfinal answer",
+      }),
+    ).toBe("Tool finished");
+  });
+
+  it("does not preserve suffix-matched block preview text without an accumulated transcript signal", () => {
+    expect(
+      resolveMattermostPreviewFinalText({
+        streamingMode: "block",
+        finalText: "Done",
+        lastPartialText: "temporary draft status\n\nDone",
+      }),
+    ).toBe("Done");
+  });
+
+  it("skips accumulated block preview finalization when the accumulated text is not sendable", () => {
+    expect(
+      resolveMattermostPreviewFinalText({
+        streamingMode: "block",
+        finalText: "final answer",
+        lastPartialText: "first block\n\nTool finished\n\nfinal answer",
+        allowAccumulatedPreviewText: true,
+        resolvePreviewText: (text) => (text.length <= "final answer".length ? text : undefined),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps non-block previews from overwriting longer draft text with a prefix", () => {
+    expect(
+      resolveMattermostPreviewFinalText({
+        streamingMode: "partial",
+        finalText: "Final",
+        lastPartialText: "Final answer still streaming",
+      }),
+    ).toBeUndefined();
   });
 });
 

@@ -10,6 +10,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
+import { normalizeAssistantPhase, type AssistantPhase } from "../../shared/chat-message-content.js";
 
 function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
   return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
@@ -57,10 +58,17 @@ function createAgentEventBridge<T>(params: {
   };
 }
 
+export type CliAssistantTextPayload = {
+  text: string;
+  delta?: string;
+  replace?: true;
+  phase?: AssistantPhase;
+};
+
 function createAssistantTextBridge(params: {
   runId: string;
   suppressed?: boolean;
-  deliver?: (text: string) => Promise<void>;
+  deliver?: (payload: CliAssistantTextPayload) => Promise<void>;
 }) {
   let lastText: string | undefined;
   return createAgentEventBridge({
@@ -76,7 +84,14 @@ function createAssistantTextBridge(params: {
         return undefined;
       }
       lastText = text;
-      return text;
+      const delta = typeof evt.data.delta === "string" ? evt.data.delta : undefined;
+      const phase = normalizeAssistantPhase(evt.data.phase);
+      return {
+        text,
+        ...(delta !== undefined ? { delta } : {}),
+        ...(evt.data.replace === true ? { replace: true as const } : {}),
+        ...(phase ? { phase } : {}),
+      };
     },
   });
 }
@@ -181,7 +196,7 @@ export async function runCliAgentWithLifecycle(params: {
   emitLifecycleTerminal?: boolean;
   onAgentRunStart?: () => void;
   suppressAssistantBridge?: boolean;
-  onAssistantText?: (text: string) => Promise<void>;
+  onAssistantText?: (payload: CliAssistantTextPayload) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
@@ -209,9 +224,12 @@ export async function runCliAgentWithLifecycle(params: {
   const reasoningBridge = createAssistantTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: shouldBridgeCliAssistantTextToReasoning(params.provider)
-      ? params.onReasoningText
-      : undefined,
+    deliver:
+      shouldBridgeCliAssistantTextToReasoning(params.provider) && params.onReasoningText
+        ? async (payload) => {
+            await params.onReasoningText?.(payload.text);
+          }
+        : undefined,
   });
   const toolBridge = createToolEventBridge({
     runId: params.runId,

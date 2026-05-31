@@ -1,6 +1,7 @@
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
@@ -44,6 +45,7 @@ export type QueuedReplyLifecycle = {
 export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   delta?: string;
   replace?: true;
+  phase?: AssistantPhase;
 };
 
 export type GetReplyOptions = {

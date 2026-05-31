@@ -147,6 +147,54 @@ export function shouldSuppressMattermostDefaultToolProgressMessages(
   return account.streamingMode !== "off";
 }
 
+export function resolveMattermostStreamingDeliveryPolicy(params: {
+  account: Pick<ResolvedMattermostAccount, "streamingMode" | "blockStreaming">;
+  cfg: Pick<OpenClawConfig, "agents">;
+}): {
+  draftPreviewEnabled: boolean;
+  disableBlockStreaming: boolean;
+} {
+  const previewStreamingEnabled = params.account.streamingMode !== "off";
+  const blockStreamingEnabled =
+    params.account.blockStreaming === true ||
+    (!previewStreamingEnabled &&
+      (params.account.blockStreaming ??
+        params.cfg.agents?.defaults?.blockStreamingDefault === "on"));
+  const draftPreviewEnabled = previewStreamingEnabled && params.account.blockStreaming !== true;
+  return {
+    draftPreviewEnabled,
+    disableBlockStreaming: draftPreviewEnabled ? true : !blockStreamingEnabled,
+  };
+}
+
+export function resolveMattermostPreviewFinalText(params: {
+  streamingMode: ResolvedMattermostAccount["streamingMode"];
+  finalText: string;
+  lastPartialText?: string;
+  allowAccumulatedPreviewText?: boolean;
+  resolvePreviewText?: (text: string) => string | undefined;
+}): string | undefined {
+  const trimmed = params.finalText.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lastPartialText = params.lastPartialText?.trim();
+  if (!lastPartialText || trimmed.length >= lastPartialText.length) {
+    return trimmed;
+  }
+  if (
+    params.streamingMode === "block" &&
+    params.allowAccumulatedPreviewText === true &&
+    lastPartialText.endsWith(trimmed)
+  ) {
+    return params.resolvePreviewText ? params.resolvePreviewText(lastPartialText) : lastPartialText;
+  }
+  if (lastPartialText.startsWith(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostReaction = {
@@ -695,11 +743,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           threadRootId: post.root_id,
         }).sessionKey;
       },
-      dispatchButtonClick: async (optsLocal) => {
-        const channelInfo = await resolveChannelInfo(optsLocal.channelId);
+      dispatchButtonClick: async (opts) => {
+        const channelInfo = await resolveChannelInfo(opts.channelId);
         if (!channelInfo?.type) {
           logVerboseMessage(
-            `mattermost: drop interaction dispatch (cannot resolve channel type for ${optsLocal.channelId})`,
+            `mattermost: drop interaction dispatch (cannot resolve channel type for ${opts.channelId})`,
           );
           return;
         }
@@ -707,7 +755,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const chatType = channelChatType(kind);
         const teamId = channelInfo?.team_id ?? undefined;
         const channelName = channelInfo?.name ?? undefined;
-        const channelDisplay = channelInfo?.display_name ?? channelName ?? optsLocal.channelId;
+        const channelDisplay = channelInfo?.display_name ?? channelName ?? opts.channelId;
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
           channel: "mattermost",
@@ -715,20 +763,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           teamId,
           peer: {
             kind,
-            id: kind === "direct" ? optsLocal.userId : optsLocal.channelId,
+            id: kind === "direct" ? opts.userId : opts.channelId,
           },
         });
         const replyToMode = resolveMattermostReplyToMode(account, kind);
         const threadContext = resolveMattermostThreadSessionContext({
           baseSessionKey: route.sessionKey,
           kind,
-          postId: optsLocal.post.id || optsLocal.postId,
+          postId: opts.post.id || opts.postId,
           replyToMode,
-          threadRootId: optsLocal.post.root_id,
+          threadRootId: opts.post.root_id,
         });
-        const to =
-          kind === "direct" ? `user:${optsLocal.userId}` : `channel:${optsLocal.channelId}`;
-        const bodyText = `[Button click: user @${optsLocal.userName} selected "${optsLocal.actionName}"]`;
+        const to = kind === "direct" ? `user:${opts.userId}` : `channel:${opts.channelId}`;
+        const bodyText = `[Button click: user @${opts.userName} selected "${opts.actionName}"]`;
         const ctxPayload = core.channel.reply.finalizeInboundContext({
           Body: bodyText,
           BodyForAgent: bodyText,
@@ -736,24 +783,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           CommandBody: bodyText,
           From:
             kind === "direct"
-              ? `mattermost:${optsLocal.userId}`
+              ? `mattermost:${opts.userId}`
               : kind === "group"
-                ? `mattermost:group:${optsLocal.channelId}`
-                : `mattermost:channel:${optsLocal.channelId}`,
+                ? `mattermost:group:${opts.channelId}`
+                : `mattermost:channel:${opts.channelId}`,
           To: to,
           SessionKey: threadContext.sessionKey,
           ParentSessionKey: threadContext.parentSessionKey,
           AccountId: route.accountId,
           ChatType: chatType,
-          ConversationLabel: `mattermost:${optsLocal.userName}`,
+          ConversationLabel: `mattermost:${opts.userName}`,
           GroupSubject: kind !== "direct" ? channelDisplay : undefined,
           GroupChannel: channelName ? `#${channelName}` : undefined,
           GroupSpace: teamId,
-          SenderName: optsLocal.userName,
-          SenderId: optsLocal.userId,
+          SenderName: opts.userName,
+          SenderId: opts.userId,
           Provider: "mattermost" as const,
           Surface: "mattermost" as const,
-          MessageSid: `interaction:${optsLocal.postId}:${optsLocal.actionId}`,
+          MessageSid: `interaction:${opts.postId}:${opts.actionId}`,
           ReplyToId: threadContext.effectiveReplyToId,
           MessageThreadId: threadContext.effectiveReplyToId,
           WasMentioned: true,
@@ -780,13 +827,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             channel: "mattermost",
             accountId: account.accountId,
             typing: {
-              start: () =>
-                sendTypingIndicator(optsLocal.channelId, threadContext.effectiveReplyToId),
+              start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
               onStartError: (err) => {
                 logTypingFailure({
                   log: (message) => logger.debug?.(message),
                   channel: "mattermost",
-                  target: optsLocal.channelId,
+                  target: opts.channelId,
                   error: err,
                 });
               },
@@ -1666,10 +1712,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               },
             },
           });
-        const draftPreviewEnabled = account.streamingMode !== "off";
-        const draftToolProgressEnabled = shouldUpdateMattermostDraftToolProgress(account);
+        const streamingDeliveryPolicy = resolveMattermostStreamingDeliveryPolicy({
+          account,
+          cfg,
+        });
+        const draftPreviewEnabled = streamingDeliveryPolicy.draftPreviewEnabled;
+        const draftToolProgressEnabled =
+          draftPreviewEnabled && shouldUpdateMattermostDraftToolProgress(account);
         const suppressDefaultToolProgressMessages =
-          shouldSuppressMattermostDefaultToolProgressMessages(account);
+          draftPreviewEnabled && shouldSuppressMattermostDefaultToolProgressMessages(account);
         const draftStream = draftPreviewEnabled
           ? createMattermostDraftStream({
               client,
@@ -1684,8 +1735,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
+        let lastPartialTextCanFinalizeAsAccumulated = false;
 
-        const resolvePreviewFinalText = (text?: string) => {
+        const resolveSinglePreviewChunk = (text?: string) => {
           if (typeof text !== "string") {
             return undefined;
           }
@@ -1710,18 +1762,30 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           if (!trimmed) {
             return undefined;
           }
-          if (
-            lastPartialText &&
-            lastPartialText.startsWith(trimmed) &&
-            trimmed.length < lastPartialText.length
-          ) {
-            return undefined;
-          }
           return trimmed;
         };
 
-        const updateDraftFromPartial = (text?: string) => {
-          const cleaned = text?.trim();
+        const resolvePreviewFinalText = (text?: string) => {
+          const trimmed = resolveSinglePreviewChunk(text);
+          if (!trimmed) {
+            return undefined;
+          }
+          return resolveMattermostPreviewFinalText({
+            streamingMode: account.streamingMode,
+            finalText: trimmed,
+            lastPartialText,
+            allowAccumulatedPreviewText: lastPartialTextCanFinalizeAsAccumulated,
+            resolvePreviewText: resolveSinglePreviewChunk,
+          });
+        };
+
+        const updateDraftFromPartial = (payload: {
+          text?: string;
+          delta?: string;
+          replace?: true;
+          phase?: string;
+        }) => {
+          const cleaned = payload.text?.trim();
           if (!cleaned) {
             return;
           }
@@ -1735,6 +1799,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           ) {
             return;
           }
+          lastPartialTextCanFinalizeAsAccumulated =
+            account.streamingMode === "block" &&
+            payload.replace !== true &&
+            payload.phase === "final_answer" &&
+            typeof payload.delta === "string" &&
+            payload.delta.trim().length > 0 &&
+            Boolean(lastPartialText) &&
+            cleaned.startsWith(lastPartialText);
           lastPartialText = cleaned;
           draftStream.update(cleaned);
         };
@@ -1744,9 +1816,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             ...replyPipeline,
             humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             typingCallbacks,
-            deliver: async (payloadEntry: ReplyPayload, info) => {
+            deliver: async (payload: ReplyPayload, info) => {
               await deliverMattermostReplyWithDraftPreview({
-                payload: payloadEntry,
+                payload,
                 info,
                 kind,
                 client,
@@ -1880,39 +1952,41 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                         dispatcher,
                         replyOptions: {
                           ...replyOptions,
-                          disableBlockStreaming: true,
+                          disableBlockStreaming: streamingDeliveryPolicy.disableBlockStreaming,
                           ...(suppressDefaultToolProgressMessages
                             ? { suppressDefaultToolProgressMessages: true }
                             : {}),
                           onModelSelected,
-                          onPartialReply: (payloadResult) => {
+                          onPartialReply: (payload) => {
                             if (account.streamingMode !== "progress") {
-                              updateDraftFromPartial(payloadResult.text);
+                              updateDraftFromPartial(payload);
                             }
                           },
                           onAssistantMessageStart: () => {
                             lastPartialText = "";
+                            lastPartialTextCanFinalizeAsAccumulated = false;
                           },
                           onReasoningEnd: () => {
                             lastPartialText = "";
+                            lastPartialTextCanFinalizeAsAccumulated = false;
                           },
                           onReasoningStream: async () => {
                             if (!lastPartialText) {
                               draftStream.update("Thinking…");
                             }
                           },
-                          onToolStart: async (payloadValue) => {
+                          onToolStart: async (payload) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
                             draftStream.update(
                               buildMattermostToolStatusText({
-                                ...payloadValue,
+                                ...payload,
                                 config: account.config,
                               }),
                             );
                           },
-                          onItemEvent: async (payloadLocal) => {
+                          onItemEvent: async (payload) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
@@ -1920,15 +1994,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               account.config,
                               {
                                 event: "item",
-                                itemId: payloadLocal.itemId,
-                                itemKind: payloadLocal.kind,
-                                title: payloadLocal.title,
-                                name: payloadLocal.name,
-                                phase: payloadLocal.phase,
-                                status: payloadLocal.status,
-                                summary: payloadLocal.summary,
-                                progressText: payloadLocal.progressText,
-                                meta: payloadLocal.meta,
+                                itemId: payload.itemId,
+                                itemKind: payload.kind,
+                                title: payload.title,
+                                name: payload.name,
+                                phase: payload.phase,
+                                status: payload.status,
+                                summary: payload.summary,
+                                progressText: payload.progressText,
+                                meta: payload.meta,
                               },
                             );
                             if (progressText) {
@@ -2165,7 +2239,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         client,
         commands,
         log: (msg) => runtime.log?.(msg),
-      }).catch((err: unknown) => {
+      }).catch((err) => {
         runtime.error?.(`mattermost: slash cleanup failed: ${String(err)}`);
       });
     };
