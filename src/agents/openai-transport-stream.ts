@@ -29,6 +29,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { isGemma4ModelId } from "../shared/google-models.js";
+import { createReasoningTagTextFilter } from "../shared/text/reasoning-tags.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -2526,6 +2527,7 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
+  const reasoningTagTextFilter = createReasoningTagTextFilter();
   type ToolCallBlock = {
     type: "toolCall";
     id: string;
@@ -2656,18 +2658,22 @@ async function processOpenAICompletionsStream(
     }
   };
   const appendFilteredVisibleTextDelta = (text: string) => {
-    const parts = deepSeekTextFilter?.push(text) ?? [text];
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
+    const dsmlParts = deepSeekTextFilter?.push(text) ?? [text];
+    for (const part of dsmlParts) {
+      for (const visible of reasoningTagTextFilter.push(part)) {
+        appendVisibleTextDelta(visible);
+      }
     }
   };
-  const flushDeepSeekTextFilterAtEnd = () => {
-    const parts = deepSeekTextFilter?.flush();
-    if (!parts) {
-      return;
+  const flushVisibleTextFiltersAtEnd = () => {
+    const dsmlParts = deepSeekTextFilter?.flush() ?? [];
+    for (const part of dsmlParts) {
+      for (const visible of reasoningTagTextFilter.push(part)) {
+        appendVisibleTextDelta(visible);
+      }
     }
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
+    for (const visible of reasoningTagTextFilter.flush()) {
+      appendVisibleTextDelta(visible);
     }
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
@@ -2803,7 +2809,7 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     await cooperativeScheduler.afterEvent();
   }
-  flushDeepSeekTextFilterAtEnd();
+  flushVisibleTextFiltersAtEnd();
   finishAllToolCallBlocks();
   currentBlock = null;
   flushPendingPostToolCallDeltas();

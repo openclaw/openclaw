@@ -10,6 +10,7 @@ import type {
   ChatCompletionSystemMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { createReasoningTagTextFilter } from "../../shared/text/reasoning-tags.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -179,6 +180,20 @@ export const streamOpenAICompletions: StreamFunction<
       let textBlock: TextContent | null = null;
       let thinkingBlock: ThinkingContent | null = null;
       let hasFinishReason = false;
+      const reasoningTagTextFilter = createReasoningTagTextFilter();
+      const appendVisibleText = (visible: string) => {
+        if (!visible) {
+          return;
+        }
+        const block = ensureTextBlock();
+        block.text += visible;
+        stream.push({
+          type: "text_delta",
+          contentIndex: getContentIndex(block),
+          delta: visible,
+          partial: output,
+        });
+      };
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const blocks = output.content as StreamingBlock[];
@@ -326,14 +341,9 @@ export const streamOpenAICompletions: StreamFunction<
             choice.delta.content !== undefined &&
             choice.delta.content.length > 0
           ) {
-            const block = ensureTextBlock();
-            block.text += choice.delta.content;
-            stream.push({
-              type: "text_delta",
-              contentIndex: getContentIndex(block),
-              delta: choice.delta.content,
-              partial: output,
-            });
+            for (const visible of reasoningTagTextFilter.push(choice.delta.content)) {
+              appendVisibleText(visible);
+            }
           }
 
           // Some endpoints return reasoning in reasoning_content (llama.cpp),
@@ -412,6 +422,9 @@ export const streamOpenAICompletions: StreamFunction<
         }
       }
 
+      for (const visible of reasoningTagTextFilter.flush()) {
+        appendVisibleText(visible);
+      }
       for (const block of blocks) {
         finishBlock(block);
       }

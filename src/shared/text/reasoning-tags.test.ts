@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { createReasoningTagTextFilter, stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 describe("stripReasoningTagsFromText", () => {
   function expectStrippedCase(params: {
@@ -327,5 +327,125 @@ describe("stripReasoningTagsFromText", () => {
     { input: "E <think>x</think> F", expected: "E  F" },
   ] as const)("does not leak regex state across repeated calls: %j", (testCase) => {
     expectStrippedCase(testCase);
+  });
+});
+
+describe("createReasoningTagTextFilter", () => {
+  function runFilter(chunks: readonly string[]): string {
+    const filter = createReasoningTagTextFilter();
+    const parts: string[] = [];
+    for (const chunk of chunks) {
+      parts.push(...filter.push(chunk));
+    }
+    parts.push(...filter.flush());
+    return parts.join("");
+  }
+
+  it.each([
+    { name: "single buffered span", chunks: ["before <think>reason</think> after"] },
+    { name: "tag split across chunks", chunks: ["before <thi", "nk>reason</thi", "nk> after"] },
+    { name: "body split across chunks", chunks: ["before <think>rea", "son</think> aft", "er"] },
+    {
+      name: "leading think then answer",
+      chunks: ["<think>", "User wants thrillers. ", "Recommend three.</think>", "after"],
+      expected: "after",
+    },
+  ] as const)("strips inline reasoning spans: $name", ({ chunks, expected }) => {
+    expect(runFilter(chunks)).toBe(expected ?? "before  after");
+  });
+
+  it.each([
+    { name: "thinking", open: "<thinking>", close: "</thinking>" },
+    { name: "thought", open: "<thought>", close: "</thought>" },
+    { name: "antml thinking", open: "<thinking>", close: "</thinking>" },
+    { name: "whitespace + close slash", open: "< think >", close: "</ think >" },
+  ] as const)("recognizes $name tags", ({ open, close }) => {
+    expect(runFilter([`a${open}secret${close}b`])).toBe("ab");
+  });
+
+  it("recovers answer text when the reasoning tag is never closed", () => {
+    expect(runFilter(["<think>orphaned answer with no close tag"])).toBe(
+      "orphaned answer with no close tag",
+    );
+  });
+
+  it("keeps unclosed reasoning hidden when visible text already streamed", () => {
+    expect(runFilter(["Visible prefix <think>private reasoning"])).toBe("Visible prefix ");
+    expect(runFilter(["Visible ", "prefix <thi", "nk>private reasoning"])).toBe("Visible prefix ");
+  });
+
+  it.each([
+    { name: "single chunk", chunks: ["private </think>answer"] },
+    { name: "split across chunks", chunks: ["private </thi", "nk>answer"] },
+  ] as const)(
+    "preserves orphan close boundaries for the delivery sanitizer: $name",
+    ({ chunks }) => {
+      expect(runFilter(chunks)).toBe("private </think>answer");
+      expect(stripReasoningTagsFromText("private </think>answer", { trim: "none" })).toBe("answer");
+    },
+  );
+
+  it("passes through literal angle brackets that are not reasoning tags", () => {
+    expect(runFilter(["if a < b && c > d, then "])).toBe("if a < b && c > d, then ");
+    expect(runFilter(["see <table> and ", "</table> markup"])).toBe(
+      "see <table> and </table> markup",
+    );
+  });
+
+  it("keeps text emitted before a still-pending partial tag", () => {
+    const filter = createReasoningTagTextFilter();
+    expect(filter.push("answer<")).toEqual(["answer"]);
+    expect(filter.push("think>hidden")).toEqual([]);
+    expect(filter.push("</think>done")).toEqual(["done"]);
+    expect(filter.flush()).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "inline code keeps literal tag",
+      input: "Use the `<think>` tag to reason.",
+    },
+    {
+      name: "inline code split across chunks",
+      input: ["Use the `<thi", "nk>` tag to reason."],
+      expected: "Use the `<think>` tag to reason.",
+    },
+    {
+      name: "fenced block keeps literal tags",
+      input: "Example:\n```html\n<think>reasoning</think>\n```\ndone",
+    },
+    {
+      name: "tilde fence keeps literal tags",
+      input: "Example:\n~~~\n<think>reasoning</think>\n~~~\ndone",
+    },
+    {
+      name: "fence split across chunks",
+      input: ["Example:\n```\n<thi", "nk>x</think>\n```\nend"],
+      expected: "Example:\n```\n<think>x</think>\n```\nend",
+    },
+    {
+      name: "reasoning before a code example is still stripped",
+      input: "<think>plan it</think>Use the `<think>` tag.",
+      expected: "Use the `<think>` tag.",
+    },
+  ] as const)("preserves reasoning tags inside code: $name", ({ input, expected }) => {
+    const chunks: readonly string[] = typeof input === "string" ? [input] : input;
+    const joined = chunks.join("");
+    expect(runFilter(chunks)).toBe(expected ?? joined);
+  });
+
+  it.each([
+    "before <think>reason</think> after",
+    "<think>plan</think>answer",
+    "Use the `<think>` tag.",
+    "Example:\n```\n<think>x</think>\n```\ndone",
+    "leading <thinking>secret</thinking> middle <thought>more</thought> end",
+    "no reasoning tags at all, just text",
+    "Start `unclosed <think>hidden</think> end",
+    "Use ``code`` with <think>hidden</think> text",
+    "Example:\n~~~\n<think>reasoning</think>\n~~~\nDone!",
+    "Before\n```\ncode\n```\nAfter with <think>hidden</think>",
+  ])("matches stripReasoningTagsFromText (trim none) on fully buffered input: %j", (input) => {
+    expect(runFilter([input])).toBe(stripReasoningTagsFromText(input, { trim: "none" }));
   });
 });

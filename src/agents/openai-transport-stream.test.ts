@@ -1257,6 +1257,104 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("keeps inline <think> reasoning out of visible text parts on the completions stream", async () => {
+    const chunks = [
+      { delta: { role: "assistant", content: "<think>" } },
+      { delta: { content: "User wants thrillers. ", reasoning_content: "User wants thrillers. " } },
+      { delta: { content: "Recommend three.</think>", reasoning_content: "Recommend three." } },
+      { delta: { content: "Here are three great thrillers." } },
+      { delta: {}, finish_reason: "stop" },
+    ];
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        for (const chunk of chunks) {
+          res.write(
+            `data: ${JSON.stringify({
+              id: "chatcmpl-think-leak",
+              object: "chat.completion.chunk",
+              created,
+              model: "minimax/MiniMax-M2.7",
+              choices: [{ index: 0, finish_reason: null, ...chunk }],
+            })}\n\n`,
+          );
+        }
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "minimax/MiniMax-M2.7",
+        name: "MiniMax M2.7",
+        api: "openai-completions",
+        provider: "minimax",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [
+            { role: "user", content: "Best thriller movies right now", timestamp: Date.now() },
+          ],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let text = "";
+      let thinking = "";
+      let doneMessage: { content: Array<{ type: string; text?: string }> } | undefined;
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        delta?: string;
+        message?: { content: Array<{ type: string; text?: string }> };
+      }>) {
+        if (event.type === "text_delta") {
+          text += event.delta ?? "";
+        }
+        if (event.type === "thinking_delta") {
+          thinking += event.delta ?? "";
+        }
+        if (event.type === "done") {
+          doneMessage = event.message;
+        }
+      }
+
+      expect(text).toBe("Here are three great thrillers.");
+      expect(text).not.toContain("<think>");
+      expect(text).not.toContain("User wants thrillers.");
+      expect(thinking).toBe("User wants thrillers. Recommend three.");
+      const visibleTextParts = (doneMessage?.content ?? [])
+        .filter((part) => part.type === "text")
+        .map((part) => part.text ?? "")
+        .join("");
+      expect(visibleTextParts).toBe("Here are three great thrillers.");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
     const server = createServer((req, res) => {
       req.resume();

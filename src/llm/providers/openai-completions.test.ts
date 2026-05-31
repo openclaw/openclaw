@@ -214,3 +214,67 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
   });
 });
+
+describe("openai-completions inline reasoning-tag routing", () => {
+  function makeContentChunk(content: string, reasoningContent?: string) {
+    const delta: { role: "assistant"; content: string; reasoning_content?: string } = {
+      role: "assistant",
+      content,
+    };
+    if (reasoningContent) {
+      delta.reasoning_content = reasoningContent;
+    }
+    return {
+      id: "chatcmpl-test",
+      choices: [{ index: 0, delta }],
+    } satisfies DeepPartial<ChatCompletionChunk>;
+  }
+
+  it("keeps inline <think> reasoning out of the visible text block", async () => {
+    mockChunksRef.chunks = [
+      makeContentChunk("<think>"),
+      makeContentChunk("User wants thrillers. ", "User wants thrillers. "),
+      makeContentChunk("Recommend three.</think>", "Recommend three."),
+      makeContentChunk("Here are three great thrillers."),
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => (block as { text: string }).text)
+      .join("");
+    const thinking = result.content
+      .filter((block) => block.type === "thinking")
+      .map((block) => (block as { thinking: string }).thinking)
+      .join("");
+
+    expect(text).toBe("Here are three great thrillers.");
+    expect(text).not.toContain("<think>");
+    expect(text).not.toContain("User wants thrillers.");
+    expect(thinking).toBe("User wants thrillers. Recommend three.");
+  });
+
+  it("preserves literal <think> examples inside fenced and inline code", async () => {
+    mockChunksRef.chunks = [
+      makeContentChunk("Models can emit a "),
+      makeContentChunk("`<think>` tag. Example:\n```html\n<think>hi</think>\n```\n"),
+      makeContentChunk("Use it carefully."),
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    const text = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => (block as { text: string }).text)
+      .join("");
+
+    expect(text).toBe(
+      "Models can emit a `<think>` tag. Example:\n```html\n<think>hi</think>\n```\nUse it carefully.",
+    );
+  });
+});
