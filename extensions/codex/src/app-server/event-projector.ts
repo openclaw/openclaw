@@ -1438,7 +1438,7 @@ export class CodexAppServerEventProjector {
     params: ToolTranscriptResultInput,
   ): Promise<OpenClawAgentToolResult> {
     const result = params.result ?? createTextToolTranscriptResult(params);
-    return await this.nativeToolResultMiddlewareRunner().applyToolResultMiddleware({
+    return this.nativeToolResultMiddlewareRunner().applyToolResultMiddleware({
       threadId: this.threadId,
       turnId: this.turnId,
       toolCallId: params.id,
