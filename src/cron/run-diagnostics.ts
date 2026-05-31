@@ -67,6 +67,8 @@ function tailText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
+  // Exec output often ends with the actionable failure; keep the tail when
+  // bounding diagnostic text for run logs and control surfaces.
   return value.slice(value.length - maxChars);
 }
 
@@ -96,6 +98,7 @@ function trimSummary(value: string | undefined): string | undefined {
   return `${normalized.slice(0, MAX_SUMMARY_CHARS - 1)}…`;
 }
 
+/** Returns the operator-facing summary for persisted cron diagnostics. */
 export function summarizeCronRunDiagnostics(
   diagnostics: CronRunDiagnostics | undefined,
 ): string | undefined {
