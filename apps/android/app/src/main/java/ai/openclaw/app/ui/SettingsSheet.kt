@@ -1298,6 +1298,7 @@ internal fun resolveNotificationCandidatePackages(
     .toSet()
 }
 
+/** Shared Material text-field colors for the legacy mobile settings sheet. */
 @Composable
 private fun settingsTextFieldColors() =
   OutlinedTextFieldDefaults.colors(
@@ -1310,6 +1311,7 @@ private fun settingsTextFieldColors() =
     cursorColor = mobileAccent,
   )
 
+/** Applies the legacy mobile card border/background used by settings rows. */
 @Composable
 private fun Modifier.settingsRowModifier() =
   this
@@ -1317,6 +1319,7 @@ private fun Modifier.settingsRowModifier() =
     .border(width = 1.dp, color = mobileBorder, shape = RoundedCornerShape(14.dp))
     .background(mobileCardSurface, RoundedCornerShape(14.dp))
 
+/** Primary button colors for the legacy mobile settings sheet. */
 @Composable
 private fun settingsPrimaryButtonColors() =
   ButtonDefaults.buttonColors(
@@ -1326,6 +1329,7 @@ private fun settingsPrimaryButtonColors() =
     disabledContentColor = Color.White.copy(alpha = 0.9f),
   )
 
+/** Destructive button colors for permission and capability settings actions. */
 @Composable
 private fun settingsDangerButtonColors() =
   ButtonDefaults.buttonColors(
@@ -1335,6 +1339,7 @@ private fun settingsDangerButtonColors() =
     disabledContentColor = Color.White.copy(alpha = 0.9f),
   )
 
+/** Opens this app's Android settings page for permissions that require system UI. */
 private fun openAppSettings(context: Context) {
   val intent =
     Intent(
@@ -1344,6 +1349,7 @@ private fun openAppSettings(context: Context) {
   context.startActivity(intent)
 }
 
+/** Opens notification-listener settings, falling back to app settings if the intent is unavailable. */
 private fun openNotificationListenerSettings(context: Context) {
   val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
   runCatching {
@@ -1353,14 +1359,17 @@ private fun openNotificationListenerSettings(context: Context) {
   }
 }
 
+/** Android 13+ notification permission check; earlier versions grant posting at install time. */
 private fun hasNotificationsPermission(context: Context): Boolean {
   if (Build.VERSION.SDK_INT < 33) return true
   return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
     PackageManager.PERMISSION_GRANTED
 }
 
+/** Mirrors the notification listener service access check for UI enablement. */
 private fun isNotificationListenerEnabled(context: Context): Boolean = DeviceNotificationListenerService.isAccessEnabled(context)
 
+/** Checks whether the device exposes motion sensors needed by motion-related capabilities. */
 private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
