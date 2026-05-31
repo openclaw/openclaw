@@ -484,6 +484,35 @@ function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRo
   return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
 
+type ThinkingMetadataCarrier = {
+  thinkingLevels?: Array<{ id: string; label: string }>;
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
+};
+
+function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
+  incoming: T,
+  existing: ThinkingMetadataCarrier | undefined,
+): T {
+  const existingLevels = existing?.thinkingLevels;
+  if (!existingLevels?.length) {
+    return incoming;
+  }
+  const incomingLevels = incoming.thinkingLevels;
+  if (incomingLevels && incomingLevels.length >= existingLevels.length) {
+    return incoming;
+  }
+  const existingThinkingDefault = existing?.thinkingDefault;
+  return {
+    ...incoming,
+    thinkingLevels: existingLevels,
+    ...(existing?.thinkingOptions ? { thinkingOptions: existing.thinkingOptions } : {}),
+    ...(incoming.thinkingDefault === undefined && existingThinkingDefault !== undefined
+      ? { thinkingDefault: existingThinkingDefault }
+      : {}),
+  };
+}
+
 function checkpointSummarySignature(
   row:
     | {
@@ -841,17 +870,22 @@ export function applyChatHistorySessionInfo(
     }
     return true;
   }
+  const existingVisibleSession = state.sessionsResult.sessions.find((existing) =>
+    areUiSessionKeysEquivalent(existing.key, session.key),
+  );
   if (defaults) {
     state.sessionsResult = {
       ...state.sessionsResult,
-      defaults,
+      defaults: preserveRicherThinkingMetadata(defaults, state.sessionsResult.defaults),
     };
   }
-  const visibleKey =
-    state.sessionsResult.sessions.find((existing) =>
-      areUiSessionKeysEquivalent(existing.key, session.key),
-    )?.key ?? session.key;
-  const visibleSession = visibleKey === session.key ? session : { ...session, key: visibleKey };
+  const visibleKey = existingVisibleSession?.key ?? session.key;
+  const keyedVisibleSession =
+    visibleKey === session.key ? session : { ...session, key: visibleKey };
+  const visibleSession = preserveRicherThinkingMetadata(
+    keyedVisibleSession,
+    existingVisibleSession,
+  );
   const applied = applySessionsChangedEvent(state, {
     session: visibleSession,
     sessionKey: visibleSession.key,

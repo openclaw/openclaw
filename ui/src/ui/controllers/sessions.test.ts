@@ -2163,6 +2163,82 @@ describe("applySessionsChangedEvent", () => {
     ]);
   });
 
+  it("keeps richer catalog-backed thinking metadata when chat history is lightweight", () => {
+    const catalogThinkingLevels = [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+      { id: "xhigh", label: "Extra high" },
+    ];
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: {
+          modelProvider: "custom",
+          model: "catalog-model",
+          contextTokens: 200_000,
+          thinkingLevels: catalogThinkingLevels,
+          thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+          thinkingDefault: "medium",
+        },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            thinkingLevels: catalogThinkingLevels,
+            thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+            thinkingDefault: "medium",
+          },
+        ],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(
+      state,
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+        thinkingOptions: ["Low", "Medium", "High"],
+        thinkingDefault: "medium",
+      },
+      {
+        modelProvider: "custom",
+        model: "catalog-model",
+        contextTokens: 200_000,
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+        thinkingOptions: ["Low", "Medium", "High"],
+        thinkingDefault: "medium",
+      },
+    );
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevels?.map((level) => level.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(state.sessionsResult?.defaults.thinkingLevels?.map((level) => level.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
   it("applies chat history session info for the selected non-default global agent", () => {
     const state = createState(async () => undefined, {
       sessionKey: "global",
