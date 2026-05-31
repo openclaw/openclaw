@@ -22,6 +22,27 @@ const defaultShell = isWin
   ? undefined
   : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
 
+function requireTextContent(
+  result: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>,
+) {
+  const content = result.content[0];
+  expect(content?.type).toBe("text");
+  if (content?.type !== "text") {
+    throw new Error(`expected text content, got ${content?.type ?? "missing"}`);
+  }
+  return content.text;
+}
+
+function requireFailedDetails(
+  details: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>["details"],
+) {
+  expect(details.status).toBe("failed");
+  if (details.status !== "failed") {
+    throw new Error(`expected failed details, got ${details.status}`);
+  }
+  return details;
+}
+
 describe("exec foreground failures", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
@@ -49,7 +70,7 @@ describe("exec foreground failures", () => {
     const tool = createExecTool({
       security: "full",
       ask: "off",
-      timeoutSec: 0.05,
+      timeoutSec: 1,
       backgroundMs: 10,
       allowBackground: false,
     });
@@ -81,16 +102,11 @@ describe("exec foreground failures", () => {
     });
 
     expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-    expect((supervisorMock.spawn.mock.calls[0]?.[0] as SpawnInput | undefined)?.timeoutMs).toBe(50);
-    expect(result.content[0]?.type).toBe("text");
-    const details = result.details as {
-      status?: string;
-      exitCode?: number | null;
-      aggregated?: string;
-      durationMs?: number;
-      timedOut?: boolean;
-    };
-    expect(details.status).toBe("failed");
+    expect(supervisorMock.spawn.mock.calls[0]?.[0]?.timeoutMs).toBe(1_000);
+    const text = requireTextContent(result);
+    expect(text).toMatch(/timed out/i);
+    expect(text).toMatch(/re-run with a higher timeout/i);
+    const details = requireFailedDetails(result.details);
     expect(details.exitCode).toBeNull();
     expect(details.timedOut).toBe(true);
     expect(details.aggregated).toBe("");
