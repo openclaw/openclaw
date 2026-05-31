@@ -171,6 +171,7 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   await tempDirs.cleanup();
 });
 
@@ -405,7 +406,7 @@ describe("state migrations", () => {
     const env = createEnv(stateDir);
     const cfg = createConfig();
     const queueDir = path.join(stateDir, "delivery-queue");
-    await fs.mkdir(queueDir, { recursive: true });
+    await fs.mkdir(path.join(queueDir, "failed"), { recursive: true });
     await fs.writeFile(
       path.join(queueDir, "outbound-1.json"),
       JSON.stringify({
@@ -418,6 +419,7 @@ describe("state migrations", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(path.join(queueDir, "outbound-1.delivered"), '{"id":"done"}\n', "utf8");
     await fs.writeFile(
       path.join(queueDir, "outbound-2.json"),
       JSON.stringify({
@@ -427,6 +429,19 @@ describe("state migrations", () => {
         channel: "telegram",
         to: "456",
         payloads: [{ text: "still pending" }],
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(queueDir, "failed", "outbound-failed.json"),
+      JSON.stringify({
+        id: "outbound-failed",
+        enqueuedAt: 12,
+        retryCount: 3,
+        channel: "telegram",
+        to: "789",
+        lastError: "nope",
+        payloads: [{ text: "failed once" }],
       }),
       "utf8",
     );
@@ -444,18 +459,22 @@ describe("state migrations", () => {
       `,
     ).run();
 
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     const result = await runLegacyStateMigrations({ detected });
 
     expect(result.changes).toContain(
-      "Migrated 1 outbound delivery queue entry → shared SQLite state",
+      "Migrated 2 outbound delivery queue entries → shared SQLite state",
     );
+    expect(result.changes).toContain("Removed 1 outbound delivery queue delivered marker");
     expect(result.warnings).toStrictEqual([
       "Left outbound delivery queue in place because 1 entry already existed in shared state: outbound-1",
     ]);
     await expect(fs.readFile(path.join(queueDir, "outbound-1.json"), "utf8")).resolves.toContain(
       '"retryCount":2',
     );
+    await expectMissingPath(path.join(queueDir, "outbound-1.delivered"));
     expect(
       db
         .prepare(
@@ -470,6 +489,20 @@ describe("state migrations", () => {
         )
         .get(),
     ).toEqual({ retry_count: 1 });
+    expect(
+      db
+        .prepare(
+          "SELECT retry_count, failed_at FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = 'outbound-failed'",
+        )
+        .get(),
+    ).toEqual({ retry_count: 3, failed_at: 12 });
+
+    vi.setSystemTime(2_000);
+    const rerunDetected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const rerunResult = await runLegacyStateMigrations({ detected: rerunDetected });
+    expect(rerunResult.warnings).toStrictEqual([
+      "Left outbound delivery queue in place because 1 entry already existed in shared state: outbound-1",
+    ]);
   });
 
   it("preserves a corrupt target session store instead of overwriting it with legacy-only data", async () => {

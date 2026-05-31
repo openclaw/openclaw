@@ -844,6 +844,12 @@ function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile
   return [...pending, ...failed];
 }
 
+function listLegacyDeliveryQueueDeliveredMarkers(queueDir: string): string[] {
+  return safeReadDir(queueDir)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".delivered"))
+    .map((entry) => path.join(queueDir, entry.name));
+}
+
 function readLegacyDeliveryQueueEntry(sourcePath: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
@@ -893,6 +899,14 @@ function buildLegacyDeliveryQueueRow(params: {
   const enqueuedAt =
     typeof params.entry.enqueuedAt === "number" ? params.entry.enqueuedAt : params.now;
   const retryCount = typeof params.entry.retryCount === "number" ? params.entry.retryCount : 0;
+  const failedAt =
+    params.status === "failed"
+      ? typeof params.entry.failedAt === "number"
+        ? params.entry.failedAt
+        : typeof params.entry.lastAttemptAt === "number"
+          ? params.entry.lastAttemptAt
+          : enqueuedAt
+      : null;
   const meta = legacyQueueMetadata(params.entry);
   return {
     queue_name: params.queueName,
@@ -916,7 +930,7 @@ function buildLegacyDeliveryQueueRow(params: {
     entry_json: JSON.stringify({ ...params.entry, id: params.id, enqueuedAt, retryCount }),
     enqueued_at: enqueuedAt,
     updated_at: params.now,
-    failed_at: params.status === "failed" ? params.now : null,
+    failed_at: failedAt,
   };
 }
 
@@ -966,6 +980,24 @@ function removeLegacyDeliveryQueueDir(params: {
   }
 }
 
+function removeLegacyDeliveryQueueMarkers(
+  markerPaths: string[],
+  label: string,
+  warnings: string[],
+): number | null {
+  let removed = 0;
+  for (const markerPath of markerPaths) {
+    try {
+      fs.rmSync(markerPath, { force: true });
+      removed++;
+    } catch (err) {
+      warnings.push(`Failed removing ${label} marker ${markerPath}: ${String(err)}`);
+      return null;
+    }
+  }
+  return removed;
+}
+
 async function migrateLegacyDeliveryQueues(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
@@ -974,7 +1006,8 @@ async function migrateLegacyDeliveryQueues(params: {
   for (const queue of LEGACY_DELIVERY_QUEUE_DIRS) {
     const queueDir = resolveLegacyDeliveryQueuePath(params.stateDir, queue.dirName);
     const files = listLegacyDeliveryQueueFiles(queueDir);
-    if (files.length === 0) {
+    const markerPaths = listLegacyDeliveryQueueDeliveredMarkers(queueDir);
+    if (files.length === 0 && markerPaths.length === 0) {
       continue;
     }
     let imported = 0;
@@ -1038,6 +1071,15 @@ async function migrateLegacyDeliveryQueues(params: {
     } catch (err) {
       warnings.push(`Failed migrating ${queue.label} ${queueDir}: ${String(err)}`);
       continue;
+    }
+    const removedMarkers = removeLegacyDeliveryQueueMarkers(markerPaths, queue.label, warnings);
+    if (removedMarkers === null) {
+      continue;
+    }
+    if (removedMarkers > 0) {
+      changes.push(
+        `Removed ${removedMarkers} ${queue.label} delivered ${removedMarkers === 1 ? "marker" : "markers"}`,
+      );
     }
     if (imported > 0) {
       changes.push(
@@ -2257,7 +2299,9 @@ export async function detectLegacyStateMigrations(params: {
   };
   const hasDeliveryQueues =
     listLegacyDeliveryQueueFiles(deliveryQueuePaths.outboundPath).length > 0 ||
-    listLegacyDeliveryQueueFiles(deliveryQueuePaths.sessionPath).length > 0;
+    listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.outboundPath).length > 0 ||
+    listLegacyDeliveryQueueFiles(deliveryQueuePaths.sessionPath).length > 0 ||
+    listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.sessionPath).length > 0;
   const channelPlans = await collectChannelLegacyStateMigrationPlans({
     cfg: params.cfg,
     env,

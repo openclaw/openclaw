@@ -397,7 +397,12 @@ describe("createBackupArchive", () => {
         await state.writeText("cron/runs/nightly.jsonl", "cron\n");
         await state.writeText("logs/gateway.log", "log\n");
         await state.writeJson("delivery-queue/message.json", { id: "delivery" });
+        await state.writeText("delivery-queue/message.delivered", '{"id":"delivery"}\n');
         await state.writeJson("session-delivery-queue/message.json", { id: "session-delivery" });
+        await state.writeText(
+          "session-delivery-queue/message.delivered",
+          '{"id":"session-delivery"}\n',
+        );
         await state.writeText("tmp/staged.tmp", "tmp\n");
         await state.writeText("gateway.pid", "123\n");
 
@@ -416,7 +421,9 @@ describe("createBackupArchive", () => {
           "/state/cron/runs/nightly.jsonl",
           "/state/logs/gateway.log",
           "/state/delivery-queue/message.json",
+          "/state/delivery-queue/message.delivered",
           "/state/session-delivery-queue/message.json",
+          "/state/session-delivery-queue/message.delivered",
           "/state/tmp/staged.tmp",
           "/state/gateway.pid",
         ]) {
@@ -425,7 +432,7 @@ describe("createBackupArchive", () => {
             suffix,
           ).toBe(false);
         }
-        expect(result.skippedVolatileCount).toBe(8);
+        expect(result.skippedVolatileCount).toBe(10);
       },
     );
   });
