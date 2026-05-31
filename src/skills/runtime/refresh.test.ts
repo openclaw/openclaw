@@ -657,6 +657,7 @@ describe("ensureSkillsWatcher", () => {
       workspaceDir: "/tmp/ws-a",
       config: { skills: { load: { extraDirs: ["/tmp/shared"], watch: false } } },
     });
+    seen.length = 0;
 
     const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
     const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
@@ -693,10 +694,11 @@ describe("ensureSkillsWatcher", () => {
     });
 
     const nextVersion = refreshModule.getSkillsSnapshotVersion(workspaceDir);
-    expect(nextVersion).toBe(firstVersion);
-    expect(refreshModule.shouldRefreshSnapshotForVersion(0, nextVersion)).toBe(true);
+    expect(nextVersion).toBeGreaterThan(firstVersion);
+    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, nextVersion)).toBe(true);
+    vi.setSystemTime(new Date(nextVersion));
     expect(refreshModule.bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" })).toBe(
-      firstVersion,
+      nextVersion,
     );
   });
 
@@ -725,10 +727,12 @@ describe("ensureSkillsWatcher", () => {
     });
 
     expect(createdWatchers[idleSkillsIndex]?.close).toHaveBeenCalledTimes(1);
-    expect(refreshModule.getSkillsSnapshotVersion(idleWorkspaceDir)).toBe(firstVersion);
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const evictedVersion = refreshModule.getSkillsSnapshotVersion(idleWorkspaceDir);
+    expect(evictedVersion).toBeGreaterThan(firstVersion);
+    expect(refreshModule.shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
+    vi.setSystemTime(new Date(evictedVersion));
     expect(refreshModule.bumpSkillsSnapshotVersion({ workspaceDir: idleWorkspaceDir })).toBe(
-      firstVersion,
+      evictedVersion,
     );
   });
 

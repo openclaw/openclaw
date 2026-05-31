@@ -532,12 +532,18 @@ function disposeWorkspaceWatchState(
   workspaceDir: string,
   watchTargets: readonly WatchTarget[] = workspaceWatchTargets.get(workspaceDir) ?? [],
 ): void {
+  const hadWatchTargets = watchTargets.length > 0;
   for (const watchTarget of watchTargets) {
     unsubscribeWorkspaceFromPath(workspaceDir, watchTarget);
   }
   workspaceWatchTargets.delete(workspaceDir);
   workspaceWatchTargetCache.delete(workspaceDir);
   workspaceWatchLastEnsuredAt.delete(workspaceDir);
+  if (hadWatchTargets) {
+    // Watcher disposal creates an unwatched interval; mark the workspace dirty
+    // so the next turn rebuilds skills even if file events were missed.
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch-targets" });
+  }
   clearSkillsSnapshotVersionForWorkspace(workspaceDir);
 }
 
