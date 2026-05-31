@@ -168,6 +168,7 @@ export type CronServiceState = {
   storeLoadedAtMs: number | null;
 };
 
+/** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   return {
     deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
