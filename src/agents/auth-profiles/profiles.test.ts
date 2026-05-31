@@ -475,6 +475,59 @@ describe("promoteAuthProfileInOrder", () => {
     }
   });
 
+  it("creates a per-agent provider order when relogin has no existing order", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-order-create-"));
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const newProfileId = "openai:new-login";
+      const oldProfileId = "openai:old-login";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [oldProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "old-access",
+              refresh: "old-refresh",
+              expires: Date.now() + 30 * 60 * 1000,
+            },
+            [newProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "new-access",
+              refresh: "new-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const updated = await promoteAuthProfileInOrder({
+        agentDir,
+        provider: "openai",
+        profileId: newProfileId,
+      });
+
+      expect(updated?.order?.["openai"]).toEqual([newProfileId, oldProfileId]);
+      expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
+        newProfileId,
+        oldProfileId,
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears matching lastGood after a stale refresh_token_reused profile", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-clear-lastgood-"));
     const agentDir = path.join(stateDir, "agents", "main", "agent");

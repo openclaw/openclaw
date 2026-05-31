@@ -104,10 +104,10 @@ export async function promoteAuthProfileInOrder(params: {
         findProviderAuthStateKey(store.order, providerKey) ??
         findNormalizedProviderKey(store.order, providerKey) ??
         normalizeProviderId(providerKey);
-      const existing = store.order?.[orderKey];
-      if (!existing || existing.length === 0) {
-        return false;
-      }
+      const existing =
+        store.order?.[orderKey] && store.order[orderKey].length > 0
+          ? store.order[orderKey]
+          : listProfilesForProvider(store, providerKey);
       const next = dedupeProfileIds([
         params.profileId,
         ...existing.filter((profileId) => profileId !== params.profileId),
