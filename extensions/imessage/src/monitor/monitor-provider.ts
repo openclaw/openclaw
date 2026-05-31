@@ -170,10 +170,15 @@ function resolveIMessageWatchSourceDbPath(params: {
 }
 
 async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<number | null> {
-  const { DatabaseSync } = await import("node:sqlite");
   const resolvedDbPath = resolveLocalMessagesDbPath(dbPath);
-  let database: InstanceType<typeof DatabaseSync> | undefined;
+  let database:
+    | {
+        close: () => void;
+        prepare: (sql: string) => { get: () => unknown };
+      }
+    | undefined;
   try {
+    const { DatabaseSync } = await import("node:sqlite");
     database = new DatabaseSync(resolvedDbPath, { readOnly: true });
     const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
       | { maxRowid?: unknown }

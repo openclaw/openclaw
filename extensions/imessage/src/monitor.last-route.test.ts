@@ -350,6 +350,40 @@ describe("iMessage monitor last-route updates", () => {
     );
   });
 
+  it("subscribes without a startup watermark when node sqlite is unavailable", async () => {
+    vi.doMock("node:sqlite", () => {
+      throw new Error("node:sqlite unavailable");
+    });
+    vi.resetModules();
+    try {
+      const { monitorIMessageProvider: monitorWithoutSqlite } = await import("./monitor.js");
+      const client = {
+        request: vi.fn(async () => ({ subscription: 1 })),
+        waitForClose: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+      };
+      createIMessageRpcClientMock.mockImplementation(async () => client as never);
+
+      await monitorWithoutSqlite({
+        config: {
+          channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+          messages: { inbound: { debounceMs: 0 } },
+          session: { mainKey: "main" },
+        } as never,
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      });
+
+      expect(client.request).toHaveBeenCalledWith(
+        "watch.subscribe",
+        { attachments: false, include_reactions: true },
+        { timeoutMs: 10_000 },
+      );
+    } finally {
+      vi.doUnmock("node:sqlite");
+      vi.resetModules();
+    }
+  });
+
   it("advances the catchup cursor after startup catchup succeeds and a live row is handled", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-live-cursor-"));
     tempDirs.push(stateDir);
