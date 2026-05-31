@@ -493,6 +493,7 @@ export type PluginHookToolContext = {
   sessionId?: string;
   runId?: string;
   trace?: DiagnosticTraceContext;
+  senderId?: string;
   toolName: string;
   /** Host-authoritative discriminator for tools that intentionally share names. */
   toolKind?: PluginHookToolKind;
@@ -501,6 +502,7 @@ export type PluginHookToolContext = {
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type PluginHookBeforeToolCallEvent = {

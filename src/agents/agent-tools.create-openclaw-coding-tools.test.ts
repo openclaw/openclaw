@@ -208,6 +208,96 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("passes current channel ids to wrapped tool hooks", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hook-current-channel-"));
+    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tmpDir,
+      currentChannelId: "channel-test-id",
+    });
+    const readTool = requireTool(tools, "read");
+    await requireToolExecute(readTool)("tool-hook-current-channel", { path: "note.txt" });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ channelId: "channel-test-id" }),
+    );
+  });
+
+  it("passes requester sender ids to wrapped tool hooks", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hook-requester-"));
+    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tmpDir,
+      currentChannelId: "channel-test-id",
+      senderId: "requester-test-id",
+    });
+    const readTool = requireTool(tools, "read");
+    await requireToolExecute(readTool)("tool-hook-requester", { path: "note.txt" });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ senderId: "requester-test-id" }),
+    );
+  });
+
+  it("omits requester sender ids for runs without requester context", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hook-no-requester-"));
+    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
+    const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+    const readTool = requireTool(tools, "read");
+    await requireToolExecute(readTool)("tool-hook-no-requester", { path: "note.txt" });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("senderId");
+  });
+
+  it("passes caller metadata to wrapped tool hooks", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hook-metadata-"));
+    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
+    const metadata = { requestId: "request-1", source: "test" };
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tmpDir,
+      metadata,
+    });
+    const readTool = requireTool(tools, "read");
+    await requireToolExecute(readTool)("tool-hook-metadata", { path: "note.txt" });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ metadata }));
+  });
+
+  it("omits metadata when callers do not provide it", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hook-no-metadata-"));
+    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
+    const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+    const readTool = requireTool(tools, "read");
+    await requireToolExecute(readTool)("tool-hook-no-metadata", { path: "note.txt" });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("metadata");
+  });
+
   it("adds Tool Search control tools when explicitly requested", () => {
     const tools = createOpenClawCodingTools({
       includeToolSearchControls: true,

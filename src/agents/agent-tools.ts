@@ -447,6 +447,8 @@ export function createOpenClawCodingTools(options?: {
   currentChannelId?: string;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
   hookChannelId?: string;
+  /** Additional caller-provided context exposed to tool hooks. */
+  metadata?: Record<string, unknown>;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
@@ -1132,6 +1134,8 @@ export function createOpenClawCodingTools(options?: {
         sessionId: options?.sessionId,
         runId: options?.runId,
         channelId: options?.hookChannelId ?? options?.currentChannelId,
+        ...(options?.senderId ? { senderId: options.senderId } : {}),
+        ...(options?.metadata ? { metadata: options.metadata } : {}),
         ...(options?.trace ? { trace: options.trace } : {}),
         loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
         onToolOutcome: options?.onToolOutcome,
