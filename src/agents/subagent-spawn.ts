@@ -379,54 +379,55 @@ function readRequesterThinkingLevel(params: {
   requesterInternalKey: string;
   requesterAgentId?: string;
 }): string | undefined {
+  let entry: SessionEntry | undefined;
   try {
     const target = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: params.requesterInternalKey,
     });
     const store = loadSessionStore(target.storePath, { clone: false });
-    const entry = resolveStoreEntryByKeys(store, target.storeKeys);
-    if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
-      return entry.thinkingLevel.trim();
-    }
-    const requesterAgentThinking = params.requesterAgentId
-      ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
-      : undefined;
-    if (requesterAgentThinking) {
-      return requesterAgentThinking;
-    }
-    const defaultModel = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.requesterAgentId,
-    });
-    if (entry) {
-      const normalizedOverride = normalizeStoredOverrideModel({
-        providerOverride: entry.providerOverride,
-        modelOverride: entry.modelOverride,
-      });
-      const persistedModel = resolvePersistedSelectedModelRef({
-        defaultProvider: defaultModel.provider,
-        runtimeProvider: entry.modelProvider,
-        runtimeModel: entry.model,
-        overrideProvider: normalizedOverride.providerOverride,
-        overrideModel: normalizedOverride.modelOverride,
-      });
-      if (persistedModel) {
-        return resolveThinkingDefault({
-          cfg: params.cfg,
-          provider: persistedModel.provider,
-          model: persistedModel.model,
-        });
-      }
-    }
-    return resolveThinkingDefault({
-      cfg: params.cfg,
-      provider: defaultModel.provider,
-      model: defaultModel.model,
-    });
+    entry = resolveStoreEntryByKeys(store, target.storeKeys);
   } catch {
-    return undefined;
+    entry = undefined;
   }
+  if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
+    return entry.thinkingLevel.trim();
+  }
+  const requesterAgentThinking = params.requesterAgentId
+    ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
+    : undefined;
+  if (requesterAgentThinking) {
+    return requesterAgentThinking;
+  }
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.requesterAgentId,
+  });
+  if (entry) {
+    const normalizedOverride = normalizeStoredOverrideModel({
+      providerOverride: entry.providerOverride,
+      modelOverride: entry.modelOverride,
+    });
+    const persistedModel = resolvePersistedSelectedModelRef({
+      defaultProvider: defaultModel.provider,
+      runtimeProvider: entry.modelProvider,
+      runtimeModel: entry.model,
+      overrideProvider: normalizedOverride.providerOverride,
+      overrideModel: normalizedOverride.modelOverride,
+    });
+    if (persistedModel) {
+      return resolveThinkingDefault({
+        cfg: params.cfg,
+        provider: persistedModel.provider,
+        model: persistedModel.model,
+      });
+    }
+  }
+  return resolveThinkingDefault({
+    cfg: params.cfg,
+    provider: defaultModel.provider,
+    model: defaultModel.model,
+  });
 }
 
 type PreparedSpawnContext =
