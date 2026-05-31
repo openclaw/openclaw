@@ -196,7 +196,6 @@ describe("production lint suppressions", () => {
       "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
       "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
       "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
-      "src/config/types.channels.ts|typescript/no-explicit-any|1",
       "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
       "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
       "src/infra/channel-runtime-context.ts|typescript/no-unnecessary-type-parameters|1",
@@ -239,10 +238,6 @@ describe("production lint suppressions", () => {
     expect(anySuppressions).toEqual([
       {
         file: "src/channels/plugins/types.plugin.ts",
-        rule: "typescript/no-explicit-any",
-      },
-      {
-        file: "src/config/types.channels.ts",
         rule: "typescript/no-explicit-any",
       },
       {

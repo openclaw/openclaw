@@ -38,6 +38,16 @@ export type ExtensionNestedPolicyConfig = {
   [key: string]: unknown;
 };
 
+export type ExtensionAccountConfig = ExtensionNestedPolicyConfig & {
+  defaultTo?: string | number;
+  dmPolicy?: string;
+  dm?: ExtensionNestedPolicyConfig;
+  mediaMaxMb?: number;
+  configWrites?: boolean;
+};
+
+type OpenWorldChannelConfig = ReturnType<typeof JSON.parse>;
+
 /**
  * Base type for extension channel config sections.
  * Extensions can use this as a starting point for their channel config.
@@ -51,7 +61,7 @@ export type ExtensionChannelConfig = {
   defaultAccount?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
-  mentionPatterns?: MentionPatternsPolicyConfig;
+  mentionPatterns?: MentionPatternsPolicyConfig | string[];
   contextVisibility?: ContextVisibilityMode;
   healthMonitor?: ChannelHealthMonitorConfig;
   dm?: ExtensionNestedPolicyConfig;
@@ -74,7 +84,7 @@ export type ExtensionChannelConfig = {
   botLoopProtection?: ChannelBotLoopProtectionConfig;
   spawnSubagentSessions?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
-  accounts?: Record<string, unknown>;
+  accounts?: Record<string, ExtensionAccountConfig>;
   [key: string]: unknown;
 };
 
@@ -93,10 +103,7 @@ export interface ChannelsConfig {
   whatsapp?: WhatsAppConfig;
   /**
    * Channel sections are plugin-owned and keyed by arbitrary channel ids.
-   * Keep the lookup permissive so augmented channel configs remain ergonomic at call sites.
+   * Open-world config keeps SDK/plugin-owned sections ergonomic for dynamic ids.
    */
-  // Plugin-owned channel sections are open-world config; narrowing this breaks
-  // SDK config-write helpers that accept account-shaped channel records.
-  // oxlint-disable-next-line typescript/no-explicit-any
-  [key: string]: any;
+  [key: string]: OpenWorldChannelConfig;
 }

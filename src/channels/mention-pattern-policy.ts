@@ -32,6 +32,10 @@ function isMentionPatternsPolicyConfig(value: unknown): value is MentionPatterns
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
 function resolveProviderMentionPatternsPolicy(
   cfg: OpenClawConfig | undefined,
   provider: string | undefined,
@@ -39,7 +43,8 @@ function resolveProviderMentionPatternsPolicy(
   if (!cfg || !provider) {
     return undefined;
   }
-  const policy = cfg.channels?.[provider]?.mentionPatterns;
+  const channelConfig = cfg.channels?.[provider];
+  const policy = isRecord(channelConfig) ? channelConfig.mentionPatterns : undefined;
   return isMentionPatternsPolicyConfig(policy) ? policy : undefined;
 }
 
