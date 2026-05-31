@@ -209,6 +209,42 @@ function loadRouteReplyRuntime() {
   return routeReplyRuntimeLoader.load();
 }
 
+function isDirectAcpChildDeliveryTurn(params: {
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry | null;
+}): boolean {
+  const deliveryContext = params.entry?.deliveryContext;
+  const deliveryChannel = normalizeMessageChannel(deliveryContext?.channel);
+  const turnChannel = normalizeMessageChannel(
+    params.ctx.OriginatingChannel ?? params.ctx.Provider ?? params.ctx.Surface,
+  );
+  if (!deliveryChannel || !turnChannel || deliveryChannel !== turnChannel) {
+    return false;
+  }
+
+  const deliveryAccountId = normalizeOptionalString(deliveryContext?.accountId);
+  const turnAccountId = normalizeOptionalString(params.ctx.AccountId);
+  if (deliveryAccountId && turnAccountId && deliveryAccountId !== turnAccountId) {
+    return false;
+  }
+
+  const deliveryThreadId =
+    deliveryContext?.threadId != null
+      ? normalizeOptionalString(String(deliveryContext.threadId))
+      : undefined;
+  const turnThreadId =
+    params.ctx.MessageThreadId != null
+      ? normalizeOptionalString(String(params.ctx.MessageThreadId))
+      : undefined;
+  if (deliveryThreadId && turnThreadId && deliveryThreadId === turnThreadId) {
+    return true;
+  }
+
+  const deliveryTo = normalizeOptionalString(deliveryContext?.to);
+  const turnTo = normalizeOptionalString(params.ctx.OriginatingTo);
+  return Boolean(deliveryTo && turnTo && deliveryTo === turnTo);
+}
+
 function loadGetReplyFromConfigRuntime() {
   return getReplyFromConfigRuntimeLoader.load();
 }
@@ -1308,7 +1344,12 @@ export async function dispatchReplyFromConfig(
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
+  const suppressAcpChildUserDelivery =
+    isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry) &&
+    !isDirectAcpChildDeliveryTurn({
+      ctx,
+      entry: sessionStoreEntry.entry,
+    });
   const normalizedRouteReplyChannel = normalizeMessageChannel(replyRoute.channel);
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
   const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);

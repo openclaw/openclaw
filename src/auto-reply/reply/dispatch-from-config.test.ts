@@ -3599,6 +3599,152 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.text).toBe("hello world");
   });
 
+  it("delivers follow-up replies from parent-owned ACP sessions in their bound Discord thread", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "thread follow-up" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "acp-session-id",
+      updatedAt: Date.now(),
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+      spawnedBy: "agent:main:discord:channel:parent",
+      deliveryContext: {
+        channel: "discord",
+        accountId: "main",
+        to: "channel:thread-1",
+        threadId: "thread-1",
+      },
+    };
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 128 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:thread-1",
+      AccountId: "main",
+      SessionKey: "agent:codex-acp:session-1",
+      MessageThreadId: "thread-1",
+      BodyForAgent: "follow up in the bound thread",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "thread follow-up" });
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("thread follow-up");
+  });
+
+  it("still suppresses parent-owned ACP replies outside the child delivery thread", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "hidden child output" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "acp-session-id",
+      updatedAt: Date.now(),
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+      spawnedBy: "agent:main:discord:channel:parent",
+      deliveryContext: {
+        channel: "discord",
+        accountId: "main",
+        to: "channel:thread-1",
+        threadId: "thread-1",
+      },
+    };
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 128 },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:other-thread",
+      AccountId: "main",
+      SessionKey: "agent:codex-acp:session-1",
+      MessageThreadId: "other-thread",
+      BodyForAgent: "follow up somewhere else",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
+
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("emits lifecycle end for ACP turns using the current run id", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "done" }, { type: "done" }]);
