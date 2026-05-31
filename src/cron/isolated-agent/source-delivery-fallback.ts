@@ -1,27 +1,29 @@
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import type { CronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob } from "../types.js";
 
-export function resolveFallbackCronSourceDeliveryPlan(
-  job: CronJob,
-  resolvedDelivery: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-    ok?: boolean;
-  },
-): SourceDeliveryPlan {
-  const deliveryPlan = resolveCronDeliveryPlan(job);
+export type CronSourceDeliveryResolvedTarget = {
+  channel?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string | number;
+  ok?: boolean;
+};
+
+export function resolveCronSourceDeliveryPlan(params: {
+  deliveryPlan: CronDeliveryPlan;
+  resolvedDelivery: CronSourceDeliveryResolvedTarget;
+}): SourceDeliveryPlan {
   const target = {
-    channel: resolvedDelivery.channel,
-    to: resolvedDelivery.to,
-    accountId: resolvedDelivery.accountId,
-    threadId: resolvedDelivery.threadId,
+    channel: params.resolvedDelivery.channel,
+    to: params.resolvedDelivery.to,
+    accountId: params.resolvedDelivery.accountId,
+    threadId: params.resolvedDelivery.threadId,
   };
 
-  if (deliveryPlan.mode === "webhook") {
+  if (params.deliveryPlan.mode === "webhook") {
     return createSourceDeliveryPlan({
       owner: "none",
       reason: "cron_webhook",
@@ -30,7 +32,7 @@ export function resolveFallbackCronSourceDeliveryPlan(
     });
   }
 
-  if (deliveryPlan.mode === "none") {
+  if (params.deliveryPlan.mode === "none") {
     return createSourceDeliveryPlan({
       owner: "none",
       reason: "cron_none",
@@ -47,7 +49,17 @@ export function resolveFallbackCronSourceDeliveryPlan(
     target,
     messageToolEnabled: true,
     messageToolForced: false,
+    requireExplicitMessageTarget: true,
+    requireExplicitMessageTargetEvidence: true,
     directFallback: true,
-    skipFallbackWhenMessageToolSentToTarget: resolvedDelivery.ok,
+    skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok,
   });
+}
+
+export function resolveFallbackCronSourceDeliveryPlan(
+  job: CronJob,
+  resolvedDelivery: CronSourceDeliveryResolvedTarget,
+): SourceDeliveryPlan {
+  const deliveryPlan = resolveCronDeliveryPlan(job);
+  return resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery });
 }

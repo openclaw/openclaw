@@ -16,7 +16,8 @@ import {
 const actualDeliveryPlanModule =
   await vi.importActual<typeof import("../delivery-plan.js")>("../delivery-plan.js");
 const { createCronPromptExecutor, executeCronRun } = await import("./run-executor.js");
-const { resolveFallbackCronSourceDeliveryPlan } = await import("./source-delivery-fallback.js");
+const { resolveCronSourceDeliveryPlan, resolveFallbackCronSourceDeliveryPlan } =
+  await import("./source-delivery-fallback.js");
 
 const emptySkillsSnapshot: SkillSnapshot = {
   prompt: "",
@@ -158,6 +159,82 @@ describe("resolveFallbackCronSourceDeliveryPlan", () => {
     expect(plan.fallback.directDelivery).toBe(true);
     expect(plan.fallback.skipWhenMessageToolSentToTarget).toBe(false);
   });
+});
+
+describe("resolveCronSourceDeliveryPlan", () => {
+  beforeEach(() => {
+    resolveCronDeliveryPlanMock.mockReset();
+    resolveCronDeliveryPlanMock.mockImplementation(
+      actualDeliveryPlanModule.resolveCronDeliveryPlan,
+    );
+  });
+
+  const cases: Array<{
+    name: string;
+    job: CronJob;
+    resolvedDelivery: {
+      channel?: string;
+      accountId?: string;
+      to?: string;
+      threadId?: string | number;
+      ok?: boolean;
+    };
+  }> = [
+    {
+      name: "none",
+      job: makeJob({ delivery: { mode: "none" } }),
+      resolvedDelivery: {
+        channel: "messagechat",
+        accountId: "acct-1",
+        to: "room-1",
+        threadId: "thread-1",
+        ok: true,
+      },
+    },
+    {
+      name: "announce",
+      job: makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "room-1" } }),
+      resolvedDelivery: {
+        channel: "messagechat",
+        to: "room-1",
+        ok: true,
+      },
+    },
+    {
+      name: "webhook",
+      job: makeJob({ delivery: { mode: "webhook" } }),
+      resolvedDelivery: {
+        channel: "messagechat",
+        to: "room-1",
+        ok: true,
+      },
+    },
+    {
+      name: "implicit announce",
+      job: makeJob({ omitDelivery: true }),
+      resolvedDelivery: {
+        channel: "messagechat",
+        to: "room-1",
+        ok: false,
+      },
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(`matches the fallback wrapper for ${testCase.name}`, () => {
+      const deliveryPlan = actualDeliveryPlanModule.resolveCronDeliveryPlan(testCase.job);
+      const normalPathPlan = resolveCronSourceDeliveryPlan({
+        deliveryPlan,
+        resolvedDelivery: testCase.resolvedDelivery,
+      });
+      const fallbackPathPlan = resolveFallbackCronSourceDeliveryPlan(
+        testCase.job,
+        testCase.resolvedDelivery,
+      );
+
+      expect(normalPathPlan).toEqual(fallbackPathPlan);
+    });
+  }
 });
 
 describe("createCronPromptExecutor sourceDelivery guard", () => {
