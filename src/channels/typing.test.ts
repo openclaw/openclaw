@@ -80,14 +80,6 @@ describe("createTypingCallbacks", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
-    if (vi.isFakeTimers()) {
-      vi.clearAllTimers();
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
   it("invokes start on reply start", async () => {
     const { start, onStartError, callbacks } = createTypingHarness();
 
