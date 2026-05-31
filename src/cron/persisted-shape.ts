@@ -1,5 +1,6 @@
 import { parseAbsoluteTimeMs } from "./parse.js";
 
+/** Structural rejection code for persisted cron jobs that cannot be loaded safely. */
 export type InvalidPersistedCronJobReason =
   | "missing-id"
   | "missing-schedule"
