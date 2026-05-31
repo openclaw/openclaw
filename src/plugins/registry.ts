@@ -15,6 +15,7 @@ import {
 } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   normalizeCommandDescriptorName,
@@ -2628,6 +2629,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             ): PluginStateSyncKeyedStore<T> => {
               assertPluginStateAllowed();
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
+            },
+            openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+              options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+            ) => {
+              assertPluginStateAllowed();
+              const stateDir = options?.stateDir ?? baseState.resolveStateDir();
+              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
+                ...(options ?? {}),
+                channelId: pluginId,
+                stateDir,
+              });
             },
           } satisfies PluginRuntime["state"];
         }

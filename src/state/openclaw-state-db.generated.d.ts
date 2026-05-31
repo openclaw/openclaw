@@ -144,6 +144,29 @@ export interface CaptureSessions {
   started_at: number;
 }
 
+export interface ChannelIngressEvents {
+  account_id: string;
+  attempts: Generated<number>;
+  channel_id: string;
+  claim_owner: string | null;
+  claim_token: string | null;
+  claimed_at: number | null;
+  completed_at: number | null;
+  completed_metadata_json: string | null;
+  event_id: string;
+  failed_at: number | null;
+  failed_reason: string | null;
+  lane_key: string | null;
+  last_attempt_at: number | null;
+  last_error: string | null;
+  metadata_json: string | null;
+  payload_json: string;
+  queue_name: string;
+  received_at: number;
+  status: string;
+  updated_at: number;
+}
+
 export interface ChannelPairingAllowEntries {
   account_id: string;
   channel_key: string;
@@ -931,6 +954,7 @@ export interface DB {
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
   capture_sessions: CaptureSessions;
+  channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
   command_log_entries: CommandLogEntries;

@@ -607,6 +607,39 @@ CREATE INDEX IF NOT EXISTS idx_plugin_state_expiry
 CREATE INDEX IF NOT EXISTS idx_plugin_state_listing
   ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
 
+CREATE TABLE IF NOT EXISTS channel_ingress_events (
+  queue_name TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  lane_key TEXT,
+  payload_json TEXT NOT NULL,
+  metadata_json TEXT,
+  received_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  claim_token TEXT,
+  claim_owner TEXT,
+  claimed_at INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  last_error TEXT,
+  failed_reason TEXT,
+  failed_at INTEGER,
+  completed_at INTEGER,
+  completed_metadata_json TEXT,
+  PRIMARY KEY (queue_name, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_pending
+  ON channel_ingress_events(queue_name, status, received_at, event_id);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_claims
+  ON channel_ingress_events(queue_name, status, claimed_at);
+
+CREATE INDEX IF NOT EXISTS idx_channel_ingress_lane
+  ON channel_ingress_events(queue_name, status, lane_key);
+
 CREATE TABLE IF NOT EXISTS plugin_blob_entries (
   plugin_id TEXT NOT NULL,
   namespace TEXT NOT NULL,
