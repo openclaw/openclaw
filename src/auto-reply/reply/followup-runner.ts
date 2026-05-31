@@ -28,6 +28,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   clearDroppedCliSessionBinding,
@@ -35,6 +36,7 @@ import {
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 import {
+  buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
 } from "./agent-runner-execution.js";
@@ -546,19 +548,40 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
-      activeSessionEntry = await runPreflightCompactionIfNeeded({
-        cfg: runtimeConfig,
-        followupRun: effectiveQueued,
-        promptForEstimate: queued.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore,
-        sessionKey: replySessionKey,
-        storePath,
-        isHeartbeat: opts?.isHeartbeat === true,
-        replyOperation,
-      });
+      try {
+        activeSessionEntry = await runPreflightCompactionIfNeeded({
+          cfg: runtimeConfig,
+          followupRun: effectiveQueued,
+          promptForEstimate: queued.prompt,
+          defaultModel,
+          agentCfgContextTokens,
+          sessionEntry: activeSessionEntry,
+          sessionStore,
+          sessionKey: replySessionKey,
+          storePath,
+          isHeartbeat: opts?.isHeartbeat === true,
+          replyOperation,
+        });
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        replyOperation.fail("run_failed", err);
+        const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
+          includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
+        });
+        if (preflightCompactionFailureText) {
+          await sendFollowupPayloads(
+            [
+              markReplyPayloadForSourceSuppressionDelivery({
+                text: preflightCompactionFailureText,
+              }),
+            ],
+            effectiveQueued,
+            { provider: fallbackProvider, modelId: fallbackModel },
+          );
+          return;
+        }
+        throw err;
+      }
       if (run.sessionKey) {
         const owningSessionId =
           activeSessionEntry?.sessionId === run.sessionId

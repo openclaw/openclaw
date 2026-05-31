@@ -744,6 +744,77 @@ describe("createFollowupRunner reply-lane admission", () => {
     );
     realAgentEvents.resetAgentRunContextForTest();
   });
+
+  it("routes preflight compaction failures before starting queued followup runs", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "acct-1",
+        originatingThreadId: "thread-1",
+        originatingChatType: "group",
+        run: {
+          messageProvider: "discord",
+          provider: "anthropic",
+          model: "claude",
+          verboseLevel: "off",
+          sessionKey: "main",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledOnce();
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+        payload: expect.objectContaining({
+          text: expect.stringContaining("auto-compaction could not recover"),
+        }),
+      }),
+    );
+  });
+
+  it("preserves non-compaction preflight failures for queued followup runs", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(new Error("session load failed"));
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          run: {
+            messageProvider: "discord",
+            provider: "anthropic",
+            model: "claude",
+            sessionKey: "main",
+          },
+        }),
+      ),
+    ).rejects.toThrow("session load failed");
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
 });
 
 async function normalizeComparablePath(filePath: string): Promise<string> {

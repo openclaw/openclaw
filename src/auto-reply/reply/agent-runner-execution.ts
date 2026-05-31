@@ -625,6 +625,7 @@ function collapseRepeatedFailureDetail(message: string): string {
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
+const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
 
 type ExternalRunFailureReply = {
   text: string;
@@ -690,6 +691,27 @@ function buildCodexAppServerFailureText(message: string): string | null {
     return "⚠️ Codex app-server stopped before confirming turn completion. OpenClaw did not replay the turn automatically because it may still be active; try again, or use /new if the session stays stuck.";
   }
   return null;
+}
+
+export function buildPreflightCompactionFailureText(
+  message: string,
+  options?: { includeDetails?: boolean },
+): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (!normalizedMessage.startsWith(PREFLIGHT_COMPACTION_FAILURE_PREFIX)) {
+    return null;
+  }
+  const reason = sanitizeUserFacingText(
+    normalizedMessage.slice(PREFLIGHT_COMPACTION_FAILURE_PREFIX.length),
+    { errorContext: true },
+  )
+    .trim()
+    .replace(/\s+/gu, " ");
+  const reasonSuffix = options?.includeDetails && reason ? ` Reason: ${reason}.` : "";
+  return (
+    "⚠️ Context is too large and auto-compaction could not recover this turn." +
+    `${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`
+  );
 }
 
 function buildCliBackendTimeoutFailureText(message: string): string | null {
@@ -813,6 +835,20 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
         text: BILLING_ERROR_USER_MESSAGE,
+        sessionCtx: params.sessionCtx,
+        isGenericRunnerFailure: false,
+        cfg: params.cfg,
+      }),
+    });
+  }
+
+  const preflightCompactionFailureText = buildPreflightCompactionFailureText(message, {
+    includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+  });
+  if (preflightCompactionFailureText) {
+    return markAgentRunFailureReplyPayload({
+      text: resolveExternalRunFailureTextForConversation({
+        text: preflightCompactionFailureText,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
         cfg: params.cfg,
