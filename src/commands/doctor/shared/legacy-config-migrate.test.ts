@@ -1412,6 +1412,35 @@ describe("legacy migrate x_search auth", () => {
 });
 
 describe("legacy bundled provider discovery migrate", () => {
+  it("rewrites legacy OpenAI Codex plugin policy ids", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram", "openai-codex", "openai"],
+        deny: ["openai-codex"],
+        entries: {
+          "openai-codex": {
+            enabled: false,
+          },
+        },
+        slots: {
+          memory: "openai-codex",
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.allow).toEqual(["telegram", "openai"]);
+    expect(res.config?.plugins?.deny).toEqual(["openai"]);
+    expect(res.config?.plugins?.entries?.openai).toEqual({ enabled: false });
+    expect(res.config?.plugins?.entries?.["openai-codex"]).toBeUndefined();
+    expect(res.config?.plugins?.slots?.memory).toBe("openai");
+    expect(res.changes).toContain("Rewrote plugins.allow openai-codex references to openai.");
+    expect(res.changes).toContain("Rewrote plugins.deny openai-codex references to openai.");
+    expect(res.changes).toContain(
+      "Rewrote plugins.entries.openai-codex to plugins.entries.openai.",
+    );
+    expect(res.changes).toContain("Rewrote plugins.slots openai-codex references to openai.");
+  });
+
   it("sets compat mode for existing restrictive plugin allowlists", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {

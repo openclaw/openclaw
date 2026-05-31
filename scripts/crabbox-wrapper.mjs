@@ -143,6 +143,7 @@ const shellInlineCommandInterpreters = new Set(["bash", "dash", "ksh", "sh", "zs
 const remoteChangedGateEnv = [
   "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
   "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+  "CI=1",
 ];
 const shellInlineCommandOptionsWithNextValue = new Set([
   "+O",

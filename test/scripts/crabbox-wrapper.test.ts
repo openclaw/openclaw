@@ -312,7 +312,7 @@ function expectGroupedShellCommand(remoteCommand: string, command: string): void
 }
 
 const remoteChangedGateEnvPrefix =
-  "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1";
+  "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1";
 const remoteChangedGateExport = `export ${remoteChangedGateEnvPrefix};`;
 
 afterAll(() => {
@@ -1758,7 +1758,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("git diff --cached --quiet");
     expect(remoteCommand).toContain("commit -q --no-gpg-sign -m remote-changed-gate-tree");
     expect(remoteCommand).toMatch(
-      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed$/u,
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
   });
 
@@ -1935,7 +1935,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
-    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
+    expect(remoteCommand).toContain(
+      `&& export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1; ${shellScript}`,
+    );
   });
 
   it("preserves sparse changed-gate Git bootstrap for shell option values before -c", () => {
@@ -2079,7 +2081,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toMatch(
-      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
     );
   });
 
@@ -2102,7 +2104,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toMatch(
-      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 timeout 1200s bash -lc 'pnpm check:changed'$/u,
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s bash -lc 'pnpm check:changed'$/u,
     );
   });
 

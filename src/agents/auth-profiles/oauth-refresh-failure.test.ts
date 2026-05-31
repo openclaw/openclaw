@@ -15,8 +15,5 @@ describe("oauth refresh failure hints", () => {
     expect(buildOAuthRefreshFailureLoginCommand("openai")).toBe(
       "openclaw models auth login --provider openai",
     );
-    expect(buildOAuthRefreshFailureLoginCommand("OpenAI-Codex")).toBe(
-      "openclaw models auth login --provider openai",
-    );
   });
 });

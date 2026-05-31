@@ -11,9 +11,6 @@ export type OAuthRefreshFailureReason =
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
-const RETIRED_REAUTH_PROVIDER_IDS: Readonly<Record<string, string>> = {
-  "openai-codex": "openai",
-};
 
 function isOAuthRefreshFailureMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -72,10 +69,7 @@ export function classifyOAuthRefreshFailure(message: string): {
 
 export function buildOAuthRefreshFailureLoginCommand(provider: string | null | undefined): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
-  const reauthProvider = sanitizedProvider
-    ? (RETIRED_REAUTH_PROVIDER_IDS[sanitizedProvider] ?? sanitizedProvider)
-    : null;
-  return reauthProvider
-    ? formatCliCommand(`openclaw models auth login --provider ${reauthProvider}`)
+  return sanitizedProvider
+    ? formatCliCommand(`openclaw models auth login --provider ${sanitizedProvider}`)
     : formatCliCommand("openclaw models auth login");
 }

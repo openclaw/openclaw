@@ -206,17 +206,10 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
     provider?: unknown;
     stopReason?: unknown;
   };
-  // Persisted transcripts from the retired OpenAI Codex route still need this
-  // repair so replay sees a complete tool-call/tool-result pair.
-  const legacyOpenAIProvider = "openai-codex";
-  const legacyOpenAIResponsesApi = "openai-codex-responses";
-  const openAIProvider = message.provider === "openai" || message.provider === legacyOpenAIProvider;
-  const openAIResponsesApi =
-    message.api === "openai-chatgpt-responses" || message.api === legacyOpenAIResponsesApi;
   return (
     message.role === "assistant" &&
-    openAIResponsesApi &&
-    openAIProvider &&
+    message.api === "openai-chatgpt-responses" &&
+    message.provider === "openai" &&
     message.stopReason !== "error" &&
     message.stopReason !== "aborted"
   );
