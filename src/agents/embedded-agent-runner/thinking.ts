@@ -450,7 +450,9 @@ function shouldRecoverAnthropicThinkingErrorMessage(
 function isAssistantMessageErrorEvent(
   event: unknown,
 ): event is Extract<AssistantMessageEvent, { type: "error" }> {
-  return !!event && typeof event === "object" && (event as { type?: unknown }).type === "error";
+  return (
+    Boolean(event) && typeof event === "object" && (event as { type?: unknown }).type === "error"
+  );
 }
 
 function getAssistantMessageErrorText(
