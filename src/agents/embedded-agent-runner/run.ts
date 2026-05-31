@@ -705,6 +705,8 @@ export async function runEmbeddedAgent(
             // first generating OpenClaw models.json. This keeps one-shot model runs from
             // blocking on unrelated provider discovery.
             skipAgentDiscovery: true,
+            allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
+            preferBundledStaticCatalogModel: pluginHarnessOwnsTransport,
             workspaceDir: resolvedWorkspace,
             authProfileId: params.authProfileId,
           },
@@ -717,25 +719,6 @@ export async function runEmbeddedAgent(
         }
       }
       if (!modelResolution && pluginHarnessOwnsTransport) {
-        for (const candidateProvider of modelResolutionProviders) {
-          const staticCatalogResolution = await resolveModelAsync(
-            candidateProvider,
-            modelId,
-            agentDir,
-            params.config,
-            {
-              skipAgentDiscovery: true,
-              allowBundledStaticCatalogFallback: true,
-              workspaceDir: resolvedWorkspace,
-              authProfileId: params.authProfileId,
-            },
-          );
-          if (staticCatalogResolution.model) {
-            resolvedModelProvider = candidateProvider;
-            modelResolution = staticCatalogResolution;
-            break;
-          }
-        }
         modelResolution ??= firstModelResolution;
       }
       if (!modelResolution) {

@@ -1355,6 +1355,7 @@ export async function resolveModelAsync(
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
     allowBundledStaticCatalogFallback?: boolean;
+    preferBundledStaticCatalogModel?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
@@ -1422,6 +1423,47 @@ export async function resolveModelAsync(
     authProfileId: options?.authProfileId,
     preferredProfile: options?.preferredProfile,
   });
+  let staticCatalogLookupComplete = false;
+  let staticCatalogModel: ReturnType<typeof resolveBundledStaticCatalogModel> | undefined;
+  const resolveStaticCatalogModel = () => {
+    if (!options?.allowBundledStaticCatalogFallback) {
+      return undefined;
+    }
+    if (!staticCatalogLookupComplete) {
+      staticCatalogLookupComplete = true;
+      staticCatalogModel = resolveBundledStaticCatalogModel({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        cfg,
+        workspaceDir,
+      });
+    }
+    return staticCatalogModel;
+  };
+  const resolveStaticCatalogFallbackModel = () => {
+    const catalogModel = resolveStaticCatalogModel();
+    if (!catalogModel) {
+      return undefined;
+    }
+    const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
+      provider: normalizedRef.provider,
+      discoveredModel: catalogModel,
+      providerConfig,
+      modelId: normalizedRef.model,
+      cfg,
+      runtimeHooks,
+      workspaceDir,
+      preferDiscoveredModelMetadata: true,
+    });
+    return normalizeResolvedModel({
+      provider: normalizedRef.provider,
+      cfg,
+      agentDir: resolvedAgentDir,
+      workspaceDir,
+      model: overriddenStaticCatalogModel,
+      runtimeHooks,
+    });
+  };
   const resolveDynamicAttempt = async () => {
     await runtimeHooks.prepareProviderDynamicModel({
       provider: normalizedRef.provider,
@@ -1461,7 +1503,10 @@ export async function resolveModelAsync(
       runtimeHooks,
     })
       ? explicitModel.model
-      : await resolveDynamicAttempt();
+      : !explicitModel && options?.preferBundledStaticCatalogModel
+        ? resolveStaticCatalogFallbackModel()
+        : undefined;
+  model ??= await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
     // gateway boot. Retry once before surfacing a user-visible "Unknown model"
@@ -1469,41 +1514,10 @@ export async function resolveModelAsync(
     model = await resolveDynamicAttempt();
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
-    const staticCatalogModel = resolveBundledStaticCatalogModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      workspaceDir,
-    });
-    if (staticCatalogModel) {
-      const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
-        provider: normalizedRef.provider,
-        discoveredModel: staticCatalogModel,
-        providerConfig,
-        modelId: normalizedRef.model,
-        cfg,
-        runtimeHooks,
-        workspaceDir,
-        preferDiscoveredModelMetadata: true,
-      });
-      model = normalizeResolvedModel({
-        provider: normalizedRef.provider,
-        cfg,
-        agentDir: resolvedAgentDir,
-        workspaceDir,
-        model: overriddenStaticCatalogModel,
-        runtimeHooks,
-      });
-    }
+    model = resolveStaticCatalogFallbackModel();
   }
   if (model && options?.allowBundledStaticCatalogFallback) {
-    const staticCatalogModel = resolveBundledStaticCatalogModel({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      cfg,
-      workspaceDir,
-    });
-    const staticMediaInput = staticCatalogModel?.mediaInput;
+    const staticMediaInput = resolveStaticCatalogModel()?.mediaInput;
     const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
     const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
     if (mediaInput) {

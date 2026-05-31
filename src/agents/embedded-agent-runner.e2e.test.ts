@@ -501,7 +501,7 @@ describe("runEmbeddedAgent", () => {
     ).toBe("openai");
   });
 
-  it("resolves a transport-owned Codex model from the bundled static catalog on a cold dynamic miss", async () => {
+  it("resolves a transport-owned Codex model from the bundled static catalog in one resolver pass", async () => {
     const sessionFile = nextSessionFile();
     const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
     const openAIProvider = baseConfig.models?.providers?.openai;
@@ -529,15 +529,9 @@ describe("runEmbeddedAgent", () => {
         },
       },
     };
-    resolveModelAsyncMock
-      .mockResolvedValueOnce({
-        error: "Unknown model: openai/gpt-5.3-codex",
-        authStorage: {
-          setRuntimeApiKey: () => undefined,
-        },
-        modelRegistry: {},
-      })
-      .mockResolvedValueOnce(createResolvedEmbeddedRunnerModel("openai", "gpt-5.3-codex"));
+    resolveModelAsyncMock.mockResolvedValueOnce(
+      createResolvedEmbeddedRunnerModel("openai", "gpt-5.3-codex"),
+    );
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
         assistantTexts: ["ok"],
@@ -562,15 +556,9 @@ describe("runEmbeddedAgent", () => {
       enqueue: immediateEnqueue,
     });
 
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
     expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
       1,
-      "openai",
-      "gpt-5.3-codex",
-      agentDir,
-      cfg,
-      expect.objectContaining({ skipAgentDiscovery: true }),
-    );
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "openai",
       "gpt-5.3-codex",
       agentDir,
@@ -578,6 +566,7 @@ describe("runEmbeddedAgent", () => {
       expect.objectContaining({
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
+        preferBundledStaticCatalogModel: true,
       }),
     );
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
