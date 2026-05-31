@@ -2124,6 +2124,29 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("treats protocol-relative npmjs registry env as public", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await withEnvAsync({ NPM_CONFIG_REGISTRY: "//registry.npmjs.org/" }, async () => {
+      await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+    });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
   it("ignores the default npmrc when npm userconfig is set", async () => {
     const home = await createTrackedTempDir("openclaw-update-home-npmrc-");
     const configDir = await createTrackedTempDir("openclaw-update-userconfig-");

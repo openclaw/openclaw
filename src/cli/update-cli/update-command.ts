@@ -1009,8 +1009,13 @@ function normalizeNpmRegistryUrl(value: string | undefined | null): string | nul
   if (!trimmed) {
     return null;
   }
+  const urlInput = trimmed.startsWith("//")
+    ? `https:${trimmed}`
+    : /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
   try {
-    const url = new URL(trimmed);
+    const url = new URL(urlInput);
     url.hash = "";
     url.search = "";
     const pathname = url.pathname.replace(/\/+$/u, "");
