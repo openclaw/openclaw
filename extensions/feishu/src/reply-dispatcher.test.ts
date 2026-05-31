@@ -1731,7 +1731,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("resets no-visible-reply state at each reply start", async () => {
+  it("resets no-visible-reply state on the first reply start", async () => {
     const runtime = createRuntimeLogger();
     const { result, options } = createDispatcherHarness({ runtime });
 
@@ -1745,6 +1745,22 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(result.getVisibleReplyState()).toEqual({
       visibleReplySent: false,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("keeps visible reply state across repeated reply-start keepalives", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+
+    await options.onReplyStart?.();
+    await options.deliver({ mediaUrl: "https://example.com/a.png" }, { kind: "block" });
+    await options.onReplyStart?.();
+
+    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
       skippedFinalReason: null,
     });
   });

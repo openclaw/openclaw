@@ -250,6 +250,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let visibleReplySent = false;
   let skippedFinalReason: string | null = null;
   let idleSideEffectsPromise: Promise<void> = Promise.resolve();
+  let replyLifecycleStateInitialized = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const markVisibleReplySent = () => {
@@ -597,11 +598,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       },
       onReplyStart: async () => {
-        deliveredFinalTexts.clear();
-        streamingClosedForReply = false;
-        streamingCloseErroredForReply = false;
-        visibleReplySent = false;
-        skippedFinalReason = null;
+        if (!replyLifecycleStateInitialized) {
+          replyLifecycleStateInitialized = true;
+          deliveredFinalTexts.clear();
+          streamingClosedForReply = false;
+          streamingCloseErroredForReply = false;
+          visibleReplySent = false;
+          skippedFinalReason = null;
+        }
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
