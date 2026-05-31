@@ -23,7 +23,7 @@ const defaultShell = isWin
   : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
 
 describe("exec foreground failures", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   beforeEach(() => {
     vi.useRealTimers();
@@ -41,7 +41,8 @@ describe("exec foreground failures", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    envSnapshot.restore();
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   it("returns a failed text result when the default timeout is exceeded", async () => {
