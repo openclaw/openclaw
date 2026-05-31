@@ -1560,6 +1560,11 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
       cfg: {
         models: {
           providers: {
+            openrouter: {
+              api: "openai-completions" as const,
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [],
+            },
             "openrouter-minimax": {
               api: "openai-completions" as const,
               baseUrl: "https://openrouter.ai/api/v1",
@@ -1593,6 +1598,11 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
       cfg: {
         models: {
           providers: {
+            openrouter: {
+              api: "openai-completions" as const,
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [],
+            },
             "openrouter-minimax": {
               api: "openai-completions" as const,
               baseUrl: "https://openrouter.ai/api/v1",
@@ -1621,6 +1631,11 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
       cfg: {
         models: {
           providers: {
+            openrouter: {
+              api: "openai-completions" as const,
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [],
+            },
             "openrouter-minimax": {
               api: "openai-completions" as const,
               baseUrl: "https://openrouter.ai/api/v1",
@@ -1672,6 +1687,11 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
       cfg: {
         models: {
           providers: {
+            openrouter: {
+              api: "openai-completions" as const,
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [],
+            },
             "openrouter-minimax": {
               api: "openai-completions" as const,
               baseUrl: "https://openrouter.ai/api/v1",
@@ -1733,6 +1753,41 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     );
   });
 
+  it("throws when a bearer profile points at a different provider endpoint", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "custom-proxy",
+        cfg: {
+          models: {
+            providers: {
+              openrouter: {
+                api: "openai-completions" as const,
+                baseUrl: "https://openrouter.ai/api/v1",
+                models: [],
+              },
+              "custom-proxy": {
+                api: "openai-completions" as const,
+                baseUrl: "https://example.invalid/v1",
+                apiKey: "openrouter:key-b",
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "openrouter:key-b": {
+              type: "api_key",
+              provider: "openrouter",
+              key: "sk-or-actual-key-b",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/not compatible with this provider entry's auth binding/);
+  });
+
   it("throws (does not fall through to literal bearer) when matched profile resolution fails (clawsweeper P2)", async () => {
     // Profile is matched on ID but its credential has no usable api key material
     // (no `key` and no `keyRef`). Pre-fix, this would fall through to the late
@@ -1744,6 +1799,11 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
         cfg: {
           models: {
             providers: {
+              openrouter: {
+                api: "openai-completions" as const,
+                baseUrl: "https://openrouter.ai/api/v1",
+                models: [],
+              },
               "openrouter-minimax": {
                 api: "openai-completions" as const,
                 baseUrl: "https://openrouter.ai/api/v1",
