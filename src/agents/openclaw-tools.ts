@@ -136,6 +136,8 @@ export function createOpenClawTools(
     inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    /** If true, omit the cron tool from the tool list. */
+    disableCronTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
     enableHeartbeatTool?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
@@ -352,6 +354,21 @@ export function createOpenClawTools(
   });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
+  const cronTool =
+    embedded || options?.disableCronTool
+      ? null
+      : createCronTool({
+          agentSessionKey: options?.agentSessionKey,
+          currentDeliveryContext: {
+            channel: options?.agentChannel,
+            to: options?.currentChannelId ?? options?.agentTo,
+            accountId: options?.agentAccountId,
+            threadId: options?.currentThreadTs ?? options?.agentThreadId,
+          },
+          ...(options?.cronSelfRemoveOnlyJobId
+            ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
+            : {}),
+        });
   const explicitFactoryAllowlist = mergeFactoryPolicyList(
     resolvedConfig?.tools?.allow,
     resolvedConfig?.tools?.alsoAllow,
@@ -385,23 +402,7 @@ export function createOpenClawTools(
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
-    ...(embedded
-      ? []
-      : [
-          nodesTool,
-          createCronTool({
-            agentSessionKey: options?.agentSessionKey,
-            currentDeliveryContext: {
-              channel: options?.agentChannel,
-              to: options?.currentChannelId ?? options?.agentTo,
-              accountId: options?.agentAccountId,
-              threadId: options?.currentThreadTs ?? options?.agentThreadId,
-            },
-            ...(options?.cronSelfRemoveOnlyJobId
-              ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
-              : {}),
-          }),
-        ]),
+    ...(embedded ? [] : collectPresentOpenClawTools([nodesTool, cronTool])),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),
     createTtsTool({

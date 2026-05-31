@@ -3,7 +3,12 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
-const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = ["browser", "cron", "message"] as const;
+const LOCAL_MODEL_LEAN_DENY_TOOL_NAME_SET = new Set<string>(LOCAL_MODEL_LEAN_DENY_TOOL_NAMES);
+
+export function listLocalModelLeanDeniedToolNames(): string[] {
+  return [...LOCAL_MODEL_LEAN_DENY_TOOL_NAMES];
+}
 
 function resolveLocalModelLeanAgentId(params: {
   config?: OpenClawConfig;
@@ -47,5 +52,5 @@ export function filterLocalModelLeanTools(params: {
   if (!isLocalModelLeanEnabled(params)) {
     return params.tools;
   }
-  return params.tools.filter((tool) => !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(tool.name));
+  return params.tools.filter((tool) => !LOCAL_MODEL_LEAN_DENY_TOOL_NAME_SET.has(tool.name));
 }

@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "./local-model-lean.js";
+import {
+  filterLocalModelLeanTools,
+  isLocalModelLeanEnabled,
+  listLocalModelLeanDeniedToolNames,
+} from "./local-model-lean.js";
 
 function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
 }
 
 describe("local model lean tool filtering", () => {
+  it("keeps the construction denylist aligned with the final filter", () => {
+    expect(listLocalModelLeanDeniedToolNames()).toEqual(["browser", "cron", "message"]);
+  });
+
   it("filters heavyweight tools for one configured agent", () => {
     const cfg: OpenClawConfig = {
       agents: {

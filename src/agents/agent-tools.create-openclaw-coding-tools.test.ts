@@ -578,6 +578,34 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
   });
 
+  it("pushes local-model lean tool cuts into construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+      },
+    });
+
+    const names = toolNameList(tools);
+    expect(names).not.toContain("browser");
+    expect(names).not.toContain("cron");
+    expect(names).not.toContain("message");
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const options = latestCreateOpenClawToolsOptions();
+    expect(options.disableMessageTool).toBe(true);
+    expect(options.disableCronTool).toBe(true);
+    expectListIncludes(options.pluginToolDenylist, ["browser", "cron", "message"]);
+    expectListIncludes(options.inheritedToolDenylist, ["browser", "cron", "message"]);
+  });
+
   it("passes inherited allowlist entries to OpenClaw plugin discovery", async () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

@@ -85,6 +85,16 @@ describe("openclaw-tools update_plan gating", () => {
     expect(shouldIncludeUpdatePlanToolForOpenClawTools(emptyAllowlistParams)).toBe(false);
   });
 
+  it("can skip cron tool construction", () => {
+    const tools = createFastToolNames({
+      config: {} as OpenClawConfig,
+      disableCronTool: true,
+    });
+
+    expect(tools).toContain("nodes");
+    expect(tools).not.toContain("cron");
+  });
+
   it("wraps constructed tools with before-tool-call hooks by default", () => {
     const tools = createOpenClawTools({
       config: {} as OpenClawConfig,

@@ -63,7 +63,11 @@ import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
-import { filterLocalModelLeanTools } from "./local-model-lean.js";
+import {
+  filterLocalModelLeanTools,
+  isLocalModelLeanEnabled,
+  listLocalModelLeanDeniedToolNames,
+} from "./local-model-lean.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -687,6 +691,14 @@ export function createOpenClawCodingTools(options?: {
   const includeOpenClawTools = includeCoreTools && toolConstructionPlan.includeOpenClawTools;
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
+  const localModelLeanEnabled = isLocalModelLeanEnabled({
+    config: options?.config,
+    agentId: options?.agentId,
+    sessionKey: options?.sessionKey,
+  });
+  const localModelLeanDeniedToolNames = localModelLeanEnabled
+    ? listLocalModelLeanDeniedToolNames()
+    : [];
   const workspaceOnly = fsPolicy.workspaceOnly;
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options?.skillsSnapshot);
   const applyPatchConfig = execConfig.applyPatch;
@@ -853,7 +865,7 @@ export function createOpenClawCodingTools(options?: {
     inheritedToolPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
   ]);
-  const pluginToolDenylist = collectExplicitDenylist([
+  const configuredPluginToolDenylist = collectExplicitDenylist([
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -866,6 +878,10 @@ export function createOpenClawCodingTools(options?: {
     subagentPolicy,
     inheritedToolPolicy,
   ]);
+  const pluginToolDenylist =
+    localModelLeanDeniedToolNames.length > 0
+      ? [...new Set([...configuredPluginToolDenylist, ...localModelLeanDeniedToolNames])]
+      : configuredPluginToolDenylist;
   const inheritedToolDenylist = [...pluginToolDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
@@ -912,7 +928,7 @@ export function createOpenClawCodingTools(options?: {
             modelId: options?.modelId,
             modelHasVision: options?.modelHasVision,
             requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
-            disableMessageTool: options?.disableMessageTool,
+            disableMessageTool: options?.disableMessageTool || localModelLeanEnabled,
             requesterAgentIdOverride: agentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             authProfileStore: options?.authProfileStore,
@@ -1002,7 +1018,8 @@ export function createOpenClawCodingTools(options?: {
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
           sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
-          disableMessageTool: options?.disableMessageTool,
+          disableMessageTool: options?.disableMessageTool || localModelLeanEnabled,
+          disableCronTool: localModelLeanEnabled,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,
           wrapBeforeToolCallHook: false,
