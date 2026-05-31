@@ -1251,9 +1251,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   ? await approveBootstrapDevicePairing(
                       pairing.request.requestId,
                       boundBootstrapProfile,
+                      { accessMetadata: clientAccessMetadata },
                     )
                   : await approveDevicePairing(pairing.request.requestId, {
                       callerScopes: scopes,
+                      accessMetadata: clientAccessMetadata,
                     });
               if (approved?.status === "approved") {
                 if (allowSilentBootstrapPairing && boundBootstrapProfile) {

@@ -885,9 +885,12 @@ export function registerControlUiAndPairingSuite(): void {
       (entry) => entry.deviceId === identity.deviceId,
     );
     expect(pendingAfterRead).toHaveLength(0);
-    if (!(await getPairedDevice(identity.deviceId))) {
+    const pairedAfterRead = await getPairedDevice(identity.deviceId);
+    if (!pairedAfterRead) {
       throw new Error(`expected paired device ${identity.deviceId}`);
     }
+    expect(pairedAfterRead.lastSeenReason).toBe("connect");
+    expect(typeof pairedAfterRead.lastSeenAtMs).toBe("number");
     wsRemoteRead.close();
 
     const ws2 = await openWs(port, { host: "gateway.example" });
