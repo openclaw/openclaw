@@ -104,9 +104,11 @@ fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
   return parsed.code to message
 }
 
+/** Normalizes user/session keys while preserving main as the canonical session id. */
 fun normalizeMainKey(raw: String?): String? {
   val trimmed = raw?.trim().orEmpty()
   return if (trimmed.isEmpty()) null else trimmed
 }
 
+/** Returns true only for the canonical main-session key understood by gateway UI. */
 fun isCanonicalMainSessionKey(key: String): Boolean = key == "main"

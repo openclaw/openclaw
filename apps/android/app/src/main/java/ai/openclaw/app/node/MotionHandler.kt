@@ -270,12 +270,14 @@ private object SystemMotionDataSource : MotionDataSource {
   }
 }
 
+/** Handles Android motion-related node.invoke commands backed by live sensors. */
 class MotionHandler private constructor(
   private val appContext: Context,
   private val dataSource: MotionDataSource,
 ) {
   constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemMotionDataSource)
 
+  /** Classifies a short accelerometer sample into the gateway activity shape. */
   suspend fun handleMotionActivity(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -323,6 +325,7 @@ class MotionHandler private constructor(
     }
   }
 
+  /** Returns the current boot-scoped Android step-counter reading. */
   suspend fun handleMotionPedometer(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -374,6 +377,8 @@ class MotionHandler private constructor(
       } catch (_: Throwable) {
         null
       } ?: return null
+    // Keep the accepted gateway parameter even though Android can only return
+    // one live classification sample for now.
     val limit = ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 200).coerceIn(1, 1000)
     return MotionActivityRequest(
       startISO = (params["startISO"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },

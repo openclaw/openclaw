@@ -47,17 +47,20 @@ private object SystemNotificationsStateProvider : NotificationsStateProvider {
   ): NotificationActionResult = DeviceNotificationListenerService.executeAction(context, request)
 }
 
+/** Handles notification listing and actions via the Android listener service. */
 class NotificationsHandler private constructor(
   private val appContext: Context,
   private val stateProvider: NotificationsStateProvider,
 ) {
   constructor(appContext: Context) : this(appContext = appContext, stateProvider = SystemNotificationsStateProvider)
 
+  /** Lists the current listener snapshot after nudging Android to reconnect if needed. */
   suspend fun handleNotificationsList(_paramsJson: String?): GatewaySession.InvokeResult {
     val snapshot = readSnapshotWithRebind()
     return GatewaySession.InvokeResult.ok(snapshotPayloadJson(snapshot))
   }
 
+  /** Executes an action against a notification key from the current listener snapshot. */
   suspend fun handleNotificationsActions(paramsJson: String?): GatewaySession.InvokeResult {
     readSnapshotWithRebind()
 
@@ -79,6 +82,8 @@ class NotificationsHandler private constructor(
           code = "INVALID_REQUEST",
           message = "INVALID_REQUEST: action required (open|dismiss|reply)",
         )
+    // Keep accepted action names aligned with the cross-platform notification
+    // command contract rather than Android-specific PendingIntent labels.
     val action =
       when (actionRaw) {
         "open" -> NotificationActionKind.Open

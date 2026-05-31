@@ -240,12 +240,14 @@ private object SystemPhotosDataSource : PhotosDataSource {
   }
 }
 
+/** Handles photos.latest by querying MediaStore and returning bounded JPEG payloads. */
 class PhotosHandler private constructor(
   private val appContext: Context,
   private val dataSource: PhotosDataSource,
 ) {
   constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemPhotosDataSource)
 
+  /** Returns the newest accessible photos as gateway-sized base64 JPEGs. */
   fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
       return GatewaySession.InvokeResult.error(

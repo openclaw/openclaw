@@ -71,6 +71,8 @@ private class AndroidSystemNotificationPoster(
 
   private fun ensureChannel(priority: String?): String {
     val normalizedPriority = priority.orEmpty().trim().lowercase()
+    // Android channel importance is immutable after creation, so priority maps
+    // to stable channel ids instead of mutating one shared channel.
     val (suffix, importance, name) =
       when (normalizedPriority) {
         "passive" -> Triple("passive", NotificationManager.IMPORTANCE_LOW, "OpenClaw Passive")
@@ -99,11 +101,13 @@ private class AndroidSystemNotificationPoster(
   }
 }
 
+/** Handles system-level node.invoke commands implemented by Android services. */
 class SystemHandler private constructor(
   private val poster: SystemNotificationPoster,
 ) {
   constructor(appContext: Context) : this(poster = AndroidSystemNotificationPoster(appContext))
 
+  /** Posts an Android notification from the gateway system.notify command. */
   fun handleSystemNotify(paramsJson: String?): GatewaySession.InvokeResult {
     val params =
       parseNotifyRequest(paramsJson)
