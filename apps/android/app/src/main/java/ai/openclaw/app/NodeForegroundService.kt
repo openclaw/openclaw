@@ -200,16 +200,19 @@ class NodeForegroundService : Service() {
     private const val ACTION_SET_VOICE_CAPTURE_MODE = "ai.openclaw.app.action.SET_VOICE_CAPTURE_MODE"
     private const val EXTRA_VOICE_CAPTURE_MODE = "ai.openclaw.app.extra.VOICE_CAPTURE_MODE"
 
+    /** Starts the persistent node foreground service from UI lifecycle code. */
     fun start(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java)
       context.startForegroundService(intent)
     }
 
+    /** Requests disconnect through the service action path so notification actions and UI share behavior. */
     fun stop(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_STOP)
       context.startService(intent)
     }
 
+    /** Updates Android's foreground-service type before voice capture mode changes require microphone access. */
     fun setVoiceCaptureMode(
       context: Context,
       mode: VoiceCaptureMode,

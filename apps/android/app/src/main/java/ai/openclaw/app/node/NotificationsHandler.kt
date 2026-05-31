@@ -25,6 +25,7 @@ internal interface NotificationsStateProvider {
 }
 
 private object SystemNotificationsStateProvider : NotificationsStateProvider {
+  /** Reads listener state through Android APIs and returns a disabled snapshot when access is missing. */
   override fun readSnapshot(context: Context): DeviceNotificationSnapshot {
     val enabled = DeviceNotificationListenerService.isAccessEnabled(context)
     if (!enabled) {
@@ -37,10 +38,12 @@ private object SystemNotificationsStateProvider : NotificationsStateProvider {
     return DeviceNotificationListenerService.snapshot(context, enabled = true)
   }
 
+  /** Requests a platform listener rebind after access has been granted. */
   override fun requestServiceRebind(context: Context) {
     DeviceNotificationListenerService.requestServiceRebind(context)
   }
 
+  /** Delegates actions to the active listener service instance. */
   override fun executeAction(
     context: Context,
     request: NotificationActionRequest,

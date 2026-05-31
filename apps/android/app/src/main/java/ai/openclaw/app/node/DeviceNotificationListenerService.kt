@@ -21,6 +21,9 @@ import kotlinx.serialization.json.put
 private const val MAX_NOTIFICATION_TEXT_CHARS = 512
 private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
 
+/**
+ * Trims notification text and caps payload size before it enters gateway-visible state.
+ */
 internal fun sanitizeNotificationText(value: CharSequence?): String? {
   val normalized = value?.toString()?.trim().orEmpty()
   // Notification extras can include long previews; cap before sending over node events.
@@ -95,6 +98,9 @@ data class NotificationActionResult(
 
 internal fun actionRequiresClearableNotification(kind: NotificationActionKind): Boolean = kind == NotificationActionKind.Dismiss
 
+/**
+ * Process-local cache of active notifications mirrored from Android listener callbacks.
+ */
 private object DeviceNotificationStore {
   private val lock = Any()
   private var connected = false
@@ -144,6 +150,9 @@ private object DeviceNotificationStore {
   }
 }
 
+/**
+ * Android notification listener that mirrors notification state and executes gateway actions.
+ */
 class DeviceNotificationListenerService : NotificationListenerService() {
   private val securePrefs by lazy { SecurePrefs(applicationContext) }
   private val forwardingLimiter = NotificationBurstLimiter()
@@ -306,6 +315,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
     private fun serviceComponent(context: Context): ComponentName = ComponentName(context, DeviceNotificationListenerService::class.java)
 
+    /** Installs the node event sink used to emit filtered notification change events. */
     fun setNodeEventSink(sink: ((event: String, payloadJson: String?) -> Unit)?) {
       nodeEventSink = sink
     }
@@ -327,6 +337,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       }
     }
 
+    /** Returns recent third-party packages seen by the listener for settings suggestions. */
     fun recentPackages(context: Context): List<String> {
       migrateLegacyRecentPackagesIfNeeded(context)
       val prefs = recentPackagesPrefs(context)
@@ -338,22 +349,26 @@ class DeviceNotificationListenerService : NotificationListenerService() {
         .distinct()
     }
 
+    /** Checks whether Android has granted listener access to this service component. */
     fun isAccessEnabled(context: Context): Boolean {
       val manager = context.getSystemService(NotificationManager::class.java) ?: return false
       return manager.isNotificationListenerAccessGranted(serviceComponent(context))
     }
 
+    /** Reads the current mirrored notification snapshot without forcing service startup. */
     fun snapshot(
       context: Context,
       enabled: Boolean = isAccessEnabled(context),
     ): DeviceNotificationSnapshot = DeviceNotificationStore.snapshot(enabled = enabled)
 
+    /** Asks Android to rebind the listener after settings grant access but callbacks have not arrived. */
     fun requestServiceRebind(context: Context) {
       runCatching {
         NotificationListenerService.requestRebind(serviceComponent(context))
       }
     }
 
+    /** Executes an open, dismiss, or reply action through the active listener instance. */
     fun executeAction(
       context: Context,
       request: NotificationActionRequest,
