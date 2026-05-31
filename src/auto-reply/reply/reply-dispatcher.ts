@@ -6,6 +6,7 @@ import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -29,6 +30,11 @@ type ReplyDispatchSkipHandler = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind; reason: NormalizeReplySkipReason },
 ) => void;
+
+type ReplyDispatchCancelHandler = (
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind },
+) => Promise<void> | void;
 
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
@@ -80,6 +86,7 @@ export type ReplyDispatcherOptions = {
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
+  onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -203,8 +210,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           deliverPayload = await beforeDeliver(normalized, { kind });
           if (!deliverPayload) {
             cancelledCounts[kind] += 1;
+            try {
+              await options.onBeforeDeliverCancelled?.(normalized, { kind });
+            } catch (err: unknown) {
+              void options.onError?.(err, { kind });
+            }
             return;
           }
+          deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
         }
         await options.deliver(deliverPayload, { kind });
       })
@@ -259,7 +272,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       beforeDeliver = previousBeforeDeliver
         ? async (payload, info) => {
             const previousPayload = await previousBeforeDeliver(payload, info);
-            return previousPayload ? hook(previousPayload, info) : null;
+            return previousPayload
+              ? hook(copyReplyPayloadMetadata(payload, previousPayload), info)
+              : null;
           }
         : hook;
     },

@@ -1,5 +1,6 @@
 // Tests before-deliver hook ordering and payload mutation behavior.
 import { describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -31,10 +32,14 @@ describe("beforeDeliver in reply dispatcher", () => {
 
   it("cancels delivery when beforeDeliver returns null", async () => {
     const delivered: string[] = [];
+    const cancelled: string[] = [];
 
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload.text ?? "");
+      },
+      onBeforeDeliverCancelled: (payload) => {
+        cancelled.push(payload.text ?? "");
       },
       beforeDeliver: async (payload: ReplyPayload) => {
         if (payload.text?.includes("blocked")) {
@@ -50,6 +55,7 @@ describe("beforeDeliver in reply dispatcher", () => {
     await dispatcher.waitForIdle();
 
     expect(delivered).toEqual(["safe reply"]);
+    expect(cancelled).toEqual(["blocked reply"]);
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 2 });
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
   });
@@ -74,6 +80,25 @@ describe("beforeDeliver in reply dispatcher", () => {
     await dispatcher.waitForIdle();
 
     expect(delivered).toEqual(["replaced"]);
+  });
+
+  it("preserves payload metadata through beforeDeliver rewrites", async () => {
+    let deliveredMetadata: unknown;
+
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredMetadata = getReplyPayloadMetadata(payload);
+      },
+      beforeDeliver: async () => ({ text: "rewritten" }),
+    });
+
+    dispatcher.sendBlockReply(
+      setReplyPayloadMetadata({ text: "original" }, { assistantMessageIndex: 12 }),
+    );
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredMetadata).toMatchObject({ assistantMessageIndex: 12 });
   });
 
   it("delivers normally without beforeDeliver", async () => {
