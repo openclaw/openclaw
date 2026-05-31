@@ -176,16 +176,23 @@ Before overwriting a live install:
 For example, to restore the state asset into the current user's default state directory:
 
 ```bash
+set -euo pipefail
+
 state_archive_path="$(
   node -e 'const fs = require("node:fs"); const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(manifest.assets.find((asset) => asset.kind === "state")?.archivePath ?? "");' "$manifest_path"
 )"
 test -n "$state_archive_path"
 
+state_target="$HOME/.openclaw"
+state_backup="$HOME/.openclaw.pre-restore.$(date +%s)"
+
 openclaw gateway stop
 
-mv "$HOME/.openclaw" "$HOME/.openclaw.pre-restore.$(date +%s)" 2>/dev/null || true
-mkdir -p "$HOME/.openclaw"
-cp -a "$restore_dir/$state_archive_path"/. "$HOME/.openclaw"/
+if [ -e "$state_target" ]; then
+  mv "$state_target" "$state_backup"
+fi
+mkdir -p "$state_target"
+cp -a "$restore_dir/$state_archive_path"/. "$state_target"/
 
 openclaw doctor
 openclaw gateway start
