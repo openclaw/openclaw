@@ -794,9 +794,12 @@ async function discardSuspendedPendingFinalDelivery(
 ): Promise<void> {
   const delivery = ensureDeliveryState(entry);
   const payload = delivery.payload;
+  const durableFallbackText = payload?.frozenResultText ?? payload?.fallbackFrozenResultText;
+  const persistedDurableFallback =
+    reason === "expired" && typeof durableFallbackText === "string" && durableFallbackText.length > 0;
   delivery.status = "discarded";
   delivery.discardedAt = now;
-  delivery.discardReason = reason;
+  delivery.discardReason = persistedDurableFallback ? "expired-after-durable-fallback" : reason;
   delivery.discardedPayloadSummary = {
     requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
     childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
@@ -814,15 +817,20 @@ async function discardSuspendedPendingFinalDelivery(
   delivery.suspendedReason = undefined;
   entry.wakeOnDescendantSettle = undefined;
   const completion = ensureCompletionState(entry);
-  completion.fallbackResultText = undefined;
-  completion.fallbackCapturedAt = undefined;
+  if (persistedDurableFallback) {
+    completion.fallbackResultText = durableFallbackText;
+    completion.fallbackCapturedAt = now;
+  } else {
+    completion.fallbackResultText = undefined;
+    completion.fallbackCapturedAt = undefined;
+  }
   entry.cleanupHandled = true;
   delivery.announcedAt = undefined;
   resumedRuns.delete(runId);
   clearPendingLifecycleError(runId);
   clearPendingLifecycleTimeout(runId);
   log.warn("subagent suspended delivery discarded", {
-    reason,
+    reason: delivery.discardReason,
     runId: entry.runId,
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,

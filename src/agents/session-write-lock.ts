@@ -684,6 +684,35 @@ function inspectLockPayloadForSession(params: {
   return inspected;
 }
 
+function formatSessionLockTimeoutOwner(params: {
+  payload: LockFilePayload | null;
+  inspected: LockInspectionDetails;
+}): string {
+  const parts = [
+    params.inspected.pid === null ? "pid=unknown" : `pid=${params.inspected.pid}`,
+    `alive=${params.inspected.pidAlive}`,
+  ];
+  if (typeof params.payload?.starttime === "number") {
+    parts.push(`starttime=${params.payload.starttime}`);
+    if (params.inspected.pid !== null && params.inspected.pidAlive) {
+      const currentStarttime = resolveProcessStartTimeForLock(params.inspected.pid);
+      parts.push(`currentStarttime=${currentStarttime ?? "unknown"}`);
+    }
+  } else {
+    parts.push("starttime=missing");
+  }
+  if (params.inspected.createdAt) {
+    parts.push(`createdAt=${params.inspected.createdAt}`);
+  }
+  if (params.inspected.ageMs !== null) {
+    parts.push(`ageMs=${params.inspected.ageMs}`);
+  }
+  if (params.inspected.staleReasons.length > 0) {
+    parts.push(`staleReasons=${params.inspected.staleReasons.join(",")}`);
+  }
+  return parts.join(" ");
+}
+
 export async function cleanStaleLockFiles(params: {
   sessionsDir: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
@@ -865,7 +894,16 @@ export async function acquireSessionWriteLock(params: {
       }
       const timeoutLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
       const payload = await readLockPayload(timeoutLockPath);
-      const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
+      const inspected = inspectLockPayloadForSession({
+        payload,
+        staleMs,
+        nowMs: Date.now(),
+        heldByThisProcess: sessionLockHeldByThisProcess(normalizedSessionFile),
+        reclaimLockWithoutStarttime: true,
+        readOwnerProcessArgs: readProcessArgsSync,
+        respectMaxHold: true,
+      });
+      const owner = formatSessionLockTimeoutOwner({ payload, inspected });
       throw new SessionWriteLockTimeoutError({ timeoutMs, owner, lockPath: timeoutLockPath });
     }
   }

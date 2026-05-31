@@ -216,10 +216,21 @@ describe("acquireSessionWriteLock", () => {
 
   it("does not reenter locks by default in the same process", async () => {
     await withTempSessionLockFile(async ({ sessionFile }) => {
+      pinCurrentProcessStartTimeForTest();
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
-      await expect(
-        acquireSessionWriteLock({ sessionFile, timeoutMs: 5, staleMs: 60_000 }),
-      ).rejects.toThrow(/session file locked/);
+      let error: unknown;
+      try {
+        await acquireSessionWriteLock({ sessionFile, timeoutMs: 5, staleMs: 60_000 });
+      } catch (err) {
+        error = err;
+      }
+      expect(error).toBeInstanceOf(Error);
+      expect(String((error as { owner?: unknown }).owner)).toContain(`pid=${process.pid}`);
+      expect(String((error as { owner?: unknown }).owner)).toContain("alive=true");
+      expect(String((error as { owner?: unknown }).owner)).toContain(
+        `starttime=${FAKE_STARTTIME}`,
+      );
+      expect(error).toHaveProperty("message", expect.stringContaining("currentStarttime=12345"));
       await lock.release();
     });
   });

@@ -62,7 +62,7 @@ export type SubagentCompletionDeliveryState = {
   suspendedAt?: number;
   suspendedReason?: "retry-limit" | "expiry";
   discardedAt?: number;
-  discardReason?: "expired" | "pressure-pruned";
+  discardReason?: "expired" | "expired-after-durable-fallback" | "pressure-pruned";
   discardedPayloadSummary?: {
     requesterSessionKey?: string;
     childSessionKey?: string;
