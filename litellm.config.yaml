@@ -1,0 +1,89 @@
+# LiteLLM provider gateway for OpenClaw
+# ----------------------------------------------------------------------------
+# Role: a fallback safety-net in front of OpenClaw's LLM layer. OpenClaw keeps
+# its claude-cli / codex SUBSCRIPTION runtimes as primary (free). When a
+# subscription dies (Max/Pro required, rate limit, token/quota), OpenClaw falls
+# through to `litellm/openclaw-auto` here, which fans out across HTTP providers.
+#
+# Tier order inside this gateway (per operator decision):
+#   1) OpenRouter  anthropic/claude-sonnet-4-6   (Claude tier, key already owned)
+#   2) Ollama      qwen3:8b                       (local, always available)
+#   3) Ollama      qwen2.5:3b                     (lightweight last resort)
+#
+# ANTHROPIC_API_KEY is OPTIONAL. The `claude-primary` model below is defined but
+# kept OUT of the default openclaw-auto chain. To make direct Anthropic the top
+# tier, set ANTHROPIC_API_KEY in .env and prepend "claude-primary" to the
+# openclaw-auto fallback list in litellm_settings.fallbacks.
+# ----------------------------------------------------------------------------
+
+model_list:
+  # --- Entry point OpenClaw calls. Primary = OpenRouter Claude. ---
+  - model_name: openclaw-auto
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4-6
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 90
+      extra_headers:
+        HTTP-Referer: https://xn--e1afmkfd6e.xn--p1ai
+        X-Title: GruzPotok OpenClaw LiteLLM
+
+  # --- Claude tier via OpenRouter (named, reusable) ---
+  - model_name: openrouter-fallback
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4-6
+      api_key: os.environ/OPENROUTER_API_KEY
+      api_base: https://openrouter.ai/api/v1
+      timeout: 90
+
+  # --- Optional direct Anthropic API (enabled only if ANTHROPIC_API_KEY set) ---
+  - model_name: claude-primary
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 90
+
+  # --- Local Ollama: qwen3:8b (primary local fallback) ---
+  - model_name: ollama-local-qwen
+    litellm_params:
+      model: ollama_chat/qwen3:8b
+      api_base: os.environ/OLLAMA_BASE_URL
+      timeout: 120
+
+  # --- Local Ollama: qwen2.5:3b (lightweight last resort) ---
+  - model_name: ollama-local-coder
+    litellm_params:
+      model: ollama_chat/qwen2.5:3b
+      api_base: os.environ/OLLAMA_BASE_URL
+      timeout: 120
+
+litellm_settings:
+  # Retry the same model a couple times before falling over.
+  num_retries: 2
+  request_timeout: 120
+  # Drop failed deployments out of rotation briefly so retries don't hammer them.
+  allowed_fails: 2
+  cooldown_time: 30
+  # Fallback chains. LiteLLM triggers these on retryable provider failures:
+  # 429 (rate limit), 500/502/503 (provider unavailable), timeouts, and
+  # auth/quota errors (401/402/403, insufficient_quota) surfaced as API errors.
+  fallbacks:
+    - openclaw-auto: ["ollama-local-qwen", "ollama-local-coder"]
+    - openrouter-fallback: ["ollama-local-qwen", "ollama-local-coder"]
+    - claude-primary: ["openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+  # Oversized-context requests route to the big local context model.
+  context_window_fallbacks:
+    - openclaw-auto: ["ollama-local-qwen"]
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 2
+  timeout: 120
+  fallbacks:
+    - openclaw-auto: ["ollama-local-qwen", "ollama-local-coder"]
+    - openrouter-fallback: ["ollama-local-qwen", "ollama-local-coder"]
+    - claude-primary: ["openrouter-fallback", "ollama-local-qwen", "ollama-local-coder"]
+
+general_settings:
+  # Master key gates /v1/* and /health. Set in .env (never committed).
+  master_key: os.environ/LITELLM_MASTER_KEY
