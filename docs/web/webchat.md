@@ -83,7 +83,9 @@ Full configuration: [Configuration](/gateway/configuration)
 
 WebChat options:
 
-- `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. When a transcript entry exceeds this limit, Gateway truncates long text fields and may replace oversized messages with a placeholder. Per-request `maxChars` can also be sent by the client to override this default for a single `chat.history` call.
+- `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. Control UI history reloads use this server-side limit by default. Custom clients can send per-request `maxChars` to override this default for a single `chat.history` call.
+- `channels.webchat.textChunkLimit`: maximum size for live outbound WebChat message chunks. This affects live delivery and streaming, not transcript history reload truncation.
+- `channels.webchat.chunkMode`: outbound WebChat chunking mode. Use `"length"` to split only by size, or `"newline"` to prefer paragraph boundaries when splitting.
 
 Related global options:
 

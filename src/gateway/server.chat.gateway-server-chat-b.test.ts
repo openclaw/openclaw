@@ -1317,6 +1317,38 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history keeps configured WebChat history above the legacy UI cap", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await writeGatewayConfig({
+        gateway: {
+          webchat: {
+            chatHistoryMaxChars: 64_000,
+          },
+        },
+      });
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const longReply = Array.from(
+        { length: 500 },
+        (_, index) => `sentinel-line-${String(index).padStart(4, "0")}`,
+      ).join("\n");
+      expect(longReply.length).toBeGreaterThan(4_000);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: longReply }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws);
+      const serialized = JSON.stringify(messages);
+      expect(serialized).toContain("sentinel-line-0499");
+      expect(serialized).not.toContain("...(truncated)...");
+    });
+  });
+
   test("chat.history prefers RPC maxChars over config", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
