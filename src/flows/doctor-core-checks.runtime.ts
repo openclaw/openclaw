@@ -158,9 +158,14 @@ function collectProviderCatalogModelFindings(params: {
       }),
     ];
   }
-  let indexes: number[];
+  let modelEntries: Array<[number, unknown]>;
   try {
-    indexes = [...models.keys()];
+    modelEntries = [];
+    let index = 0;
+    for (const model of models) {
+      modelEntries.push([index, model]);
+      index += 1;
+    }
   } catch (error) {
     return [
       providerCatalogProjectionFinding({
@@ -171,21 +176,7 @@ function collectProviderCatalogModelFindings(params: {
       }),
     ];
   }
-  for (const index of indexes) {
-    let model: unknown;
-    try {
-      model = models[index];
-    } catch (error) {
-      findings.push(
-        providerCatalogProjectionFinding({
-          providerId: params.providerId,
-          pluginId: params.pluginId,
-          message: `Provider catalog ${params.providerId} model row ${index} cannot be read during doctor validation.`,
-          error,
-        }),
-      );
-      continue;
-    }
+  for (const [index, model] of modelEntries) {
     const modelId = readProviderCatalogValue({
       value: model,
       key: "id",

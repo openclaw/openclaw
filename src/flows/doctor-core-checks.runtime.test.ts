@@ -691,6 +691,45 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 
+  it("reports provider catalog model lists with invalid iterators", async () => {
+    const models = [{ id: "mock-model" }];
+    Object.defineProperty(models, Symbol.iterator, {
+      value: () => {
+        throw new Error("model iterator failed");
+      },
+    });
+    mocks.resolvePluginProviders.mockReturnValueOnce([
+      {
+        id: "mockplugin",
+        pluginId: "mockplugin",
+        label: "Mock",
+        auth: [],
+        staticCatalog: {
+          order: "simple",
+          run: async () => ({
+            provider: {
+              api: "openai-completions" as const,
+              baseUrl: "https://mockplugin.test/v1",
+              models,
+            },
+          }),
+        },
+      },
+    ]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message:
+          "Provider catalog mockplugin model rows cannot be enumerated during doctor validation.",
+        requirement: "model iterator failed",
+      }),
+    );
+  });
+
   it("reports provider catalog results without provider containers", async () => {
     mocks.resolvePluginProviders.mockReturnValueOnce([
       {
