@@ -2076,6 +2076,59 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("rehydrates daily-ingested multi-line list snippets from the full live note range", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## 模型切换 (16:23)",
+        "- **需求**: 用户想使用小米 Mimo 模型作为默认",
+        "- **偏好**: 保持低成本默认路由",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 4,
+            endLine: 5,
+            score: 0.91,
+            snippet:
+              "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认; **偏好**: 保持低成本默认路由",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(4);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(5);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-05-28.md:4-5");
+      expect(memoryText).toContain("**偏好**: 保持低成本默认路由");
+    });
+  });
+
   it("keeps rehydrated promotion snippets capped in the recall store", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;

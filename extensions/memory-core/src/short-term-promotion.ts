@@ -1605,12 +1605,14 @@ function normalizeListMarkerFreeRangeSnippet(
   if (startIndex >= endIndex) {
     return "";
   }
-  return normalizeSnippet(
-    lines
-      .slice(startIndex, endIndex)
-      .map((line) => line.trim().replace(PROMOTION_LIST_MARKER_RE, ""))
-      .join(" "),
-  );
+  const strippedLines = lines.slice(startIndex, endIndex).map((line) => {
+    const trimmed = line.trim();
+    const withoutMarker = trimmed.replace(PROMOTION_LIST_MARKER_RE, "");
+    return { text: withoutMarker, hadListMarker: withoutMarker !== trimmed };
+  });
+  const joiner =
+    strippedLines.length > 1 && strippedLines.every((line) => line.hadListMarker) ? "; " : " ";
+  return normalizeSnippet(strippedLines.map((line) => line.text).join(joiner));
 }
 
 function compareCandidateWindow(
