@@ -706,7 +706,6 @@ export async function runEmbeddedAgent(
             // blocking on unrelated provider discovery.
             skipAgentDiscovery: true,
             allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
-            preferBundledStaticCatalogModel: pluginHarnessOwnsTransport,
             workspaceDir: resolvedWorkspace,
             authProfileId: params.authProfileId,
           },

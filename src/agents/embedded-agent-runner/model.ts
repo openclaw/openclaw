@@ -1355,7 +1355,6 @@ export async function resolveModelAsync(
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
     allowBundledStaticCatalogFallback?: boolean;
-    preferBundledStaticCatalogModel?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
@@ -1503,11 +1502,7 @@ export async function resolveModelAsync(
   let model =
     explicitModel?.kind === "resolved" && !providerRuntimeMetadataShouldWin
       ? explicitModel.model
-      : !explicitModel &&
-          options?.preferBundledStaticCatalogModel &&
-          !providerRuntimeMetadataShouldWin
-        ? resolveStaticCatalogFallbackModel()
-        : undefined;
+      : undefined;
   model ??= await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh

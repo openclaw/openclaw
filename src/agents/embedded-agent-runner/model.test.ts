@@ -556,7 +556,7 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
-  it("prefers bundled static catalog rows before provider dynamic discovery when requested", async () => {
+  it("falls back to bundled static catalog rows without agent discovery", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "openai",
       id: "gpt-5.3-codex",
@@ -571,11 +571,10 @@ describe("resolveModel", () => {
     });
     const baseRuntimeHooks = createRuntimeHooks();
     const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
-    const runProviderDynamicModel = vi.fn(baseRuntimeHooks.runProviderDynamicModel);
+    const runProviderDynamicModel = vi.fn(() => undefined);
 
     const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", undefined, {
       allowBundledStaticCatalogFallback: true,
-      preferBundledStaticCatalogModel: true,
       runtimeHooks: {
         ...baseRuntimeHooks,
         prepareProviderDynamicModel,
@@ -593,8 +592,8 @@ describe("resolveModel", () => {
       maxTokens: 128_000,
     });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledTimes(1);
-    expect(prepareProviderDynamicModel).not.toHaveBeenCalled();
-    expect(runProviderDynamicModel).not.toHaveBeenCalled();
+    expect(prepareProviderDynamicModel).toHaveBeenCalled();
+    expect(runProviderDynamicModel).toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
@@ -630,7 +629,6 @@ describe("resolveModel", () => {
 
     const result = await resolveModelAsync("openai", "gpt-5.5-pro", "/tmp/agent", undefined, {
       allowBundledStaticCatalogFallback: true,
-      preferBundledStaticCatalogModel: true,
       runtimeHooks: {
         ...baseRuntimeHooks,
         prepareProviderDynamicModel,
