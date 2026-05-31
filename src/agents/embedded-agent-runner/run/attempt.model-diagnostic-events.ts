@@ -113,6 +113,8 @@ function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefi
   if (!("partial" in chunk)) {
     return utf8JsonByteLength(chunk);
   }
+  // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
+  // count the new stream event shape, not the answer-so-far replay.
   const { partial: _partial, ...snapshotlessChunk } = chunk;
   return utf8JsonByteLength(snapshotlessChunk);
 }
