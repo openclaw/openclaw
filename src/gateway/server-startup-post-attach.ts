@@ -220,6 +220,7 @@ function scheduleProviderAuthStatePrewarm(params: {
     warn: (msg: string) => void;
   };
   delayMs?: number;
+  startupWarmEnabled?: boolean;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -285,29 +286,31 @@ function scheduleProviderAuthStatePrewarm(params: {
       clearCurrentProviderAuthState();
       scheduleAuthMapRewarm("auth-profile-failure");
     });
-    startupTimer = setTimeout(
-      () => {
-        void (async () => {
-          if (isStopped()) {
-            return;
-          }
-          const cfg = params.getConfig();
-          const metrics = await measureProviderAuthWarm(() =>
-            warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
-          );
-          if (isStopped()) {
-            return;
-          }
-          params.log.info(
-            `provider auth state pre-warmed ${formatProviderAuthWarmMetrics(metrics)}`,
-          );
-        })().catch((err) => {
-          params.log.warn(`provider auth state pre-warm failed: ${String(err)}`);
-        });
-      },
-      Math.max(0, delayMs),
-    );
-    startupTimer.unref?.();
+    if (params.startupWarmEnabled !== false) {
+      startupTimer = setTimeout(
+        () => {
+          void (async () => {
+            if (isStopped()) {
+              return;
+            }
+            const cfg = params.getConfig();
+            const metrics = await measureProviderAuthWarm(() =>
+              warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
+            );
+            if (isStopped()) {
+              return;
+            }
+            params.log.info(
+              `provider auth state pre-warmed ${formatProviderAuthWarmMetrics(metrics)}`,
+            );
+          })().catch((err) => {
+            params.log.warn(`provider auth state pre-warm failed: ${String(err)}`);
+          });
+        },
+        Math.max(0, delayMs),
+      );
+      startupTimer.unref?.();
+    }
   })().catch((err) => {
     params.log.warn(`provider auth state pre-warm setup failed: ${String(err)}`);
   });
@@ -1255,12 +1258,13 @@ export async function startGatewayPostAttachRuntime(
         }
         const postReadySidecars = [...result.postReadySidecars];
         const gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
-        if (params.providerAuthPrewarm?.enabled !== false) {
+        if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({
               getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
               log: params.log,
               delayMs: params.providerAuthPrewarm?.delayMs,
+              startupWarmEnabled: params.providerAuthPrewarm.enabled === true,
             }),
           );
         }
