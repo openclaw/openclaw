@@ -509,15 +509,19 @@ describe("resolvePluginProviders", () => {
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
-    vi.doMock("./plugin-metadata-snapshot.js", () => ({
-      loadPluginMetadataSnapshot: (params: Parameters<LoadPluginMetadataSnapshot>[0]) => {
+    vi.doMock("./plugin-metadata-snapshot.js", () => {
+      const loadSnapshot = (params: Parameters<LoadPluginMetadataSnapshot>[0]) => {
         loadPluginMetadataSnapshotMock(params);
         return {
           manifestRegistry: loadPluginManifestRegistryMock(),
           index: createProviderRegistrySnapshotFixture(),
         };
-      },
-    }));
+      };
+      return {
+        loadPluginMetadataSnapshot: loadSnapshot,
+        resolvePluginMetadataSnapshot: loadSnapshot,
+      };
+    });
     vi.doMock("./current-plugin-metadata-snapshot.js", () => ({
       getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
         getCurrentPluginMetadataSnapshotMock(...args),

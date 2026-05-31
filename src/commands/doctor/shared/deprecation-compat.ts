@@ -205,11 +205,11 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     removeAfter: "2026-08-31",
     source: "channels.webchat",
     migration: "src/commands/doctor/shared/legacy-config-migrations.channels.ts",
-    replacement: "gateway.webchat.chatHistoryMaxChars for WebChat history limits",
+    replacement: "chat.history maxChars per-request override when a custom client needs it",
     docsPath: "/web/webchat",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
     notes:
-      "WebChat is an internal control surface, not a configurable outbound channel. Runtime ignores the retired channel key; doctor preserves the history-size intent when possible.",
+      "WebChat is an internal control surface, not a configurable outbound channel. Runtime ignores the retired channel key; doctor removes stale config.",
   }),
   deprecatedCompatRecord({
     code: "doctor-tts-provider-aliases",

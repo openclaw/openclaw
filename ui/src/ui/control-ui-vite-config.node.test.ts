@@ -8,6 +8,12 @@ import {
 } from "../../vite.config.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+type ResolveIdHandler = (
+  this: never,
+  source: string,
+  importer: string | undefined,
+  options: { custom: Record<string, never>; isEntry: boolean; ssr: boolean },
+) => unknown;
 
 function findStringAlias(key: string) {
   return resolveTsconfigPathAliasesForVite().find((alias) => alias.find === key);
@@ -55,16 +61,18 @@ describe("Control UI Vite config", () => {
   it("uses a browser-safe redactor for shared tool display imports", async () => {
     const plugin = controlUiBrowserOnlySharedModuleAliases();
     const resolveIdHook = plugin.resolveId;
-    const resolveId = typeof resolveIdHook === "function" ? resolveIdHook : resolveIdHook?.handler;
-    if (typeof resolveId !== "function") {
+    const resolveIdHandler = (
+      typeof resolveIdHook === "function" ? resolveIdHook : resolveIdHook?.handler
+    ) as ResolveIdHandler | undefined;
+    if (!resolveIdHandler) {
       throw new Error("Expected browser-only shared module alias plugin to expose resolveId");
     }
 
-    const resolved = await resolveId.call(
+    const resolved = await resolveIdHandler.call(
       {} as never,
       "../logging/redact.js",
       path.join(repoRoot, "src/agents/tool-display-common.ts"),
-      { attributes: {}, custom: {}, isEntry: false, ssr: false },
+      { custom: {}, isEntry: false, ssr: false },
     );
 
     expect(resolved).toBe(path.join(repoRoot, "ui/src/ui/browser-redact.ts"));

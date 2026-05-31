@@ -376,6 +376,12 @@ export type SessionEntry = {
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
+  /** Consecutive memory flush failures since the last successful flush. */
+  memoryFlushFailureCount?: number;
+  /** Timestamp (ms) of the last failed memory flush attempt. */
+  memoryFlushLastFailedAt?: number;
+  /** Last memory flush failure error message, truncated for durable metadata. */
+  memoryFlushLastFailureError?: string;
   cliSessionIds?: Record<string, string>;
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;

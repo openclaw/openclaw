@@ -227,6 +227,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
       flowRunsPath: "/tmp/state/flows/registry.sqlite",
       hasLegacy: false,
     },
+    deliveryQueues: {
+      outboundPath: "/tmp/state/delivery-queue",
+      sessionPath: "/tmp/state/session-delivery-queue",
+      hasLegacy: false,
+    },
     channelPlans: {
       hasLegacy: false,
       plans: [],

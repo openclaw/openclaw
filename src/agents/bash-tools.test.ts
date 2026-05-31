@@ -175,6 +175,7 @@ vi.mock("../process/supervisor/index.js", () => {
           stdin: undefined,
           wait: async () => {
             await immediate();
+            await immediate();
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
             }
@@ -266,6 +267,7 @@ const createNotifyOnExitExecTool = (overrides: Partial<ExecToolConfig> = {}) =>
     allowBackground: true,
     backgroundMs: 0,
     notifyOnExit: true,
+    notifyOnExitEmptySuccess: true,
     sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
     ...overrides,
   });
@@ -639,9 +641,7 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
 const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
-  const tool = createNotifyOnExitExecTool(
-    notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
-  );
+  const tool = createNotifyOnExitExecTool({ notifyOnExitEmptySuccess });
 
   const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);

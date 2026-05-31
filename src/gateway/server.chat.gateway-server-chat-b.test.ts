@@ -1328,40 +1328,8 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history applies gateway.webchat.chatHistoryMaxChars from config", async () => {
+  test("chat.history applies RPC maxChars", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await writeGatewayConfig({
-        gateway: {
-          webchat: {
-            chatHistoryMaxChars: 5,
-          },
-        },
-      });
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "abcdefghij" }],
-            timestamp: Date.now(),
-          },
-        }),
-      ]);
-
-      const messages = await fetchHistoryMessages(ws);
-      expect(JSON.stringify(messages)).toContain("abcde\\n...(truncated)...");
-    });
-  });
-
-  test("chat.history prefers RPC maxChars over config", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await writeGatewayConfig({
-        gateway: {
-          webchat: {
-            chatHistoryMaxChars: 3,
-          },
-        },
-      });
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
       await writeMainSessionTranscript(sessionDir, [
         JSON.stringify({
@@ -1376,7 +1344,6 @@ describe("gateway server chat", () => {
       const messages = await fetchHistoryMessages(ws, { maxChars: 7 });
       const serialized = JSON.stringify(messages);
       expect(serialized).toContain("abcdefg\\n...(truncated)...");
-      expect(serialized).not.toContain("abc\\n...(truncated)...");
     });
   });
 

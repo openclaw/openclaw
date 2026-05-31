@@ -16,7 +16,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   clearProviderRuntimePluginCacheForTest,
@@ -902,7 +902,7 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
 }): ProviderExternalAuthProfile[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
-  const { manifestRegistry } = loadPluginMetadataSnapshot({
+  const { manifestRegistry } = resolvePluginMetadataSnapshot({
     config: params.config ?? {},
     workspaceDir,
     env,

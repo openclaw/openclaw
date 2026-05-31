@@ -28,6 +28,7 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/matrix/src/plugin-entry.runtime.js",
   "extensions/memory-core/src/memory-tool-manager-mock.ts",
+  "ui/src/ui/browser-redact.ts",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/inbound.group-require-mention-test-plugins.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",

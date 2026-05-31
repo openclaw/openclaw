@@ -36,10 +36,11 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
     spawn: async (input: {
       argv?: string[];
+      ptyCommand?: string;
       env?: NodeJS.ProcessEnv;
       onStdout?: (chunk: string) => void;
     }) => {
-      const command = input.argv?.at(-1) ?? "";
+      const command = input.ptyCommand ?? input.argv?.at(-1) ?? "";
       const env = input.env ?? {};
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
@@ -47,7 +48,7 @@ vi.mock("../process/supervisor/index.js", () => ({
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
       } else if (command.includes("$PATH")) {
         input.onStdout?.(env.PATH ?? "");
-      } else if (command === "echo ok") {
+      } else if (command.includes("echo ok")) {
         input.onStdout?.("ok\n");
       }
       return {
