@@ -100,6 +100,11 @@ The shorthand is also accepted:
 Code mode remains off when `tools.codeMode` is omitted, `false`, or an object
 without `enabled: true`.
 
+When you use sandboxed agents with configured MCP servers, also make sure the
+sandbox tool policy allows the bundled MCP plugin, for example with
+`tools.sandbox.tools.alsoAllow: ["bundle-mcp"]`. See
+[Configuration - tools and custom providers](/gateway/config-tools#mcp-and-plugin-tools-inside-sandbox-tool-policy).
+
 Use explicit limits when you want tighter bounds:
 
 ```json5
@@ -492,6 +497,20 @@ declare namespace MCP.github {
   }): Promise<McpToolResult>;
 }
 ```
+
+The declaration files are virtual, not files written under the workspace or
+state directory. For each code-mode `exec` call, OpenClaw builds the run-scoped
+tool catalog, keeps the visible MCP entries, renders `mcp/index.d.ts` plus one
+`mcp/<server>.d.ts` declaration per visible server, and injects that small
+read-only table into the QuickJS worker. Guest code sees only the `API` object:
+`API.list(prefix?)` returns file metadata and `API.read(path)` returns the
+selected declaration content. Unknown paths and `.` / `..` segments are rejected.
+
+This keeps large MCP schemas out of the model prompt. The agent learns that the
+virtual API exists from the `exec` tool description, reads only the needed
+declaration file, and then calls `MCP.<server>.<tool>()` with one object argument.
+`MCP.<server>.$api()` remains available as an inline fallback when the agent
+needs a single-tool schema response inside the program.
 
 The guest runtime must not expose host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
