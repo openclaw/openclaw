@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -26,8 +28,6 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -90,7 +90,7 @@ const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
-const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai", "openai-codex"]);
+const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -115,6 +115,7 @@ type BaseStreamOptions = {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
+  stop?: string[];
   signal?: AbortSignal;
   apiKey?: string;
   cacheRetention?: "none" | "short" | "long";
@@ -985,17 +986,24 @@ function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"
 
 function parseTextSignature(
   signature: string | undefined,
-): { id: string; phase?: "commentary" | "final_answer" } | undefined {
+): { id?: string; phase?: "commentary" | "final_answer" } | undefined {
   if (!signature) {
     return undefined;
   }
   if (signature.startsWith("{")) {
     try {
       const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
-      if (parsed.v === 1 && typeof parsed.id === "string") {
-        return parsed.phase === "commentary" || parsed.phase === "final_answer"
-          ? { id: parsed.id, phase: parsed.phase }
-          : { id: parsed.id };
+      if (parsed.v === 1) {
+        const id = typeof parsed.id === "string" ? parsed.id : undefined;
+        const phase =
+          parsed.phase === "commentary" || parsed.phase === "final_answer"
+            ? parsed.phase
+            : undefined;
+        // A reasoning-dropped replay keeps the phase but omits the paired id.
+        if (id !== undefined || phase !== undefined) {
+          return { id, phase };
+        }
+        return undefined;
       }
     } catch {
       // Keep legacy plain-string behavior below.
@@ -1103,6 +1111,7 @@ function convertResponsesMessages(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
+      let textFallbackOrdinal = 0;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -1140,9 +1149,21 @@ function convertResponsesMessages(
           }
         } else if (block.type === "text") {
           const textSignature = parseTextSignature(block.textSignature);
-          let msgId = shouldReplayResponsesItemIds
-            ? (textSignature?.id ?? `msg_${msgIndex}`)
-            : undefined;
+          let msgId: string | undefined;
+          if (shouldReplayResponsesItemIds) {
+            if (textSignature?.id) {
+              msgId = textSignature.id;
+            } else {
+              // Reasoning-dropped/model-switch replay strips textSignature, which can
+              // leave several text blocks in one assistant turn without ids. msgIndex
+              // is per-message, so disambiguate fallbacks to avoid duplicate item ids.
+              msgId =
+                textFallbackOrdinal === 0
+                  ? `msg_${msgIndex}`
+                  : `msg_${msgIndex}_${textFallbackOrdinal}`;
+              textFallbackOrdinal += 1;
+            }
+          }
           msgId = normalizeResponsesReplayItemId(msgId, "msg");
           const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
@@ -1918,7 +1939,8 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
 function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
     OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
-    (model.api === "openai-codex-responses" || model.api === "openclaw-openai-responses-transport")
+    (model.api === "openai-chatgpt-responses" ||
+      model.api === "openclaw-openai-responses-transport")
   );
 }
 
@@ -2055,7 +2077,7 @@ export function buildOpenAIResponsesParams(
   const messages = convertResponsesMessages(
     model,
     context,
-    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses", "github-copilot"]),
+    new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
@@ -2764,6 +2786,9 @@ async function processOpenAICompletionsStream(
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
+  }
+  if (hasToolCalls && output.stopReason !== "toolUse") {
+    output.content = output.content.filter((block) => block.type !== "toolCall");
   }
 }
 
@@ -3590,6 +3615,9 @@ export function buildOpenAICompletionsParams(
   }
   if (options?.seed !== undefined) {
     params.seed = options.seed;
+  }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop = options.stop;
   }
   if (supportsModelTools(model)) {
     if (context.tools) {

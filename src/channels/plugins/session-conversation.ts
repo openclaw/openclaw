@@ -1,3 +1,8 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
 import {
@@ -6,11 +11,6 @@ import {
   type ParsedThreadSessionSuffix,
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../../shared/string-normalization.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 

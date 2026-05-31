@@ -337,10 +337,10 @@ export function isCodexAppServerNativeAuthProfile(
       ...lookup,
       authProfileId,
     });
-    return isCodexAppServerNativeAuthProvider({
-      provider: credential?.provider,
-      config: lookup.config,
-    });
+    if (!credential || credential.type === "api_key") {
+      return false;
+    }
+    return isOpenAiAuthProvider({ provider: credential.provider, config: lookup.config });
   } catch (error) {
     embeddedAgentLog.debug("failed to resolve codex app-server auth profile provider", {
       authProfileId,
@@ -403,7 +403,7 @@ function loadCodexAppServerAuthProfileStore(params: {
   );
 }
 
-function isCodexAppServerNativeAuthProvider(params: {
+function isOpenAiAuthProvider(params: {
   provider?: string;
   config?: ProviderAuthAliasConfig;
 }): boolean {

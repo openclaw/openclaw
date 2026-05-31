@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -13,11 +18,6 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  resolveDateTimestampMs,
-  resolveTimestampMsToIsoString,
-} from "../../shared/number-coercion.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 

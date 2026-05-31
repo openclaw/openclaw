@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
@@ -22,7 +23,6 @@ import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp } from "../logging/timestamps.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 

@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  sortUniqueStrings,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
@@ -27,7 +31,6 @@ import {
 } from "../../plugins/plugin-module-loader-cache.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { sortUniqueStrings, uniqueStrings } from "../../shared/string-normalization.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import {
   isSafeManifestChannelId,

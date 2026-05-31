@@ -1,3 +1,4 @@
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
@@ -12,7 +13,6 @@ import {
   normalizeProviderResolvedModelWithPlugin,
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
-import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
@@ -27,7 +27,7 @@ import {
   shouldSuppressBuiltInModel,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-codex-routing.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
@@ -72,6 +72,12 @@ type ProviderRuntimeHooks = {
     params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
   ) => unknown;
   normalizeProviderTransportWithPlugin: typeof normalizeProviderTransportWithPlugin;
+};
+
+type StaticCatalogFallbackModel = Model & {
+  compat?: ModelCompatConfig;
+  contextTokens?: number;
+  mediaInput?: ModelMediaInputConfig;
 };
 
 const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
@@ -156,7 +162,7 @@ function discoverCachedAgentStoresForAgent(
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
   if (
-    !["openai", "openai-codex"].includes(normalizeProviderId(params.provider)) ||
+    normalizeProviderId(params.provider) !== "openai" ||
     params.model.id.trim().toLowerCase() !== "gpt-5.4-codex"
   ) {
     return params.model;
@@ -748,7 +754,14 @@ function resolveExplicitModelWithRegistry(params: {
     // Conditional suppressions (e.g. baseUrlHosts-gated qwen restrictions) are
     // intentionally bypassable when the user has explicitly configured the model.
     // (#74451)
-    if (shouldUnconditionallySuppress({ provider, id: modelId, config: cfg })) {
+    if (
+      shouldUnconditionallySuppress({
+        provider,
+        id: modelId,
+        ...(cfg ? { config: cfg } : {}),
+        ...(workspaceDir ? { workspaceDir } : {}),
+      })
+    ) {
       return { kind: "suppressed" };
     }
     const resolvedParams = mergeConfiguredRuntimeModelParams({
@@ -783,8 +796,9 @@ function resolveExplicitModelWithRegistry(params: {
     shouldSuppressBuiltInModel({
       provider,
       id: modelId,
-      baseUrl: providerConfig?.baseUrl,
-      config: cfg,
+      ...(cfg ? { config: cfg } : {}),
+      ...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
     })
   ) {
     return { kind: "suppressed" };
@@ -989,14 +1003,16 @@ function resolveConfiguredFallbackModel(params: {
   }
   const staticCatalogModel = configuredModel
     ? undefined
-    : resolveBundledStaticCatalogModel({
+    : (resolveBundledStaticCatalogModel({
         provider,
         modelId,
         cfg,
         workspaceDir,
         includeRuntimeDiscovery: true,
-      });
+      }) as StaticCatalogFallbackModel | undefined);
   const metadataModel = configuredModel ?? staticCatalogModel;
+  const fallbackCompat = configuredModel?.compat ?? staticCatalogModel?.compat;
+  const fallbackMediaInput = configuredModel?.mediaInput ?? staticCatalogModel?.mediaInput;
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -1009,7 +1025,7 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     modelId,
     providerParams: providerConfig?.params,
-    configuredParams: metadataModel?.params,
+    configuredParams: configuredModel?.params,
   });
   const fallbackTransport = resolveProviderTransport({
     provider,
@@ -1036,7 +1052,7 @@ function resolveConfiguredFallbackModel(params: {
   });
   const fallbackReasoning = resolveConfiguredFallbackReasoning({
     provider,
-    compat: metadataModel?.compat,
+    compat: fallbackCompat,
     reasoning: metadataModel?.reasoning,
   });
   return normalizeResolvedModel({
@@ -1080,8 +1096,8 @@ function resolveConfiguredFallbackModel(params: {
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
-          compat: metadataModel?.compat,
-          mediaInput: metadataModel?.mediaInput,
+          compat: fallbackCompat,
+          mediaInput: fallbackMediaInput,
         } as Model,
         providerRequest,
       ),
@@ -1156,10 +1172,7 @@ function resolveMergedConfiguredModelReasoning(params: {
   );
 }
 
-function isVllmQwenThinkingCompat(params: {
-  provider: string;
-  compat?: unknown;
-}): boolean {
+function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }): boolean {
   const thinkingFormat = readCompatThinkingFormat(params.compat);
   return (
     normalizeProviderId(params.provider) === "vllm" &&
@@ -1535,7 +1548,8 @@ function buildUnknownModelError(params: {
   const suppressed = buildSuppressedBuiltInModelError({
     provider: params.provider,
     id: params.modelId,
-    config: params.cfg,
+    ...(params.cfg ? { config: params.cfg } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   if (suppressed) {
     return suppressed;

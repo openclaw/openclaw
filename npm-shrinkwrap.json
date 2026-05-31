@@ -25,7 +25,6 @@
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
-        "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
         "clawpdf": "0.2.0",

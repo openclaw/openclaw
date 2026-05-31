@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
@@ -275,8 +279,13 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
 }
 
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
+  const validNowMs = asDateTimestampMs(nowMs);
+  if (validNowMs === undefined) {
+    return;
+  }
   for (const session of relaySessions.values()) {
-    if (nowMs > session.expiresAtMs) {
+    const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
+    if (expiresAtMs === undefined || validNowMs > expiresAtMs) {
       closeRelaySession(session, "completed");
     }
   }
@@ -308,7 +317,10 @@ export function createTalkRealtimeRelaySession(
   enforceRelaySessionLimits(params.connId);
   const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
-  const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
+  if (expiresAtMs === undefined) {
+    throw new Error("Realtime relay session expiry is outside the supported Date range");
+  }
   const talk = createTalkSessionController(
     {
       sessionId: relaySessionId,
@@ -688,7 +700,15 @@ function ensureRelayTurn(session: RelaySession): string {
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   const session = relaySessions.get(relaySessionId);
-  if (!session || session.connId !== connId || Date.now() > session.expiresAtMs) {
+  const nowMs = asDateTimestampMs(Date.now());
+  const expiresAtMs = session ? asDateTimestampMs(session.expiresAtMs) : undefined;
+  if (
+    !session ||
+    session.connId !== connId ||
+    nowMs === undefined ||
+    expiresAtMs === undefined ||
+    nowMs > expiresAtMs
+  ) {
     if (session) {
       closeRelaySession(session, "completed");
     }

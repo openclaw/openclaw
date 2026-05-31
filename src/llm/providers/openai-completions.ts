@@ -429,6 +429,14 @@ export const streamOpenAICompletions: StreamFunction<
         throw new Error("Stream ended without finish_reason");
       }
 
+      const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+      if (output.stopReason === "toolUse" && !hasToolCalls) {
+        output.stopReason = "stop";
+      }
+      if (hasToolCalls && output.stopReason !== "toolUse") {
+        output.content = output.content.filter((block) => block.type !== "toolCall");
+      }
+
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
@@ -589,6 +597,10 @@ function buildParams(
 
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
+  }
+
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop = options.stop;
   }
 
   if (context.tools && context.tools.length > 0) {
@@ -816,7 +828,7 @@ export function convertMessages(
   const normalizeToolCallId = (id: string): string => {
     // Handle pipe-separated IDs from OpenAI Responses API
     // Format: {call_id}|{id} where {id} can be 400+ chars with special chars (+, /, =)
-    // These come from providers like github-copilot, openai-codex, opencode
+    // These come from providers like github-copilot, openai, opencode
     // Extract just the call_id part and normalize it
     if (id.includes("|")) {
       const [callId] = id.split("|");

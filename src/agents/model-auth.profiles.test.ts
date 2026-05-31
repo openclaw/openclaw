@@ -13,8 +13,10 @@ import {
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
+  createRuntimeProviderAuthLookup,
   getApiKeyForModel,
   hasAvailableAuthForProvider,
+  hasRuntimeAvailableProviderAuth,
   resolveApiKeyForProvider,
   resolveEnvApiKey,
   resolveModelAuthMode,
@@ -185,6 +187,7 @@ vi.mock("./model-auth-env-vars.js", () => {
       aliasMap,
       envCandidateMap: candidates,
       authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+      setupProviderFallbackRefs: ["anthropic-vertex"],
     }),
   };
 });
@@ -194,7 +197,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     provider: string;
     context: { listProfileIds: (providerId: string) => string[] };
   }) => {
-    if (params.provider === "openai" && params.context.listProfileIds("openai-codex").length > 0) {
+    if (params.provider === "openai" && params.context.listProfileIds("openai").length > 0) {
       return 'No API key found for provider "openai". Use openai/gpt-5.5.';
     }
     return undefined;
@@ -405,9 +408,9 @@ describe("getApiKeyForModel", () => {
         await state.writeAuthProfiles({
           version: 1,
           profiles: {
-            "openai-codex:default": {
+            "openai:default": {
               type: "oauth",
-              provider: "openai-codex",
+              provider: "openai",
               ...oauthFixture,
             },
           },
@@ -415,8 +418,8 @@ describe("getApiKeyForModel", () => {
 
         const model = {
           id: "codex-mini-latest",
-          provider: "openai-codex",
-          api: "openai-codex-responses",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
         } as Model;
 
         const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
@@ -424,7 +427,7 @@ describe("getApiKeyForModel", () => {
         });
         const apiKey = await getApiKeyForModel({
           model,
-          profileId: "openai-codex:default",
+          profileId: "openai:default",
           store,
           agentDir: process.env.OPENCLAW_AGENT_DIR,
         });
@@ -462,7 +465,7 @@ describe("getApiKeyForModel", () => {
       model: {
         id: "gpt-5.5",
         provider: "openai",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
       } as Model,
       store,
     });
@@ -593,7 +596,7 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("suggests openai-codex when only Codex OAuth is configured", async () => {
+  it("uses OpenAI OAuth when it is configured for the provider", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -607,21 +610,21 @@ describe("getApiKeyForModel", () => {
         await state.writeAuthProfiles({
           version: 1,
           profiles: {
-            "openai-codex:default": {
+            "openai:default": {
               type: "oauth",
-              provider: "openai-codex",
+              provider: "openai",
               ...oauthFixture,
             },
           },
         });
 
-        let error: unknown = null;
-        try {
-          await resolveApiKeyForProvider({ provider: "openai" });
-        } catch (err) {
-          error = err;
-        }
-        expect(String(error)).toContain("openai/gpt-5.5");
+        const resolved = await resolveApiKeyForProvider({ provider: "openai" });
+
+        expect(resolved).toMatchObject({
+          apiKey: oauthFixture.access,
+          mode: "oauth",
+          profileId: "openai:default",
+        });
       },
     );
   });
@@ -1516,5 +1519,34 @@ describe("getApiKeyForModel", () => {
     );
 
     expect(resolved).toBeNull();
+  });
+
+  it("prepared runtime auth lookup still allows setup fallback for manifest setup providers", () => {
+    const runtimeLookup = createRuntimeProviderAuthLookup({ env: {} });
+
+    expect(runtimeLookup.setupProviderFallbackRefs).toContain("anthropic-vertex");
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "anthropic-vertex",
+        env: {
+          ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+        } as NodeJS.ProcessEnv,
+        runtimeLookup,
+      }),
+    ).toBe(true);
+  });
+
+  it("prepared runtime auth lookup skips setup fallback for providers outside manifest setup refs", () => {
+    const runtimeLookup = createRuntimeProviderAuthLookup({ env: {} });
+
+    expect(
+      hasRuntimeAvailableProviderAuth({
+        provider: "other-vertex",
+        env: {
+          ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+        } as NodeJS.ProcessEnv,
+        runtimeLookup,
+      }),
+    ).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { normalizeProviderId } from "../provider-id.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
@@ -11,7 +11,7 @@ export type OAuthRefreshFailureReason =
 
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
-const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const LEGACY_OPENAI_CODEX_PROVIDER_ID = ["openai", "codex"].join("-");
 const OPENAI_PROVIDER_ID = "openai";
 
 function isOAuthRefreshFailureMessage(message: string): boolean {

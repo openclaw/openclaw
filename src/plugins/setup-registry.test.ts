@@ -462,7 +462,7 @@ describe("setup-registry module loader", () => {
         {
           id: "openai",
           rootDir: pluginRoot,
-          providerAuthAliases: { "openai-codex": "openai" },
+          providerAuthAliases: { openai: "openai" },
           setup: {
             providers: [{ id: "openai" }],
             requiresRuntime: true,
@@ -484,7 +484,7 @@ describe("setup-registry module loader", () => {
           }) {
             api.registerProvider({
               id: "openai",
-              aliases: ["openai-codex"],
+              aliases: ["openai"],
               label: "OpenAI",
               auth: [],
             });
@@ -493,9 +493,7 @@ describe("setup-registry module loader", () => {
       });
     });
 
-    const provider = requireRecord(
-      resolvePluginSetupProvider({ provider: "openai-codex", env: {} }),
-    );
+    const provider = requireRecord(resolvePluginSetupProvider({ provider: "openai", env: {} }));
     expect(provider.id).toBe("openai");
     expect(provider.label).toBe("OpenAI");
   });

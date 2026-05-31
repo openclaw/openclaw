@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./rest-errors.js";
 import { RestScheduler, type RestSchedulerOptions } from "./rest-scheduler.js";
@@ -67,5 +68,68 @@ describe("RestScheduler", () => {
 
     expect(executor).toHaveBeenCalledTimes(1);
     expect(scheduler.queueSize).toBe(0);
+  });
+
+  it("ignores 429 retry deadlines that exceed the Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(MAX_DATE_TIMESTAMP_MS);
+    try {
+      const scheduler = new RestScheduler(createOptions(), vi.fn());
+      scheduler.recordResponse(
+        "GET /channels/c1/messages",
+        "/channels/c1/messages",
+        createJsonResponse(
+          { message: "Rate limited", retry_after: 1, global: true },
+          { status: 429 },
+        ),
+        { message: "Rate limited", retry_after: 1, global: true },
+      );
+
+      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps immediate 429 retry deadlines working", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
+    try {
+      const scheduler = new RestScheduler(createOptions(), vi.fn());
+      scheduler.recordResponse(
+        "GET /channels/c1/messages",
+        "/channels/c1/messages",
+        createJsonResponse(
+          { message: "Rate limited", retry_after: 0, global: true },
+          { status: 429 },
+        ),
+        { message: "Rate limited", retry_after: 0, global: true },
+      );
+
+      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(Date.now());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rounds fractional millisecond 429 retry deadlines up", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
+    try {
+      const scheduler = new RestScheduler(createOptions(), vi.fn());
+      scheduler.recordResponse(
+        "GET /channels/c1/messages",
+        "/channels/c1/messages",
+        createJsonResponse(
+          { message: "Rate limited", retry_after: 0.0004, global: true },
+          { status: 429 },
+        ),
+        { message: "Rate limited", retry_after: 0.0004, global: true },
+      );
+
+      expect(scheduler.getMetrics().globalRateLimitUntil).toBe(Date.now() + 1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

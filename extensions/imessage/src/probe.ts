@@ -57,6 +57,20 @@ type RpcSupportCacheEntry = { result: RpcSupportResult; expiresAt: number };
 
 const rpcSupportCache = new Map<string, RpcSupportCacheEntry>();
 
+function cacheIMessagePrivateApiStatus(
+  cliPath: string,
+  status: NonNullable<IMessageProbe["privateApi"]>,
+): void {
+  if (status.available) {
+    setCachedIMessagePrivateApiStatus(cliPath, status, 0);
+    return;
+  }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(PRIVATE_API_NEGATIVE_TTL_MS);
+  if (expiresAt !== undefined) {
+    setCachedIMessagePrivateApiStatus(cliPath, status, expiresAt);
+  }
+}
+
 function getCachedRpcSupport(cliPath: string): RpcSupportResult | undefined {
   const cached = rpcSupportCache.get(cliPath);
   if (!cached) {
@@ -245,11 +259,7 @@ export async function probeIMessagePrivateApi(
           : {}
         : { error: combined || `imsg status --json failed (code ${String(result.code)})` }),
     };
-    setCachedIMessagePrivateApiStatus(
-      key,
-      status,
-      status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
-    );
+    cacheIMessagePrivateApiStatus(key, status);
     return status;
   } catch (err) {
     const status: NonNullable<IMessageProbe["privateApi"]> = {
@@ -260,7 +270,7 @@ export async function probeIMessagePrivateApi(
       cliCapabilities: { sendRichSupportsAttachment: false },
       error: String(err),
     };
-    setCachedIMessagePrivateApiStatus(key, status, Date.now() + PRIVATE_API_NEGATIVE_TTL_MS);
+    cacheIMessagePrivateApiStatus(key, status);
     return status;
   }
 }

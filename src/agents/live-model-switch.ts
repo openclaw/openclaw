@@ -14,11 +14,11 @@ import {
 } from "./model-selection.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeProviderId } from "./provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 export function resolveLiveSessionModelSelection(params: {
   cfg?: { session?: { store?: string } } | undefined;
@@ -98,7 +98,7 @@ function isAlreadyAppliedOpenAICodexRuntimePromotion(
   current: { provider: string; model: string },
   next: LiveSessionModelSelection,
 ): boolean {
-  // The embedded Codex runtime reports openai-codex after applying a canonical
+  // The embedded Codex runtime reports openai after applying a canonical
   // openai selection. Other runtime aliases remain real live-switch targets.
   return (
     normalizeProviderId(current.provider) === OPENAI_CODEX_PROVIDER_ID &&

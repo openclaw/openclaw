@@ -1,4 +1,9 @@
 import fs from "node:fs";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
@@ -19,11 +24,6 @@ import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";

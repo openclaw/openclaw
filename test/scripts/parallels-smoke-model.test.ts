@@ -131,13 +131,18 @@ describe("Parallels smoke model selection", () => {
     }
   });
 
-  it("stops parsing smoke options after the argument terminator", () => {
+  it("accepts leading package-manager separators and still honors later terminators", () => {
+    expect(parseLinuxSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
     expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe(
       "fresh",
     );
+    expect(parseMacosSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
     expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe(
       "fresh",
     );
+    expect(
+      parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec,
+    ).toBe("openclaw@2026.5.1");
     expect(
       parseNpmUpdateSmokeArgs([
         "--package-spec",
@@ -148,6 +153,9 @@ describe("Parallels smoke model selection", () => {
       ]).packageSpec,
     ).toBe("openclaw@2026.5.1");
     expect(parseWindowsSmokeArgs(["--", "--upgrade-from-packed-main"]).upgradeFromPackedMain).toBe(
+      true,
+    );
+    expect(parseWindowsSmokeArgs(["--mode", "fresh", "--", "--upgrade-from-packed-main"]).upgradeFromPackedMain).toBe(
       false,
     );
   });

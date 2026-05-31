@@ -75,3 +75,30 @@ describe("Zalo inbound timestamp normalization", () => {
     expect(inboundTimestamp("9007199254740993")).toBe(1_700_000_000_000);
   });
 });
+
+describe("Zalo group context cache", () => {
+  afterEach(() => {
+    zaloTesting.clearCachedGroupContext("cache-profile");
+  });
+
+  it("drops cached group context when the current clock is invalid", () => {
+    zaloTesting.writeCachedGroupContext("cache-profile", {
+      groupId: "group-invalid-clock",
+      name: "Cached",
+    });
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+
+    expect(zaloTesting.readCachedGroupContext("cache-profile", "group-invalid-clock")).toBeNull();
+  });
+
+  it("does not cache group context when ttl expiry exceeds the Date range", () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+
+    zaloTesting.writeCachedGroupContext("cache-profile", {
+      groupId: "group-overflow",
+      name: "Overflow",
+    });
+
+    expect(zaloTesting.readCachedGroupContext("cache-profile", "group-overflow")).toBeNull();
+  });
+});

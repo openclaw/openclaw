@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
   MEMORY_SEARCH_RESPONSE_MAX_BYTES,
+  classifyMemorySearchInvokeResponse,
   hasChildExited,
   parseArgs,
   readBoundedResponseText,
@@ -114,6 +115,76 @@ describe("check-memory-fd-repro", () => {
       withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17" }, () => parseArgs(["--", "--unknown"])),
     ).toMatchObject({
       fileCount: 17,
+    });
+  });
+
+  it("accepts the leading package-manager argument separator", () => {
+    expect(parseArgs(["--", "--files", "20", "--allow-non-darwin"])).toMatchObject({
+      allowNonDarwin: true,
+      fileCount: 20,
+    });
+  });
+
+  it("accepts an available memory_search tool payload", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({
+        ok: true,
+        result: {
+          content: [{ type: "text", text: JSON.stringify({ results: [] }) }],
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      gatewayOk: true,
+      resultCount: 0,
+    });
+  });
+
+  it("rejects disabled memory_search tool payloads", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({
+        ok: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                results: [],
+                disabled: true,
+                unavailable: true,
+                error: 'No API key found for provider "openai".',
+              }),
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      gatewayOk: true,
+      toolDisabled: true,
+      toolUnavailable: true,
+      toolError: 'No API key found for provider "openai".',
+    });
+  });
+
+  it("rejects gateway success envelopes without memory_search details", () => {
+    const result = classifyMemorySearchInvokeResponse({
+      httpOk: true,
+      status: 200,
+      bodyText: JSON.stringify({ ok: true, result: { content: [] } }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "memory_search result payload missing or invalid",
     });
   });
 

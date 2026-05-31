@@ -1,9 +1,9 @@
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
@@ -70,6 +70,10 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
     return value;
   }
   return undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeRecordKey(value: string): string | undefined {
@@ -151,6 +155,16 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
   assign(
     "pendingFinalDeliveryIntentId",
     normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
+  );
+  const restartRecoveryDeliveryContext = normalizeOptionalDeliveryContext(
+    entry.restartRecoveryDeliveryContext,
+  );
+  if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
+    assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
+  }
+  assign(
+    "restartRecoveryDeliveryRunId",
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
   );
 
   return next;

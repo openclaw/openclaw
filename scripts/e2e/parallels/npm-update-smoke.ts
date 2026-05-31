@@ -128,6 +128,7 @@ Options:
 }
 
 export function parseArgs(argv: string[]): NpmUpdateOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: NpmUpdateOptions = {
     apiKeyEnv: undefined,
     betaValidation: undefined,
@@ -139,25 +140,25 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
     provider: "openai",
     updateTarget: "",
   };
-  parseArgv: for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
         break parseArgv;
       case "--package-spec":
-        options.packageSpec = ensureValue(argv, i, arg);
+        options.packageSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--update-target":
-        options.updateTarget = ensureValue(argv, i, arg);
+        options.updateTarget = ensureValue(args, i, arg);
         i++;
         break;
       case "--fresh-target":
-        options.freshTargetSpec = ensureValue(argv, i, arg);
+        options.freshTargetSpec = ensureValue(args, i, arg);
         i++;
         break;
       case "--beta-validation": {
-        const next = argv[i + 1];
+        const next = args[i + 1];
         if (next && !next.startsWith("-")) {
           options.betaValidation = next;
           i++;
@@ -168,24 +169,24 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
       }
       case "--platform":
       case "--only":
-        options.platforms = parsePlatformList(ensureValue(argv, i, arg));
+        options.platforms = parsePlatformList(ensureValue(args, i, arg));
         i++;
         break;
       case "--provider":
-        options.provider = parseProvider(ensureValue(argv, i, arg));
+        options.provider = parseProvider(ensureValue(args, i, arg));
         i++;
         break;
       case "--model":
-        options.modelId = ensureValue(argv, i, arg);
+        options.modelId = ensureValue(args, i, arg);
         i++;
         break;
       case "--host-ip":
-        options.hostIp = ensureValue(argv, i, arg);
+        options.hostIp = ensureValue(args, i, arg);
         i++;
         break;
       case "--api-key-env":
       case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(argv, i, arg);
+        options.apiKeyEnv = ensureValue(args, i, arg);
         i++;
         break;
       case "--json":
@@ -200,6 +201,10 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
     }
   }
   return options;
+}
+
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 function platformRecord<T>(value: T): Record<Platform, T> {

@@ -86,9 +86,6 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.3.0)
-      '@silvia-odwyer/photon-node':
-        specifier: 0.3.4
-        version: 0.3.4
       chalk:
         specifier: 5.6.2
         version: 5.6.2
@@ -1433,16 +1430,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/skill-workshop:
-    dependencies:
-      typebox:
-        specifier: 1.1.38
-        version: 1.1.38
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/slack:
     dependencies:
       '@slack/bolt':
@@ -1833,11 +1820,15 @@ importers:
 
   packages/memory-host-sdk: {}
 
+  packages/model-catalog-core: {}
+
   packages/net-policy:
     dependencies:
       ipaddr.js:
         specifier: 2.4.0
         version: 2.4.0
+
+  packages/normalization-core: {}
 
   packages/plugin-package-contract: {}
 
@@ -1864,6 +1855,10 @@ importers:
         specifier: 5.6.2
         version: 5.6.2
 
+  packages/tool-call-repair: {}
+
+  packages/web-content-core: {}
+
   ui:
     dependencies:
       '@create-markdown/preview':
@@ -1872,6 +1867,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../packages/normalization-core
       dompurify:
         specifier: 3.4.6
         version: 3.4.6

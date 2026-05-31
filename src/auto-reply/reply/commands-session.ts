@@ -1,3 +1,9 @@
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
@@ -21,12 +27,6 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import { timestampMsToIsoString } from "../../shared/number-coercion.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";

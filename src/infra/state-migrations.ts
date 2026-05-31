@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listBundledChannelLegacySessionSurfaces,
@@ -24,7 +25,13 @@ import {
   countPluginStateLiveEntries,
   createPluginStateKeyedStore,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+  type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
+import {
+  listPluginDoctorStateMigrationEntries,
+  type PluginDoctorStateMigrationContext,
+  type PluginDoctorStateMigration,
+} from "../plugins/doctor-contract-registry.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -34,7 +41,6 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { expandHomePrefix } from "./home-dir.js";
@@ -78,6 +84,10 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     plans: ChannelLegacyStateMigrationPlan[];
   };
+  pluginPlans?: {
+    hasLegacy: boolean;
+    plans: DetectedPluginDoctorStateMigrationPlan[];
+  };
   pluginStateSidecar: {
     sourcePath: string;
     hasLegacy: boolean;
@@ -119,6 +129,12 @@ type LegacyPluginStateSidecarRow = {
 
 type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 type SqliteBindRow = Record<string, SQLInputValue>;
+
+type DetectedPluginDoctorStateMigrationPlan = {
+  pluginId: string;
+  migration: PluginDoctorStateMigration;
+  preview: string[];
+};
 
 const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
@@ -1865,6 +1881,49 @@ async function collectChannelLegacyStateMigrationPlans(params: {
   return plans;
 }
 
+async function collectPluginDoctorStateMigrationPlans(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+}): Promise<DetectedPluginDoctorStateMigrationPlan[]> {
+  const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
+  for (const entry of listPluginDoctorStateMigrationEntries({
+    config: params.cfg,
+    env: params.env,
+  })) {
+    const detected = await entry.migration.detectLegacyState({
+      config: params.cfg,
+      env: params.env,
+      stateDir: params.stateDir,
+      oauthDir: params.oauthDir,
+      context: createPluginDoctorStateMigrationContext(entry.pluginId, params.env),
+    });
+    if (detected?.preview.length) {
+      plans.push({
+        pluginId: entry.pluginId,
+        migration: entry.migration,
+        preview: detected.preview,
+      });
+    }
+  }
+  return plans;
+}
+
+function createPluginDoctorStateMigrationContext(
+  pluginId: string,
+  env: NodeJS.ProcessEnv,
+): PluginDoctorStateMigrationContext {
+  return {
+    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+      return createPluginStateKeyedStore<T>(pluginId, {
+        ...options,
+        env: options.env ?? env,
+      });
+    },
+  };
+}
+
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -1918,6 +1977,12 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     oauthDir,
   });
+  const pluginPlans = await collectPluginDoctorStateMigrationPlans({
+    cfg: params.cfg,
+    env,
+    stateDir,
+    oauthDir,
+  });
 
   const preview: string[] = [];
   if (hasLegacySessions) {
@@ -1940,6 +2005,9 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
+  }
+  if (pluginPlans.length > 0) {
+    preview.push(...pluginPlans.flatMap((plan) => plan.preview));
   }
 
   return {
@@ -1964,6 +2032,10 @@ export async function detectLegacyStateMigrations(params: {
     channelPlans: {
       hasLegacy: channelPlans.length > 0,
       plans: channelPlans,
+    },
+    pluginPlans: {
+      hasLegacy: pluginPlans.length > 0,
+      plans: pluginPlans,
     },
     pluginStateSidecar: {
       sourcePath: pluginStateSidecarPath,
@@ -2152,8 +2224,41 @@ export async function migrateLegacyAgentDir(
   return { changes, warnings };
 }
 
+async function runPluginDoctorStateMigrationPlans(params: {
+  detected: LegacyStateDetection;
+  config: OpenClawConfig;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const refreshedPlans = await collectPluginDoctorStateMigrationPlans({
+    cfg: params.config,
+    env: process.env,
+    stateDir: params.detected.stateDir,
+    oauthDir: params.detected.oauthDir,
+  });
+  const plans =
+    refreshedPlans.length > 0 ? refreshedPlans : (params.detected.pluginPlans?.plans ?? []);
+  for (const plan of plans) {
+    try {
+      const result = await plan.migration.migrateLegacyState({
+        config: params.config,
+        env: process.env,
+        stateDir: params.detected.stateDir,
+        oauthDir: params.detected.oauthDir,
+        context: createPluginDoctorStateMigrationContext(plan.pluginId, process.env),
+      });
+      changes.push(...result.changes);
+      warnings.push(...result.warnings);
+    } catch (err) {
+      warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
+    }
+  }
+  return { changes, warnings };
+}
+
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
+  config?: OpenClawConfig;
   now?: () => number;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
@@ -2167,6 +2272,10 @@ export async function runLegacyStateMigrations(params: {
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
+  const pluginPlans = await runPluginDoctorStateMigrationPlans({
+    detected,
+    config: params.config ?? ({} as OpenClawConfig),
+  });
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
@@ -2177,6 +2286,7 @@ export async function runLegacyStateMigrations(params: {
       ...pluginStateSidecar.changes,
       ...taskStateSidecars.changes,
       ...preSessionChannelPlans.changes,
+      ...pluginPlans.changes,
       ...sessions.changes,
       ...agentDir.changes,
       ...channelPlans.changes,
@@ -2185,6 +2295,7 @@ export async function runLegacyStateMigrations(params: {
       ...pluginStateSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...preSessionChannelPlans.warnings,
+      ...pluginPlans.warnings,
       ...sessions.warnings,
       ...agentDir.warnings,
       ...channelPlans.warnings,
@@ -2426,12 +2537,17 @@ export async function autoMigrateLegacyState(params: {
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
     );
+    const pluginPlans = await runPluginDoctorStateMigrationPlans({
+      detected,
+      config: params.cfg,
+    });
     const changes = [
       ...stateDirResult.changes,
       ...orphanKeys.changes,
       ...pluginStateSidecar.changes,
       ...taskStateSidecars.changes,
       ...preSessionChannelPlans.changes,
+      ...pluginPlans.changes,
     ];
     const warnings = [
       ...stateDirResult.warnings,
@@ -2439,6 +2555,7 @@ export async function autoMigrateLegacyState(params: {
       ...pluginStateSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...preSessionChannelPlans.warnings,
+      ...pluginPlans.warnings,
     ];
     logMigrationResults(changes, warnings);
     return {
@@ -2447,7 +2564,8 @@ export async function autoMigrateLegacyState(params: {
         orphanKeys.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
-        preSessionChannelPlans.changes.length > 0,
+        preSessionChannelPlans.changes.length > 0 ||
+        pluginPlans.changes.length > 0,
       skipped: true,
       changes,
       warnings,
@@ -2457,6 +2575,7 @@ export async function autoMigrateLegacyState(params: {
     !detected.sessions.hasLegacy &&
     !detected.agentDir.hasLegacy &&
     !detected.channelPlans.hasLegacy &&
+    !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
     !detected.taskStateSidecars.hasLegacy
   ) {
@@ -2481,6 +2600,10 @@ export async function autoMigrateLegacyState(params: {
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
+  const pluginPlans = await runPluginDoctorStateMigrationPlans({
+    detected,
+    config: params.cfg,
+  });
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
@@ -2492,6 +2615,7 @@ export async function autoMigrateLegacyState(params: {
     ...pluginStateSidecar.changes,
     ...taskStateSidecars.changes,
     ...preSessionChannelPlans.changes,
+    ...pluginPlans.changes,
     ...sessions.changes,
     ...agentDir.changes,
     ...channelPlans.changes,
@@ -2502,6 +2626,7 @@ export async function autoMigrateLegacyState(params: {
     ...pluginStateSidecar.warnings,
     ...taskStateSidecars.warnings,
     ...preSessionChannelPlans.warnings,
+    ...pluginPlans.warnings,
     ...sessions.warnings,
     ...agentDir.warnings,
     ...channelPlans.warnings,

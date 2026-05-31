@@ -143,9 +143,6 @@ Choose the extension path by the job you need OpenClaw to do:
   [Build plugins](/plugins/building-plugins).
 - Add or tune reusable agent instructions with [Skills](/tools/skills) and
   [Creating skills](/tools/creating-skills).
-- Package reusable workflow material with
-  [Skill workshop](/plugins/skill-workshop) when the workflow belongs in a
-  plugin-distributed skill bundle.
 - Use [Plugin SDK](/plugins/sdk-overview) and [Plugin manifest](/plugins/manifest) when you need implementation contracts.
 
 ## Troubleshoot missing tools
