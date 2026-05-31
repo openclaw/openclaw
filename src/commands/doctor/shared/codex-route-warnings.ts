@@ -85,6 +85,15 @@ function isOpenAICodexModelRef(model: string | undefined): model is string {
   return normalizeString(model)?.startsWith("openai-codex/") === true;
 }
 
+function isOpenAICodexAuthProfileRef(profile: unknown): boolean {
+  return normalizeString(profile)?.startsWith("openai-codex:") === true;
+}
+
+function isProviderlessModelRef(model: unknown): model is string {
+  const normalized = normalizeString(model);
+  return Boolean(normalized && !normalized.includes("/"));
+}
+
 function toCanonicalOpenAIModelRef(model: string): string | undefined {
   if (!isOpenAICodexModelRef(model)) {
     return undefined;
@@ -2900,6 +2909,31 @@ function clearStaleSessionRuntimePins(entry: SessionEntry): boolean {
   return changed;
 }
 
+function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
+  if (
+    !isProviderlessModelRef(entry.modelOverride) ||
+    !isOpenAICodexAuthProfileRef(entry.authProfileOverride) ||
+    entry.authProfileOverrideSource !== "auto" ||
+    entry.modelOverrideSource !== "auto" ||
+    normalizeString(entry.providerOverride)
+  ) {
+    return false;
+  }
+
+  entry.providerOverride = "openai";
+  if (entry.model !== undefined || entry.modelProvider !== undefined) {
+    delete entry.model;
+    delete entry.modelProvider;
+  }
+  if (entry.contextTokens !== undefined) {
+    delete entry.contextTokens;
+  }
+  if (entry.contextBudgetStatus !== undefined) {
+    delete entry.contextBudgetStatus;
+  }
+  return true;
+}
+
 export function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
@@ -2920,7 +2954,9 @@ export function repairCodexSessionStoreRoutes(params: {
       providerKey: "providerOverride",
       modelKey: "modelOverride",
     });
-    const changedModelRoute = changedRuntimeModelRoute || changedOverrideModelRoute;
+    const changedProviderlessOverride = repairProviderlessCodexSessionOverride(entry);
+    const changedModelRoute =
+      changedRuntimeModelRoute || changedOverrideModelRoute || changedProviderlessOverride;
     const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
     const changedRuntimePins =
       changedModelRoute || changedFallbackNotice ? clearStaleSessionRuntimePins(entry) : false;
@@ -2946,6 +2982,11 @@ function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): strin
       normalizeString(entry.providerOverride) === "openai-codex" ||
       isOpenAICodexModelRef(entry.model) ||
       isOpenAICodexModelRef(entry.modelOverride) ||
+      (isProviderlessModelRef(entry.modelOverride) &&
+        isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
+        entry.authProfileOverrideSource === "auto" &&
+        entry.modelOverrideSource === "auto" &&
+        !normalizeString(entry.providerOverride)) ||
       isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
       isOpenAICodexModelRef(entry.fallbackNoticeActiveModel);
     return hasLegacyRoute ? [sessionKey] : [];
