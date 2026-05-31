@@ -53,6 +53,12 @@ Find chats + messages
 - `wacli messages search "query" --limit 20 --chat <jid>`
 - `wacli messages search "invoice" --after 2025-01-01 --before 2025-12-31`
 
+Inspect / verify messages
+
+- `wacli messages show --chat <jid> --id <message_id> --json --full`
+- `messages show` requires both `--chat` and `--id`; do not pass the message ID as a positional argument.
+- After sending, verify the stored message when exact formatting matters, especially multiline text.
+
 History backfill
 
 - `wacli history backfill --chat <jid> --requests 2 --count 50`
