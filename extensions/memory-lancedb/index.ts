@@ -200,6 +200,16 @@ const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
 const DEFAULT_TOOL_RECALL_TIMEOUT_MS = 15_000;
 const DEFAULT_TOOL_RECALL_COOLDOWN_MS = 60_000;
 
+// Auto-recall over-fetches from the vector store, then filters envelope sludge
+// (contaminated memories that slipped past capture gating), then caps the
+// surviving results before prompt injection. The over-fetch limit must stay a
+// few multiples above the cap so a small number of contaminated top-K hits
+// still leave enough clean memories to surface; the cap mirrors prior
+// behavior of "at most 3 injected memories" so prompt budget impact stays
+// bounded.
+const DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT = 10;
+const DEFAULT_AUTO_RECALL_RESULT_CAP = 3;
+
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -718,11 +728,14 @@ const ENVELOPE_JSON_LINE_RE =
  * prefix because the regex is anchored to start-of-string and requires the
  * marker to live inside the leading bracket followed by `]<space>`.
  *
- * Header part length is capped at 300 chars to avoid catastrophic backtracking
- * on pathological inputs; real envelopes are well under that.
+ * Capture group 1 is the inside-bracket text, used by the sender-prefix
+ * gating logic in `sanitizeForMemoryCapture` to scope which body labels we
+ * are willing to strip. Header part length is capped at 300 chars to avoid
+ * catastrophic backtracking on pathological inputs; real envelopes are well
+ * under that.
  */
 const INBOUND_ENVELOPE_PREFIX_RE =
-  /^\[[^\]\n]{0,300}?(?:\s\+(?:\d+[smhdwy]|just now)\b|\s[A-Za-z]{3}\s\d{4}-\d{2}-\d{2})[^\]\n]{0,200}\]\s/;
+  /^\[([^\]\n]{0,300}?(?:\s\+(?:\d+[smhdwy]|just now)\b|\s[A-Za-z]{3}\s\d{4}-\d{2}-\d{2})[^\]\n]{0,200})\]\s/;
 
 /**
  * Marker-free leading envelope header, e.g. `[telegram alice] hello`. The
@@ -741,27 +754,39 @@ const INBOUND_ENVELOPE_PREFIX_RE =
  *
  * From-label must be at least one non-whitespace token so user prose like
  * `[note]` or `[telegram] ...` (no following label) is not mistaken for an
- * envelope. Header part length is capped at 300 chars to match the marker-aware
- * regex above and avoid catastrophic backtracking.
+ * envelope. Capture group 1 is the inside-bracket text (channel + from-label
+ * and any remaining header parts), used by the sender-prefix gating logic in
+ * `sanitizeForMemoryCapture`. Header part length is capped at 300 chars to
+ * match the marker-aware regex above and avoid catastrophic backtracking.
+ *
+ * Guarded against an empty `BUNDLED_CHAT_CHANNEL_IDS` so the alternation never
+ * degenerates into `(?:)` (which would match the empty string and flag every
+ * `[...]` prefix as an envelope). When the bundled list is empty the
+ * known-channel detector is disabled and only the marker-aware regex above
+ * applies.
  */
 const ENVELOPE_KNOWN_CHANNEL_PATTERN = BUNDLED_CHAT_CHANNEL_IDS.map((id) =>
   id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
 ).join("|");
-const INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE = new RegExp(
-  `^\\[(?:${ENVELOPE_KNOWN_CHANNEL_PATTERN})\\s+[^\\]\\n\\s][^\\]\\n]{0,299}\\]\\s`,
-  "i",
-);
+const INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE: RegExp | null = ENVELOPE_KNOWN_CHANNEL_PATTERN
+  ? new RegExp(
+      `^\\[((?:${ENVELOPE_KNOWN_CHANNEL_PATTERN})\\s+[^\\]\\n\\s][^\\]\\n]{0,299})\\]\\s`,
+      "i",
+    )
+  : null;
 
 /**
  * Group-chat envelope bodies prepend `<Sender>: ` to the raw user text (see
  * `formatInboundEnvelope`). After stripping the leading envelope bracket,
- * this pattern removes that sender prefix so the surviving text is the user's
- * actual intent, not channel-injected metadata. Sender label is capped at the
- * same length as `sanitizeEnvelopeHeaderPart` would produce in practice (the
- * envelope formatter does not truncate, but a 120-char ceiling keeps the
+ * this pattern matches that body sender prefix; capture group 1 is the label
+ * itself so the gated strip in `sanitizeForMemoryCapture` can compare it
+ * against the envelope header before removing it. Sender label is capped at
+ * the same length as `sanitizeEnvelopeHeaderPart` would produce in practice
+ * (the envelope formatter does not truncate, but a 120-char ceiling keeps the
  * regex bounded and matches realistic display names).
  */
-const ENVELOPE_BODY_SENDER_PREFIX_RE = /^[^\n:]{1,120}:\s/;
+const ENVELOPE_BODY_SENDER_PREFIX_RE = /^([^\n:]{1,120}):\s/;
+const ENVELOPE_BODY_SELF_PREFIX = "(self)";
 
 /**
  * Returns true if `text` looks like it contains OpenClaw-injected envelope or
@@ -812,7 +837,7 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
   if (INBOUND_ENVELOPE_PREFIX_RE.test(text)) {
     return true;
   }
-  if (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE.test(text)) {
+  if (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE?.test(text)) {
     return true;
   }
 
@@ -824,6 +849,37 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
  * Canonical source: src/auto-reply/reply/strip-inbound-meta.ts
  */
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+
+/**
+ * Decide whether a `<X>: ` body prefix that follows a stripped envelope
+ * bracket was emitted by the formatter (vs being user-typed prose). The
+ * formatter contract in `src/auto-reply/envelope.ts` only ever prepends:
+ *   - `(self): ` for direct chats with `fromMe`, OR
+ *   - `<resolvedSender>: ` for non-direct chats with a sender label.
+ *
+ * The sender label always appears verbatim somewhere in the envelope header
+ * (channels either pass it as `from` directly or fold it into a composite
+ * label such as `Group id:123 Alice`). We therefore only strip when the body
+ * label exactly matches a whitespace-separated token of the captured header,
+ * or is the literal `(self)` sentinel. Conservative on purpose: leaving a
+ * stray `Alice: hello` body in a noisy memory is far less harmful than
+ * truncating a legitimate `TODO: fix this` DM to `fix this`.
+ */
+function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): string {
+  const match = body.match(ENVELOPE_BODY_SENDER_PREFIX_RE);
+  if (!match) {
+    return body;
+  }
+  const label = match[1];
+  if (label === ENVELOPE_BODY_SELF_PREFIX) {
+    return body.slice(match[0].length);
+  }
+  const headerTokens = headerInside.split(/\s+/);
+  if (headerTokens.includes(label)) {
+    return body.slice(match[0].length);
+  }
+  return body;
+}
 
 /**
  * Strips OpenClaw-injected envelope metadata from a user message so that only
@@ -844,53 +900,78 @@ export function sanitizeForMemoryCapture(text: string): string {
 
   // Strip the leading inbound-envelope bracket emitted by formatInboundEnvelope
   // (src/auto-reply/envelope.ts). The bracket precedes the user's body text;
-  // for group-chat envelopes the body itself is prefixed with `<Sender>: ` so
-  // strip that too, but only when an envelope bracket was actually removed
-  // (don't blanket-strip user text that happens to start with `Name: `). Try
-  // the marker-aware regex first, then fall back to the known-channel regex so
-  // marker-free envelopes (`[telegram alice] hi`) are also sanitized cleanly.
-  const markerAwareMatch = cleaned.match(INBOUND_ENVELOPE_PREFIX_RE);
+  // for non-direct envelopes the body is prefixed with `<Sender>: ` and for
+  // direct fromMe with `(self): `, so strip that too -- but only when the
+  // surviving label matches the formatter contract (see
+  // `stripEnvelopeBodySenderPrefix`). Try the marker-aware regex first, then
+  // fall back to the known-channel regex so marker-free envelopes
+  // (`[telegram alice] hi`) are also sanitized cleanly.
   const envelopePrefixMatch =
-    markerAwareMatch ?? cleaned.match(INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE);
+    cleaned.match(INBOUND_ENVELOPE_PREFIX_RE) ??
+    (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE
+      ? cleaned.match(INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE)
+      : null);
   if (envelopePrefixMatch) {
-    cleaned = cleaned
-      .slice(envelopePrefixMatch[0].length)
-      .replace(ENVELOPE_BODY_SENDER_PREFIX_RE, "");
+    const headerInside = envelopePrefixMatch[1] ?? "";
+    const afterBracket = cleaned.slice(envelopePrefixMatch[0].length);
+    cleaned = stripEnvelopeBodySenderPrefix(afterBracket, headerInside);
   }
 
   // Strip inbound metadata blocks: sentinel line + optional ```json + content + ```
+  // First pass strips every sentinel+code-fence block; each replace removes
+  // the entire block including its sentinel header so iteration order does
+  // not matter.
   for (const sentinel of INBOUND_META_SENTINELS) {
     const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Strip sentinel + code-fence blocks first (order matters: the block regex
-    // needs the sentinel line intact to anchor the match).
     const blockRe = new RegExp(
       `${escapedSentinel}\\s*\\n\\s*\`\`\`json\\s*\\n[\\s\\S]*?\\n\\s*\`\`\`\\s*\\n?`,
       "g",
     );
     cleaned = cleaned.replace(blockRe, "");
-    // For any sentinel that still appears in the text (plain-text body, no JSON
-    // fence was stripped above), handle it according to its position:
-    //   - Sentinel has meaningful user content BEFORE it: truncate at the sentinel
-    //     so that the body (which may span multiple lines, e.g. a chat-history or
-    //     thread-starter block) is removed entirely.
-    //   - Sentinel appears at the very start (only whitespace before it): strip
-    //     the sentinel header line so the user text after it is preserved.
-    // Only sentinel occurrences at the start of a line are matched to avoid
-    // false-positives on user text that quotes a sentinel phrase mid-sentence.
-    const trailerRe = new RegExp(`^${escapedSentinel}`, "m");
-    const trailerMatch = trailerRe.exec(cleaned);
-    if (trailerMatch) {
-      const before = cleaned.slice(0, trailerMatch.index);
-      if (before.trim().length > 0) {
-        // User content exists before the sentinel — truncate here to drop the
-        // plain-text body that follows (chat history, thread starter, etc.).
-        cleaned = before;
-      } else {
-        // Sentinel is at the very beginning — strip just the header line so the
-        // user text that follows it is preserved.
-        cleaned = cleaned.replace(new RegExp(`^${escapedSentinel}.*$`, "gm"), "");
+  }
+  // For sentinels that survived the code-fence strip (plain-text body, no
+  // JSON fence), act on the earliest line-anchored sentinel across the WHOLE
+  // list each pass. Iterating per-sentinel and truncating at each first
+  // match independently can leave a later (earlier-positioned) sentinel
+  // intact in the kept-prefix range and preserve metadata that belonged to
+  // an outer sentinel's plain-text body. Looping until no leading sentinel
+  // remains preserves the original behavior of stripping every
+  // back-to-back header at the start of the message while staying
+  // declaration-order-independent. A bounded retry cap rules out pathological
+  // input from spinning forever.
+  for (let pass = 0; pass < INBOUND_META_SENTINELS.length + 1; pass += 1) {
+    let earliestSentinelIndex = -1;
+    let earliestSentinel: string | null = null;
+    for (const sentinel of INBOUND_META_SENTINELS) {
+      const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const trailerRe = new RegExp(`^${escapedSentinel}`, "m");
+      const trailerMatch = cleaned.match(trailerRe);
+      if (
+        trailerMatch?.index !== undefined &&
+        (earliestSentinelIndex === -1 || trailerMatch.index < earliestSentinelIndex)
+      ) {
+        earliestSentinelIndex = trailerMatch.index;
+        earliestSentinel = sentinel;
       }
     }
+    if (earliestSentinel === null) {
+      break;
+    }
+    const escapedSentinel = earliestSentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const before = cleaned.slice(0, earliestSentinelIndex);
+    if (before.trim().length > 0) {
+      // User content exists before the earliest sentinel -- truncate here to
+      // drop every metadata block that follows (chat history, thread starter,
+      // etc.). No further sentinel passes are needed because the trailing
+      // text is gone.
+      cleaned = before;
+      break;
+    }
+    // Sentinel is at the very beginning -- strip every line that exact
+    // sentinel begins so the user text that follows it is preserved. Loop
+    // continues so a back-to-back second sentinel at the new start is also
+    // handled.
+    cleaned = cleaned.replace(new RegExp(`^${escapedSentinel}.*$`, "gm"), "");
   }
 
   // Strip the "Untrusted context (metadata..." header and everything after it,
@@ -1491,7 +1572,7 @@ export default definePluginEntry({
             });
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(vector, 10, 0.3);
+            return await db.search(vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
           },
         });
         if (recall.status === "timeout") {
@@ -1501,10 +1582,10 @@ export default definePluginEntry({
           return undefined;
         }
 
-        // Filter out contaminated memories, then cap at 3 clean results
+        // Filter contaminated memories, then cap at the prompt-budget bound.
         const cleanResults = recall.value
           .filter((r) => !looksLikeEnvelopeSludge(r.entry.text))
-          .slice(0, 3);
+          .slice(0, DEFAULT_AUTO_RECALL_RESULT_CAP);
 
         if (cleanResults.length === 0) {
           return undefined;

@@ -3106,6 +3106,33 @@ describe("memory plugin e2e", () => {
     expect(sanitizeForMemoryCapture("Alice: I prefer dark mode")).toBe("Alice: I prefer dark mode");
   });
 
+  test("sanitizeForMemoryCapture preserves DM body that starts with `TODO:` / `FIXME:`", () => {
+    // Direct-message envelope: per the formatter contract there is no sender
+    // prefix on the body. A user-typed `TODO: ...` or `FIXME: ...` must not
+    // be truncated to `...`. The leading label does not match any token in
+    // the envelope header, so the gated strip leaves it alone.
+    expect(sanitizeForMemoryCapture("[telegram alice] TODO: fix this")).toBe("TODO: fix this");
+    expect(sanitizeForMemoryCapture("[Telegram Alice +5m] FIXME: clean up sanitizer")).toBe(
+      "FIXME: clean up sanitizer",
+    );
+  });
+
+  test("sanitizeForMemoryCapture preserves group body whose `Name: ` does not match envelope", () => {
+    // Group envelope `[discord alice]` with body `Bob: hello` (Alice is
+    // quoting Bob). `Bob` is not a token in the envelope header, so the
+    // formatter could not have emitted it; the gated strip leaves it alone.
+    expect(sanitizeForMemoryCapture("[discord alice] Bob: hello there")).toBe("Bob: hello there");
+  });
+
+  test("sanitizeForMemoryCapture strips `(self):` body prefix from direct fromMe envelope", () => {
+    // Direct chat + fromMe contract: body is `(self): <text>`. The literal
+    // `(self)` sentinel is always safe to strip after an envelope bracket.
+    expect(sanitizeForMemoryCapture("[telegram alice] (self): typed this")).toBe("typed this");
+    expect(sanitizeForMemoryCapture("[Telegram Alice +5m] (self): note to self")).toBe(
+      "note to self",
+    );
+  });
+
   test("shouldCapture rejects formatInboundEnvelope-prefixed messages", () => {
     // The agent_end hook still receives envelope-prefixed user content, so the
     // capture gate must reject these without relying on prior sanitize.
@@ -3259,6 +3286,36 @@ describe("memory plugin e2e", () => {
       "Original message: I always want verbose logging enabled",
     ].join("\n");
     expect(sanitizeForMemoryCapture(input)).toBe("I always use ESLint in every project");
+  });
+
+  test("sanitizeForMemoryCapture truncates at earliest sentinel across multiple inbound-meta blocks", () => {
+    // Regression guard for the per-sentinel loop ordering bug: when a body
+    // contains two different sentinels the sanitizer must truncate at the
+    // EARLIEST position, regardless of INBOUND_META_SENTINELS declaration
+    // order. Here `Chat history since last reply` appears BEFORE
+    // `Conversation info`; the iteration-order-dependent code would
+    // truncate at `Conversation info` (declared first) and preserve the
+    // plain-text history that followed `Chat history`.
+    const input = [
+      "I always prefer dark mode",
+      "Chat history since last reply (untrusted, for context):",
+      "User: hi",
+      "Bot: I always say hello back",
+      "Conversation info (untrusted metadata):",
+      "irrelevant trailing metadata",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture preserves user text after back-to-back sentinels at start", () => {
+    // Two sentinels at the very start (no user content before either) must
+    // both be stripped so the body that follows survives.
+    const input = [
+      "Conversation info (untrusted metadata): {x:1}",
+      "Sender (untrusted metadata): Alex",
+      "I always prefer verbose output",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer verbose output");
   });
 
   test("shouldCapture does not fire on MEMORY_TRIGGER words inside a chat-history block body", () => {
