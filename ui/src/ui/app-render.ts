@@ -127,6 +127,12 @@ import {
   toggleSessionCompactionCheckpoints,
 } from "./controllers/sessions.ts";
 import {
+  countSkillWorkshopProposals,
+  requestSkillWorkshopRevision,
+  runSkillWorkshopLifecycleAction,
+  selectSkillWorkshopProposal,
+} from "./controllers/skill-workshop.ts";
+import {
   closeClawHubDetail,
   installFromClawHub,
   loadSkillCard,
@@ -451,6 +457,10 @@ const lazyInstances = createLazyView(() => import("./views/instances.ts"), notif
 const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewChanged);
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
+const lazySkillWorkshop = createLazyView(
+  () => import("./views/skill-workshop.ts"),
+  notifyLazyViewChanged,
+);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
@@ -2183,7 +2193,12 @@ export function renderApp(state: AppViewState) {
       <main
         class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
           ? "content--logs"
-          : ""} ${state.tab === "workboard" ? "content--workboard" : ""}"
+          : ""} ${state.tab === "workboard" ? "content--workboard" : ""} ${state.tab ===
+        "skillWorkshop"
+          ? `content--skill-workshop ${
+              state.skillWorkshopMode === "today" ? "content--skill-workshop-today" : ""
+            }`
+          : ""}"
       >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
@@ -3064,6 +3079,77 @@ export function renderApp(state: AppViewState) {
                 onClawHubInstall: (slug) => void installFromClawHub(state, slug),
               }),
             )
+          : nothing}
+        ${state.tab === "skillWorkshop"
+          ? renderLazyView(lazySkillWorkshop, (m) => {
+              const proposals = state.skillWorkshopProposals;
+              const selectedIndex = Math.max(
+                0,
+                proposals.findIndex((proposal) => proposal.key === state.skillWorkshopSelectedKey),
+              );
+              const selectRelativeProposal = (delta: -1 | 1) => {
+                if (proposals.length === 0) {
+                  return;
+                }
+                const nextIndex = (selectedIndex + delta + proposals.length) % proposals.length;
+                selectSkillWorkshopProposal(state, proposals[nextIndex].key);
+              };
+              return m.renderSkillWorkshop({
+                loading: state.skillWorkshopLoading,
+                error: state.skillWorkshopError,
+                inspectingKey: state.skillWorkshopInspectingKey,
+                proposals,
+                selectedKey: state.skillWorkshopSelectedKey,
+                statusFilter: state.skillWorkshopStatusFilter,
+                query: state.skillWorkshopQuery,
+                filePreviewKey: state.skillWorkshopFilePreviewKey,
+                filePreviewQuery: state.skillWorkshopFilePreviewQuery,
+                queueWidth: state.skillWorkshopQueueWidth,
+                mode: state.skillWorkshopMode,
+                actionBusy: state.skillWorkshopActionBusy,
+                actionNotice: state.skillWorkshopActionNotice,
+                revisionKey: state.skillWorkshopRevisionKey,
+                revisionDraft: state.skillWorkshopRevisionDraft,
+                assistantName: state.assistantName,
+                counts: countSkillWorkshopProposals(proposals),
+                onStatusFilterChange: (status) => (state.skillWorkshopStatusFilter = status),
+                onQueryChange: (query) => (state.skillWorkshopQuery = query),
+                onFilePreviewQueryChange: (query) => (state.skillWorkshopFilePreviewQuery = query),
+                onQueueWidthChange: (width) => (state.skillWorkshopQueueWidth = width),
+                onQueueWidthCommit: (width) => (state.skillWorkshopQueueWidth = width),
+                onModeChange: (mode) => (state.skillWorkshopMode = mode),
+                onSelect: (key) => {
+                  state.skillWorkshopFilePreviewKey = null;
+                  selectSkillWorkshopProposal(state, key);
+                },
+                onPrev: () => selectRelativeProposal(-1),
+                onNext: () => selectRelativeProposal(1),
+                onApply: (key) => void runSkillWorkshopLifecycleAction(state, "apply", key),
+                onRevise: (key) => {
+                  state.skillWorkshopRevisionKey = key;
+                  state.skillWorkshopRevisionDraft = "";
+                },
+                onReject: (key) => void runSkillWorkshopLifecycleAction(state, "reject", key),
+                onRevisionDraftChange: (draft) => (state.skillWorkshopRevisionDraft = draft),
+                onRevisionCancel: () => {
+                  state.skillWorkshopRevisionKey = null;
+                  state.skillWorkshopRevisionDraft = "";
+                },
+                onRevisionSubmit: (key) =>
+                  void requestSkillWorkshopRevision(state, key, async (message) => {
+                    state.setTab("chat" as import("./navigation.ts").Tab);
+                    await state.handleSendChat(message, { restoreDraft: true });
+                  }),
+                onPreviewFile: (key, path) => {
+                  state.skillWorkshopSelectedKey = key;
+                  state.skillWorkshopFilePreviewKey = path;
+                },
+                onClosePreview: () => {
+                  state.skillWorkshopFilePreviewKey = null;
+                  state.skillWorkshopFilePreviewQuery = "";
+                },
+              });
+            })
           : nothing}
         ${state.tab === "nodes"
           ? renderLazyView(lazyNodes, (m) =>

@@ -51,6 +51,13 @@ import type {
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import type {
+  SkillWorkshopActionBusy,
+  SkillWorkshopActionNotice,
+  SkillWorkshopMode,
+  SkillWorkshopProposal,
+  SkillWorkshopStatusFilter,
+} from "./views/skill-workshop.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {
@@ -425,6 +432,23 @@ export type AppViewState = {
     skillCardContentKeys: Record<string, string>;
     skillCardLoadingKey: string | null;
     skillCardErrors: Record<string, string>;
+    skillWorkshopLoading: boolean;
+    skillWorkshopLoaded: boolean;
+    skillWorkshopError: string | null;
+    skillWorkshopInspectingKey: string | null;
+    skillWorkshopProposals: SkillWorkshopProposal[];
+    skillWorkshopSelectedKey: string | null;
+    skillWorkshopActionBusy: SkillWorkshopActionBusy | null;
+    skillWorkshopActionNotice: SkillWorkshopActionNotice | null;
+    skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
+    skillWorkshopRevisionKey: string | null;
+    skillWorkshopRevisionDraft: string;
+    skillWorkshopStatusFilter: SkillWorkshopStatusFilter;
+    skillWorkshopQuery: string;
+    skillWorkshopFilePreviewKey: string | null;
+    skillWorkshopFilePreviewQuery: string;
+    skillWorkshopQueueWidth: number;
+    skillWorkshopMode: SkillWorkshopMode;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
