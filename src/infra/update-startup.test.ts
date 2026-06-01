@@ -509,14 +509,16 @@ describe("update-startup", () => {
       "beta",
       "--json",
     ]);
-    expect(options).toEqual({
-      timeoutMs: 45 * 60 * 1000,
-      env: {
-        OPENCLAW_AUTO_UPDATE: "1",
-        OPENCLAW_SERVICE_KIND: undefined,
-        OPENCLAW_SERVICE_MARKER: undefined,
-      },
+    if (typeof options === "number") {
+      throw new Error("expected auto-update command options object");
+    }
+    expect(options.timeoutMs).toBe(45 * 60 * 1000);
+    expect(options.env).toEqual({
+      OPENCLAW_AUTO_UPDATE: "1",
     });
+    expect(options.baseEnv?.OPENCLAW_STATE_DIR).toBe(tempDir);
+    expect(options.baseEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
+    expect(options.baseEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
   });
 
   it("scheduleGatewayUpdateCheck returns a cleanup function", () => {

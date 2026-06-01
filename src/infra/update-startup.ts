@@ -290,10 +290,9 @@ async function runAutoUpdateCommand(params: {
   try {
     const res = await runCommandWithTimeout(argv, {
       timeoutMs: params.timeoutMs,
+      baseEnv: resolveAutoUpdateCommandBaseEnv(),
       env: {
         OPENCLAW_AUTO_UPDATE: "1",
-        OPENCLAW_SERVICE_MARKER: undefined,
-        OPENCLAW_SERVICE_KIND: undefined,
       },
     });
     return {
@@ -310,6 +309,15 @@ async function runAutoUpdateCommand(params: {
       reason: String(err),
     };
   }
+}
+
+function resolveAutoUpdateCommandBaseEnv(): NodeJS.ProcessEnv {
+  const {
+    OPENCLAW_SERVICE_KIND: _serviceKind,
+    OPENCLAW_SERVICE_MARKER: _serviceMarker,
+    ...baseEnv
+  } = process.env;
+  return baseEnv;
 }
 
 function clearAutoState(nextState: UpdateCheckState): void {
