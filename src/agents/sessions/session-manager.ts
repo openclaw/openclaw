@@ -402,13 +402,28 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
     }
   }
 
-  // Validate session header
   if (entries.length === 0) {
     return entries;
   }
-  const header = entries[0];
-  if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
-    return [];
+
+  // Find a valid session header — it should be at index 0 but may not be
+  // if the original header line was corrupted and skipped during parsing.
+  const headerIndex = entries.findIndex(
+    (e) => e.type === "session" && typeof (e as SessionHeader).id === "string",
+  );
+
+  if (headerIndex === -1) {
+    // No valid session header found anywhere in the file.
+    // Return the parsed entries so callers can decide whether to
+    // synthesize a header or treat the file as empty.
+    return entries;
+  }
+
+  if (headerIndex !== 0) {
+    // A valid session header exists but not at index 0 — the original
+    // first line (header) was likely corrupted. Move it to the front.
+    const [header] = entries.splice(headerIndex, 1);
+    entries.unshift(header);
   }
 
   return entries;
@@ -722,9 +737,8 @@ export class SessionManager {
     if (existsSync(this.sessionFile)) {
       this.fileEntries = loadEntriesFromFile(this.sessionFile);
 
-      // If file was empty or corrupted (no valid header), truncate and start fresh
-      // to avoid appending messages without a session header (which breaks the session)
       if (this.fileEntries.length === 0) {
+        // File is truly empty (zero parseable lines): start fresh
         const explicitPath = this.sessionFile;
         this.newSession();
         this.sessionFile = explicitPath;
@@ -733,8 +747,30 @@ export class SessionManager {
         return;
       }
 
-      const header = this.fileEntries.find((e) => e.type === "session");
-      this.sessionId = header?.id ?? createSessionId();
+      // Look for a valid session header anywhere in the parsed entries
+      // (not just at index 0 — the original header line may have been
+      // corrupted and skipped by loadEntriesFromFile).
+      const header = this.fileEntries.find((e) => e.type === "session") as
+        | SessionHeader
+        | undefined;
+
+      if (header && typeof header.id === "string") {
+        this.sessionId = header.id;
+      } else {
+        // Valid message entries exist but no session header was found.
+        // Synthesize a new header to preserve existing messages instead
+        // of silently wiping the file (data loss fix).
+        this.sessionId = createSessionId();
+        const syntheticHeader: SessionHeader = {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: this.sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: this.cwd,
+        };
+        this.fileEntries.unshift(syntheticHeader);
+        this.rewriteFile();
+      }
 
       if (migrateToCurrentVersion(this.fileEntries)) {
         this.rewriteFile();
