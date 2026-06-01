@@ -184,10 +184,14 @@ export function stripStructuralPrefixes(text: string): string {
   const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
     ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
     : text;
+  const afterEnvelope = afterMarker.replace(/\[[^\]]+\]\s*/g, "");
+  const senderPrefixPattern =
+    afterEnvelope === afterMarker
+      ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm
+      : /^[ \t]*[^\n:]{1,120}:\s+/gm;
 
-  return afterMarker
-    .replace(/\[[^\]]+\]\s*/g, "")
-    .replace(/^[ \t]*[^\n:]{1,120}:\s+/gm, "")
+  return afterEnvelope
+    .replace(senderPrefixPattern, "")
     .replace(/\\n/g, " ")
     .replace(/\s+/g, " ")
     .trim();
