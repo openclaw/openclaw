@@ -105,7 +105,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
-        sessionStartedAt: 2 * 60_000,
+        sessionStartedAt: 1 * 60 * 60_000 + 46 * 60_000,
         inputTokens: 1200,
         outputTokens: 800,
         totalTokens: 16_000,
@@ -121,7 +121,7 @@ describe("buildStatusMessage", () => {
       resolvedHarness: "openclaw",
       queue: { mode: "collect", depth: 0 },
       modelAuth: "api-key",
-      now: 10 * 60_000, // 10 minutes later
+      now: 4 * 60 * 60_000, // 4 hours after epoch
     });
     const normalized = normalizeTestText(text);
 
@@ -133,8 +133,8 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Context: 16k/32k (50%)");
     expect(normalized).toContain("Compactions: 2");
     expect(normalized).toContain("Session: agent:main:main");
-    expect(normalized).toContain("duration 8m");
-    expect(normalized).toContain("updated 10m ago");
+    expect(normalized).toContain("duration 2h 14m");
+    expect(normalized).toContain("updated 4h ago");
     expect(normalized).toContain("Execution: direct");
     expect(normalized).toContain("Runtime: OpenClaw Default");
     expect(normalized).not.toContain("Runner:");
