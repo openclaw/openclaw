@@ -107,6 +107,7 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  isReplyPayloadTtsAutoDeliveryAudio,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -2849,7 +2850,12 @@ export async function dispatchReplyFromConfig(
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
       !sendPolicyDenied &&
-      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
+      // Internal notices opt in via metadata; trusted-local TTS audio is the
+      // explicit result of a voice/speech tool call whose contract auto-delivers
+      // the audio, so it must reach the originating surface even when normal
+      // assistant text replies are message-tool-only. sendPolicy deny still wins.
+      (getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true ||
+        isReplyPayloadTtsAutoDeliveryAudio(reply)) &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
     for (const reply of replies) {
       throwIfDispatchOperationAborted();
@@ -2875,8 +2881,18 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
+      // When suppression is bypassed solely to auto-deliver trusted-local TTS
+      // audio, keep the assistant text private (message-tool-only) and deliver
+      // only the audio media, mirroring the tool contract.
+      const deliveryReply =
+        suppressDelivery &&
+        getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression !== true &&
+        isReplyPayloadTtsAutoDeliveryAudio(reply) &&
+        reply.text !== undefined
+          ? { ...reply, text: undefined }
+          : reply;
       attemptedFinalDelivery = true;
-      const finalReply = await sendFinalPayload(reply);
+      const finalReply = await sendFinalPayload(deliveryReply);
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {

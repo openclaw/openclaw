@@ -105,6 +105,26 @@ export function isReplyPayloadTtsSupplement(
   return Boolean(getReplyPayloadTtsSupplement(payload));
 }
 
+/**
+ * True when the payload carries trusted-local audio media staged for
+ * auto-delivery (the dynamic `tts` tool contract). Such audio is the explicit
+ * result of a voice/speech tool call, so it must still reach the originating
+ * surface even when normal assistant text replies are message-tool-only.
+ * sendPolicy deny still wins over this exemption at the call site.
+ */
+export function isReplyPayloadTtsAutoDeliveryAudio(
+  payload: Pick<
+    ReplyPayload,
+    "mediaUrl" | "mediaUrls" | "trustedLocalMedia" | "audioAsVoice"
+  >,
+): boolean {
+  return Boolean(
+    payload.trustedLocalMedia &&
+      payload.audioAsVoice &&
+      hasReplyPayloadMedia(payload),
+  );
+}
+
 export function markReplyPayloadAsTtsSupplement<T extends ReplyPayload>(
   payload: T,
   spokenText: string = payload.spokenText ?? payload.text ?? "",

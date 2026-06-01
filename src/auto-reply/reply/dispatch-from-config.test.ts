@@ -1824,6 +1824,109 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers TTS tool audio finals in message_tool_only contexts", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+
+    const ttsAudioFinal = {
+      text: "(spoken) hello there",
+      mediaUrl: "https://example.com/tts-tool.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    } satisfies ReplyPayload;
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => ttsAudioFinal;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    const sent = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(sent?.mediaUrl).toBe("https://example.com/tts-tool.opus");
+    expect(sent?.audioAsVoice).toBe(true);
+    // Assistant text stays private in message_tool_only; only audio is delivered.
+    expect(sent?.text).toBeUndefined();
+  });
+
+  it("keeps text-only finals private in message_tool_only contexts", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => ({ text: "plain text final" }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver TTS tool audio finals when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) =>
+      ({
+        text: "(spoken) hello there",
+        mediaUrl: "https://example.com/tts-tool.opus",
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("does not synthesize hidden text-only tool summaries into TTS media", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeToolAudio = true;
