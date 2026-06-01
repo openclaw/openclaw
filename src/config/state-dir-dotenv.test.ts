@@ -27,6 +27,8 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       'SUPERMEMORY_OPENCLAW_API_KEY="${SUPERMEMORY_OPENCLAW_KEY}"',
       "QUOTED_SUPERMEMORY_OPENCLAW_API_KEY='\"$SUPERMEMORY_OPENCLAW_KEY\"'",
       "QUOTED_CURLY_KEY=\"'${ANOTHER_VAR}'\"",
+      "BRACE_DEFAULT_KEY=${ANOTHER_VAR:-fallback}",
+      "QUOTED_BRACE_DEFAULT_KEY='\"${ANOTHER_VAR:-fallback}\"'",
       'COMMAND_KEY="$(hostname)"',
       "OTHER_KEY=$SOME_SHELL_VAR",
       "CURLY_KEY=${ANOTHER_VAR}",
@@ -38,6 +40,8 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       expect(Object.keys(result)).not.toContain("SUPERMEMORY_OPENCLAW_API_KEY");
       expect(Object.keys(result)).not.toContain("QUOTED_SUPERMEMORY_OPENCLAW_API_KEY");
       expect(Object.keys(result)).not.toContain("QUOTED_CURLY_KEY");
+      expect(Object.keys(result)).not.toContain("BRACE_DEFAULT_KEY");
+      expect(Object.keys(result)).not.toContain("QUOTED_BRACE_DEFAULT_KEY");
       expect(Object.keys(result)).not.toContain("COMMAND_KEY");
       expect(Object.keys(result)).not.toContain("OTHER_KEY");
       expect(Object.keys(result)).not.toContain("CURLY_KEY");
@@ -60,8 +64,8 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       expect(result["PASSWORD"]).toBe("abc$2!xyz");
       expect(result["TOKEN"]).toBe("tok_$prod_v2");
       expect(result["PRICE"]).toBe("\\$100");
-      expect(result["QUOTED_PASSWORD"]).toBe("\"abc$2!xyz\"");
-      expect(result["QUOTED_PRICE"]).toBe("\"$100\"");
+      expect(result["QUOTED_PASSWORD"]).toBe('"abc$2!xyz"');
+      expect(result["QUOTED_PRICE"]).toBe('"$100"');
       expect(Object.keys(result)).not.toContain("PURE_REF");
     });
   });

@@ -35,7 +35,7 @@ function isUnresolvedShellReference(value: string): boolean {
   // A real credential that merely contains a $ (e.g. "abc$2!", "$100") is NOT matched.
   return (
     /^\$[A-Za-z_]\w*$/.test(candidate) ||
-    /^\$\{[A-Za-z_]\w*\}$/.test(candidate) ||
+    /^\$\{[^}]+\}$/.test(candidate) ||
     /^\$\([^)]*\)$/.test(candidate)
   );
 }
