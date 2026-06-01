@@ -29,6 +29,20 @@ describe("detectPackageManager", () => {
     );
   });
 
+  it("can prefer npm publish lockfiles over build-time packageManager metadata", async () => {
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@11.2.2" }) },
+        { path: "npm-shrinkwrap.json", content: "{}" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root, { preferPackageLockfiles: true })).resolves.toBe(
+          "npm",
+        );
+      },
+    );
+  });
+
   it.each([
     {
       name: "uses bun.lock",
@@ -46,6 +60,11 @@ describe("detectPackageManager", () => {
         { path: "package.json", content: JSON.stringify({ packageManager: "yarn@4.0.0" }) },
         { path: "package-lock.json", content: "" },
       ],
+      expected: "npm",
+    },
+    {
+      name: "uses npm-shrinkwrap.json",
+      files: [{ path: "npm-shrinkwrap.json", content: "{}" }],
       expected: "npm",
     },
   ])("falls back to lockfiles when $name", async ({ files, expected }) => {

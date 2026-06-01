@@ -86,6 +86,10 @@ async function detectPackageManager(root: string): Promise<PackageManager> {
   return (await detectPackageManagerImpl(root)) ?? "unknown";
 }
 
+async function detectPackageInstallManager(root: string): Promise<PackageManager> {
+  return (await detectPackageManagerImpl(root, { preferPackageLockfiles: true })) ?? "unknown";
+}
+
 async function detectGitRoot(root: string): Promise<string | null> {
   const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     timeoutMs: 4000,
@@ -200,10 +204,10 @@ async function statMtimeMs(p: string): Promise<number | null> {
   }
 }
 
-function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
+async function resolveDepsMarker(params: { root: string; manager: PackageManager }): Promise<{
   lockfilePath: string | null;
   markerPath: string | null;
-} {
+}> {
   const root = params.root;
   if (params.manager === "pnpm") {
     return {
@@ -218,8 +222,11 @@ function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
     };
   }
   if (params.manager === "npm") {
+    const shrinkwrapPath = path.join(root, "npm-shrinkwrap.json");
     return {
-      lockfilePath: path.join(root, "package-lock.json"),
+      lockfilePath: (await exists(shrinkwrapPath))
+        ? shrinkwrapPath
+        : path.join(root, "package-lock.json"),
       markerPath: path.join(root, "node_modules"),
     };
   }
@@ -231,7 +238,7 @@ export async function checkDepsStatus(params: {
   manager: PackageManager;
 }): Promise<DepsStatus> {
   const root = path.resolve(params.root);
-  const { lockfilePath, markerPath } = resolveDepsMarker({
+  const { lockfilePath, markerPath } = await resolveDepsMarker({
     root,
     manager: params.manager,
   });
@@ -423,12 +430,12 @@ export async function checkUpdateStatus(params: {
   }
 
   const rootRealpath = await fs.realpath(root).catch(() => root);
-  const [pm, gitRoot, registry] = await Promise.all([
-    detectPackageManager(root),
+  const [gitRoot, registry] = await Promise.all([
     detectGitRoot(root),
     params.includeRegistry ? fetchRegistry() : Promise.resolve(undefined),
   ]);
   const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
+  const pm = isGit ? await detectPackageManager(root) : await detectPackageInstallManager(root);
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([

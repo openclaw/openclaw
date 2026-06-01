@@ -194,6 +194,22 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkDepsStatus", () => {
+  it("uses npm-shrinkwrap.json as the npm dependency lock marker", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-npm-" }, async (base) => {
+      await fs.writeFile(path.join(base, "npm-shrinkwrap.json"), "{}", "utf8");
+      await fs.mkdir(path.join(base, "node_modules"), { recursive: true });
+
+      const status = await checkDepsStatus({ root: base, manager: "npm" });
+
+      expect(status).toMatchObject({
+        manager: "npm",
+        status: "ok",
+        lockfilePath: path.join(base, "npm-shrinkwrap.json"),
+        markerPath: path.join(base, "node_modules"),
+      });
+    });
+  });
+
   it("reports unknown, missing, stale, and ok states from lockfile markers", async () => {
     await withTempDir({ prefix: "openclaw-update-check-" }, async (base) => {
       await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
@@ -266,6 +282,31 @@ describe("checkUpdateStatus", () => {
       expect(status.git).toBeUndefined();
       expect(status.registry).toBeUndefined();
       expect(status.deps?.manager).toBe("npm");
+    });
+  });
+
+  it("detects published npm package roots from shrinkwrap before build packageManager metadata", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "npm-shrinkwrap.json"), "{}", "utf8");
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+
+      const status = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+
+      expect(status.root).toBe(root);
+      expect(status.installKind).toBe("package");
+      expect(status.packageManager).toBe("npm");
+      expect(status.deps?.manager).toBe("npm");
+      expect(status.deps?.lockfilePath).toBe(path.join(root, "npm-shrinkwrap.json"));
     });
   });
 
