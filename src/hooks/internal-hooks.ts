@@ -535,6 +535,7 @@ export function isAgentTurnSaveEvent(event: InternalHookEvent): event is AgentTu
     (context.saveOutcome === "saved" ||
       context.saveOutcome === "skipped" ||
       context.saveOutcome === "failed") &&
+    context.success === (context.saveOutcome === "saved") &&
     hasBooleanContextField(context, "turnSuccess") &&
     hasNumberContextField(context, "durationMs") &&
     (context.turnErrorCode === undefined || typeof context.turnErrorCode === "string") &&

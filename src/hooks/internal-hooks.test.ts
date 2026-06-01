@@ -393,6 +393,28 @@ describe("hooks", () => {
         expected: false,
       },
       {
+        name: "returns false when skipped save outcome has true success",
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
+          sessionKey: "test-session",
+          success: true,
+          saveOutcome: "skipped",
+          turnSuccess: true,
+          durationMs: 100,
+        }),
+        expected: false,
+      },
+      {
+        name: "returns false when saved save outcome has false success",
+        event: createInternalHookEvent("agent", "turn:save", "test-session", {
+          sessionKey: "test-session",
+          success: false,
+          saveOutcome: "saved",
+          turnSuccess: true,
+          durationMs: 100,
+        }),
+        expected: false,
+      },
+      {
         name: "returns false when turnErrorCode is not a string",
         event: createInternalHookEvent("agent", "turn:save", "test-session", {
           sessionKey: "test-session",

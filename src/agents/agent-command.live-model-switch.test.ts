@@ -885,7 +885,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
     );
     state.persistAcpTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      async (params: { sessionEntry?: unknown }) => ({
+        sessionEntry: params.sessionEntry,
+        saveOutcome: "saved",
+      }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,

@@ -482,7 +482,19 @@ export class AcpSessionManager {
       return { saveOutcome: "skipped", saveSkipReason: "declined" };
     }
     if (result && typeof result === "object") {
-      return result;
+      if (result.saveOutcome === "saved") {
+        return { saveOutcome: "saved" };
+      }
+      if (result.saveOutcome === "skipped") {
+        if (result.saveSkipReason !== undefined && typeof result.saveSkipReason !== "string") {
+          throw new Error("invalid ACP turn save skip reason");
+        }
+        return {
+          saveOutcome: "skipped",
+          ...(result.saveSkipReason ? { saveSkipReason: result.saveSkipReason } : {}),
+        };
+      }
+      throw new Error("invalid ACP turn save outcome");
     }
     return { saveOutcome: "saved" };
   }

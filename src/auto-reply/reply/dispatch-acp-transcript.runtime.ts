@@ -41,7 +41,7 @@ export async function persistAcpDispatchTranscript(params: {
     throw new Error(`unknown ACP session key: ${params.sessionKey}`);
   }
 
-  await persistAcpTurnTranscript({
+  const persistResult = await persistAcpTurnTranscript({
     body: promptText,
     transcriptBody: promptText,
     finalText,
@@ -55,5 +55,10 @@ export async function persistAcpDispatchTranscript(params: {
     sessionCwd: resolveAcpSessionCwd(params.meta) ?? process.cwd(),
     config: params.cfg,
   });
-  return { saveOutcome: "saved" };
+  return persistResult.saveOutcome === "saved"
+    ? { saveOutcome: "saved" }
+    : {
+        saveOutcome: "skipped",
+        saveSkipReason: persistResult.saveSkipReason ?? "no_transcript_write",
+      };
 }

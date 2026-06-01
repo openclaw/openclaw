@@ -479,6 +479,94 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("emits failed agent:turn:save when the save step returns an invalid outcome", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const saveHandler = vi.fn();
+    registerInternalHook("agent:turn:save", saveHandler);
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "hello",
+      mode: "prompt",
+      requestId: "turn-save-invalid-outcome",
+      onBeforeTurnSaveHook: () => ({ saveOutcome: "done" }) as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(saveHandler).toHaveBeenCalledTimes(1);
+    });
+
+    expect(saveHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent",
+        action: "turn:save",
+        context: expect.objectContaining({
+          sessionKey: "agent:codex:acp:session-1",
+          success: false,
+          saveOutcome: "failed",
+          turnSuccess: true,
+          saveError: "invalid ACP turn save outcome",
+        }),
+      }),
+    );
+  });
+
+  it("emits failed agent:turn:save when the save step returns an empty object", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const saveHandler = vi.fn();
+    registerInternalHook("agent:turn:save", saveHandler);
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "hello",
+      mode: "prompt",
+      requestId: "turn-save-empty-object",
+      onBeforeTurnSaveHook: () => ({}) as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(saveHandler).toHaveBeenCalledTimes(1);
+    });
+
+    expect(saveHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent",
+        action: "turn:save",
+        context: expect.objectContaining({
+          sessionKey: "agent:codex:acp:session-1",
+          success: false,
+          saveOutcome: "failed",
+          turnSuccess: true,
+          saveError: "invalid ACP turn save outcome",
+        }),
+      }),
+    );
+  });
+
   it("emits agent:turn:end and failed agent:turn:save after a failed ACP turn with a save hook", async () => {
     const runtimeState = createRuntime();
     runtimeState.runTurn.mockImplementation(async function* () {

@@ -946,7 +946,7 @@ async function agentCommandInternal(
                 sessionFile: internalSessionFile,
               }
             : sessionEntry;
-          sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
+          const persistResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
             body,
             transcriptBody,
             finalText: finalTextRaw,
@@ -960,10 +960,16 @@ async function agentCommandInternal(
             sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
             config: cfg,
           });
+          sessionEntry = persistResult.sessionEntry;
           if (internalSessionFile) {
             sessionEntry = prepared.sessionEntry;
           }
-          return { saveOutcome: "saved" };
+          return persistResult.saveOutcome === "saved"
+            ? { saveOutcome: "saved" }
+            : {
+                saveOutcome: "skipped",
+                saveSkipReason: persistResult.saveSkipReason ?? "no_transcript_write",
+              };
         } catch (error) {
           log.warn(
             `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,

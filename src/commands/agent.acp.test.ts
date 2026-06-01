@@ -36,9 +36,10 @@ const attemptExecutionMocks = vi.hoisted(() => ({
   emitAcpLifecycleError: vi.fn(),
   emitAcpPromptSubmitted: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
-  persistAcpTurnTranscript: vi.fn(
-    async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
-  ),
+  persistAcpTurnTranscript: vi.fn(async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
+    sessionEntry,
+    saveOutcome: "saved",
+  })),
 }));
 
 vi.mock("../infra/agent-events.js", () => agentEventMocks);
@@ -427,7 +428,10 @@ describe("agentCommand ACP runtime routing", () => {
       });
       attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(async (params) => {
         order.push("persist");
-        return (params as { sessionEntry?: unknown }).sessionEntry;
+        return {
+          sessionEntry: (params as { sessionEntry?: unknown }).sessionEntry,
+          saveOutcome: "saved",
+        };
       });
       mockAcpManager({
         runTurn: (params: unknown) => runTurn(params),
