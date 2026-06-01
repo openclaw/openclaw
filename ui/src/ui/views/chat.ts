@@ -13,7 +13,7 @@ import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentFile,
 } from "../chat/attachment-support.ts";
-import { buildChatItems } from "../chat/build-chat-items.ts";
+import { buildChatItems, type BuildChatItemsProps } from "../chat/build-chat-items.ts";
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
@@ -486,12 +486,49 @@ function createChatEphemeralState(): ChatEphemeralState {
 
 const vs = createChatEphemeralState();
 
+type CachedChatItems = {
+  input: BuildChatItemsProps | null;
+  items: ReturnType<typeof buildChatItems>;
+};
+
+const chatItemsBySession = new Map<string, CachedChatItems>();
+
+function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
+  return (
+    previous.sessionKey === next.sessionKey &&
+    previous.messages === next.messages &&
+    previous.toolMessages === next.toolMessages &&
+    previous.streamSegments === next.streamSegments &&
+    previous.stream === next.stream &&
+    previous.streamStartedAt === next.streamStartedAt &&
+    previous.queue === next.queue &&
+    previous.showToolCalls === next.showToolCalls &&
+    previous.searchOpen === next.searchOpen &&
+    previous.searchQuery === next.searchQuery
+  );
+}
+
+function buildCachedChatItems(input: BuildChatItemsProps): ReturnType<typeof buildChatItems> {
+  const cached = getOrCreateSessionCacheValue(chatItemsBySession, input.sessionKey, () => ({
+    input: null,
+    items: [],
+  }));
+  if (cached.input && sameChatItemsInput(cached.input, input)) {
+    return cached.items;
+  }
+  const items = buildChatItems(input);
+  cached.input = input;
+  cached.items = items;
+  return items;
+}
+
 /**
  * Reset chat view ephemeral state when navigating away.
  * Clears search/slash UI that should not survive navigation.
  */
 export function resetChatViewState() {
   Object.assign(vs, createChatEphemeralState());
+  chatItemsBySession.clear();
 }
 
 export const cleanupChatModuleState = resetChatViewState;
@@ -1301,7 +1338,7 @@ export function renderChat(props: ChatProps) {
     );
   };
 
-  const chatItems = buildChatItems({
+  const chatItems = buildCachedChatItems({
     sessionKey: props.sessionKey,
     messages: props.messages,
     toolMessages: props.toolMessages,
