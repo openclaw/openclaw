@@ -248,7 +248,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
           durationMs: 1,
           agentMeta: {
             sessionId: "session-1",
-            provider: "openai-codex",
+            provider: "openai",
             model: "gpt-5.4",
           },
         },
@@ -256,7 +256,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
 
     expect(normalized).toHaveLength(1);
-    expectTextPayload(normalized[0], "[openai-codex/gpt-5.4] Ready.");
+    expectTextPayload(normalized[0], "[openai/gpt-5.4] Ready.");
   });
 
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
@@ -608,6 +608,54 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(delivered.meta.durationMs).toBe(1);
     expect(delivered.meta.transport).toBe("embedded");
     expect(delivered.meta.fallbackFrom).toBe("gateway");
+  });
+
+  it("preserves committed message-tool delivery evidence when automatic delivery is disabled", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "completion handoff",
+        deliver: false,
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [],
+      result: {
+        ...createResult(),
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The image is ready."],
+        messagingToolSentMediaUrls: ["/tmp/generated-image.png"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "telegram:-100123",
+            threadId: "22",
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-image.png"],
+          },
+        ],
+      } as RunResult,
+    });
+
+    expect(delivered.didSendViaMessagingTool).toBe(true);
+    expect(delivered.messagingToolSentTexts).toEqual(["The image is ready."]);
+    expect(delivered.messagingToolSentMediaUrls).toEqual(["/tmp/generated-image.png"]);
+    expect(delivered.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "telegram",
+        to: "telegram:-100123",
+        threadId: "22",
+        text: "The image is ready.",
+        mediaUrls: ["/tmp/generated-image.png"],
+      },
+    ]);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
   });
 
   it("adds sent deliveryStatus to JSON output after delivery completes", async () => {

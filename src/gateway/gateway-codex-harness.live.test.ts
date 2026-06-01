@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   renderBitmapTextPngBase64,
   renderSolidColorPngBase64,
@@ -25,6 +26,7 @@ import {
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
+  shouldSkipRetryableCodexHarnessLiveError,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
   assertCronJobMatches,
@@ -35,7 +37,6 @@ import {
   type CronListJob,
 } from "./live-agent-probes.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
-import type { EventFrame } from "./protocol/index.js";
 
 const LIVE = isLiveTestEnabled();
 const CODEX_HARNESS_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS);
@@ -103,13 +104,6 @@ function logCodexLiveStep(step: string, details?: Record<string, unknown>): void
 
 function isCodexAccountTokenError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Failed to extract accountId from token");
-}
-
-function isRetryableCodexHarnessLiveError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return error.message.includes("gateway request timeout for sessions.list");
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -237,16 +231,15 @@ async function writeLiveGatewayConfig(params: {
         },
       },
     },
-    // The Codex plugin owns the `codex/*` catalog/auth marker. Keeping the
-    // fixture on that provider proves the app-server harness path instead of
-    // exercising legacy OpenAI-Codex provider overrides.
+    // The Codex plugin owns the `codex/*` catalog/auth marker. Keeping runtime
+    // policy on the model entry proves the app-server harness path.
     agents: {
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex" },
         skipBootstrap: true,
         timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
         model: { primary: params.modelKey },
+        models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         sandbox: { mode: "off" },
       },
       list: [
@@ -254,7 +247,6 @@ async function writeLiveGatewayConfig(params: {
           id: "dev",
           default: true,
           workspace: params.workspace,
-          agentRuntime: { id: "codex" },
           model: { primary: params.modelKey },
           models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         },
@@ -267,6 +259,7 @@ async function writeLiveGatewayConfig(params: {
 async function requestAgentTextWithEvents(params: {
   client: GatewayClient;
   eventPrefix?: string;
+  includeAllSessions?: boolean;
   message: string;
   sessionKey: string;
 }): Promise<{ text: string; events: CapturedAgentEvent[] }> {
@@ -277,7 +270,7 @@ async function requestAgentTextWithEvents(params: {
   const unsubscribe = onAgentEvent((event) => {
     if (
       !event.stream.startsWith(eventPrefix) ||
-      (event.sessionKey && event.sessionKey !== params.sessionKey)
+      (!params.includeAllSessions && event.sessionKey && event.sessionKey !== params.sessionKey)
     ) {
       return;
     }
@@ -958,6 +951,63 @@ async function verifyCodexSubagentProbe(params: {
   }
 }
 
+async function verifyCodexNativeSubagentBridgeProbe(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<void> {
+  const runId = randomUUID();
+  const childToken = `CODEX-NATIVE-CHILD-${runId.slice(0, 6).toUpperCase()}`;
+  const parentToken = `CODEX-NATIVE-PARENT-${runId.slice(0, 6).toUpperCase()}`;
+  const { listTaskRecords } = await import("../tasks/runtime-internal.js");
+  const { text, events } = await requestAgentTextWithEvents({
+    client: params.client,
+    eventPrefix: "codex_app_server.",
+    includeAllSessions: true,
+    sessionKey: params.sessionKey,
+    message: [
+      "Bridge probe.",
+      "You must use the Codex native spawn_agent tool exactly once before replying.",
+      `Give the subagent this exact instruction: Reply exactly ${childToken} and nothing else.`,
+      "Wait for the subagent result. Do not answer from your own knowledge.",
+      `After the subagent result returns, reply exactly ${parentToken} ${childToken} and nothing else.`,
+    ].join("\n"),
+  });
+  logCodexLiveStep("native-subagent-bridge-probe:initial-reply", { text });
+  expect(
+    events.some((event) => event.stream === "codex_app_server.lifecycle"),
+    `expected Codex lifecycle events; events=${JSON.stringify(events)}`,
+  ).toBe(true);
+  let codexNativeTasks = listCodexNativeTasks();
+  let deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
+  const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
+  while (!deliveredTask && Date.now() < deadline) {
+    await delay(1_000);
+    codexNativeTasks = listCodexNativeTasks();
+    deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
+  }
+  expect(
+    deliveredTask,
+    `expected delivered Codex-native subagent task with child result; initialText=${JSON.stringify(
+      text,
+    )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
+  ).toBeDefined();
+
+  function listCodexNativeTasks() {
+    return listTaskRecords().filter(
+      (entry) => entry.runtime === "subagent" && entry.taskKind === "codex-native",
+    );
+  }
+
+  function findDeliveredCodexNativeTask(tasks: ReturnType<typeof listCodexNativeTasks>) {
+    return tasks.find(
+      (entry) =>
+        entry.status === "succeeded" &&
+        entry.deliveryStatus === "delivered" &&
+        entry.terminalSummary?.includes(childToken),
+    );
+  }
+}
+
 describeLive("gateway live (Codex harness)", () => {
   it(
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
@@ -1037,6 +1087,8 @@ describeLive("gateway live (Codex harness)", () => {
           if (CODEX_HARNESS_SUBAGENT_PROBE) {
             logCodexLiveStep("subagent-probe:start", { sessionKey });
             await verifyCodexSubagentProbe({ client, sessionKey });
+            logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
+            await verifyCodexNativeSubagentBridgeProbe({ client, sessionKey });
             logCodexLiveStep("subagent-probe:done");
             if (CODEX_HARNESS_SUBAGENT_ONLY) {
               return;
@@ -1131,7 +1183,11 @@ describeLive("gateway live (Codex harness)", () => {
             console.error(
               "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness assertions.",
             );
-          } else if (isRetryableCodexHarnessLiveError(error)) {
+          } else if (
+            shouldSkipRetryableCodexHarnessLiveError(error, {
+              subagentProbe: CODEX_HARNESS_SUBAGENT_PROBE,
+            })
+          ) {
             console.error(
               `SKIP: Codex harness live backend hit a retryable gateway timeout; skipping live Codex harness assertions. ${error instanceof Error ? error.message : String(error)}`,
             );

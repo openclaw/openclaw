@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
@@ -5,7 +7,6 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -225,7 +226,7 @@ export function listDangerousPluginNodeCommands(): string[] {
       .filter((entry) => entry.policy.dangerous === true)
       .flatMap((entry) => entry.policy.commands),
   ];
-  return [...new Set(commands.map((command) => command.trim()).filter(Boolean))];
+  return normalizeUniqueStringEntries(commands);
 }
 
 function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
@@ -240,7 +241,7 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
     const defaults = entry.policy.defaultPlatforms ?? [];
     return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  return [...new Set(commands.map((command) => command.trim()).filter(Boolean))];
+  return normalizeUniqueStringEntries(commands);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {

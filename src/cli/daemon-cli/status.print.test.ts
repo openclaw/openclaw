@@ -9,14 +9,17 @@ const runtime = vi.hoisted(() => ({
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
 );
+const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
+const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-vi.mock("../../terminal/theme.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../terminal/theme.js")>("../../terminal/theme.js");
+vi.mock("../../../packages/terminal-core/src/theme.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../packages/terminal-core/src/theme.js")
+  >("../../../packages/terminal-core/src/theme.js");
   return {
     ...actual,
     colorize: (_rich: boolean, _theme: unknown, text: string) => text,
@@ -46,8 +49,8 @@ vi.mock("../../daemon/restart-logs.js", () => ({
 }));
 
 vi.mock("../../daemon/systemd-hints.js", () => ({
-  isSystemdUnavailableDetail: () => false,
-  renderSystemdUnavailableHints: () => [],
+  isSystemdUnavailableDetail: isSystemdUnavailableDetailMock,
+  renderSystemdUnavailableHints: renderSystemdUnavailableHintsMock,
 }));
 
 vi.mock("../../infra/wsl.js", () => ({
@@ -87,6 +90,8 @@ describe("printDaemonStatus", () => {
     runtime.log.mockReset();
     runtime.error.mockReset();
     resolveControlUiLinksMock.mockClear();
+    isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
+    renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -187,6 +192,10 @@ describe("printDaemonStatus", () => {
               label: "ai.openclaw.update.2026.5.12",
               lastExitStatus: 127,
             },
+            {
+              label: "ai.openclaw.manual-update.1717168800",
+              lastExitStatus: 0,
+            },
           ],
         },
         gateway: {
@@ -203,6 +212,7 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
     expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
+    expectMockLineContains(runtime.error, "ai.openclaw.manual-update.1717168800");
     expectMockLineContains(runtime.error, "launchctl remove <label>");
     expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
   });
@@ -319,6 +329,44 @@ describe("printDaemonStatus", () => {
       runtime.error,
       "if this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
     );
+  });
+
+  it("prints gateway version from gathered gateway status when probe server metadata is absent", () => {
+    printDaemonStatus(
+      {
+        cli: {
+          version: "2026.4.23",
+          entrypoint: "/usr/local/bin/openclaw",
+        },
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+          version: "2026.5.7",
+        },
+        rpc: {
+          ok: true,
+          kind: "read",
+          capability: "read_only",
+          url: "ws://127.0.0.1:18789",
+          version: "2026.5.7",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Gateway version: 2026.5.7");
+    expectMockLineContains(runtime.error, "this OpenClaw command is version 2026.4.23");
   });
 
   it("prints restart handoff diagnostics when deep status gathered one", () => {
@@ -467,5 +515,44 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Other gateway-like services detected");
     expectMockLineContains(runtime.log, "ai.openclaw.gateway.rescue");
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not print systemd user-service hints when a gateway responds", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    isSystemdUnavailableDetailMock.mockReturnValue(true);
+    renderSystemdUnavailableHintsMock.mockReturnValue(["run loginctl enable-linger"]);
+
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd user",
+            loaded: false,
+            loadedText: "not loaded",
+            notLoadedText: "not loaded",
+            runtime: { status: "unknown", detail: "systemd user services unavailable" },
+          },
+          rpc: {
+            ok: true,
+            url: "ws://127.0.0.1:18789",
+            server: { version: "2026.5.12" },
+          },
+          port: {
+            port: 18789,
+            status: "busy",
+            listeners: [],
+            hints: [],
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("systemd user services unavailable");
+    expect(errors).not.toContain("run loginctl enable-linger");
   });
 });

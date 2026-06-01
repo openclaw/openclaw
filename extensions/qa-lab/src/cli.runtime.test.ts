@@ -76,6 +76,7 @@ import {
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaCoverageReportCommand,
+  runQaJsonlReplayCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
   runQaSuiteCommand,
@@ -272,7 +273,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: "pi,codex",
+      runtimePair: "openclaw,codex",
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
@@ -284,8 +285,36 @@ describe("qa cli runtime", () => {
       alternateModel: undefined,
       fastMode: undefined,
       scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: ["pi", "codex"],
+      runtimePair: ["openclaw", "codex"],
     });
+  });
+
+  it("rejects unknown runtime-pair ids at the CLI boundary", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair: "legacy-runtime,codex",
+      }),
+    ).rejects.toThrow('--runtime-pair only supports "openclaw" and "codex".');
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
+  });
+
+  it("accepts legacy pi as a runtime-pair suite alias", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: "pi,codex",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        runtimePair: ["openclaw", "codex"],
+      }),
+    );
   });
 
   it("drops blank suite model refs so provider defaults apply", async () => {
@@ -441,6 +470,17 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
       concurrency: 3,
     });
+  });
+
+  it("rejects fractional suite concurrency from programmatic callers", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["channel-chat-baseline"],
+        concurrency: 1.5,
+      }),
+    ).rejects.toThrow("--concurrency must be a positive integer");
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
   it("sets a failing exit code when host suite scenarios fail", async () => {
@@ -622,7 +662,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-7",
+      alternateModel: "anthropic/claude-opus-4-8",
       preflight: true,
     });
 
@@ -632,7 +672,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-7",
+      alternateModel: "anthropic/claude-opus-4-8",
       scenarioIds: ["approval-turn-tool-followthrough"],
       concurrency: 1,
     });
@@ -781,6 +821,7 @@ describe("qa cli runtime", () => {
         "personal-task-followthrough-status",
         "personal-share-safe-diagnostics-artifact",
         "personal-no-fake-progress",
+        "personal-failure-recovery",
       ],
     });
   });
@@ -797,6 +838,12 @@ describe("qa cli runtime", () => {
       scenarioIds: [
         "channel-chat-baseline",
         "runtime-tool-bash",
+        "auth-profile-codex-mixed-profiles",
+        "auth-profile-doctor-migration-safety",
+        "codex-plugin-cold-install",
+        "codex-plugin-install-race",
+        "codex-plugin-pinned-new",
+        "codex-plugin-pinned-old",
         "runtime-first-hour-20-turn",
         "runtime-tool-apply-patch",
         "runtime-tool-edit",
@@ -851,7 +898,7 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         pack: "personal-admin",
       }),
-    ).rejects.toThrow('--pack must be one of personal-agent, got "personal-admin"');
+    ).rejects.toThrow('--pack must be one of personal-agent, observability, got "personal-admin"');
   });
 
   it("rejects unknown suite CLI auth modes", async () => {
@@ -916,8 +963,8 @@ describe("qa cli runtime", () => {
                 drift: "tool-call-shape",
                 driftDetails: "tool call 1 differs",
                 cells: {
-                  pi: {
-                    runtime: "pi",
+                  openclaw: {
+                    runtime: "openclaw",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
                     finalText: "done",
@@ -943,7 +990,7 @@ describe("qa cli runtime", () => {
           run: {
             providerMode: "mock-openai",
             primaryModel: "openai/gpt-5.5",
-            runtimePair: ["pi", "codex"],
+            runtimePair: ["openclaw", "codex"],
           },
         }),
         "utf8",
@@ -986,8 +1033,8 @@ describe("qa cli runtime", () => {
                 scenarioId: "runtime-tool-fs-read",
                 drift: "none",
                 cells: {
-                  pi: {
-                    runtime: "pi",
+                  openclaw: {
+                    runtime: "openclaw",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "fs.read", argsHash: "a", resultHash: "r" }],
                     finalText: "done",
@@ -1016,7 +1063,7 @@ describe("qa cli runtime", () => {
           run: {
             providerMode: "live-frontier",
             primaryModel: "openai/gpt-5.5",
-            runtimePair: ["pi", "codex"],
+            runtimePair: ["openclaw", "codex"],
           },
         }),
         "utf8",
@@ -1077,11 +1124,71 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "memory.recall");
   });
 
+  it("prints a focused scenario match report from coverage metadata", async () => {
+    await runQaCoverageReportCommand({
+      repoRoot: process.cwd(),
+      match: ["image roundtrip"],
+    });
+
+    expectWriteContains(stdoutWrite, "# QA Scenario Matches");
+    expectWriteContains(stdoutWrite, "image-generation-roundtrip");
+    expectWriteContains(stdoutWrite, "--scenario image-generation-roundtrip");
+    expect(stdoutWrite.mock.calls.flat().join("")).not.toContain("memory-recall");
+  });
+
+  it("rejects scenario match queries for tool coverage reports", async () => {
+    await expect(
+      runQaCoverageReportCommand({
+        repoRoot: process.cwd(),
+        tools: true,
+        match: ["runtime"],
+      }),
+    ).rejects.toThrow("--match cannot be combined with --tools.");
+  });
+
   it("prints a markdown tool coverage report from runtime tool fixtures", async () => {
     await runQaCoverageReportCommand({ repoRoot: process.cwd(), tools: true });
 
     expectWriteContains(stdoutWrite, "# OpenClaw Runtime Tool Coverage");
     expectWriteContains(stdoutWrite, "codex-native-workspace");
+  });
+
+  it("writes a curated mock JSONL replay report and summary", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-jsonl-replay-cli-"));
+    try {
+      await runQaJsonlReplayCommand({
+        repoRoot,
+        transcripts: path.resolve("qa/scenarios/jsonl-replay"),
+        outputDir: "jsonl-output",
+        runtimePair: "openclaw,codex",
+      });
+
+      const report = await fs.readFile(
+        path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-report.md"),
+        "utf8",
+      );
+      const summary = JSON.parse(
+        await fs.readFile(
+          path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-summary.json"),
+          "utf8",
+        ),
+      ) as { transcripts?: Array<{ userTurnCount?: number }> };
+
+      expect(report).toContain("# OpenClaw JSONL Replay Report - openclaw vs codex");
+      expect(report).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");
+      expect(summary.transcripts).toHaveLength(7);
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps JSONL replay mock-only until real runtime cell replay is wired", async () => {
+    await expect(
+      runQaJsonlReplayCommand({
+        repoRoot: process.cwd(),
+        providerMode: "live-frontier",
+      }),
+    ).rejects.toThrow("qa jsonl-replay currently supports mock-openai curated fixtures only.");
   });
 
   it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {
@@ -1100,8 +1207,8 @@ describe("qa cli runtime", () => {
                 drift: "tool-call-shape",
                 driftDetails: "Codex emitted no web_search call",
                 cells: {
-                  pi: {
-                    runtime: "pi",
+                  openclaw: {
+                    runtime: "openclaw",
                     transcriptBytes: "",
                     toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                     finalText: "",
@@ -1122,7 +1229,7 @@ describe("qa cli runtime", () => {
               },
             },
           ],
-          run: { runtimePair: ["pi", "codex"] },
+          run: { runtimePair: ["openclaw", "codex"] },
         }),
         "utf8",
       );
@@ -1154,7 +1261,7 @@ describe("qa cli runtime", () => {
       fast: true,
       thinking: "medium",
       modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-7,thinking=high"],
+      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-8,thinking=high"],
       judgeTimeoutMs: 180_000,
       blindJudgeModels: true,
       concurrency: 4,
@@ -1175,10 +1282,10 @@ describe("qa cli runtime", () => {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
         "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
       },
-      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-7"],
+      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-8"],
       judgeModelOptions: {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-7": { thinkingDefault: "high" },
+        "anthropic/claude-opus-4-8": { thinkingDefault: "high" },
       },
       judgeTimeoutMs: 180_000,
       judgeBlindModels: true,
@@ -1308,14 +1415,14 @@ describe("qa cli runtime", () => {
       runner: "multipass",
       providerMode: "mock-openai",
       scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: "codex,pi",
+      runtimePair: "codex,openclaw",
       allowFailures: true,
     });
 
     expect(runQaMultipass).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
-        runtimePair: ["pi", "codex"],
+        runtimePair: ["openclaw", "codex"],
       }),
     );
   });
@@ -1509,7 +1616,7 @@ describe("qa cli runtime", () => {
       providerMode: "mock-openai",
       parityPack: "agentic",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-7",
+      alternateModel: "anthropic/claude-opus-4-8",
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
@@ -1518,7 +1625,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-7",
+      alternateModel: "anthropic/claude-opus-4-8",
       fastMode: undefined,
       scenarioIds: [
         "approval-turn-tool-followthrough",

@@ -1,4 +1,4 @@
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
@@ -197,6 +197,25 @@ describe("google provider plugin hooks", () => {
 
     runCase(googleProvider, "google");
     runCase(cliProvider, "google-gemini-cli");
+  });
+
+  it("wires Vertex transport before request-time metadata ADC detection", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+
+    expect(
+      provider.createStreamFn?.({
+        model: {
+          api: "google-vertex",
+          provider: "google",
+          id: "gemini-2.5-pro",
+        },
+      } as never),
+    ).toEqual(expect.any(Function));
   });
 
   it("advertises adaptive thinking for Gemini dynamic thinking", async () => {

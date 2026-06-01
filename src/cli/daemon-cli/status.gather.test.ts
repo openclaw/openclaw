@@ -17,6 +17,7 @@ const callGatewayStatusProbe = vi.fn<
     url?: string;
     error?: string | null;
     server?: { version?: string | null; connId?: string | null };
+    version?: string | null;
   }>
 >(async (_opts?: unknown) => ({
   ok: true,
@@ -30,9 +31,9 @@ const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   fingerprintSha256: "sha256:11:22:33:44",
 }));
 const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
-const findStaleOpenClawUpdateLaunchdJobs = vi.fn<() => Promise<StaleOpenClawUpdateLaunchdJob[]>>(
-  async () => [],
-);
+const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
+  (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
+>(async () => []);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free" as const,
@@ -151,7 +152,8 @@ vi.mock("../../daemon/inspect.js", () => ({
 }));
 
 vi.mock("../../daemon/launchd.js", () => ({
-  findStaleOpenClawUpdateLaunchdJobs: () => findStaleOpenClawUpdateLaunchdJobs(),
+  findStaleOpenClawUpdateLaunchdJobs: (env?: NodeJS.ProcessEnv) =>
+    findStaleOpenClawUpdateLaunchdJobs(env),
 }));
 
 vi.mock("../../daemon/service-audit.js", () => ({
@@ -272,6 +274,7 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.token).toBe("daemon-token");
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
     expect(status.gateway?.tlsEnabled).toBe(true);
+    expect(status.gateway?.version).toBe("2026.5.6");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
     expect(status.rpc?.server).toEqual({ version: "2026.5.6", connId: "conn-1" });
@@ -280,6 +283,25 @@ describe("gatherDaemonStatus", () => {
       expect(status.cli?.entrypoint).toBe(process.argv[1]);
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
+  });
+
+  it("falls back to probe version when server metadata is unavailable", async () => {
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: true,
+      url: "ws://127.0.0.1:19001",
+      error: null,
+      version: "2026.5.7",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(status.gateway?.version).toBe("2026.5.7");
+    expect(status.rpc?.version).toBe("2026.5.7");
+    expect(status.rpc?.server).toBeUndefined();
   });
 
   it("forwards requireRpc and configPath to the daemon probe", async () => {
@@ -462,10 +484,22 @@ describe("gatherDaemonStatus", () => {
   it.runIf(process.platform === "darwin")(
     "surfaces stale updater launchd jobs only during deep status",
     async () => {
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+        environment: {
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+          OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
+        },
+      });
       findStaleOpenClawUpdateLaunchdJobs.mockResolvedValueOnce([
         {
           label: "ai.openclaw.update.2026.5.12",
           lastExitStatus: 127,
+        },
+        {
+          label: "ai.openclaw.manual-update.1717168800",
+          lastExitStatus: 0,
         },
       ]);
 
@@ -475,10 +509,18 @@ describe("gatherDaemonStatus", () => {
         deep: true,
       });
 
+      const staleScanEnv = findStaleOpenClawUpdateLaunchdJobs.mock.calls[0]?.[0];
+      expect(staleScanEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-daemon");
+      expect(staleScanEnv?.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-daemon/openclaw.json");
+      expect(staleScanEnv?.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.manual-update.gateway");
       expect(status.service.staleUpdateLaunchdJobs).toEqual([
         {
           label: "ai.openclaw.update.2026.5.12",
           lastExitStatus: 127,
+        },
+        {
+          label: "ai.openclaw.manual-update.1717168800",
+          lastExitStatus: 0,
         },
       ]);
     },

@@ -1,6 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
-import { normalizeProviderId } from "../provider-id.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
@@ -68,8 +68,8 @@ export function classifyOAuthRefreshFailure(message: string): {
 }
 
 export function buildOAuthRefreshFailureLoginCommand(provider: string | null | undefined): string {
-  const safeProvider = sanitizeOAuthRefreshFailureProvider(provider);
-  return safeProvider
-    ? formatCliCommand(`openclaw models auth login --provider ${safeProvider}`)
+  const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
+  return sanitizedProvider
+    ? formatCliCommand(`openclaw models auth login --provider ${sanitizedProvider}`)
     : formatCliCommand("openclaw models auth login");
 }

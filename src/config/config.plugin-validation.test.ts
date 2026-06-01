@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -141,7 +143,7 @@ describe("config plugin validation", () => {
 
   const validateRemovedPluginConfig = (removedId: string) =>
     validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: false,
         entries: { [removedId]: { enabled: true } },
@@ -245,7 +247,7 @@ describe("config plugin validation", () => {
   it("reports missing plugin refs across entries and allowlist surfaces", () => {
     const missingPath = path.join(suiteHome, "missing-plugin-dir");
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [missingPath] },
@@ -299,7 +301,7 @@ describe("config plugin validation", () => {
 
   it("warns instead of failing for stale plugins.deny entries", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         deny: ["missing-deny"],
       },
@@ -315,10 +317,420 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("reports catalog install hints for missing configured official external plugins", () => {
+  describe("missing Codex plugin diagnostics", () => {
+    const validateWithMissingCodexPlugin = (raw: Record<string, unknown>) =>
+      validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "openclaw" }] },
+          ...raw,
+        },
+        {
+          env: suiteEnv(),
+          pluginMetadataSnapshot: {
+            manifestRegistry: {
+              plugins: [],
+              diagnostics: [],
+            },
+          },
+        },
+      );
+
+    const expectNoMissingCodexPluginWarning = (
+      warnings: readonly { path: string; message: string }[] | undefined,
+    ) => {
+      expect(warnings ?? []).not.toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    };
+
+    const expectMissingCodexPluginWarning = (
+      warnings: readonly { path: string; message: string }[] | undefined,
+    ) => {
+      expect(warnings ?? []).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    };
+
+    it.each([
+      {
+        name: "provider-level PI runtime policy",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+          plugins: { entries: { codex: {} } },
+        },
+      },
+      {
+        name: "agent wildcard PI runtime policy",
+        config: {
+          agents: {
+            list: [{ id: "openclaw" }],
+            defaults: {
+              models: {
+                "openai/*": { agentRuntime: { id: "pi" } },
+              },
+            },
+          },
+          plugins: { entries: { codex: {} } },
+        },
+      },
+      {
+        name: "explicitly disabled Codex plugin entry",
+        config: {
+          plugins: { entries: { codex: { enabled: false } } },
+        },
+      },
+    ])("does not warn when $name keeps Codex unavailable", ({ config }) => {
+      const res = validateWithMissingCodexPlugin(config);
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when only one provider model route is pinned to OpenClaw", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "openclaw" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when provider PI policy is overridden by an automatic OpenAI model route", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses automatic runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when exact agent policy overrides an automatic OpenAI provider model route", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "pi" } },
+              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses implicit runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a normalized custom OpenAI-compatible provider key uses implicit runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            OpenAI: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still reports explicit Codex allowlist entries for custom OpenAI-compatible base URLs", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: {
+          allow: ["codex"],
+          entries: { codex: {} },
+        },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+      expect(res.warnings ?? []).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.allow",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses automatic wildcard policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "default" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when only one agent model route is pinned to PI", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when a provider-wide PI policy is overridden by an OpenAI wildcard default", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "default" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when the missing Codex plugin is explicitly enabled", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        plugins: { entries: { codex: { enabled: true } } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when a provider model route explicitly selects Codex", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "codex" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when an agent model route explicitly selects Codex", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+  });
+
+  it("deduplicates catalog install hints for missing configured official external plugins", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: { brave: { enabled: true } },
           allow: ["brave"],
@@ -339,7 +751,7 @@ describe("config plugin validation", () => {
     const message =
       "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
     expectPathMessage(res.warnings, "plugins.entries.brave", message);
-    expectPathMessage(res.warnings, "plugins.allow", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
     expect(
       (res.warnings ?? []).some(
         (warning) =>
@@ -352,7 +764,7 @@ describe("config plugin validation", () => {
   it("warns instead of failing when an official external memory slot plugin is not installed", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           slots: { memory: "memory-lancedb" },
           entries: { "memory-lancedb": { enabled: true } },
@@ -381,7 +793,7 @@ describe("config plugin validation", () => {
   it("keeps no-persistent-memory wording scoped to the selected missing memory slot", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           slots: { memory: "none" },
           entries: { "memory-lancedb": { enabled: true } },
@@ -403,7 +815,7 @@ describe("config plugin validation", () => {
     const message =
       "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
     expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", message);
-    expectPathMessage(res.warnings, "plugins.allow", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
     expect(
       (res.warnings ?? []).some((warning) =>
         warning.message.includes("gateway will run without persistent memory"),
@@ -411,10 +823,37 @@ describe("config plugin validation", () => {
     ).toBe(false);
   });
 
+  it("deduplicates yuanbao missing-plugin warnings across entries and allow", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: { yuanbao: { enabled: true } },
+          allow: ["yuanbao"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.13.1";
+    expectPathMessage(res.warnings, "plugins.entries.yuanbao", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
+  });
+
   it("keeps official external non-memory plugins fatal in the memory slot", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           slots: { memory: "brave" },
           entries: { brave: { enabled: true } },
@@ -446,7 +885,7 @@ describe("config plugin validation", () => {
   it("keeps blocked official external memory slot plugins fatal", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           slots: { memory: "memory-lancedb" },
           entries: { "memory-lancedb": { enabled: true } },
@@ -496,7 +935,7 @@ describe("config plugin validation", () => {
       await fs.chmod(blockedPluginDir, 0o777);
       try {
         const res = validateInSuite({
-          agents: { list: [{ id: "pi" }] },
+          agents: { list: [{ id: "openclaw" }] },
           plugins: {
             enabled: true,
             load: { paths: [blockedPluginDir] },
@@ -535,7 +974,7 @@ describe("config plugin validation", () => {
   it("maps legacy blocked diagnostics without plugin ids to configured load paths", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           enabled: true,
           load: { paths: [blockedPluginDir] },
@@ -582,7 +1021,7 @@ describe("config plugin validation", () => {
   it("warns for broken discovered plugins that are not referenced by config", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           allow: ["telegram"],
         },
@@ -620,7 +1059,7 @@ describe("config plugin validation", () => {
   it("keeps broken discovered plugins fatal when config references them", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: {
             "broken-local": { enabled: true },
@@ -660,7 +1099,7 @@ describe("config plugin validation", () => {
     const aliasDir = path.join(suiteHome, "alias-dir");
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           enabled: true,
           load: { paths: [aliasDir] },
@@ -716,7 +1155,7 @@ describe("config plugin validation", () => {
 
   it("warns instead of failing for stale channel config backed by missing plugin refs", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       channels: {
         "missing-chat": { token: "stale" },
       },
@@ -749,7 +1188,7 @@ describe("config plugin validation", () => {
 
   it("keeps unknown channel typos fatal when there is no stale plugin evidence", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       channels: {
         telegarm: { botToken: "typo" },
       },
@@ -774,7 +1213,7 @@ describe("config plugin validation", () => {
   it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         channels: {
           discord: { token: "xxx" },
         },
@@ -804,29 +1243,32 @@ describe("config plugin validation", () => {
   });
 
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
-    const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
-    await mkdirSafe(path.dirname(installedPluginIndexPath));
-    await fs.writeFile(
-      installedPluginIndexPath,
-      JSON.stringify(
-        {
-          installRecords: {
-            "missing-sms": {
-              source: "npm",
-              spec: "missing-sms@1.0.0",
-              installedAt: "2026-04-12T00:00:00.000Z",
-            },
+    const stateDir = path.join(suiteHome, ".openclaw");
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+    await writePersistedInstalledPluginIndex(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 1,
+        installRecords: {
+          "missing-sms": {
+            source: "npm",
+            spec: "missing-sms@1.0.0",
+            installedAt: "2026-04-12T00:00:00.000Z",
           },
-          plugins: [],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+        plugins: [],
+        diagnostics: [],
+      },
+      { stateDir },
     );
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     try {
       const res = validateInSuite({
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         channels: {
           "missing-sms": { token: "stale" },
         },
@@ -842,13 +1284,27 @@ describe("config plugin validation", () => {
           "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
       });
     } finally {
-      await fs.rm(installedPluginIndexPath, { force: true });
+      await writePersistedInstalledPluginIndex(
+        {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash: "test",
+          generatedAtMs: 2,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        { stateDir },
+      );
+      clearLoadInstalledPluginIndexInstallRecordsCache();
     }
   });
 
   it("warns with actionable guidance when a runtime command name is used in plugins.allow", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         allow: ["dreaming"],
         entries: {
@@ -878,7 +1334,7 @@ describe("config plugin validation", () => {
   it("does not fail validation for the implicit default memory slot when plugins config is explicit", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: { acpx: { enabled: true } },
         },
@@ -932,9 +1388,25 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("ignores standalone helper scripts in auto-discovered global extensions", async () => {
+    const helperPath = path.join(suiteHome, ".openclaw", "extensions", "my-helper.mjs");
+    await mkdirSafe(path.dirname(helperPath));
+    await fs.writeFile(helperPath, "export default {};\n", "utf-8");
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: { enabled: true },
+      });
+
+      expect(res.ok).toBe(true);
+    } finally {
+      await fs.rm(helperPath, { force: true });
+    }
+  });
+
   it("surfaces plugin config diagnostics", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [badPluginDir] },
@@ -955,7 +1427,7 @@ describe("config plugin validation", () => {
   it("surfaces invalid Codex native plugin marketplaces as config diagnostics", () => {
     const res = validateConfigObjectWithPlugins(
       {
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         plugins: {
           entries: {
             codex: {
@@ -1004,7 +1476,7 @@ describe("config plugin validation", () => {
 
   it("does not require native config schemas for enabled bundle plugins", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [bundlePluginDir] },
@@ -1017,7 +1489,7 @@ describe("config plugin validation", () => {
 
   it("accepts enabled manifestless Claude bundles without a native schema", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [manifestlessClaudeBundleDir] },
@@ -1030,7 +1502,7 @@ describe("config plugin validation", () => {
 
   it("surfaces allowed enum values for plugin config diagnostics", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [enumPluginDir] },
@@ -1050,7 +1522,7 @@ describe("config plugin validation", () => {
 
   it("accepts voice-call webhookSecurity and streaming guard config fields", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1081,7 +1553,7 @@ describe("config plugin validation", () => {
 
   it("accepts voice-call OpenAI TTS speed, instructions, and baseUrl config fields", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1108,7 +1580,7 @@ describe("config plugin validation", () => {
 
   it("accepts voice-call SecretRef credentials declared by the plugin schema", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1140,7 +1612,7 @@ describe("config plugin validation", () => {
 
   it("rejects out-of-range voice-call OpenAI TTS speed values", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1173,7 +1645,7 @@ describe("config plugin validation", () => {
 
   it("rejects out-of-range voice-call ElevenLabs voice settings", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -1210,7 +1682,7 @@ describe("config plugin validation", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { target: "last", directPolicy: "block" } },
-        list: [{ id: "pi", heartbeat: { directPolicy: "allow" } }],
+        list: [{ id: "openclaw", heartbeat: { directPolicy: "allow" } }],
       },
       channels: {
         modelByChannel: {
@@ -1226,8 +1698,15 @@ describe("config plugin validation", () => {
 
   it("accepts plugin heartbeat targets", () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "pi" }] },
+      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "openclaw" }] },
       plugins: { enabled: false, load: { paths: [chatPluginDir] } },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts bundled channel aliases for heartbeat targets", () => {
+    const res = validateInSuite({
+      agents: { defaults: { heartbeat: { target: "gchat" } }, list: [{ id: "pi" }] },
     });
     expect(res.ok).toBe(true);
   });
@@ -1236,7 +1715,7 @@ describe("config plugin validation", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { target: "not-a-channel" } },
-        list: [{ id: "pi" }],
+        list: [{ id: "openclaw" }],
       },
     });
     expect(res.ok).toBe(false);
@@ -1256,7 +1735,7 @@ describe("config plugin validation", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { directPolicy: "maybe" } },
-        list: [{ id: "pi" }],
+        list: [{ id: "openclaw" }],
       },
     });
     expect(res.ok).toBe(false);

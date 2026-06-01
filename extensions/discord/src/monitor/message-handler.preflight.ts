@@ -6,13 +6,13 @@ import {
   logInboundDrop,
   resolveInboundMentionDecision,
   resolveUnmentionedGroupInboundPolicy,
+  recordDroppedChannelInboundHistory,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -168,7 +168,7 @@ async function recordDiscordPendingHistoryEntry(params: {
   if (params.preflight.historyLimit <= 0) {
     return;
   }
-  await recordDroppedChannelTurnHistory({
+  await recordDroppedChannelInboundHistory({
     input: {
       id: params.message.id,
       timestamp: params.entry?.timestamp,
@@ -425,7 +425,11 @@ export async function preflightDiscordMessage(
     logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
     return null;
   }
-  const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
+  const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId, {
+    provider: "discord",
+    conversationId: messageChannelId,
+    providerPolicy: params.discordConfig?.mentionPatterns,
+  });
   const explicitlyMentioned = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
@@ -455,7 +459,7 @@ export async function preflightDiscordMessage(
       })
     : null;
   logDebug(
-    `[discord-preflight] guild_id=${params.data.guild_id} guild_obj=${!!params.data.guild} guild_obj_id=${params.data.guild?.id} guildInfo=${!!guildInfo} guildEntries=${params.guildEntries ? Object.keys(params.guildEntries).join(",") : "none"}`,
+    `[discord-preflight] guild_id=${params.data.guild_id} guild_obj=${Boolean(params.data.guild)} guild_obj_id=${params.data.guild?.id} guildInfo=${Boolean(guildInfo)} guildEntries=${params.guildEntries ? Object.keys(params.guildEntries).join(",") : "none"}`,
   );
   if (
     isGuildMessage &&
@@ -724,8 +728,6 @@ export async function preflightDiscordMessage(
     enqueueSystemEvent(systemText, {
       sessionKey: effectiveRoute.sessionKey,
       contextKey: `discord:system:${messageChannelId}:${message.id}`,
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     return null;
   }

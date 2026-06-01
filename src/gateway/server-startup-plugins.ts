@@ -22,10 +22,13 @@ type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
 };
 
+/** Returns the config snapshot used by channel/plugin startup maintenance. */
 export function resolveGatewayStartupMaintenanceConfig(params: {
   cfgAtStart: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
 }): OpenClawConfig {
+  // Early config recovery may supply channel blocks after the start snapshot; startup
+  // maintenance needs those owner configs even when the original snapshot was sparse.
   return params.cfgAtStart.channels === undefined &&
     params.startupRuntimeConfig.channels !== undefined
     ? {
@@ -35,6 +38,7 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
     : params.cfgAtStart;
 }
 
+/** Builds plugin startup state and gateway method lists before the server binds. */
 export async function prepareGatewayPluginBootstrap(params: {
   cfgAtStart: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -43,6 +47,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
   loadRuntimePlugins?: boolean;
+  loadSetupRuntimePlugins?: boolean;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
@@ -77,6 +82,8 @@ export async function prepareGatewayPluginBootstrap(params: {
 
   initSubagentRegistry();
 
+  // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
+  // defaults injected while loading runtime config; runtime-only plugin config still merges in.
   const gatewayPluginConfig = params.minimalTestGateway
     ? params.cfgAtStart
     : mergeActivationSectionsIntoRuntimeConfig({
@@ -87,6 +94,7 @@ export async function prepareGatewayPluginBootstrap(params: {
           ...(params.pluginMetadataSnapshot?.manifestRegistry
             ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
             : {}),
+          discovery: params.pluginMetadataSnapshot?.discovery,
         }).config,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
@@ -110,11 +118,32 @@ export async function prepareGatewayPluginBootstrap(params: {
   const baseMethods = listGatewayMethods();
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  let pluginRegistry = emptyPluginRegistry;
+  let pluginRegistry;
   let baseGatewayMethods = baseMethods;
   const shouldLoadRuntimePlugins = params.loadRuntimePlugins !== false;
+  const shouldLoadSetupRuntimePlugins =
+    params.loadSetupRuntimePlugins === true && deferredConfiguredChannelPluginIds.length > 0;
 
-  if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
+  if (!params.minimalTestGateway && shouldLoadSetupRuntimePlugins) {
+    // Pre-bind bootstrap only loads deferred channel plugins that expose setup runtime hooks.
+    // Full plugin handlers are loaded later so startup does not register duplicate methods.
+    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
+      {
+        cfg: gatewayPluginConfig,
+        activationSourceConfig,
+        workspaceDir: defaultWorkspaceDir,
+        log: params.log,
+        baseMethods,
+        coreGatewayMethodNames,
+        startupPluginIds: deferredConfiguredChannelPluginIds,
+        pluginLookUpTable,
+        preferSetupRuntimeForChannelPlugins: true,
+        suppressPluginInfoLogs: true,
+      },
+    ));
+  } else if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
+    // Normal bootstrap loads every startup plugin and records that runtime handlers are ready
+    // before the gateway exposes the method list.
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
       {
         cfg: gatewayPluginConfig,
@@ -125,11 +154,13 @@ export async function prepareGatewayPluginBootstrap(params: {
         coreGatewayMethodNames,
         startupPluginIds,
         pluginLookUpTable,
-        preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
-        suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
+        preferSetupRuntimeForChannelPlugins: false,
+        suppressPluginInfoLogs: false,
       },
     ));
   } else {
+    // Minimal gateway tests reuse an already-active registry when present; production no-load
+    // paths install a fresh empty registry so stale plugin handlers cannot leak across starts.
     pluginRegistry = params.minimalTestGateway
       ? (getActivePluginRegistry() ?? emptyPluginRegistry)
       : emptyPluginRegistry;
@@ -145,10 +176,12 @@ export async function prepareGatewayPluginBootstrap(params: {
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,
-    runtimePluginsLoaded: !params.minimalTestGateway && shouldLoadRuntimePlugins,
+    runtimePluginsLoaded:
+      !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins,
   };
 }
 
+/** Loads startup plugin runtimes through the deferred bootstrap boundary. */
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -163,6 +196,8 @@ export async function loadGatewayStartupPluginRuntime(params: {
   suppressPluginInfoLogs?: boolean;
   startupTrace?: GatewayStartupTrace;
 }) {
+  // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
+  // planning without importing plugin package runtimes.
   const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
   return loadGatewayStartupPlugins({
     cfg: params.cfg,

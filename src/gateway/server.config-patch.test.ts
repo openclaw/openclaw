@@ -74,8 +74,8 @@ async function sendConfigApply(params: { raw: unknown; baseHash?: string }, time
   return await rpcReq(requireWs(), "config.apply", params, timeoutMs);
 }
 
-async function expectSchemaLookupInvalid(path: unknown) {
-  const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { path });
+async function expectSchemaLookupInvalid(pathValue: unknown) {
+  const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { pathValue });
   expect(res.ok).toBe(false);
   expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
 }
@@ -198,6 +198,69 @@ describe("gateway config methods", () => {
     expect(after.ok).toBe(true);
     expect(res.payload?.config).toEqual(after.payload?.config);
     requireConfigObject(res.payload?.config, "response config");
+  });
+
+  it("accepts runtime-shaped config.set when bundled provider baseUrl was only defaulted", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    try {
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            models: {
+              providers: {
+                openai: {
+                  agentRuntime: { id: "openclaw" },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      resetConfigRuntimeState();
+
+      const current = await rpcReq<{
+        hash?: string;
+        config?: Record<string, unknown>;
+      }>(requireWs(), "config.get", {});
+      expect(current.ok).toBe(true);
+      expect(typeof current.payload?.hash).toBe("string");
+      const nextConfig = structuredClone(
+        requireConfigObject(current.payload?.config, "current config"),
+      );
+      const providers = ((nextConfig.models as Record<string, unknown>).providers ?? {}) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      providers.openai ??= {};
+      providers.openai.baseUrl = "";
+      providers.openai.models = [];
+
+      const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+      gateway.port = 19002;
+
+      const res = await rpcReq<{
+        ok?: boolean;
+        error?: { message?: string };
+      }>(requireWs(), "config.set", {
+        raw: JSON.stringify(nextConfig, null, 2),
+        baseHash: current.payload?.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = await fs.readFile(configPath, "utf-8");
+      expect(persisted).toContain('"port": 19002');
+      expect(persisted).not.toContain('"baseUrl"');
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
   });
 
   it("redacts browser cdpUrl credentials from config.get responses", async () => {
@@ -337,21 +400,21 @@ describe("gateway config methods", () => {
   });
 
   it.each([
-    { name: "rejects config.schema.lookup when the path is only whitespace", path: "   " },
+    { name: "rejects config.schema.lookup when the path is only whitespace", pathLocal: "   " },
     {
       name: "rejects config.schema.lookup when the path exceeds the protocol limit",
-      path: `gateway.${"a".repeat(1020)}`,
+      pathLocal: `gateway.${"a".repeat(1020)}`,
     },
     {
       name: "rejects config.schema.lookup when the path contains invalid characters",
-      path: "gateway.auth\nspoof",
+      pathLocal: "gateway.auth\nspoof",
     },
     {
       name: "rejects config.schema.lookup when the path is not a string",
-      path: 42,
+      pathLocal: 42,
     },
-  ])("$name", async ({ path }) => {
-    await expectSchemaLookupInvalid(path);
+  ])("$name", async ({ pathLocal }) => {
+    await expectSchemaLookupInvalid(pathLocal);
   });
 
   it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {

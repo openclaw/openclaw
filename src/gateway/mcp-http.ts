@@ -4,6 +4,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -47,10 +48,6 @@ function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): 
     return;
   }
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
@@ -109,8 +106,12 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           cfg,
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
+          currentChannelId: requestContext.currentChannelId,
+          currentThreadTs: requestContext.currentThreadTs,
+          currentMessageId: requestContext.currentMessageId,
           accountId: requestContext.accountId,
           inboundEventKind: requestContext.inboundEventKind,
+          sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           senderIsOwner: requestContext.senderIsOwner,
         });
 
@@ -120,7 +121,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           methods: messages.map((message) => message.method),
           sessionKey: requestContext.sessionKey,
           inboundEventKind: requestContext.inboundEventKind,
-          senderIsOwner: requestContext.senderIsOwner,
+          senderIsOwner: requestContext.senderIsOwner === true,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });

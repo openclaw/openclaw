@@ -1,3 +1,5 @@
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+
 export type TelegramTarget = {
   chatId: string;
   messageThreadId?: number;
@@ -42,6 +44,15 @@ export function normalizeTelegramChatId(raw: string): string | undefined {
 
 export function isNumericTelegramChatId(raw: string): boolean {
   return TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(raw.trim());
+}
+
+export function normalizeTelegramOutboundTarget(raw: string): string {
+  const trimmed = raw.trim();
+  const legacyGroupMatch = /^group:(-?\d+(?::topic:\d+|:\d+)?)$/i.exec(trimmed);
+  if (legacyGroupMatch?.[1]) {
+    return legacyGroupMatch[1];
+  }
+  return raw;
 }
 
 export function normalizeTelegramLookupTarget(raw: string): string | undefined {
@@ -93,18 +104,32 @@ export function parseTelegramTarget(to: string): TelegramTarget {
 
   const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
   if (topicMatch) {
+    const messageThreadId = parseStrictNonNegativeInteger(topicMatch[2]);
+    if (messageThreadId === undefined) {
+      return {
+        chatId: normalized,
+        chatType: resolveTelegramChatType(normalized),
+      };
+    }
     return {
       chatId: topicMatch[1],
-      messageThreadId: Number.parseInt(topicMatch[2], 10),
+      messageThreadId,
       chatType: resolveTelegramChatType(topicMatch[1]),
     };
   }
 
   const colonMatch = /^(.+):(\d+)$/.exec(normalized);
   if (colonMatch) {
+    const messageThreadId = parseStrictNonNegativeInteger(colonMatch[2]);
+    if (messageThreadId === undefined) {
+      return {
+        chatId: normalized,
+        chatType: resolveTelegramChatType(normalized),
+      };
+    }
     return {
       chatId: colonMatch[1],
-      messageThreadId: Number.parseInt(colonMatch[2], 10),
+      messageThreadId,
       chatType: resolveTelegramChatType(colonMatch[1]),
     };
   }

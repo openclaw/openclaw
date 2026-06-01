@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
@@ -21,6 +22,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
+/**
+ * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
+ */
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(
   app: Application,
@@ -31,11 +35,16 @@ class MainViewModel(
   private var foreground = true
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
+  private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
+  val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
   private val _chatDraft = MutableStateFlow<String?>(null)
   val chatDraft: StateFlow<String?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
 
+  /**
+   * Lazily starts NodeRuntime and preserves the current foreground bit across startup.
+   */
   private fun ensureRuntime(): NodeRuntime {
     runtimeRef.value?.let { return it }
     val runtime = nodeApp.ensureRuntime()
@@ -44,6 +53,9 @@ class MainViewModel(
     return runtime
   }
 
+  /**
+   * Adapts a runtime StateFlow to a stable ViewModel StateFlow before runtime startup.
+   */
   private fun <T> runtimeState(
     initial: T,
     selector: (NodeRuntime) -> StateFlow<T>,
@@ -81,6 +93,40 @@ class MainViewModel(
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
+  val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
+  val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = runtimeState(initial = null) { it.gatewayUpdateAvailable }
+  val modelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.modelCatalog }
+  val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
+  val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
+  val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
+  val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
+  val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = runtimeState(initial = emptyList()) { it.gatewayAgents }
+  val cronStatus: StateFlow<GatewayCronStatus> = runtimeState(initial = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)) { it.cronStatus }
+  val cronJobs: StateFlow<List<GatewayCronJobSummary>> = runtimeState(initial = emptyList()) { it.cronJobs }
+  val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
+  val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
+  val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
+  val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
+  val usageErrorText: StateFlow<String?> = runtimeState(initial = null) { it.usageErrorText }
+  val skillsSummary: StateFlow<GatewaySkillsSummary> = runtimeState(initial = GatewaySkillsSummary(skills = emptyList())) { it.skillsSummary }
+  val skillsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillsRefreshing }
+  val skillsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillsErrorText }
+  val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> =
+    runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
+  val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
+  val nodesDevicesErrorText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesErrorText }
+  val channelsSummary: StateFlow<GatewayChannelsSummary> =
+    runtimeState(initial = GatewayChannelsSummary(channels = emptyList())) { it.channelsSummary }
+  val channelsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.channelsRefreshing }
+  val channelsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.channelsErrorText }
+  val dreamingSummary: StateFlow<GatewayDreamingSummary> =
+    runtimeState(initial = GatewayDreamingSummary()) { it.dreamingSummary }
+  val dreamingRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.dreamingRefreshing }
+  val dreamingErrorText: StateFlow<String?> = runtimeState(initial = null) { it.dreamingErrorText }
+  val healthLogsSummary: StateFlow<GatewayHealthLogsSummary> =
+    runtimeState(initial = GatewayHealthLogsSummary()) { it.healthLogsSummary }
+  val healthLogsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.healthLogsRefreshing }
+  val healthLogsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.healthLogsErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -124,6 +170,7 @@ class MainViewModel(
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
+  val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHistoryLoading }
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chatError }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHealthOk }
   val chatThinkingLevel: StateFlow<String> = runtimeState(initial = "off") { it.chatThinkingLevel }
@@ -147,6 +194,9 @@ class MainViewModel(
   val sms: SmsManager
     get() = ensureRuntime().sms
 
+  /**
+   * Attaches Activity-owned permission and lifecycle seams after runtime initialization.
+   */
   fun attachRuntimeUi(
     owner: LifecycleOwner,
     permissionRequester: PermissionRequester,
@@ -157,6 +207,9 @@ class MainViewModel(
     runtime.sms.attachPermissionRequester(permissionRequester)
   }
 
+  /**
+   * Starts runtime on foreground entry only after onboarding has completed.
+   */
   fun setForeground(value: Boolean) {
     foreground = value
     val runtime =
@@ -216,15 +269,30 @@ class MainViewModel(
     prefs.setGatewayPassword(value)
   }
 
+  /** Clears setup credentials through the runtime so active gateway sessions drop stale auth state. */
   fun resetGatewaySetupAuth() {
     ensureRuntime().resetGatewaySetupAuth()
   }
 
+  /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
   fun setOnboardingCompleted(value: Boolean) {
     if (value) {
       ensureRuntime()
     }
     prefs.setOnboardingCompleted(value)
+  }
+
+  /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
+  fun pairNewGateway() {
+    runtimeRef.value?.disconnect()
+    resetGatewaySetupAuth()
+    _startOnboardingAtGatewaySetup.value = true
+    prefs.setOnboardingCompleted(false)
+  }
+
+  /** Acknowledges the one-shot request that opens onboarding at the gateway setup step. */
+  fun clearGatewaySetupStartRequest() {
+    _startOnboardingAtGatewaySetup.value = false
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
@@ -266,6 +334,7 @@ class MainViewModel(
     ensureRuntime().setVoiceScreenActive(active)
   }
 
+  /** Routes assistant intents into chat, either as a draft or queued auto-send prompt. */
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {
     _requestedHomeDestination.value = HomeDestination.Chat
     if (request.autoSend) {
@@ -281,6 +350,10 @@ class MainViewModel(
     _requestedHomeDestination.value = null
   }
 
+  fun requestHomeDestination(destination: HomeDestination) {
+    _requestedHomeDestination.value = destination
+  }
+
   fun clearChatDraft() {
     _chatDraft.value = null
   }
@@ -291,6 +364,10 @@ class MainViewModel(
 
   fun setMicEnabled(enabled: Boolean) {
     ensureRuntime().setMicEnabled(enabled)
+  }
+
+  fun cancelMicCapture() {
+    ensureRuntime().cancelMicCapture()
   }
 
   fun setTalkModeEnabled(enabled: Boolean) {
@@ -353,6 +430,42 @@ class MainViewModel(
 
   fun refreshHomeCanvasOverviewIfConnected() {
     ensureRuntime().refreshHomeCanvasOverviewIfConnected()
+  }
+
+  fun refreshModelCatalog() {
+    ensureRuntime().refreshModelCatalog()
+  }
+
+  fun refreshAgents() {
+    ensureRuntime().refreshAgents()
+  }
+
+  fun refreshCronJobs() {
+    ensureRuntime().refreshCronJobs()
+  }
+
+  fun refreshUsage() {
+    ensureRuntime().refreshUsage()
+  }
+
+  fun refreshSkills() {
+    ensureRuntime().refreshSkills()
+  }
+
+  fun refreshNodesDevices() {
+    ensureRuntime().refreshNodesDevices()
+  }
+
+  fun refreshChannels() {
+    ensureRuntime().refreshChannels()
+  }
+
+  fun refreshDreaming() {
+    ensureRuntime().refreshDreaming()
+  }
+
+  fun refreshHealthLogs() {
+    ensureRuntime().refreshHealthLogs()
   }
 
   fun loadChat(sessionKey: String) {

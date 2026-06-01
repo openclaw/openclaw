@@ -52,8 +52,14 @@ type MessagePresentationBlock =
   | { type: "buttons"; buttons: MessagePresentationButton[] }
   | { type: "select"; placeholder?: string; options: MessagePresentationOption[] };
 
+type MessagePresentationAction =
+  | { type: "command"; command: string }
+  | { type: "callback"; value: string };
+
 type MessagePresentationButton = {
   label: string;
+  action?: MessagePresentationAction;
+  /** Legacy callback value. Prefer action for new controls. */
   value?: string;
   url?: string;
   webApp?: { url: string };
@@ -61,12 +67,15 @@ type MessagePresentationButton = {
   web_app?: { url: string };
   priority?: number;
   disabled?: boolean;
+  reusable?: boolean;
   style?: "primary" | "secondary" | "success" | "danger";
 };
 
 type MessagePresentationOption = {
   label: string;
-  value: string;
+  action?: MessagePresentationAction;
+  /** Legacy callback value. Prefer action for new controls. */
+  value?: string;
 };
 
 type ReplyPayloadDelivery = {
@@ -82,8 +91,13 @@ type ReplyPayloadDelivery = {
 
 Button semantics:
 
-- `value` is an application action value routed back through the channel's
-  existing interaction path when the channel supports clickable controls.
+- `action.type: "command"` runs a native slash command through core's command
+  path. Use this for built-in command buttons and menus.
+- `action.type: "callback"` carries opaque plugin data through the channel's
+  interaction path. Channel plugins must not reinterpret callback data as slash
+  commands.
+- `value` is the legacy opaque callback value. New controls should use `action`
+  so channel plugins can map commands and callbacks without guessing from text.
 - `url` is a link button. It can exist without `value`.
 - `webApp` describes a channel-native web app button. Telegram renders this
   as `web_app` and only supports it in private chats. `web_app` is still
@@ -98,10 +112,15 @@ Button semantics:
   order is preserved.
 - `disabled` is optional. Channels must opt in with `supportsDisabled`; otherwise
   core degrades the disabled control to non-interactive fallback text.
+- `reusable` is optional. Channels that support reusable native callbacks may
+  keep the action available after a successful interaction. Use it for
+  repeatable or idempotent actions such as refresh, inspect, or more details;
+  leave it unset for normal one-shot approvals and destructive actions.
 
 Select semantics:
 
-- `options[].value` is the selected application value.
+- `options[].action` has the same command/callback meaning as button `action`.
+- `options[].value` is the legacy selected application value.
 - `placeholder` is advisory and may be ignored by channels without native
   select support.
 - If a channel does not support selects, fallback text lists the labels.

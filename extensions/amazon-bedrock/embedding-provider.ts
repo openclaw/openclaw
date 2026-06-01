@@ -4,7 +4,10 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as asRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 
 // ---------------------------------------------------------------------------
@@ -258,12 +261,6 @@ function asNumberArray(value: unknown): number[] {
   return value;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function asNumberArrayBatch(value: unknown): number[][] {
   if (!Array.isArray(value)) {
     throw malformedBedrockEmbeddingResponse();
@@ -368,29 +365,29 @@ export async function createBedrockEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    options?: { signal?: AbortSignal },
+    optionsValue?: { signal?: AbortSignal },
   ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     if (isCohere) {
-      return (await embedCohere([text], "search_query", options?.signal))[0] ?? [];
+      return (await embedCohere([text], "search_query", optionsValue?.signal))[0] ?? [];
     }
-    return embedSingle(text, options?.signal);
+    return embedSingle(text, optionsValue?.signal);
   };
 
   const embedBatch = async (
     texts: string[],
-    options?: { signal?: AbortSignal },
+    optionsLocal?: { signal?: AbortSignal },
   ): Promise<number[][]> => {
     if (texts.length === 0) {
       return [];
     }
     if (isCohere) {
-      return embedCohere(texts, "search_document", options?.signal);
+      return embedCohere(texts, "search_document", optionsLocal?.signal);
     }
     return Promise.all(
-      texts.map((t) => (t.trim() ? embedSingle(t, options?.signal) : Promise.resolve([]))),
+      texts.map((t) => (t.trim() ? embedSingle(t, optionsLocal?.signal) : Promise.resolve([]))),
     );
   };
 

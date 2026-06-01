@@ -398,6 +398,18 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "channel",
       },
     },
+    {
+      name: "Legacy parser-only plugin chat type fallback",
+      cfg: baseConfig,
+      channel: "legacyparser",
+      target: "team-ops",
+      expected: {
+        sessionKey: "agent:main:legacyparser:group:team-ops",
+        from: "legacyparser:group:team-ops",
+        to: "channel:team-ops",
+        chatType: "group",
+      },
+    },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {
     await expectResolvedRoute(params);
   });
@@ -410,6 +422,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "user:123",
         kind: "user" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:guildchat:direct:123",
@@ -426,6 +439,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "channel:456",
         kind: "channel" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:guildchat:channel:456",
@@ -444,6 +458,7 @@ describe("resolveOutboundSessionRoute", () => {
         to: "user:dthcxgoxhifn3pwh65cut3ud3w",
         kind: "user" as const,
         source: "directory" as const,
+        resolutionSource: "directory" as const,
       },
       expected: {
         sessionKey: "agent:main:boardchat:direct:dthcxgoxhifn3pwh65cut3ud3w",

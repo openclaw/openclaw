@@ -52,7 +52,11 @@ export type TalkRealtimeConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Provider model override for realtime sessions. */
   model?: string;
-  /** Provider voice override for realtime sessions. */
+  /** Provider speaker voice name override for realtime sessions. */
+  speakerVoice?: string;
+  /** Provider speaker voice id override for realtime sessions. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
   voice?: string;
   /** Additional system instructions appended to realtime Talk sessions. */
   instructions?: string;
@@ -62,6 +66,8 @@ export type TalkRealtimeConfig = {
   transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
   /** Tool/agent strategy for realtime sessions. */
   brain?: "agent-consult" | "direct-tools" | "none";
+  /** How Gateway relay handles final user transcripts when the provider skips a consult. */
+  consultRouting?: "provider-direct" | "force-agent-consult";
 };
 
 export type ResolvedTalkConfig = {
@@ -210,6 +216,8 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
+  serviceName?: string;
   /**
    * When `mode="serve"` and an externally configured Tailscale Funnel route
    * already covers the gateway port, skip re-applying `tailscale serve` on
@@ -438,11 +446,6 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
-export type GatewayWebchatConfig = {
-  /** Max characters per text field in chat.history responses before truncation (default: 12000). */
-  chatHistoryMaxChars?: number;
-};
-
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -454,14 +457,15 @@ export type GatewayConfig = {
   /**
    * Bind address policy for the Gateway WebSocket + Control UI HTTP server.
    * - auto: Loopback (127.0.0.1) if available, else 0.0.0.0 (fallback to all interfaces)
-   * - lan: 0.0.0.0 (all interfaces, no fallback)
+   * - lan: 0.0.0.0 (all interfaces, no fallback, current BYOH path is IPv4-only)
    * - loopback: 127.0.0.1 (local-only)
    * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
-   * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost)
+   * - custom: User-specified IPv4 address, fallback to 0.0.0.0 if unavailable (requires customBindHost)
+   * IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy.
    * Default: loopback (127.0.0.1).
    */
   bind?: GatewayBindMode;
-  /** Custom IP address for bind="custom" mode. Fallback: 0.0.0.0. */
+  /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
   auth?: GatewayAuthConfig;
@@ -485,8 +489,6 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
-  /** WebChat display/history settings. */
-  webchat?: GatewayWebchatConfig;
   /**
    * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
    * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.

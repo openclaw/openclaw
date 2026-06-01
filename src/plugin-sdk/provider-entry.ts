@@ -1,5 +1,10 @@
-import type { UnifiedModelCatalogEntry } from "../model-catalog/types.js";
+import type { UnifiedModelCatalogEntry } from "@openclaw/model-catalog-core/model-catalog-types";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "../../packages/normalization-core/src/string-normalization.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
+import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
 import type {
   ProviderPlugin,
   ProviderCatalogContext,
@@ -9,6 +14,7 @@ import type {
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
+import { copyArrayEntries, isRecord, readRecordValue } from "../shared/safe-record.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
@@ -97,44 +103,23 @@ function resolveWizardSetup(params: {
   };
 }
 
-function resolveEnvVars(params: {
-  envVars?: string[];
-  auth?: SingleProviderPluginApiKeyAuthOptions[];
-}): string[] | undefined {
-  const combined = [
-    ...(params.envVars ?? []),
-    ...(params.auth ?? []).map((entry) => entry.envVar).filter(Boolean),
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return combined.length > 0 ? [...new Set(combined)] : undefined;
+function copyProviderAuthOptions(value: unknown): SingleProviderPluginApiKeyAuthOptions[] {
+  return copyArrayEntries(value).filter(isRecord) as SingleProviderPluginApiKeyAuthOptions[];
 }
 
-function projectProviderCatalogResultToUnifiedTextRows(params: {
-  providerId: string;
-  result: ProviderCatalogResult;
-  source: UnifiedModelCatalogEntry["source"];
-}): UnifiedModelCatalogEntry[] {
-  if (!params.result) {
-    return [];
-  }
-  const providers =
-    "provider" in params.result
-      ? { [params.providerId]: params.result.provider }
-      : params.result.providers;
-  const rows: UnifiedModelCatalogEntry[] = [];
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    for (const model of providerConfig.models ?? []) {
-      rows.push({
-        kind: "text",
-        provider: providerId,
-        model: model.id,
-        ...(model.name ? { label: model.name } : {}),
-        source: params.source,
-      });
-    }
-  }
-  return rows;
+function copyProviderAuthMethods(value: unknown): ProviderAuthMethod[] {
+  return copyArrayEntries(value).filter(isRecord) as ProviderAuthMethod[];
+}
+
+function resolveEnvVars(params: {
+  envVars?: unknown;
+  auth?: SingleProviderPluginApiKeyAuthOptions[];
+}): string[] | undefined {
+  const combined = normalizeStringEntries([
+    ...copyArrayEntries(params.envVars),
+    ...(params.auth ?? []).map((entry) => readRecordValue(entry, "envVar")).filter(Boolean),
+  ]);
+  return combined.length > 0 ? uniqueStrings(combined) : undefined;
 }
 
 async function runUnifiedTextCatalog(params: {
@@ -162,25 +147,33 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
       const provider = options.provider;
       if (provider) {
         const providerId = provider.id ?? options.id;
+        const providerAuth = copyProviderAuthOptions(provider.auth);
+        const acceptedProviderAuth: SingleProviderPluginApiKeyAuthOptions[] = [];
+        const auth = providerAuth.flatMap((entry) => {
+          try {
+            const { wizard: _wizard, ...authParams } = entry;
+            const wizard = resolveWizardSetup({
+              providerId,
+              providerLabel: provider.label,
+              auth: entry,
+            });
+            const method = createProviderApiKeyAuthMethod({
+              ...authParams,
+              providerId,
+              expectedProviders: entry.expectedProviders ?? [providerId],
+              ...(wizard ? { wizard } : {}),
+            });
+            acceptedProviderAuth.push(entry);
+            return [method];
+          } catch {
+            return [];
+          }
+        });
         const envVars = resolveEnvVars({
           envVars: provider.envVars,
-          auth: provider.auth,
+          auth: acceptedProviderAuth,
         });
-        const auth = (provider.auth ?? []).map((entry) => {
-          const { wizard: _wizard, ...authParams } = entry;
-          const wizard = resolveWizardSetup({
-            providerId,
-            providerLabel: provider.label,
-            auth: entry,
-          });
-          return createProviderApiKeyAuthMethod({
-            ...authParams,
-            providerId,
-            expectedProviders: entry.expectedProviders ?? [providerId],
-            ...(wizard ? { wizard } : {}),
-          });
-        });
-        auth.push(...(provider.extraAuth ?? []));
+        auth.push(...copyProviderAuthMethods(provider.extraAuth));
         let catalog: ProviderPluginCatalog;
         if ("run" in provider.catalog) {
           const catalogRun = provider.catalog.run;

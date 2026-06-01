@@ -3,7 +3,7 @@ summary: "Configure migrated native Codex plugins for Codex-mode OpenClaw agents
 title: "Native Codex plugins"
 read_when:
   - You want Codex-mode OpenClaw agents to use native Codex plugins
-  - You are migrating source-installed openai-curated Codex plugins
+  - You are configuring first-party Codex plugin marketplaces
   - You are troubleshooting codexPlugins, app inventory, destructive actions, or plugin app diagnostics
 ---
 
@@ -22,14 +22,20 @@ Use this page after the base [Codex harness](/plugins/codex-harness) is working.
 - The selected OpenClaw agent runtime must be the native Codex harness.
 - `plugins.entries.codex.enabled` must be true.
 - `plugins.entries.codex.config.codexPlugins.enabled` must be true.
-- V1 supports only `openai-curated` plugins that migration observed as
+- V1 supports first-party Codex plugin marketplaces: `openai-curated`,
+  `openai-bundled`, and `openai-primary-runtime`.
+- Migration only auto-discovers `openai-curated` plugins that it observed as
   source-installed in the source Codex home.
 - The target Codex app-server must be able to see the expected marketplace,
   plugin, and app inventory.
 
-`codexPlugins` has no effect on PI runs, normal OpenAI provider runs, ACP
+`codexPlugins` has no effect on OpenClaw runs, normal OpenAI provider runs, ACP
 conversation bindings, or other harnesses because those paths do not create
 Codex app-server threads with native `apps` config.
+
+OpenAI-side Codex access, app availability, and workspace app/plugin controls
+come from the signed-in Codex account. For the OpenAI account and admin model,
+see [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).
 
 ## Quickstart
 
@@ -52,9 +58,11 @@ Apply the migration when the plan looks right:
 openclaw migrate apply codex --yes
 ```
 
-Migration writes explicit `codexPlugins` entries for eligible plugins and calls
-Codex app-server `plugin/install` for selected plugins. A typical migrated
-config looks like this:
+Migration writes explicit `codexPlugins` entries for eligible curated plugins
+and calls Codex app-server `plugin/install` for selected plugins. Explicit
+config may also reference Codex's bundled and primary-runtime first-party
+marketplaces when the target app-server inventory exposes those plugin apps. A
+typical migrated config looks like this:
 
 ```json5
 {
@@ -81,8 +89,78 @@ config looks like this:
 }
 ```
 
-After changing `codexPlugins`, use `/new`, `/reset`, or restart the gateway so
-future Codex harness sessions start with the updated app set.
+After changing `codexPlugins`, new Codex conversations pick up the updated app
+set automatically. Use `/new` or `/reset` to refresh the current conversation.
+A gateway restart is not required for plugin enable or disable changes.
+
+## Manual first-party marketplace entries
+
+Migration writes `openai-curated` entries for eligible source-installed plugins.
+For first-party plugins that live in Codex's bundled or primary-runtime
+marketplaces, add explicit entries after confirming the target Codex app-server
+inventory exposes that marketplace and plugin.
+
+Use the same config shape for every first-party marketplace:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            plugins: {
+              chrome: {
+                enabled: true,
+                marketplaceName: "openai-bundled",
+                pluginName: "chrome",
+              },
+              documents: {
+                enabled: true,
+                marketplaceName: "openai-primary-runtime",
+                pluginName: "documents",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The key under `plugins` is OpenClaw's local config key. `pluginName` and
+`marketplaceName` must match the Codex app-server inventory exactly. If the
+plugin is not listed in `/codex plugins list` or Codex app diagnostics, OpenClaw
+keeps the entry configured but cannot expose its apps to Codex turns.
+
+## Manage plugins from chat
+
+Use `/codex plugins` when you want to inspect or change configured native Codex
+plugins from the same chat where you operate the Codex harness:
+
+```text
+/codex plugins
+/codex plugins list
+/codex plugins disable google-calendar
+/codex plugins enable google-calendar
+```
+
+`/codex plugins` is an alias for `/codex plugins list`. The list output shows
+the configured plugin keys, on/off state, Codex plugin name, and marketplace
+from `plugins.entries.codex.config.codexPlugins.plugins`.
+
+`enable` and `disable` write only to OpenClaw config at
+`~/.openclaw/openclaw.json`; they do not edit `~/.codex/config.toml` or install
+new Codex plugins. Only the owner or a gateway client with the
+`operator.admin` scope can change plugin state.
+
+Enabling a configured plugin also turns on the global
+`codexPlugins.enabled` switch. If the plugin was written disabled because
+migration returned `auth_required`, reauthorize the app in Codex before enabling
+it in OpenClaw.
 
 ## How native plugin setup works
 
@@ -110,14 +188,19 @@ check after migration. Codex harness session setup then computes a restrictive
 thread app config for the enabled and accessible plugin apps.
 
 Thread app config is computed when OpenClaw establishes a Codex harness session
-or replaces a stale Codex thread binding. It is not recomputed on every turn.
+or replaces a stale Codex thread binding. It is not recomputed on every turn, so
+`/codex plugins enable` and `/codex plugins disable` affect new Codex
+conversations. Use `/new` or `/reset` when the current conversation should pick
+up the updated app set.
 
 ## V1 support boundary
 
 V1 is intentionally narrow:
 
+- Runtime config accepts `openai-curated`, `openai-bundled`, and
+  `openai-primary-runtime` plugin identities.
 - Only `openai-curated` plugins that were already installed in the source Codex
-  app-server inventory are migration-eligible.
+  app-server inventory are migration-eligible for automatic migration.
 - App-backed source plugins must pass the migration-time subscription gate.
   `--verify-plugin-apps` adds the source app-inventory gate. Subscription-gated
   accounts plus, in verification mode, inaccessible, disabled, missing source
@@ -130,7 +213,9 @@ V1 is intentionally narrow:
 - There is no `plugins["*"]` wildcard and no config key that grants arbitrary
   install authority.
 - Unsupported marketplaces, cached plugin bundles, hooks, and Codex config files
-  are preserved in the migration report for manual review.
+  are preserved in the migration report for manual review. Bundled and
+  primary-runtime first-party plugins can still be added manually through
+  explicit `codexPlugins` config.
 
 ## App inventory and ownership
 
@@ -218,8 +303,10 @@ app-server auth or rerun with `--verify-plugin-apps` if you want source app
 inventory to decide eligibility when account lookup fails.
 
 **`marketplace_missing` or `plugin_missing`:** the target Codex app-server
-cannot see the expected `openai-curated` marketplace or plugin. Rerun migration
-against the target runtime or inspect Codex app-server plugin status.
+cannot see the expected first-party marketplace or plugin. Rerun migration
+against the target runtime, inspect Codex app-server plugin status, or confirm
+the explicit `marketplaceName` is one of `openai-curated`, `openai-bundled`, or
+`openai-primary-runtime`.
 
 **`app_inventory_missing` or `app_inventory_stale`:** app readiness came from an
 empty or stale cache. OpenClaw schedules an async refresh and excludes plugin
@@ -228,10 +315,10 @@ apps until ownership and readiness are known.
 **`app_ownership_ambiguous`:** app inventory only matched by display name, so
 the app is not exposed to the Codex thread.
 
-**Config changed but the agent cannot see the plugin:** use `/new`, `/reset`, or
-restart the gateway. Existing Codex thread bindings keep the app config they
-started with until OpenClaw establishes a new harness session or replaces a
-stale binding.
+**Config changed but the agent cannot see the plugin:** use `/codex plugins
+list` to confirm the configured state, then use `/new` or `/reset`. Existing
+Codex thread bindings keep the app config they started with until OpenClaw
+establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
 `allow_destructive_actions` values. Even when policy is true, unsafe elicitation

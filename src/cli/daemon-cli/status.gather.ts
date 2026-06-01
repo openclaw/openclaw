@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
 import {
   createConfigIO,
@@ -60,6 +61,7 @@ type GatewayStatusSummary = {
   portSource: "service args" | "env/config";
   probeUrl: string;
   probeNote?: string;
+  version?: string | null;
 };
 
 type PortStatusSummary = {
@@ -152,10 +154,7 @@ function coerceStatusConfig(value: unknown): OpenClawConfig {
 
 function hasOwnKey(value: unknown, key: string): boolean {
   return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.prototype.hasOwnProperty.call(value, key),
+    value && typeof value === "object" && !Array.isArray(value) && Object.hasOwn(value, key),
   );
 }
 
@@ -257,7 +256,7 @@ function appendProbeNote(
   if (values.length === 0) {
     return undefined;
   }
-  return [...new Set(values)].join(" ");
+  return uniqueStrings(values).join(" ");
 }
 export type DaemonStatus = {
   cli?: CliStatusSummary;
@@ -314,6 +313,7 @@ export type DaemonStatus = {
       version?: string | null;
       connId?: string | null;
     };
+    version?: string | null;
     error?: string;
     url?: string;
     authWarning?: string;
@@ -505,7 +505,9 @@ export async function gatherDaemonStatus(
     : process.env;
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env: serviceEnv }).catch(() => false),
-    service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
+    service
+      .readRuntime(serviceEnv)
+      .catch((err: unknown) => ({ status: "unknown", detail: String(err) })),
   ]);
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit = command
@@ -553,7 +555,9 @@ export async function gatherDaemonStatus(
   const staleUpdateLaunchdJobs =
     opts.deep && process.platform === "darwin"
       ? await loadLaunchdModule()
-          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) =>
+            findStaleOpenClawUpdateLaunchdJobs(serviceEnv),
+          )
           .catch(() => [])
       : [];
 
@@ -622,6 +626,11 @@ export async function gatherDaemonStatus(
           )
           .catch(() => undefined)
       : undefined;
+  const gatewayVersion = opts.probe
+    ? ((rpc && "server" in rpc ? rpc.server?.version : undefined) ??
+      (rpc && "version" in rpc ? rpc.version : undefined) ??
+      null)
+    : undefined;
 
   let lastError: string | undefined;
   if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
@@ -647,7 +656,14 @@ export async function gatherDaemonStatus(
       daemon: daemonConfigSummary,
       ...(configMismatch ? { mismatch: true } : {}),
     },
-    gateway,
+    gateway: {
+      ...gateway,
+      ...(opts.probe
+        ? {
+            version: gatewayVersion,
+          }
+        : {}),
+    },
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
     ...(establishedClients ? { connections: establishedClients } : {}),

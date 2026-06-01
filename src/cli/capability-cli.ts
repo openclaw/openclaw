@@ -4,7 +4,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listProfilesForProvider,
@@ -14,6 +26,7 @@ import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js
 import { buildExplicitSessionIdSessionKey } from "../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
 import {
@@ -32,12 +45,15 @@ import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
   ImageGenerationBackground,
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../infra/parse-finite-number.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
@@ -47,25 +63,18 @@ import {
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
 import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
-import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
   createEmbeddingProvider,
   registerBuiltInMemoryEmbeddingProviders,
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { listEmbeddingProviders } from "../plugins/embedding-provider-runtime.js";
 import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
 import {
   getTtsProvider,
@@ -101,6 +110,7 @@ import {
   getModelsCommandSecretTargetIds,
   getTtsCommandSecretTargetIds,
 } from "./command-secret-targets.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -724,21 +734,18 @@ async function runModelRun(params: {
       modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
       ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
     });
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
     if (prepared.selection.provider === "codex") {
       throw new Error(
-        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
       );
     }
     const localModelRunSystemPrompt =
-      prepared.selection.provider === "openai-codex" ||
-      prepared.model.api === "openai-codex-responses"
-        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
-        : undefined;
+      prepared.model.api === "openai-chatgpt-responses" ? LOCAL_MODEL_RUN_SYSTEM_PROMPT : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
@@ -920,9 +927,10 @@ async function runModelAuthStatus() {
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
-async function runModelAuthLogout(provider: string) {
+async function runModelAuthLogout(provider: string, agent?: string) {
   const cfg = getRuntimeConfig();
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = agent?.trim() || resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
   const updated = await updateAuthProfileStoreWithLock({
@@ -1155,11 +1163,29 @@ function parseOptionalFiniteNumber(
   if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
     return undefined;
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) {
+  const value = parseStrictFiniteNumber(raw);
+  if (value === undefined) {
     throw new Error(`${label} must be a finite number`);
   }
   return value;
+}
+
+function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  const value = parseStrictPositiveInteger(raw);
+  if (value === undefined) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });
 }
 
 function normalizeImageOutputFormat(
@@ -1195,14 +1221,16 @@ function normalizeVideoResolution(raw: string | undefined): VideoGenerationResol
     return undefined;
   }
   if (
+    normalized === "360P" ||
     normalized === "480P" ||
+    normalized === "540P" ||
     normalized === "720P" ||
     normalized === "768P" ||
     normalized === "1080P"
   ) {
     return normalized;
   }
-  throw new Error("video resolution must be one of 480P, 720P, 768P, or 1080P");
+  throw new Error("video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P");
 }
 
 async function runVideoGenerate(params: {
@@ -1381,11 +1409,26 @@ async function runTtsConvert(params: {
     commandName: "infer tts convert",
     targetIds: getTtsCommandSecretTargetIds(),
   });
-  const overrides = resolveExplicitTtsOverrides({
+  const ttsProvider = resolveTtsProviderForAuthHydration({
     cfg,
     provider: params.provider,
     modelId: params.modelId,
+    channelId: params.channel,
+  });
+  const effectiveCfg = await injectTtsAuthProfileApiKey({
+    cfg,
+    provider: ttsProvider,
+    channelId: params.channel,
+  });
+  if (effectiveCfg !== cfg) {
+    pinRuntimeConfigSnapshot(effectiveCfg);
+  }
+  const overrides = resolveExplicitTtsOverrides({
+    cfg: effectiveCfg,
+    provider: params.provider,
+    modelId: params.modelId,
     voiceId: params.voiceId,
+    channelId: params.channel,
   });
   const hasExplicitSelection = Boolean(
     overrides.provider ||
@@ -1394,7 +1437,7 @@ async function runTtsConvert(params: {
   );
   const result = await textToSpeech({
     text: params.text,
-    cfg,
+    cfg: effectiveCfg,
     channel: params.channel,
     overrides,
     disableFallback: hasExplicitSelection,
@@ -1423,6 +1466,264 @@ async function runTtsConvert(params: {
       },
     ],
   } satisfies CapabilityEnvelope;
+}
+
+function resolveTtsProviderForAuthHydration(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  modelId?: string;
+  channelId?: string;
+}): string | undefined {
+  const explicitProvider =
+    params.provider ?? resolveSelectedProviderFromModelRef(normalizeOptionalString(params.modelId));
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+  const ttsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
+  return getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));
+}
+
+async function injectTtsAuthProfileApiKey(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  channelId?: string;
+}): Promise<OpenClawConfig> {
+  if (!params.provider) {
+    return params.cfg;
+  }
+  const providerId =
+    canonicalizeSpeechProviderId(params.provider, params.cfg) ??
+    normalizeLowercaseStringOrEmpty(params.provider);
+  if (!providerId) {
+    return params.cfg;
+  }
+  const effectiveTtsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
+  if (resolvedTtsConfigHasProviderApiKey(effectiveTtsConfig, providerId)) {
+    return params.cfg;
+  }
+  const existingProviderConfig = resolveExistingTtsProviderConfig({
+    cfg: params.cfg,
+    providerId,
+    channelId: params.channelId,
+  });
+  if (ttsProviderConfigHasApiKey(existingProviderConfig?.value)) {
+    return params.cfg;
+  }
+  const auth = await resolveApiKeyForProvider({
+    provider: providerId,
+    cfg: params.cfg,
+    credentialPrecedence: "profile-first",
+  }).catch(() => undefined);
+  if (!auth?.apiKey || auth.mode !== "api-key") {
+    return params.cfg;
+  }
+  if (existingProviderConfig?.scope === "channel") {
+    const channels = { ...params.cfg.channels };
+    const channel = channels[existingProviderConfig.channelKey];
+    if (!isObjectRecord(channel)) {
+      return params.cfg;
+    }
+    const nextChannel = {
+      ...channel,
+      tts: buildTtsConfigWithHydratedProvider({
+        tts: channel.tts,
+        existingProviderConfig,
+        providerId,
+        apiKey: auth.apiKey,
+      }),
+    };
+    return {
+      ...params.cfg,
+      channels: {
+        ...channels,
+        [existingProviderConfig.channelKey]: nextChannel,
+      },
+    };
+  }
+  const messages = { ...params.cfg.messages };
+  const nextTts = buildTtsConfigWithHydratedProvider({
+    tts: messages.tts,
+    existingProviderConfig,
+    providerId,
+    apiKey: auth.apiKey,
+  });
+  return {
+    ...params.cfg,
+    messages: {
+      ...messages,
+      tts: nextTts,
+    },
+  };
+}
+
+type TtsProviderConfigLocation = {
+  container: "providers" | "direct";
+  key: string;
+  value: unknown;
+};
+
+type ExistingTtsProviderConfig =
+  | (TtsProviderConfigLocation & {
+      scope: "root";
+      channelKey?: never;
+    })
+  | (TtsProviderConfigLocation & {
+      scope: "channel";
+      channelKey: string;
+    });
+
+function resolveExistingTtsProviderConfig(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  channelId?: string;
+}): ExistingTtsProviderConfig | undefined {
+  const channelTts = resolveChannelTtsConfigForAuthHydration(params);
+  if (channelTts) {
+    const channelProviderConfig = resolveExistingTtsProviderConfigInTts({
+      cfg: params.cfg,
+      tts: channelTts.tts,
+      providerId: params.providerId,
+    });
+    if (channelProviderConfig) {
+      return {
+        ...channelProviderConfig,
+        scope: "channel",
+        channelKey: channelTts.channelKey,
+      };
+    }
+  }
+  const rootProviderConfig = resolveExistingTtsProviderConfigInTts({
+    cfg: params.cfg,
+    tts: params.cfg.messages?.tts,
+    providerId: params.providerId,
+  });
+  return rootProviderConfig ? { ...rootProviderConfig, scope: "root" } : undefined;
+}
+
+function resolveExistingTtsProviderConfigInTts(params: {
+  cfg: OpenClawConfig;
+  tts: unknown;
+  providerId: string;
+}): TtsProviderConfigLocation | undefined {
+  if (!isObjectRecord(params.tts)) {
+    return undefined;
+  }
+  const providers = isObjectRecord(params.tts.providers) ? params.tts.providers : undefined;
+  if (!providers) {
+    return resolveDirectTtsProviderConfig(params);
+  }
+  const exact = providers[params.providerId];
+  if (exact !== undefined) {
+    return { container: "providers", key: params.providerId, value: exact };
+  }
+  for (const [key, value] of Object.entries(providers)) {
+    const normalizedKey = normalizeLowercaseStringOrEmpty(
+      canonicalizeSpeechProviderId(key, params.cfg) ?? key,
+    );
+    if (normalizedKey === params.providerId) {
+      return { container: "providers", key, value };
+    }
+  }
+  return resolveDirectTtsProviderConfig(params);
+}
+
+const TTS_CONFIG_RESERVED_KEYS = new Set([
+  "auto",
+  "enabled",
+  "maxTextLength",
+  "mode",
+  "modelOverrides",
+  "persona",
+  "personas",
+  "prefsPath",
+  "provider",
+  "providers",
+  "summaryModel",
+  "timeoutMs",
+]);
+
+function resolveDirectTtsProviderConfig(params: {
+  cfg: OpenClawConfig;
+  tts: unknown;
+  providerId: string;
+}): TtsProviderConfigLocation | undefined {
+  if (!isObjectRecord(params.tts)) {
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(params.tts)) {
+    if (TTS_CONFIG_RESERVED_KEYS.has(key)) {
+      continue;
+    }
+    const normalizedKey = normalizeLowercaseStringOrEmpty(
+      canonicalizeSpeechProviderId(key, params.cfg) ?? key,
+    );
+    if (normalizedKey === params.providerId) {
+      return { container: "direct", key, value };
+    }
+  }
+  return undefined;
+}
+
+function resolveChannelTtsConfigForAuthHydration(params: {
+  cfg: OpenClawConfig;
+  channelId?: string;
+}): { channelKey: string; tts: unknown } | undefined {
+  const channels = params.cfg.channels;
+  const normalizedChannelId = normalizeOptionalString(params.channelId);
+  if (!isObjectRecord(channels) || !normalizedChannelId) {
+    return undefined;
+  }
+  const channelKey = Object.hasOwn(channels, normalizedChannelId)
+    ? normalizedChannelId
+    : Object.keys(channels).find(
+        (candidate) =>
+          normalizeLowercaseStringOrEmpty(candidate) ===
+          normalizeLowercaseStringOrEmpty(normalizedChannelId),
+      );
+  const channel = channelKey ? channels[channelKey] : undefined;
+  if (!channelKey || !isObjectRecord(channel)) {
+    return undefined;
+  }
+  return { channelKey, tts: channel.tts };
+}
+
+function buildTtsConfigWithHydratedProvider(params: {
+  tts: unknown;
+  existingProviderConfig?: ExistingTtsProviderConfig;
+  providerId: string;
+  apiKey: string;
+}): Record<string, unknown> {
+  const tts = isObjectRecord(params.tts) ? { ...params.tts } : {};
+  const providers = isObjectRecord(tts.providers) ? { ...tts.providers } : {};
+  const providerConfigKey = params.existingProviderConfig?.key ?? params.providerId;
+  const nextProviderConfig = {
+    ...(isObjectRecord(params.existingProviderConfig?.value)
+      ? params.existingProviderConfig.value
+      : {}),
+    apiKey: params.apiKey,
+  };
+  if (params.existingProviderConfig?.container === "direct") {
+    tts[providerConfigKey] = nextProviderConfig;
+  } else {
+    providers[providerConfigKey] = nextProviderConfig;
+    tts.providers = providers;
+  }
+  return tts;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function ttsProviderConfigHasApiKey(value: unknown): boolean {
+  return isObjectRecord(value) && "apiKey" in value;
+}
+
+function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string): boolean {
+  if (!isObjectRecord(config) || !isObjectRecord(config.providerConfigs)) {
+    return false;
+  }
+  return ttsProviderConfigHasApiKey(config.providerConfigs[providerId]);
 }
 
 async function runTtsProviders(transport: CapabilityTransport) {
@@ -1588,7 +1889,6 @@ async function resolveLocalCapabilityRuntimeConfig(params: {
   config?: OpenClawConfig;
 }): Promise<OpenClawConfig> {
   const cfg = params.config ?? getRuntimeConfig();
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: params.commandName,
@@ -1599,12 +1899,17 @@ async function resolveLocalCapabilityRuntimeConfig(params: {
     runtime: defaultRuntime,
     autoEnable: true,
   });
-  if (sourceConfig) {
-    setRuntimeConfigSnapshot(effectiveConfig, sourceConfig);
-  } else {
-    setRuntimeConfigSnapshot(effectiveConfig);
-  }
+  pinRuntimeConfigSnapshot(effectiveConfig);
   return effectiveConfig;
+}
+
+function pinRuntimeConfigSnapshot(config: OpenClawConfig): void {
+  const sourceConfig = getRuntimeConfigSourceSnapshot();
+  if (sourceConfig) {
+    setRuntimeConfigSnapshot(config, sourceConfig);
+  } else {
+    setRuntimeConfigSnapshot(config);
+  }
 }
 
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
@@ -1882,10 +2187,14 @@ export function registerCapabilityCli(program: Command) {
     .command("logout")
     .description("Remove saved auth profiles for one provider")
     .requiredOption("--provider <id>", "Provider id")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runModelAuthLogout(String(opts.provider));
+        const result = await runModelAuthLogout(
+          String(opts.provider),
+          typeof opts.agent === "string" ? opts.agent : undefined,
+        );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
           JSON.stringify(value, null, 2),
         );
@@ -1928,7 +2237,7 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.generate",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
-          count: opts.count ? Number.parseInt(String(opts.count), 10) : undefined,
+          count: parseOptionalPositiveInteger(opts.count, "--count"),
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
@@ -1938,7 +2247,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1977,7 +2286,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1999,7 +2308,7 @@ export function registerCapabilityCli(program: Command) {
           files: [String(opts.file)],
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2020,7 +2329,7 @@ export function registerCapabilityCli(program: Command) {
           files: opts.file as string[],
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2310,7 +2619,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--model <provider/model>", "Model override")
     .option("--size <size>", "Size hint like 1280x720")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
-    .option("--resolution <value>", "Resolution hint: 480P, 720P, 768P, or 1080P")
+    .option("--resolution <value>", "Resolution hint: 360P, 480P, 540P, 720P, 768P, or 1080P")
     .option("--duration <seconds>", "Target duration in seconds")
     .option("--audio", "Enable generated audio when supported")
     .option("--watermark", "Request provider watermark when supported")
@@ -2329,7 +2638,7 @@ export function registerCapabilityCli(program: Command) {
           durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2405,7 +2714,7 @@ export function registerCapabilityCli(program: Command) {
         const result = await runWebSearchCommand({
           query: String(opts.query),
           provider: opts.provider as string | undefined,
-          limit: opts.limit ? Number.parseInt(String(opts.limit), 10) : undefined,
+          limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2496,35 +2805,48 @@ export function registerCapabilityCli(program: Command) {
         const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
-        const selectedProvider =
-          resolvedMemory?.provider && resolvedMemory.provider !== "auto"
-            ? resolvedMemory.provider
-            : undefined;
-        const autoSelectedProvider =
-          resolvedMemory?.provider === "auto"
-            ? (
-                await createEmbeddingProvider({
-                  config: cfg,
-                  agentDir: resolveAgentDir(cfg, agentId),
-                  provider: "auto",
-                  fallback: "none",
-                  model: resolvedMemory.model,
-                  local: resolvedMemory.local,
-                  remote: resolvedMemory.remote,
-                  outputDimensionality: resolvedMemory.outputDimensionality,
-                }).catch(() => ({ provider: null }))
-              )?.provider?.id
-            : undefined;
-        const result = listMemoryEmbeddingProviders().map((provider) => ({
+        const selectedProvider = resolvedMemory?.provider;
+        const providers = new Map(
+          listMemoryEmbeddingProviders().map((provider) => [
+            provider.id,
+            {
+              id: provider.id,
+              defaultModel: provider.defaultModel,
+              transport: provider.transport,
+              autoSelectPriority: provider.autoSelectPriority,
+            },
+          ]),
+        );
+        for (const provider of listEmbeddingProviders(cfg)) {
+          if (providers.has(provider.id)) {
+            continue;
+          }
+          providers.set(provider.id, {
+            id: provider.id,
+            defaultModel: provider.defaultModel,
+            transport: provider.transport,
+            autoSelectPriority: undefined,
+          });
+        }
+        if (selectedProvider && !providers.has(selectedProvider)) {
+          providers.set(selectedProvider, {
+            id: selectedProvider,
+            defaultModel: resolvedMemory?.model || undefined,
+            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider })
+              ? "remote"
+              : undefined,
+            autoSelectPriority: undefined,
+          });
+        }
+        const result = Array.from(providers.values()).map((provider) => ({
           available: true,
           configured:
             provider.id === selectedProvider ||
-            provider.id === autoSelectedProvider ||
             providerHasGenericConfig({
               cfg,
               providerId: provider.id,
             }),
-          selected: provider.id === selectedProvider || provider.id === autoSelectedProvider,
+          selected: provider.id === selectedProvider,
           id: provider.id,
           defaultModel: provider.defaultModel,
           transport: provider.transport,
