@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-helpers.js";
+import type { OpenClawPluginChannelRegistration } from "./types.js";
 
 function createTestRegistry() {
   return createPluginRegistry({
@@ -53,6 +54,47 @@ describe("plugin registry channel guard", () => {
       plugin: createChannelPlugin("workspace-shadow", "Workspace Shadow"),
     });
 
+    expect(pluginRegistry.registry.channelSetups).toHaveLength(0);
+    expect(pluginRegistry.registry.channels).toHaveLength(0);
+    expect(record.channelIds).toEqual([]);
+    expect(
+      pluginRegistry.registry.diagnostics.some(
+        (diag) =>
+          diag.level === "warn" &&
+          diag.pluginId === "workspace-shadow" &&
+          diag.message ===
+            "channel registration rejected for disabled workspace plugin: workspace-shadow",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects disabled workspace registration before reading channel data", () => {
+    const pluginRegistry = createTestRegistry();
+    const config = {} as OpenClawConfig;
+    const record = createPluginRecord({
+      id: "workspace-shadow",
+      source: "/plugins/workspace-shadow/index.ts",
+      origin: "workspace",
+      enabled: false,
+    });
+    let touchedPluginGetter = false;
+    const registration = {} as OpenClawPluginChannelRegistration;
+    Object.defineProperty(registration, "plugin", {
+      enumerable: true,
+      get() {
+        touchedPluginGetter = true;
+        throw new Error("registration plugin getter should not run");
+      },
+    });
+
+    pluginRegistry.registry.plugins.push(record);
+    expect(() =>
+      pluginRegistry
+        .createApi(record, { config, registrationMode: "setup-only" })
+        .registerChannel(registration),
+    ).not.toThrow();
+
+    expect(touchedPluginGetter).toBe(false);
     expect(pluginRegistry.registry.channelSetups).toHaveLength(0);
     expect(pluginRegistry.registry.channels).toHaveLength(0);
     expect(record.channelIds).toEqual([]);

@@ -927,6 +927,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
   ) => {
+    if (record.origin === "workspace" && !record.enabled) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel registration rejected for disabled workspace plugin: ${record.id}`,
+      });
+      return;
+    }
     const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
@@ -942,15 +951,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const id = plugin.id;
-    if (record.origin === "workspace" && !record.enabled) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `channel registration rejected for disabled workspace plugin: ${id}`,
-      });
-      return;
-    }
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
     if (registrationCapabilities.runtimeChannel && existingRuntime) {
       if (existingRuntime.pluginId === record.id) {
