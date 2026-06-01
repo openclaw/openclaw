@@ -9,6 +9,7 @@ import type {
   ReplyToMode,
   SessionThreadBindingsConfig,
 } from "./types.base.js";
+import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
@@ -149,6 +150,10 @@ export type TelegramAccountConfig = {
   defaultTo?: string | number;
   /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
   groupAllowFrom?: Array<string | number>;
+  /** Allow bot-authored group messages to trigger replies (default: false). Set to "mentions" to only accept messages that mention this bot. */
+  allowBots?: boolean | "mentions";
+  /** Sliding-window guard for accepted Telegram bot-to-bot loops. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom, only mention-gating applies
@@ -260,6 +265,10 @@ export type TelegramDmConfig = {
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
+  /** Per-topic bot-authored group message policy (inherits account/group setting when unset). */
+  allowBots?: boolean | "mentions";
+  /** Per-topic sliding-window guard for accepted Telegram bot-to-bot loops. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Emit internal message hooks for mention-skipped topic messages. */
   ingest?: boolean;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
@@ -284,6 +293,10 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** Per-group bot-authored message policy (inherits account setting when unset). */
+  allowBots?: boolean | "mentions";
+  /** Per-group sliding-window guard for accepted Telegram bot-to-bot loops. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
   /** Per-group override for group message policy (open|disabled|allowlist). */

@@ -155,6 +155,8 @@ const TelegramCustomCommandConfig = {
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    botLoopProtection: BotLoopProtectionSchema.optional(),
     ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
@@ -171,6 +173,8 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    botLoopProtection: BotLoopProtectionSchema.optional(),
     ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
@@ -271,6 +275,8 @@ export const TelegramAccountSchemaBase = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.union([z.string(), z.number()]).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    botLoopProtection: BotLoopProtectionSchema.optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     mentionPatterns: MentionPatternsPolicySchema.optional(),
     contextVisibility: ContextVisibilityModeSchema.optional(),

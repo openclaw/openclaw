@@ -5,8 +5,10 @@ import {
   buildMentionRegexes,
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
+  recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundMentionDecision,
   shouldDebounceTextInbound,
+  type ChannelBotLoopProtectionFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
@@ -31,6 +33,7 @@ import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -1259,6 +1262,96 @@ export const registerTelegramHandlers = ({
       }
       logger.info({ chatId, title: chatTitle, reason: "not-allowed" }, "skipping group message");
       return true;
+    }
+    return false;
+  };
+
+  const resolveTelegramAllowBotsMode = (params: {
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+  }): "off" | "all" | "mentions" => {
+    const setting =
+      params.topicConfig?.allowBots ?? params.groupConfig?.allowBots ?? telegramCfg.allowBots;
+    return setting === "mentions" ? "mentions" : setting === true ? "all" : "off";
+  };
+
+  const resolveTelegramBotLoopProtection = (params: {
+    msg: Message;
+    chatId: string | number;
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+    senderId: string;
+    receiverId?: string;
+    resolvedThreadId?: number;
+  }): ChannelBotLoopProtectionFacts | undefined => {
+    if (!params.senderId || !params.receiverId || params.senderId === params.receiverId) {
+      return undefined;
+    }
+    return {
+      scopeId: accountId,
+      conversationId: buildTelegramGroupPeerId(params.chatId, params.resolvedThreadId),
+      senderId: params.senderId,
+      receiverId: params.receiverId,
+      config: mergePairLoopGuardConfig(
+        telegramCfg.botLoopProtection,
+        params.groupConfig?.botLoopProtection,
+        params.topicConfig?.botLoopProtection,
+      ),
+      defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+      defaultEnabled: true,
+      nowMs: params.msg.date ? params.msg.date * 1000 : undefined,
+    };
+  };
+
+  const shouldSkipBotAuthoredGroupMessage = (params: {
+    msg: Message;
+    isGroup: boolean;
+    chatId: string | number;
+    senderId: string;
+    receiverId?: string;
+    receiverUsername?: string;
+    allowBotAuthoredByDefault?: boolean;
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+    resolvedThreadId?: number;
+  }): boolean => {
+    if (!params.isGroup || params.msg.from?.is_bot !== true) {
+      return false;
+    }
+    const receiverId = params.receiverId;
+    if (receiverId && params.senderId === receiverId) {
+      return false;
+    }
+    const mode = params.allowBotAuthoredByDefault ? "all" : resolveTelegramAllowBotsMode(params);
+    if (mode === "off") {
+      logVerbose(
+        `telegram: drop bot-authored group message from ${params.senderId || "unknown"} (allowBots=false)`,
+      );
+      return true;
+    }
+    if (mode === "mentions") {
+      const botUsername = params.receiverUsername;
+      if (!botUsername || !hasBotMention(params.msg, botUsername)) {
+        logVerbose(
+          "telegram: drop bot-authored group message (allowBots=mentions, missing mention)",
+        );
+        return true;
+      }
+    }
+    const botLoopProtection = resolveTelegramBotLoopProtection({
+      ...params,
+      receiverId,
+    });
+    if (botLoopProtection) {
+      const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+      if (botLoopResult.suppressed) {
+        logVerbose(
+          `telegram: suppress bot-to-bot loop in ${botLoopProtection.conversationId} until ${new Date(
+            botLoopResult.cooldownUntilMs,
+          ).toISOString()}`,
+        );
+        return true;
+      }
     }
     return false;
   };
@@ -2728,6 +2821,7 @@ export const registerTelegramHandlers = ({
     senderId: string;
     senderUsername: string;
     requireConfiguredGroup: boolean;
+    allowBotAuthoredByDefault?: boolean;
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     errorMessage: string;
@@ -2823,6 +2917,23 @@ export const registerTelegramHandlers = ({
 
       if (event.requireConfiguredGroup && (!groupConfig || groupConfig.enabled === false)) {
         logVerbose(`Blocked telegram channel ${event.chatId} (channel disabled)`);
+        return;
+      }
+
+      if (
+        shouldSkipBotAuthoredGroupMessage({
+          msg: event.msg,
+          isGroup: event.isGroup,
+          chatId: event.chatId,
+          senderId: event.senderId,
+          receiverId: event.ctx.me?.id != null ? String(event.ctx.me.id) : undefined,
+          receiverUsername: event.ctx.me?.username,
+          allowBotAuthoredByDefault: event.allowBotAuthoredByDefault,
+          groupConfig: groupConfig as TelegramGroupConfig | undefined,
+          topicConfig,
+          resolvedThreadId,
+        })
+      ) {
         return;
       }
 
@@ -2994,6 +3105,7 @@ export const registerTelegramHandlers = ({
             : "",
       senderUsername: post.sender_chat?.username ?? post.from?.username ?? "",
       requireConfiguredGroup: true,
+      allowBotAuthoredByDefault: true,
       sendOversizeWarning: false,
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
