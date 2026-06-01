@@ -7,6 +7,7 @@ import {
   listSessionEntries,
   loadSessionEntry,
   loadTranscriptEvents,
+  patchSessionEntry,
   replaceSessionEntry,
   updateSessionEntry,
   upsertSessionEntry,
@@ -151,6 +152,44 @@ describe("session accessor file-backed seam", () => {
     });
     expect(loadSessionEntry(scope)?.model).toBeUndefined();
     expect(loadSessionEntry(scope)?.providerOverride).toBeUndefined();
+  });
+
+  it("patches entries atomically with a fallback entry", async () => {
+    const scope = {
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await patchSessionEntry(
+      scope,
+      (entry) => ({
+        ...entry,
+        model: "gpt-5.5",
+      }),
+      {
+        fallbackEntry: {
+          sessionId: "session-1",
+          updatedAt: 10,
+        },
+        replaceEntry: true,
+      },
+    );
+
+    await patchSessionEntry(
+      scope,
+      (entry) => ({
+        ...entry,
+        model: undefined,
+        providerOverride: "openai",
+      }),
+      { replaceEntry: true },
+    );
+
+    expect(loadSessionEntry(scope)).toMatchObject({
+      providerOverride: "openai",
+      sessionId: "session-1",
+    });
+    expect(loadSessionEntry(scope)?.model).toBeUndefined();
   });
 
   it("loads and appends transcript events through a session scope", async () => {

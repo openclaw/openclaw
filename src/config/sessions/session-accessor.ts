@@ -45,6 +45,11 @@ export type SessionEntryUpdateOptions = {
   takeCacheOwnership?: boolean;
 };
 
+export type SessionEntryPatchOptions = {
+  fallbackEntry?: SessionEntry;
+  replaceEntry?: boolean;
+};
+
 /** Loads one session entry through the storage-neutral accessor seam. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   if (scope.clone === false) {
@@ -94,6 +99,22 @@ export async function replaceSessionEntry(
     fallbackEntry: entry,
     replaceEntry: true,
     update: () => entry,
+  });
+}
+
+/** Patches one entry atomically through the storage-neutral accessor seam. */
+export async function patchSessionEntry(
+  scope: SessionAccessScope,
+  update: (
+    entry: SessionEntry,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  options: SessionEntryPatchOptions = {},
+): Promise<SessionEntry | null> {
+  return await patchFileSessionEntry({
+    ...scope,
+    fallbackEntry: options.fallbackEntry,
+    replaceEntry: options.replaceEntry,
+    update,
   });
 }
 
