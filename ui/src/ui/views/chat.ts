@@ -493,7 +493,43 @@ type CachedChatItems = {
   items: ReturnType<typeof buildChatItems>;
 };
 
+type ComposerDraftMirror = {
+  hostDraft: string;
+  value: string;
+};
+
 const chatItemsBySession = new Map<string, CachedChatItems>();
+const composerDraftMirrors = new Map<string, ComposerDraftMirror>();
+
+function composerDraftMirrorKey(props: Pick<ChatProps, "currentAgentId" | "sessionKey">): string {
+  return `${props.currentAgentId}\u0000${props.sessionKey}`;
+}
+
+function getComposerDraftMirror(props: ChatProps): ComposerDraftMirror {
+  const mirror = getOrCreateSessionCacheValue(
+    composerDraftMirrors,
+    composerDraftMirrorKey(props),
+    () => ({
+      hostDraft: props.draft,
+      value: props.draft,
+    }),
+  );
+  if (mirror.hostDraft !== props.draft) {
+    mirror.hostDraft = props.draft;
+    mirror.value = props.draft;
+  }
+  return mirror;
+}
+
+function commitComposerDraft(props: ChatProps, value: string): void {
+  const mirror = getComposerDraftMirror(props);
+  mirror.value = value;
+  if (mirror.hostDraft === value) {
+    return;
+  }
+  mirror.hostDraft = value;
+  props.onDraftChange(value);
+}
 
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
@@ -552,6 +588,7 @@ function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>): string
 export function resetChatViewState() {
   Object.assign(vs, createChatEphemeralState());
   chatItemsBySession.clear();
+  composerDraftMirrors.clear();
 }
 
 export const cleanupChatModuleState = resetChatViewState;
@@ -965,7 +1002,7 @@ function selectSlashCommand(
 ): void {
   // Transition to arg picker when the command has fixed options
   if (cmd.argOptions?.length) {
-    props.onDraftChange(`/${cmd.name} `);
+    commitComposerDraft(props, `/${cmd.name} `);
     vs.slashMenuMode = "args";
     vs.slashMenuCommand = cmd;
     vs.slashMenuArgItems = cmd.argOptions;
@@ -980,11 +1017,11 @@ function selectSlashCommand(
   resetSlashMenuState();
 
   if (cmd.executeLocal && !cmd.args) {
-    props.onDraftChange(`/${cmd.name}`);
+    commitComposerDraft(props, `/${cmd.name}`);
     requestUpdate();
     props.onSend();
   } else {
-    props.onDraftChange(`/${cmd.name} `);
+    commitComposerDraft(props, `/${cmd.name} `);
     requestUpdate();
   }
 }
@@ -996,7 +1033,7 @@ function tabCompleteSlashCommand(
 ): void {
   // Tab: fill in the command text without executing
   if (cmd.argOptions?.length) {
-    props.onDraftChange(`/${cmd.name} `);
+    commitComposerDraft(props, `/${cmd.name} `);
     vs.slashMenuMode = "args";
     vs.slashMenuCommand = cmd;
     vs.slashMenuArgItems = cmd.argOptions;
@@ -1009,7 +1046,7 @@ function tabCompleteSlashCommand(
 
   vs.slashMenuOpen = false;
   resetSlashMenuState();
-  props.onDraftChange(cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
+  commitComposerDraft(props, cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
   requestUpdate();
 }
 
@@ -1022,7 +1059,7 @@ function selectSlashArg(
   const cmdName = vs.slashMenuCommand?.name ?? "";
   vs.slashMenuOpen = false;
   resetSlashMenuState();
-  props.onDraftChange(`/${cmdName} ${arg}`);
+  commitComposerDraft(props, `/${cmdName} ${arg}`);
   requestUpdate();
   if (execute) {
     props.onSend();
@@ -1205,6 +1242,7 @@ function renderPinnedSection(
 function renderSlashMenu(
   requestUpdate: () => void,
   props: ChatProps,
+  draft: string,
 ): TemplateResult | typeof nothing {
   if (!vs.slashMenuOpen) {
     return nothing;
@@ -1320,7 +1358,7 @@ function renderSlashMenu(
               e.preventDefault();
               e.stopPropagation();
               vs.slashMenuExpanded = true;
-              updateSlashMenu(props.draft, requestUpdate);
+              updateSlashMenu(draft, requestUpdate);
             }}
           >
             Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
@@ -1348,10 +1386,12 @@ export function renderChat(props: ChatProps) {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
   };
+  const draftMirror = getComposerDraftMirror(props);
+  const visibleDraft = draftMirror.value;
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
-  const tokens = tokenEstimate(props.draft);
+  const tokens = tokenEstimate(visibleDraft);
 
   const placeholder = props.connected
     ? hasAttachments
@@ -1655,6 +1695,7 @@ export function renderChat(props: ChatProps) {
 
     if ((e.key === "ArrowUp" || e.key === "ArrowDown") && props.onHistoryKeydown) {
       const target = e.target as HTMLTextAreaElement;
+      commitComposerDraft(props, target.value);
       const result = props.onHistoryKeydown({
         key: e.key,
         selectionStart: target.selectionStart,
@@ -1699,6 +1740,8 @@ export function renderChat(props: ChatProps) {
       }
       e.preventDefault();
       if (canCompose) {
+        const target = e.target as HTMLTextAreaElement;
+        commitComposerDraft(props, target.value);
         props.onSend();
       }
     }
@@ -1707,8 +1750,20 @@ export function renderChat(props: ChatProps) {
   const handleInput = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
     adjustTextareaHeight(target);
+    draftMirror.value = target.value;
+    const hostDraftNeeded = isBusy || showAbortableUi || props.queue.length > 0;
+    if (hostDraftNeeded || target.value.startsWith("/") || hasVisibleSlashMenuState()) {
+      commitComposerDraft(props, target.value);
+    }
     updateSlashMenu(target.value, requestUpdate);
-    props.onDraftChange(target.value);
+  };
+  const handleBlur = (e: FocusEvent) => {
+    const target = e.target as HTMLTextAreaElement;
+    commitComposerDraft(props, target.value);
+  };
+  const handleSend = () => {
+    commitComposerDraft(props, draftMirror.value);
+    props.onSend();
   };
   const slashMenuVisible = isSlashMenuVisible();
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
@@ -1805,7 +1860,7 @@ export function renderChat(props: ChatProps) {
         class="agent-chat__input"
         @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
       >
-        ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
+        ${renderSlashMenu(requestUpdate, props, visibleDraft)} ${renderAttachmentPreview(props)}
         <div class="agent-chat__composer-status-stack">
           ${renderFallbackIndicator(props.fallbackStatus)}
           ${renderCompactionIndicator(props.compactionStatus)}
@@ -1845,8 +1900,8 @@ export function renderChat(props: ChatProps) {
         <div class="agent-chat__composer-combobox">
           <textarea
             ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
-            .value=${props.draft}
-            dir=${detectTextDirection(props.draft)}
+            .value=${visibleDraft}
+            dir=${detectTextDirection(visibleDraft)}
             ?disabled=${!props.connected}
             aria-autocomplete="list"
             aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
@@ -1854,6 +1909,7 @@ export function renderChat(props: ChatProps) {
             aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
             @keydown=${handleKeyDown}
             @input=${handleInput}
+            @blur=${handleBlur}
             @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
             placeholder=${placeholder}
             rows="1"
@@ -1933,14 +1989,14 @@ export function renderChat(props: ChatProps) {
           ${renderChatRunControls({
             canAbort: showAbortableUi,
             connected: props.connected,
-            draft: props.draft,
+            draft: visibleDraft,
             hasMessages: props.messages.length > 0,
             isBusy,
             sending: props.sending,
             onAbort: props.onAbort,
             onExport: () => exportMarkdown(props),
             onNewSession: props.onNewSession,
-            onSend: props.onSend,
+            onSend: handleSend,
             onStoreDraft: () => {},
             showSecondary: false,
           })}

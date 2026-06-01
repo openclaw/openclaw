@@ -1127,15 +1127,79 @@ describe("chat slash menu accessibility", () => {
     textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   }
 
-  it("does not request a slash-menu rerender for plain draft input when suggestions are closed", () => {
+  it("keeps plain draft input local until send while suggestions are closed", () => {
     const onDraftChange = vi.fn();
     const onRequestUpdate = vi.fn();
-    const container = renderChatView({ onDraftChange, onRequestUpdate });
+    const onSend = vi.fn();
+    const container = renderChatView({ onDraftChange, onRequestUpdate, onSend });
 
     inputDraft(container, "plain first message");
 
-    expect(onDraftChange).toHaveBeenCalledWith("plain first message");
+    expect(onDraftChange).not.toHaveBeenCalled();
     expect(onRequestUpdate).not.toHaveBeenCalled();
+
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    expect(onDraftChange).toHaveBeenCalledWith("plain first message");
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits local draft input before Enter sends", () => {
+    const onDraftChange = vi.fn();
+    const onSend = vi.fn();
+    const container = renderChatView({ onDraftChange, onSend });
+
+    inputDraft(container, "send from enter");
+    keydownComposer(container, "Enter");
+
+    expect(onDraftChange).toHaveBeenCalledWith("send from enter");
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits local draft input on blur", () => {
+    const onDraftChange = vi.fn();
+    const container = renderChatView({ onDraftChange });
+
+    inputDraft(container, "persist before leaving composer");
+    container
+      .querySelector<HTMLTextAreaElement>("textarea")!
+      .dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+
+    expect(onDraftChange).toHaveBeenCalledWith("persist before leaving composer");
+  });
+
+  it("commits plain draft input while a send is active", () => {
+    const onDraftChange = vi.fn();
+    const container = renderChatView({ onDraftChange, sending: true });
+
+    inputDraft(container, "do not let failed send restore over this");
+
+    expect(onDraftChange).toHaveBeenCalledWith("do not let failed send restore over this");
+  });
+
+  it("preserves local draft input across unrelated rerenders", () => {
+    const onDraftChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderChat(createChatProps({ onDraftChange })), container);
+    inputDraft(container, "still typing locally");
+    render(renderChat(createChatProps({ onDraftChange, loading: true })), container);
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+      "still typing locally",
+    );
+    expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
+  it("replaces local draft input when the host draft changes", () => {
+    const onDraftChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderChat(createChatProps({ onDraftChange, draft: "" })), container);
+    inputDraft(container, "still typing locally");
+    render(renderChat(createChatProps({ onDraftChange, draft: "history recall" })), container);
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("history recall");
   });
 
   it("wires command suggestions to the composer with stable active option ids", () => {
