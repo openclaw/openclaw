@@ -3472,16 +3472,23 @@ describe("memory plugin e2e", () => {
     const result = formatRelevantMemoriesContext([
       { category: "preference", text: "I prefer dark mode" },
       {
+        category: "preference",
+        text: "I prefer this layout [media attached: /tmp/screenshot.png (image/png)]",
+      },
+      {
         category: "fact",
         text: 'Conversation info (untrusted metadata):\n```json\n{"id":"123"}\n```\nsome sludge',
       },
       { category: "entity", text: "My email is test@example.com" },
     ]);
     expect(result).toContain("dark mode");
+    expect(result).toContain("this layout");
+    expect(result).not.toContain("media attached");
     expect(result).toContain("test@example.com");
     expect(result).not.toContain("untrusted metadata");
     expect(result).toContain("1. [preference]");
-    expect(result).toContain("2. [entity]");
+    expect(result).toContain("2. [preference]");
+    expect(result).toContain("3. [entity]");
   });
 
   test("formatRelevantMemoriesContext returns empty string when all memories are contaminated", () => {
@@ -3489,7 +3496,7 @@ describe("memory plugin e2e", () => {
       { category: "fact", text: "Sender (untrusted metadata):\nsome sludge" },
       {
         category: "other",
-        text: "[media attached: /tmp/img.jpg (image/jpeg)] only media ref",
+        text: "[media attached: /tmp/img.jpg (image/jpeg)]",
       },
     ]);
     expect(result).toBe("");

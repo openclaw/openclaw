@@ -633,6 +633,13 @@ const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:[^\]]*\]/gi;
 const MEDIA_ATTACHED_PATTERN_TEST = /\[media attached(?:\s+\d+\/\d+)?:[^\]]*\]/i;
 
 export function escapeMemoryForPrompt(text: string): string {
+  return stripMediaAttachedAnnotations(text).replace(
+    /[&<>"']/g,
+    (char) => PROMPT_ESCAPE_MAP[char] ?? char,
+  );
+}
+
+function stripMediaAttachedAnnotations(text: string): string {
   // Strip [media attached: ...] annotations before HTML-escaping so that
   // detectImageReferences() cannot re-parse them as live media references.
   const hadMedia = MEDIA_ATTACHED_PATTERN_TEST.test(text);
@@ -644,7 +651,15 @@ export function escapeMemoryForPrompt(text: string): string {
   if (hadMedia) {
     stripped = stripped.replace(/[ \t]{2,}/g, " ").trim();
   }
-  return stripped.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
+  return stripped;
+}
+
+function sanitizeRecallMemoryText(text: string): string | null {
+  const stripped = stripMediaAttachedAnnotations(text);
+  if (!stripped.trim()) {
+    return null;
+  }
+  return looksLikeEnvelopeSludge(stripped) ? null : stripped;
 }
 
 // ============================================================================
@@ -1015,8 +1030,12 @@ export function sanitizeForMemoryCapture(text: string): string {
 export function formatRelevantMemoriesContext(
   memories: Array<{ category: MemoryCategory; text: string }>,
 ): string {
-  // Defense-in-depth: filter out any contaminated memories that slipped through
-  const clean = memories.filter((m) => !looksLikeEnvelopeSludge(m.text));
+  // Defense-in-depth: filter out contaminated memories that slipped through,
+  // but preserve useful old memories after stripping stale media annotations.
+  const clean = memories.flatMap((entry) => {
+    const text = sanitizeRecallMemoryText(entry.text);
+    return text ? [{ category: entry.category, text }] : [];
+  });
   if (clean.length === 0) {
     return "";
   }
@@ -1599,7 +1618,10 @@ export default definePluginEntry({
 
         // Filter contaminated memories, then cap at the prompt-budget bound.
         const cleanResults = recall.value
-          .filter((r) => !looksLikeEnvelopeSludge(r.entry.text))
+          .flatMap((r) => {
+            const text = sanitizeRecallMemoryText(r.entry.text);
+            return text ? [{ category: r.entry.category, text }] : [];
+          })
           .slice(0, DEFAULT_AUTO_RECALL_RESULT_CAP);
 
         if (cleanResults.length === 0) {
@@ -1608,9 +1630,7 @@ export default definePluginEntry({
 
         api.logger.info?.(`memory-lancedb: injecting ${cleanResults.length} memories into context`);
 
-        const context = formatRelevantMemoriesContext(
-          cleanResults.map((r) => ({ category: r.entry.category, text: r.entry.text })),
-        );
+        const context = formatRelevantMemoriesContext(cleanResults);
         if (!context) {
           return undefined;
         }
