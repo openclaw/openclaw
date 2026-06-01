@@ -63,6 +63,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 async function startBatchServer(params?: {
   createStatus?: Record<string, unknown>;
   statusResponses?: Array<Record<string, unknown>>;
+  statusFailures?: Array<{ status: number; body: string }>;
 }): Promise<{
   baseUrl: string;
   uploads: string[];
@@ -73,6 +74,7 @@ async function startBatchServer(params?: {
   const batches: Array<Record<string, unknown>> = [];
   const statusPolls: string[] = [];
   const statusResponses = [...(params?.statusResponses ?? [])];
+  const statusFailures = [...(params?.statusFailures ?? [])];
   const completedStatus = { id: "batch-1", status: "completed", output_file_id: "file-output" };
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -90,6 +92,12 @@ async function startBatchServer(params?: {
       }
       if (req.method === "GET" && req.url === "/v1/batches/batch-1") {
         statusPolls.push(req.url);
+        const failure = statusFailures.shift();
+        if (failure) {
+          res.writeHead(failure.status, { "content-type": "text/plain" });
+          res.end(failure.body);
+          return;
+        }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(statusResponses.shift() ?? completedStatus));
         return;
@@ -397,6 +405,57 @@ describe("openai-compatible generic embedding provider", () => {
       expect.arrayContaining([
         "openai-compatible batch batch-1 in_progress; waiting 1ms",
         "openai-compatible batch batch-1 in_progress; progress 0/2 failed=0; waiting 2ms",
+        "openai-compatible batch batch-1 in_progress; progress 1/2 failed=0; waiting 4ms",
+      ]),
+    );
+  });
+
+  it("keeps waiting after retryable OpenAI-compatible batch status failures", async () => {
+    const server = await startBatchServer({
+      createStatus: { id: "batch-1", status: "in_progress" },
+      statusFailures: [{ status: 502, body: "Bad Gateway" }],
+      statusResponses: [
+        {
+          id: "batch-1",
+          status: "in_progress",
+          request_counts: { total: 2, completed: 1, failed: 0 },
+        },
+        { id: "batch-1", status: "completed", output_file_id: "file-output" },
+      ],
+    });
+    const debugMessages: string[] = [];
+    const result = await openAICompatibleEmbeddingProviderAdapter.create(
+      createOptions({
+        model: "mistral/mistral-embed",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+    const runtime = result.runtime as OpenAICompatibleBatchRuntime | undefined;
+
+    await expect(
+      runtime?.batchEmbed?.({
+        agentId: "main",
+        chunks: [{ text: "alpha" }, { text: "beta" }],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 0,
+        timeoutMs: 1000,
+        debug: (message) => debugMessages.push(message),
+      }),
+    ).resolves.toEqual([
+      [1, 0],
+      [2, 1],
+    ]);
+
+    expect(server.statusPolls).toEqual([
+      "/v1/batches/batch-1",
+      "/v1/batches/batch-1",
+      "/v1/batches/batch-1",
+    ]);
+    expect(debugMessages).toEqual(
+      expect.arrayContaining([
+        "openai-compatible batch batch-1 in_progress; waiting 1ms",
+        "openai-compatible batch batch-1 status check failed: openai-compatible batch status failed: 502 Bad Gateway; waiting 2ms",
         "openai-compatible batch batch-1 in_progress; progress 1/2 failed=0; waiting 4ms",
       ]),
     );

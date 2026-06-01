@@ -186,6 +186,18 @@ function formatOpenAiBatchProgress(status: OpenAiBatchStatus): string {
   return `; progress ${completed}/${counts.total} failed=${failed}`;
 }
 
+function formatOpenAiBatchPollError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRetryableOpenAiBatchPollError(error: unknown): boolean {
+  const message = formatOpenAiBatchPollError(error);
+  return (
+    /openai batch status failed: (408|409|425|429|5\d\d)\b/i.test(message) ||
+    /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b|fetch failed|network error/i.test(message)
+  );
+}
+
 async function waitForOpenAiBatch(params: {
   openAi: OpenAiEmbeddingClient;
   batchId: string;
@@ -199,12 +211,33 @@ async function waitForOpenAiBatch(params: {
   const pollBackoff = createOpenAiBatchPollBackoff(params);
   let current: OpenAiBatchStatus | undefined = params.initial;
   while (true) {
-    const status =
-      current ??
-      (await fetchOpenAiBatchStatus({
-        openAi: params.openAi,
-        batchId: params.batchId,
-      }));
+    let status: OpenAiBatchStatus;
+    try {
+      status =
+        current ??
+        (await fetchOpenAiBatchStatus({
+          openAi: params.openAi,
+          batchId: params.batchId,
+        }));
+    } catch (error) {
+      if (!params.wait || !isRetryableOpenAiBatchPollError(error)) {
+        throw error;
+      }
+      if (Date.now() - start > params.timeoutMs) {
+        throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`, {
+          cause: error,
+        });
+      }
+      const delayMs = pollBackoff.nextDelayMs();
+      params.debug?.(
+        `openai batch ${params.batchId} status check failed: ${formatOpenAiBatchPollError(
+          error,
+        )}; waiting ${delayMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      current = undefined;
+      continue;
+    }
     const state = status.status ?? "unknown";
     if (state === "completed") {
       return resolveBatchCompletionFromStatus({

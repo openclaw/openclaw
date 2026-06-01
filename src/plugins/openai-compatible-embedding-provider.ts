@@ -482,6 +482,18 @@ function formatOpenAICompatibleBatchProgress(status: OpenAICompatibleBatchStatus
   return `; progress ${completed}/${counts.total} failed=${failed}`;
 }
 
+function formatOpenAICompatibleBatchPollError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRetryableOpenAICompatibleBatchPollError(error: unknown): boolean {
+  const message = formatOpenAICompatibleBatchPollError(error);
+  return (
+    /openai-compatible batch status failed: (408|409|425|429|5\d\d)\b/i.test(message) ||
+    /\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)\b|fetch failed|network error/i.test(message)
+  );
+}
+
 async function waitForOpenAICompatibleBatch(params: {
   client: OpenAICompatibleEmbeddingClient;
   batchId: string;
@@ -495,12 +507,34 @@ async function waitForOpenAICompatibleBatch(params: {
   const pollBackoff = createOpenAICompatibleBatchPollBackoff(params);
   let current: OpenAICompatibleBatchStatus | undefined = params.initial;
   while (true) {
-    const status =
-      current ??
-      (await fetchOpenAICompatibleBatchStatus({
-        client: params.client,
-        batchId: params.batchId,
-      }));
+    let status: OpenAICompatibleBatchStatus;
+    try {
+      status =
+        current ??
+        (await fetchOpenAICompatibleBatchStatus({
+          client: params.client,
+          batchId: params.batchId,
+        }));
+    } catch (error) {
+      if (!params.wait || !isRetryableOpenAICompatibleBatchPollError(error)) {
+        throw error;
+      }
+      if (Date.now() - start > params.timeoutMs) {
+        throw new Error(
+          `openai-compatible batch ${params.batchId} timed out after ${params.timeoutMs}ms`,
+          { cause: error },
+        );
+      }
+      const delayMs = pollBackoff.nextDelayMs();
+      params.debug?.(
+        `openai-compatible batch ${params.batchId} status check failed: ${formatOpenAICompatibleBatchPollError(
+          error,
+        )}; waiting ${delayMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      current = undefined;
+      continue;
+    }
     const state = status.status ?? "unknown";
     if (state === "completed") {
       return resolveBatchCompletionFromStatus({
