@@ -20,7 +20,11 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
-const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
+const streamingInstances = vi.hoisted((): StreamingSessionStub[] => {
+  const arr: StreamingSessionStub[] = [];
+  (globalThis as Record<string, unknown>)["__feishu_test_streaming_instances__"] = arr;
+  return arr;
+});
 const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
   () => (params: { mediaUrl?: string; audioAsVoice?: boolean }) =>
     params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
@@ -685,7 +689,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("coalesces distinct final payloads into one streaming card until idle", async () => {
+  it("preserves first streaming final and delivers later distinct final as static message", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
@@ -695,14 +699,83 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith(
-      "```md\n完整回复第一段 + 第二段\n```",
-      {
-        note: "Agent: agent",
-      },
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```", {
+      note: "Agent: agent",
+    });
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "```md\n完整回复第一段 + 第二段\n```" }),
     );
+  });
+
+  it("delivers later distinct final as static message instead of overwriting streaming card", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "```md\n真正的最终回复\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\ntool-error 诊断信息\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    // Streaming card should contain the real answer, not the diagnostic
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n真正的最终回复\n```", {
+      note: "Agent: agent",
+    });
+    // Diagnostic should be delivered via static card path, not streaming card
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "```md\ntool-error 诊断信息\n```" }),
+    );
+  });
+
+  it("skips duplicate final text after streaming commit but before idle close", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "```md\n最终回复\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\n最终回复\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n最终回复\n```", {
+      note: "Agent: agent",
+    });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("does not discard streaming card for duplicate final with media before idle close", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "```md\n最终回复\n```" }, { kind: "final" });
+    await options.deliver(
+      { text: "```md\n最终回复\n```", mediaUrls: ["https://example.com/img.png"] },
+      { kind: "final" },
+    );
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n最终回复\n```", {
+      note: "Agent: agent",
+    });
+    expect(streamingInstances[0].discard).not.toHaveBeenCalled();
+  });
+
+  it("does not append block updates to streaming card after final is committed", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "```md\n最终回复\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\n诊断信息\n```" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n最终回复\n```", {
+      note: "Agent: agent",
+    });
   });
 
   it("skips exact duplicate final text after streaming close", async () => {
