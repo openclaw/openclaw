@@ -19,6 +19,7 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommand } from "./test-helpers.runtime-state.js";
+import { testing as agentJobTesting } from "./server-methods/agent-job.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -180,6 +181,9 @@ describe("gateway server chat", () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.status).toBe("ok");
     return res;
+  };
+  const waitForLifecycleWaiter = async (runId: string) => {
+    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
   };
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {

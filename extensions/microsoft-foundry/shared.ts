@@ -289,13 +289,13 @@ function buildFoundryModelCompat(
   if (resolvedApi !== DEFAULT_GPT5_API) {
     return {
       supportsReasoningEffort,
-      ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+      ...(supportedReasoningEfforts && { supportedReasoningEfforts }),
       maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
     };
   }
   return {
     ...(resolvedApi === DEFAULT_GPT5_API ? { supportsStore: false } : {}),
-    ...(supportsReasoningEffort ? { supportsReasoningEffort, supportedReasoningEfforts } : {}),
+    ...(supportsReasoningEffort && { supportsReasoningEffort, supportedReasoningEfforts }),
     maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
   };
 }
