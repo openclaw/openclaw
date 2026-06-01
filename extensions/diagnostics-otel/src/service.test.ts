@@ -2645,22 +2645,6 @@ describe("diagnostics-otel service", () => {
       },
     });
     emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      sessionKey: "agent:main:slack:channel:c1",
-      channel: "slack",
-      agentId: "main",
-      provider: "openai",
-      model: "gpt-5.5",
-      usage: { input: 3, output: 2, total: 5 },
-      durationMs: 10,
-      trace: {
-        traceId: TRACE_ID,
-        spanId: MODEL_USAGE_SPAN_ID,
-        parentSpanId: GRANDCHILD_SPAN_ID,
-        traceFlags: "01",
-      },
-    });
-    emitTrustedDiagnosticEvent({
       type: "harness.run.completed",
       runId: "run-1",
       harnessId: "codex",
@@ -2675,6 +2659,22 @@ describe("diagnostics-otel service", () => {
         traceId: TRACE_ID,
         spanId: GRANDCHILD_SPAN_ID,
         parentSpanId: CHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      sessionKey: "agent:main:slack:channel:c1",
+      channel: "slack",
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: { input: 3, output: 2, total: 5 },
+      durationMs: 10,
+      trace: {
+        traceId: TRACE_ID,
+        spanId: MODEL_USAGE_SPAN_ID,
+        parentSpanId: GRANDCHILD_SPAN_ID,
         traceFlags: "01",
       },
     });
@@ -2799,6 +2799,48 @@ describe("diagnostics-otel service", () => {
     expect(parentBySpanName["openclaw.model.usage"]?.spanId).toBe(harnessSpanContext.spanId);
     expect(messageSpanContext.traceId).toBe(TRACE_ID);
     expect(harnessSpanContext.traceId).toBe(TRACE_ID);
+    await service.stop?.(ctx);
+  });
+
+  test("does not retain fallback message processed spans as active parents", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "message.processed",
+      channel: "slack",
+      sessionKey: "agent:main:slack:channel:c1",
+      durationMs: 25,
+      outcome: "skipped",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: CHILD_SPAN_ID,
+        parentSpanId: SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    expect(spanByName("openclaw.message.processed").end).toHaveBeenCalledTimes(1);
+
+    telemetryState.tracer.setSpanContext.mockClear();
+    emitTrustedDiagnosticEvent({
+      type: "harness.run.started",
+      runId: "run-1",
+      harnessId: "codex",
+      pluginId: "codex",
+      provider: "openai",
+      model: "gpt-5.5",
+      channel: "slack",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: GRANDCHILD_SPAN_ID,
+        parentSpanId: CHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+
+    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    expect(startedSpanCall("openclaw.harness.run")?.[2]).toBeUndefined();
     await service.stop?.(ctx);
   });
 

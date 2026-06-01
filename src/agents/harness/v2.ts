@@ -9,8 +9,10 @@ import {
   type DiagnosticHarnessRunOutcome,
 } from "../../infra/diagnostic-events.js";
 import {
+  createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -29,6 +31,12 @@ import type {
 
 const log = createSubsystemLogger("agents/harness/v2");
 type AgentHarnessV2LifecyclePhase = DiagnosticHarnessRunErrorEvent["phase"];
+type AgentRunCompletedOutcome = "completed" | "aborted" | "blocked" | "error";
+type AgentRunCompletion = {
+  outcome: AgentRunCompletedOutcome;
+  blockedBy?: string;
+  error?: unknown;
+};
 
 type AgentHarnessV2RunBase = {
   harnessId: string;
@@ -139,6 +147,7 @@ function agentHarnessDiagnosticBase(
   trace?: DiagnosticTraceContext,
 ) {
   const diagnosticTrace = trace ?? getActiveDiagnosticTraceContext();
+  const channel = diagnosticChannel(params);
   return {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -148,7 +157,7 @@ function agentHarnessDiagnosticBase(
     ...(harness.pluginId ? { pluginId: harness.pluginId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
-    ...(params.messageChannel ? { channel: params.messageChannel } : {}),
+    ...(channel ? { channel } : {}),
     ...(diagnosticTrace ? { trace: freezeDiagnosticTraceContext(diagnosticTrace) } : {}),
   };
 }
@@ -166,13 +175,68 @@ function agentHarnessRunOutcome(result: AgentHarnessAttemptResult): DiagnosticHa
   return "completed";
 }
 
+function shouldEmitAgentRunDiagnostics(harness: AgentHarnessV2): boolean {
+  return harness.id !== "openclaw";
+}
+
+function diagnosticChannel(params: AgentHarnessAttemptParams): string | undefined {
+  return params.messageChannel ?? params.messageProvider;
+}
+
+function agentRunDiagnosticBase(params: AgentHarnessAttemptParams, trace: DiagnosticTraceContext) {
+  const channel = diagnosticChannel(params);
+  return {
+    runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    provider: params.provider,
+    model: params.modelId,
+    ...(params.trigger ? { trigger: params.trigger } : {}),
+    ...(channel ? { channel } : {}),
+    trace,
+  };
+}
+
+function agentRunCompletion(result: AgentHarnessAttemptResult): AgentRunCompletion {
+  if (result.promptErrorSource === "hook:before_agent_run") {
+    return { outcome: "blocked", blockedBy: "before_agent_run" };
+  }
+  if (result.promptError) {
+    return { outcome: "error", error: result.promptError };
+  }
+  if (
+    result.externalAbort ||
+    result.aborted ||
+    result.timedOut ||
+    result.idleTimedOut ||
+    result.timedOutDuringCompaction
+  ) {
+    return { outcome: "aborted" };
+  }
+  return { outcome: "completed" };
+}
+
+function withFallbackDiagnosticTrace(
+  result: AgentHarnessAttemptResult,
+  trace: DiagnosticTraceContext | undefined,
+): AgentHarnessAttemptResult {
+  if (result.diagnosticTrace || !trace) {
+    return result;
+  }
+  return {
+    ...result,
+    diagnosticTrace: freezeDiagnosticTraceContext(trace),
+  };
+}
+
 function emitAgentHarnessRunStarted(
   harness: AgentHarnessV2,
   params: AgentHarnessAttemptParams,
+  trace?: DiagnosticTraceContext,
 ): void {
   emitTrustedDiagnosticEvent({
     type: "harness.run.started",
-    ...agentHarnessDiagnosticBase(harness, params),
+    ...agentHarnessDiagnosticBase(harness, params, trace),
   });
 }
 
@@ -181,11 +245,12 @@ function emitAgentHarnessRunCompleted(params: {
   attemptParams: AgentHarnessAttemptParams;
   result: AgentHarnessAttemptResult;
   startedAt: number;
+  trace?: DiagnosticTraceContext;
 }): void {
-  const { harness, attemptParams, result, startedAt } = params;
+  const { harness, attemptParams, result, startedAt, trace } = params;
   emitTrustedDiagnosticEvent({
     type: "harness.run.completed",
-    ...agentHarnessDiagnosticBase(harness, attemptParams, result.diagnosticTrace),
+    ...agentHarnessDiagnosticBase(harness, attemptParams, trace ?? result.diagnosticTrace),
     durationMs: Date.now() - startedAt,
     outcome: agentHarnessRunOutcome(result),
     ...(result.agentHarnessResultClassification
@@ -203,11 +268,12 @@ function emitAgentHarnessRunError(params: {
   phase: AgentHarnessV2LifecyclePhase;
   error: unknown;
   cleanupFailed?: boolean;
+  trace?: DiagnosticTraceContext;
 }): void {
-  const { harness, attemptParams, startedAt, phase, error, cleanupFailed } = params;
+  const { harness, attemptParams, startedAt, phase, error, cleanupFailed, trace } = params;
   emitTrustedDiagnosticEvent({
     type: "harness.run.error",
-    ...agentHarnessDiagnosticBase(harness, attemptParams),
+    ...agentHarnessDiagnosticBase(harness, attemptParams, trace),
     durationMs: Date.now() - startedAt,
     phase,
     errorCategory: diagnosticErrorCategory(error),
@@ -225,17 +291,54 @@ export async function runAgentHarnessV2LifecycleAttempt(
   let result: AgentHarnessAttemptResult;
   let phase: AgentHarnessV2LifecyclePhase = "prepare";
   const startedAt = Date.now();
+  const activeHarnessTrace = getActiveDiagnosticTraceContext();
+  let agentRunTrace: DiagnosticTraceContext | undefined;
+  let agentRunStartedAt = 0;
+  let agentRunCompleted = false;
+  const emitAgentRunCompleted = (completion: AgentRunCompletion): void => {
+    if (!agentRunTrace || agentRunCompleted) {
+      return;
+    }
+    agentRunCompleted = true;
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      ...agentRunDiagnosticBase(params, agentRunTrace),
+      durationMs: Date.now() - agentRunStartedAt,
+      outcome: completion.outcome,
+      ...(completion.blockedBy ? { blockedBy: completion.blockedBy } : {}),
+      ...(completion.error && completion.outcome === "error"
+        ? { errorCategory: diagnosticErrorCategory(completion.error) }
+        : {}),
+    });
+  };
 
-  emitAgentHarnessRunStarted(harness, params);
+  emitAgentHarnessRunStarted(harness, params, activeHarnessTrace);
   try {
     phase = "prepare";
     prepared = await harness.prepare(params);
     phase = "start";
     session = await harness.start(prepared);
-    phase = "send";
-    rawResult = await harness.send(session);
-    phase = "resolve";
-    result = await harness.resolveOutcome(session, rawResult);
+    const startedSession = session;
+    if (shouldEmitAgentRunDiagnostics(harness) && activeHarnessTrace) {
+      agentRunTrace = freezeDiagnosticTraceContext(
+        createChildDiagnosticTraceContext(activeHarnessTrace),
+      );
+      agentRunStartedAt = Date.now();
+      emitTrustedDiagnosticEvent({
+        type: "run.started",
+        ...agentRunDiagnosticBase(params, agentRunTrace),
+      });
+    }
+    const sendAndResolve = async () => {
+      phase = "send";
+      rawResult = await harness.send(startedSession);
+      phase = "resolve";
+      return await harness.resolveOutcome(startedSession, rawResult);
+    };
+    result = agentRunTrace
+      ? await runWithDiagnosticTraceContext(agentRunTrace, sendAndResolve)
+      : await sendAndResolve();
+    result = withFallbackDiagnosticTrace(result, activeHarnessTrace);
   } catch (error) {
     let cleanupFailed = false;
     try {
@@ -264,7 +367,9 @@ export async function runAgentHarnessV2LifecycleAttempt(
       phase,
       error,
       cleanupFailed,
+      trace: activeHarnessTrace,
     });
+    emitAgentRunCompleted({ outcome: "error", error });
     throw error;
   }
 
@@ -278,9 +383,18 @@ export async function runAgentHarnessV2LifecycleAttempt(
       startedAt,
       phase,
       error,
+      trace: activeHarnessTrace,
     });
+    emitAgentRunCompleted({ outcome: "error", error });
     throw error;
   }
-  emitAgentHarnessRunCompleted({ harness, attemptParams: params, result, startedAt });
+  emitAgentRunCompleted(agentRunCompletion(result));
+  emitAgentHarnessRunCompleted({
+    harness,
+    attemptParams: params,
+    result,
+    startedAt,
+    trace: activeHarnessTrace,
+  });
   return result;
 }

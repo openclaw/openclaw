@@ -2065,14 +2065,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
         const span =
           trackedSpan ??
-          trackInternalOrTrustedSpan(
-            evt,
-            metadata,
-            spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs, {
-              parentContext: internalOrTrustedParentContext(evt, metadata),
-              endTimeMs: evt.ts,
-            }),
-          );
+          spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs, {
+            parentContext: internalOrTrustedParentContext(evt, metadata),
+            endTimeMs: evt.ts,
+          });
         setSpanAttrs(span, spanAttrs);
         if (evt.outcome === "error" && evt.error) {
           span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
@@ -2511,8 +2507,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.harness.items.completed"] = evt.itemLifecycle.completedCount;
           spanAttrs["openclaw.harness.items.active"] = evt.itemLifecycle.activeCount;
         }
+        const trustedTrace = trustedTraceContext(evt, metadata);
+        const trackedSpan = trustedTrace?.spanId
+          ? activeTrustedSpans.get(trustedTrace.spanId)
+          : undefined;
         const span =
-          takeTrackedTrustedSpan(evt, metadata) ??
+          trackedSpan ??
           spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
             parentContext: activeTrustedParentContext(evt, metadata),
             endTimeMs: evt.ts,
@@ -2523,6 +2523,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             code: SpanStatusCode.ERROR,
             message: "error",
           });
+        }
+        if (trackedSpan && trustedTrace?.spanId) {
+          scheduleTrackedRunSpanFinalize(
+            trustedTrace.spanId,
+            trustedTrace.parentSpanId,
+            trackedSpan,
+            evt.ts,
+          );
+          return;
         }
         span.end(evt.ts);
       };

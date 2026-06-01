@@ -8,6 +8,12 @@ import {
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import {
+  getActiveDiagnosticTraceContext,
+  resetDiagnosticTraceContextForTest,
+  runWithDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
@@ -98,13 +104,16 @@ async function flushDiagnosticEvents(): Promise<void> {
   });
 }
 
-function captureDiagnosticEvents(): {
+function captureDiagnosticEvents(
+  filter: (event: DiagnosticEventPayload) => boolean = (event) =>
+    event.type.startsWith("harness.run."),
+): {
   events: Array<{ event: DiagnosticEventPayload; metadata: DiagnosticEventMetadata }>;
   unsubscribe: () => void;
 } {
   const events: Array<{ event: DiagnosticEventPayload; metadata: DiagnosticEventMetadata }> = [];
   const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
-    if (event.type.startsWith("harness.run.")) {
+    if (filter(event)) {
       events.push({ event, metadata });
     }
   });
@@ -122,6 +131,7 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown
 describe("AgentHarness V2 compatibility adapter", () => {
   afterEach(() => {
     resetDiagnosticEventsForTest();
+    resetDiagnosticTraceContextForTest();
   });
 
   it("executes prepare/start/send/outcome/cleanup as one bounded lifecycle", async () => {
@@ -284,6 +294,134 @@ describe("AgentHarness V2 compatibility adapter", () => {
       activeCount: 1,
     });
     expect(typeof completedEvent?.durationMs).toBe("number");
+  });
+
+  it("scopes plugin harness send diagnostics under a child run trace", async () => {
+    resetDiagnosticEventsForTest();
+    const params = createAttemptParams();
+    params.messageChannel = undefined;
+    params.messageProvider = "discord-voice";
+    const harnessTrace = createDiagnosticTrace();
+    const result = createAttemptResult();
+    result.diagnosticTrace = undefined;
+    let attemptResult: EmbeddedRunAttemptResult | undefined;
+    let sendTrace: DiagnosticTraceContext | undefined;
+    let resolveTrace: DiagnosticTraceContext | undefined;
+    const harness: AgentHarnessV2 = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true }),
+      prepare: async () => ({
+        harnessId: "codex",
+        label: "Codex",
+        pluginId: "codex-plugin",
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => {
+        sendTrace = getActiveDiagnosticTraceContext();
+        return result;
+      },
+      resolveOutcome: async (_session, rawResult) => {
+        resolveTrace = getActiveDiagnosticTraceContext();
+        return rawResult;
+      },
+      cleanup: async () => {},
+    };
+    const diagnostics = captureDiagnosticEvents(
+      (event) =>
+        event.type === "harness.run.started" ||
+        event.type === "run.started" ||
+        event.type === "run.completed" ||
+        event.type === "harness.run.completed",
+    );
+    try {
+      attemptResult = await runWithDiagnosticTraceContext(harnessTrace, () =>
+        runAgentHarnessV2LifecycleAttempt(harness, params),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+    }
+
+    expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+      "harness.run.started",
+      "run.started",
+      "run.completed",
+      "harness.run.completed",
+    ]);
+    expect(diagnostics.events.every(({ metadata }) => metadata.trusted)).toBe(true);
+    const runStarted = diagnostics.events[1]?.event as
+      | (DiagnosticEventPayload & { trace?: DiagnosticTraceContext })
+      | undefined;
+    const runCompleted = diagnostics.events[2]?.event as
+      | (DiagnosticEventPayload & {
+          channel?: string;
+          trace?: DiagnosticTraceContext;
+          outcome?: string;
+        })
+      | undefined;
+    const harnessCompleted = diagnostics.events[3]?.event as
+      | (DiagnosticEventPayload & { channel?: string; trace?: DiagnosticTraceContext })
+      | undefined;
+    expect(runStarted?.trace?.traceId).toBe(harnessTrace.traceId);
+    expect(runStarted?.trace?.parentSpanId).toBe(harnessTrace.spanId);
+    expect(sendTrace).toEqual(runStarted?.trace);
+    expect(resolveTrace).toEqual(runStarted?.trace);
+    expect(runCompleted?.trace).toEqual(runStarted?.trace);
+    expect(runCompleted?.outcome).toBe("completed");
+    expect(runCompleted?.channel).toBe("discord-voice");
+    expect(harnessCompleted?.trace).toEqual(harnessTrace);
+    expect(harnessCompleted?.channel).toBe("discord-voice");
+    expect(attemptResult?.diagnosticTrace).toEqual(harnessTrace);
+  });
+
+  it("emits plugin before-agent-run hook blocks as blocked run completions", async () => {
+    resetDiagnosticEventsForTest();
+    const params = createAttemptParams();
+    const harnessTrace = createDiagnosticTrace();
+    const result = {
+      ...createAttemptResult(),
+      promptError: new Error("blocked by policy"),
+      promptErrorSource: "hook:before_agent_run",
+    } as EmbeddedRunAttemptResult;
+    const harness: AgentHarnessV2 = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      prepare: async () => ({
+        harnessId: "codex",
+        label: "Codex",
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => result,
+      resolveOutcome: async (_session, rawResult) => rawResult,
+      cleanup: async () => {},
+    };
+    const diagnostics = captureDiagnosticEvents((event) => event.type === "run.completed");
+    try {
+      await runWithDiagnosticTraceContext(harnessTrace, () =>
+        runAgentHarnessV2LifecycleAttempt(harness, params),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      diagnostics.unsubscribe();
+    }
+
+    const completed = diagnostics.events[0]?.event as
+      | (DiagnosticEventPayload & {
+          blockedBy?: string;
+          errorCategory?: string;
+          outcome?: string;
+        })
+      | undefined;
+    expect(completed?.outcome).toBe("blocked");
+    expect(completed?.blockedBy).toBe("before_agent_run");
+    expect(completed?.errorCategory).toBeUndefined();
   });
 
   it("emits trusted harness error diagnostics with the failing lifecycle phase", async () => {
