@@ -74,6 +74,7 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   return tryReadJson<T>(filePath);
 }
 
+/** Creates a process-local FIFO async lock; use file locks for cross-process writes. */
 export { createAsyncLock } from "@openclaw/fs-safe/advanced";
 
 export type WriteTextAtomicOptions = {
