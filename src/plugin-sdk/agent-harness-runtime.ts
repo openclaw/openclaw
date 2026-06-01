@@ -171,6 +171,7 @@ export {
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
 export {
+  filterProviderNormalizableTools,
   inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
   type RuntimeToolInputSchemaJson,
@@ -203,7 +204,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
     await Promise.all([
       import("../agents/image-sanitization.js"),
       import("../agents/embedded-agent-runner/run/images.js"),
-      import("../media/constants.js"),
+      import("@openclaw/media-core/constants"),
     ]);
 
   return detectAndLoadPromptImages({

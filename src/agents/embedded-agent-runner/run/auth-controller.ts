@@ -172,8 +172,7 @@ export function createEmbeddedRunAuthController(params: {
     }
     const refreshGeneration = runtimeAuthState.generation;
     const refreshProfileId = runtimeAuthState.profileId;
-    let refreshPromise: Promise<void>;
-    refreshPromise = (async () => {
+    const refreshPromise: Promise<void> = (async () => {
       const currentRuntimeAuthState = params.getRuntimeAuthState();
       const sourceApiKey = currentRuntimeAuthState?.sourceApiKey.trim() ?? "";
       if (!sourceApiKey) {
@@ -217,7 +216,7 @@ export function createEmbeddedRunAuthController(params: {
         );
       }
     })()
-      .catch((err) => {
+      .catch((err: unknown) => {
         const runtimeModel = params.getRuntimeModel();
         params.log.warn(
           `Runtime auth refresh failed for ${runtimeModel.provider}: ${formatErrorMessage(err)}`,

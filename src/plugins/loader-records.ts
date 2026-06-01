@@ -183,7 +183,7 @@ function describePluginModuleExportShape(
   const details = [`${label}:object keys=${keySummary}`];
 
   for (const key of ["default", "module", "register", "activate"]) {
-    if (Object.prototype.hasOwnProperty.call(record, key)) {
+    if (Object.hasOwn(record, key)) {
       details.push(...describePluginModuleExportShape(record[key], `${label}.${key}`, seen));
     }
   }

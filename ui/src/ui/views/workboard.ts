@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import {
+  addWorkboardCardComment,
   archiveWorkboardCard,
   deleteWorkboardCard,
   dispatchWorkboard,
@@ -21,6 +22,7 @@ import {
   type WorkboardLifecycle,
   type WorkboardPriority,
   type WorkboardStatus,
+  type WorkboardTaskSummary,
   type WorkboardTemplateId,
   type WorkboardUiState,
 } from "../controllers/workboard.ts";
@@ -34,6 +36,7 @@ type WorkboardProps = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   canWrite?: boolean;
+  canModelOverride?: boolean;
   pluginEnabled: boolean;
   agentsList: AgentsListResult | null;
   sessions: GatewaySessionRow[];
@@ -41,9 +44,6 @@ type WorkboardProps = {
   onRequestUpdate?: () => void;
 };
 
-const WORKBOARD_GAME_SIZE = 5;
-const WORKBOARD_GAME_GOAL = WORKBOARD_GAME_SIZE * WORKBOARD_GAME_SIZE - 1;
-const WORKBOARD_GAME_BLOCKERS = new Set([6, 8, 12, 16, 18]);
 const WORKBOARD_TEMPLATES: Array<{
   id: WorkboardTemplateId;
   title: string;
@@ -187,52 +187,50 @@ function renderEvents(card: WorkboardCard) {
 
 function renderMetadataBadges(card: WorkboardCard) {
   const metadata = card.metadata;
-  if (!metadata) {
-    return nothing;
-  }
   const badges = [
-    metadata.templateId ? t(`workboard.template.${metadata.templateId}`) : null,
-    metadata.attempts?.length
+    metadata?.templateId ? t(`workboard.template.${metadata.templateId}`) : null,
+    card.taskId ? t("workboard.badgeTaskLinked") : null,
+    metadata?.attempts?.length
       ? t("workboard.badgeAttempts", { count: String(metadata.attempts.length) })
       : null,
-    metadata.failureCount
+    metadata?.failureCount
       ? t("workboard.badgeFailures", { count: String(metadata.failureCount) })
       : null,
-    metadata.comments?.length
+    metadata?.comments?.length
       ? t("workboard.badgeComments", { count: String(metadata.comments.length) })
       : null,
-    metadata.links?.length
+    metadata?.links?.length
       ? t("workboard.badgeLinks", { count: String(metadata.links.length) })
       : null,
-    metadata.proof?.length
+    metadata?.proof?.length
       ? t("workboard.badgeProof", { count: String(metadata.proof.length) })
       : null,
-    metadata.artifacts?.length
+    metadata?.artifacts?.length
       ? t("workboard.badgeArtifacts", { count: String(metadata.artifacts.length) })
       : null,
-    metadata.attachments?.length
+    metadata?.attachments?.length
       ? t("workboard.badgeAttachments", { count: String(metadata.attachments.length) })
       : null,
-    metadata.workerLogs?.length
+    metadata?.workerLogs?.length
       ? t("workboard.badgeWorkerLogs", { count: String(metadata.workerLogs.length) })
       : null,
-    metadata.workerProtocol?.state
+    metadata?.workerProtocol?.state
       ? t("workboard.badgeWorkerProtocol", { state: metadata.workerProtocol.state })
       : null,
-    metadata.automation?.tenant
+    metadata?.automation?.tenant
       ? t("workboard.badgeTenant", { tenant: metadata.automation.tenant })
       : null,
-    metadata.automation?.skills?.length
+    metadata?.automation?.skills?.length
       ? t("workboard.badgeSkills", { count: String(metadata.automation.skills.length) })
       : null,
-    metadata.automation?.dispatchCount
+    metadata?.automation?.dispatchCount
       ? t("workboard.badgeDispatches", { count: String(metadata.automation.dispatchCount) })
       : null,
-    metadata.claim ? t("workboard.badgeClaimed", { owner: metadata.claim.ownerId }) : null,
-    metadata.diagnostics?.length
+    metadata?.claim ? t("workboard.badgeClaimed", { owner: metadata.claim.ownerId }) : null,
+    metadata?.diagnostics?.length
       ? t("workboard.badgeDiagnostics", { count: String(metadata.diagnostics.length) })
       : null,
-    metadata.stale ? t("workboard.badgeStale") : null,
+    metadata?.stale ? t("workboard.badgeStale") : null,
   ].filter((badge): badge is string => Boolean(badge));
   if (badges.length === 0) {
     return nothing;
@@ -351,46 +349,12 @@ function resetDraft(state: WorkboardUiState) {
   state.draftAgentId = "";
   state.draftSessionKey = "";
   state.draftTemplateId = "";
+  state.draftCommentBody = "";
 }
 
 function openCreateModal(state: WorkboardUiState) {
   resetDraft(state);
   state.draftOpen = true;
-}
-
-function resetGame(state: WorkboardUiState) {
-  state.gamePlayerIndex = 0;
-  state.gameMoves = 0;
-  state.gameMessage = "workboard.gameStart";
-}
-
-function moveGamePlayer(state: WorkboardUiState, delta: number) {
-  if (state.gamePlayerIndex === WORKBOARD_GAME_GOAL) {
-    resetGame(state);
-  }
-  const currentRow = Math.floor(state.gamePlayerIndex / WORKBOARD_GAME_SIZE);
-  const nextIndex = state.gamePlayerIndex + delta;
-  const nextRow = Math.floor(nextIndex / WORKBOARD_GAME_SIZE);
-  if (
-    nextIndex < 0 ||
-    nextIndex > WORKBOARD_GAME_GOAL ||
-    (delta === -1 && nextRow !== currentRow) ||
-    (delta === 1 && nextRow !== currentRow)
-  ) {
-    state.gameMessage = "workboard.gameBoundary";
-    return;
-  }
-  if (WORKBOARD_GAME_BLOCKERS.has(nextIndex)) {
-    state.gameMessage = "workboard.gameBlocked";
-    return;
-  }
-  state.gamePlayerIndex = nextIndex;
-  state.gameMoves += 1;
-  state.gameMessage =
-    nextIndex === WORKBOARD_GAME_GOAL ? "workboard.gameWin" : "workboard.gameContinue";
-  if (nextIndex === WORKBOARD_GAME_GOAL) {
-    state.gameWins += 1;
-  }
 }
 
 function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
@@ -404,6 +368,7 @@ function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = card.sessionKey ?? "";
   state.draftTemplateId = card.metadata?.templateId ?? "";
+  state.draftCommentBody = "";
 }
 
 function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId) {
@@ -418,140 +383,6 @@ function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId)
   state.draftPriority = template.priority;
 }
 
-function renderGameArrow(
-  label: string,
-  className: string,
-  delta: number,
-  props: Pick<WorkboardProps, "host" | "onRequestUpdate">,
-) {
-  const state = getWorkboardState(props.host);
-  return html`
-    <button
-      class="btn btn--icon workboard-game__arrow ${className}"
-      type="button"
-      title=${label}
-      aria-label=${label}
-      @click=${() => {
-        moveGamePlayer(state, delta);
-        props.onRequestUpdate?.();
-      }}
-    >
-      ${icons.arrowDown}
-    </button>
-  `;
-}
-
-function renderGameModal(props: WorkboardProps) {
-  const state = getWorkboardState(props.host);
-  if (!state.gameOpen) {
-    return nothing;
-  }
-  return html`
-    <div
-      class="workboard-modal"
-      role="presentation"
-      @click=${(event: MouseEvent) => {
-        if (event.target === event.currentTarget) {
-          state.gameOpen = false;
-          props.onRequestUpdate?.();
-        }
-      }}
-    >
-      <div
-        class="workboard-game"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workboard-game-title"
-        tabindex="0"
-        @keydown=${(event: KeyboardEvent) => {
-          const moves: Record<string, number> = {
-            ArrowDown: WORKBOARD_GAME_SIZE,
-            ArrowLeft: -1,
-            ArrowRight: 1,
-            ArrowUp: -WORKBOARD_GAME_SIZE,
-          };
-          const delta = moves[event.key];
-          if (typeof delta !== "number") {
-            return;
-          }
-          event.preventDefault();
-          moveGamePlayer(state, delta);
-          props.onRequestUpdate?.();
-        }}
-      >
-        <div class="workboard-modal__header">
-          <div>
-            <h2 id="workboard-game-title">${t("workboard.gameTitle")}</h2>
-            <p>${t(state.gameMessage)}</p>
-          </div>
-          <button
-            class="btn btn--icon workboard-card__icon"
-            type="button"
-            title=${t("common.cancel")}
-            @click=${() => {
-              state.gameOpen = false;
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${icons.x}
-          </button>
-        </div>
-        <div class="workboard-game__stats">
-          <span>${t("workboard.gameMoves", { count: String(state.gameMoves) })}</span>
-          <span>${t("workboard.gameWins", { count: String(state.gameWins) })}</span>
-        </div>
-        <div class="workboard-game__grid" role="grid" aria-label=${t("workboard.gameBoard")}>
-          ${Array.from({ length: WORKBOARD_GAME_SIZE * WORKBOARD_GAME_SIZE }, (_, index) => {
-            const player = index === state.gamePlayerIndex;
-            const goal = index === WORKBOARD_GAME_GOAL;
-            const blocker = WORKBOARD_GAME_BLOCKERS.has(index);
-            return html`
-              <div
-                class="workboard-game__cell ${player ? "workboard-game__cell--player" : ""} ${goal
-                  ? "workboard-game__cell--goal"
-                  : ""} ${blocker ? "workboard-game__cell--blocker" : ""}"
-                role="gridcell"
-                aria-label=${player
-                  ? t("workboard.gameAgent")
-                  : goal
-                    ? t("workboard.gameLaunch")
-                    : blocker
-                      ? t("workboard.gameBlockedCell")
-                      : t("workboard.gameOpenCell")}
-              >
-                ${player ? "A" : goal ? "L" : blocker ? "" : ""}
-              </div>
-            `;
-          })}
-        </div>
-        <div class="workboard-game__controls" aria-label=${t("workboard.gameControls")}>
-          ${renderGameArrow(
-            t("workboard.gameMoveUp"),
-            "workboard-game__arrow--up",
-            -WORKBOARD_GAME_SIZE,
-            props,
-          )}
-          ${renderGameArrow(t("workboard.gameMoveLeft"), "workboard-game__arrow--left", -1, props)}
-          ${renderGameArrow(t("workboard.gameMoveDown"), "", WORKBOARD_GAME_SIZE, props)}
-          ${renderGameArrow(t("workboard.gameMoveRight"), "workboard-game__arrow--right", 1, props)}
-        </div>
-        <div class="workboard-modal__actions">
-          <button
-            class="btn"
-            type="button"
-            @click=${() => {
-              resetGame(state);
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${t("common.reset")}
-          </button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
 function renderCardModal(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   const agents = props.agentsList?.agents ?? [];
@@ -560,6 +391,10 @@ function renderCardModal(props: WorkboardProps) {
     return nothing;
   }
   const editing = Boolean(state.editingCardId);
+  const editingCard = state.editingCardId
+    ? (state.cards.find((card) => card.id === state.editingCardId) ?? null)
+    : null;
+  const comments = editingCard?.metadata?.comments ?? [];
   return html`
     <div
       class="workboard-modal"
@@ -736,6 +571,51 @@ function renderCardModal(props: WorkboardProps) {
             />
           </label>
         </div>
+        ${editing
+          ? html`
+              <section
+                class="workboard-field workboard-field--wide"
+                aria-labelledby="workboard-card-comments-title"
+              >
+                <span id="workboard-card-comments-title">
+                  ${t("workboard.badgeComments", { count: String(comments.length) })}
+                </span>
+                ${comments.length
+                  ? html`
+                      <ol>
+                        ${comments.map((comment) => html`<li>${comment.body}</li>`)}
+                      </ol>
+                    `
+                  : nothing}
+                <textarea
+                  class="input workboard-comments__input"
+                  aria-labelledby="workboard-card-comments-title"
+                  maxlength="2000"
+                  .value=${state.draftCommentBody}
+                  @input=${(event: InputEvent) => {
+                    state.draftCommentBody = (event.currentTarget as HTMLTextAreaElement).value;
+                    props.onRequestUpdate?.();
+                  }}
+                ></textarea>
+                <div class="workboard-modal__actions">
+                  <button
+                    class="btn"
+                    type="button"
+                    ?disabled=${state.loading || !state.draftCommentBody.trim()}
+                    @click=${() => {
+                      void addWorkboardCardComment({
+                        host: props.host,
+                        client: props.client,
+                        requestUpdate: props.onRequestUpdate,
+                      });
+                    }}
+                  >
+                    ${icons.plus} ${t("common.create")}
+                  </button>
+                </div>
+              </section>
+            `
+          : nothing}
         <div class="workboard-modal__actions">
           <button class="btn primary" ?disabled=${state.loading || !state.draftTitle.trim()}>
             ${editing ? t("common.save") : t("common.create")}
@@ -808,19 +688,56 @@ function formatLifecycle(lifecycle: WorkboardLifecycle): {
   throw new Error("Unknown workboard lifecycle state.");
 }
 
-function renderLifecycle(card: WorkboardCard, sessions: readonly GatewaySessionRow[]) {
-  const lifecycle = getWorkboardLifecycle(card, sessions);
+function taskDetail(task: WorkboardTaskSummary): string {
+  if (task.status === "queued" || task.status === "running") {
+    return task.progressSummary ?? task.title ?? task.taskId;
+  }
+  return task.terminalSummary ?? task.error ?? task.progressSummary ?? task.title ?? task.taskId;
+}
+
+function taskMatchesLifecycle(task: WorkboardTaskSummary, lifecycle: WorkboardLifecycle): boolean {
+  switch (task.status) {
+    case "queued":
+    case "running":
+      return lifecycle.state === "running";
+    case "completed":
+      return lifecycle.state === "succeeded";
+    case "failed":
+    case "cancelled":
+    case "timed_out":
+      return lifecycle.state === "failed";
+  }
+  return false;
+}
+
+function taskIsActive(task: WorkboardTaskSummary | undefined): boolean {
+  return task?.status === "queued" || task?.status === "running";
+}
+
+function renderLifecycle(
+  card: WorkboardCard,
+  sessions: readonly GatewaySessionRow[],
+  task?: WorkboardTaskSummary,
+) {
+  const lifecycle = getWorkboardLifecycle(card, sessions, task);
   const formatted = formatLifecycle(lifecycle);
   const session = lifecycle.session;
   const execution = card.execution;
   const stale = lifecycle.state === "stale";
+  const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
+  const taskStatus = task && taskIsAuthoritative ? t(`workboard.taskStatus.${task.status}`) : null;
   return html`
     <div class="workboard-card__lifecycle">
       <span class="workboard-lifecycle workboard-lifecycle--${formatted.tone}">
-        ${stale || !execution ? formatted.label : `${execution.engine} ${execution.mode}`}
+        ${taskStatus ??
+        (stale || !execution ? formatted.label : `${execution.engine} ${execution.mode}`)}
       </span>
       <span class="workboard-card__lifecycle-detail">
-        ${stale ? formatted.detail : (session?.displayName ?? session?.label ?? formatted.detail)}
+        ${task && taskIsAuthoritative
+          ? taskDetail(task)
+          : stale
+            ? formatted.detail
+            : (session?.displayName ?? session?.label ?? formatted.detail)}
       </span>
     </div>
   `;
@@ -866,37 +783,70 @@ function renderStartExecutionButton(
 }
 
 function renderStartExecutionControls(props: WorkboardProps, card: WorkboardCard) {
+  const canModelOverride = props.canModelOverride !== false;
   return html`
     <div class="workboard-card__execution-controls">
       ${renderStartExecutionButton(props, card, null, "autonomous")}
-      ${renderStartExecutionButton(props, card, "codex", "autonomous")}
-      ${renderStartExecutionButton(props, card, "claude", "autonomous")}
+      ${canModelOverride
+        ? html`${renderStartExecutionButton(props, card, "codex", "autonomous")}
+          ${renderStartExecutionButton(props, card, "claude", "autonomous")}`
+        : nothing}
       ${renderStartExecutionButton(props, card, "codex", "manual")}
       ${renderStartExecutionButton(props, card, "claude", "manual")}
     </div>
   `;
 }
 
+function renderDispatchSummary(state: WorkboardUiState) {
+  const summary = state.lastDispatchSummary;
+  if (!summary) {
+    return nothing;
+  }
+  const total =
+    summary.started +
+    summary.failures +
+    summary.promoted +
+    summary.blocked +
+    summary.reclaimed +
+    summary.orchestrated;
+  const key = total === 0 ? "workboard.dispatchSummaryEmpty" : "workboard.dispatchSummary";
+  return html`
+    <div class="callout">
+      ${t(key, {
+        started: String(summary.started),
+        failures: String(summary.failures),
+        promoted: String(summary.promoted),
+        blocked: String(summary.blocked),
+        reclaimed: String(summary.reclaimed),
+        orchestrated: String(summary.orchestrated),
+      })}
+    </div>
+  `;
+}
+
 function renderCard(props: WorkboardProps, card: WorkboardCard) {
   const state = getWorkboardState(props.host);
+  const task = state.tasksByCardId.get(card.id);
   const session = findWorkboardSession(card, props.sessions);
   const busy = state.busyCardId === card.id;
   const syncing = state.syncingCardIds.has(card.id);
+  const activeTask = taskIsActive(task);
   const live =
+    activeTask ||
     session?.hasActiveRun === true ||
     (session?.hasActiveRun !== false && session?.status === "running");
   const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
-  const linked = Boolean(linkedSessionKey);
+  const openable = Boolean(linkedSessionKey);
   const writable = canMutate(props);
-  const showStartControls = writable && (!linked || !session);
+  const showStartControls = writable && !activeTask && (!linkedSessionKey || !session);
   return html`
     <article
-      class="workboard-card priority-${card.priority} ${busy ? "workboard-card--busy" : ""} ${linked
-        ? "workboard-card--openable"
-        : ""}"
-      role=${linked ? "button" : nothing}
-      tabindex=${linked ? 0 : nothing}
-      title=${linked ? t("workboard.openLinkedSession") : nothing}
+      class="workboard-card priority-${card.priority} ${busy
+        ? "workboard-card--busy"
+        : ""} ${openable ? "workboard-card--openable" : ""}"
+      role=${openable ? "button" : nothing}
+      tabindex=${openable ? 0 : nothing}
+      title=${openable ? t("workboard.openLinkedSession") : nothing}
       draggable=${writable ? "true" : "false"}
       @click=${(event: MouseEvent) => {
         if (!isCardActionTarget(event)) {
@@ -932,7 +882,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         ${syncing ? html`<span class="workboard-live">${t("common.saving")}</span>` : nothing}
       </div>
       <h3>${card.title}</h3>
-      ${card.notes ? html`<p>${card.notes}</p>` : nothing} ${renderLifecycle(card, props.sessions)}
+      ${card.notes ? html`<p>${card.notes}</p>` : nothing}
+      ${renderLifecycle(card, props.sessions, task)}
       ${card.labels.length
         ? html`<div class="workboard-labels">
             ${card.labels.map((label) => html`<span>${label}</span>`)}
@@ -961,12 +912,12 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
               </button>
             `
           : nothing}
-        ${linked
+        ${linkedSessionKey
           ? html`
               <button
                 class="btn btn--icon workboard-card__icon"
                 title=${t("workboard.openSession")}
-                @click=${() => props.onOpenSession(linkedSessionKey!)}
+                @click=${() => props.onOpenSession(linkedSessionKey)}
               >
                 ${icons.messageSquare}
               </button>
@@ -988,6 +939,24 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
                     </button>
                   `
                 : nothing}
+            `
+          : nothing}
+        ${!linkedSessionKey && writable && activeTask
+          ? html`
+              <button
+                class="btn btn--icon workboard-card__icon"
+                title=${t("workboard.stopSession")}
+                ?disabled=${busy || !props.connected}
+                @click=${() =>
+                  stopWorkboardCard({
+                    host: props.host,
+                    client: props.client,
+                    card,
+                    requestUpdate: props.onRequestUpdate,
+                  })}
+              >
+                ${icons.stop}
+              </button>
             `
           : nothing}
         ${showStartControls ? renderStartExecutionControls(props, card) : nothing}
@@ -1170,15 +1139,6 @@ export function renderWorkboard(props: WorkboardProps) {
                 </button>
               `
             : nothing}
-          <button
-            class="btn"
-            @click=${() => {
-              state.gameOpen = true;
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${icons.play} ${t("workboard.gameButton")}
-          </button>
           ${writable
             ? html`
                 <button
@@ -1195,7 +1155,7 @@ export function renderWorkboard(props: WorkboardProps) {
         </div>
       </div>
       ${state.error ? html`<div class="callout danger">${state.error}</div>` : nothing}
-      ${renderGameModal(props)} ${renderCardModal(props)}
+      ${renderDispatchSummary(state)} ${renderCardModal(props)}
       <div class="workboard-board">
         ${state.statuses.map((status) => renderColumn(props, status, byStatus.get(status) ?? []))}
       </div>

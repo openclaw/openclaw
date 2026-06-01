@@ -1633,7 +1633,9 @@ async function getFreeGatewayPort(): Promise<number> {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function sanitizeAuthProfileStoreForLiveGateway(store: AuthProfileStore): AuthProfileStore {
@@ -1722,7 +1724,6 @@ async function connectClientOnce(params: { url: string; token: string; timeoutMs
   const timeoutMs = params.timeoutMs ?? 10_000;
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let client: GatewayClient | undefined;
     const stop = (err?: Error, nextClient?: GatewayClient) => {
       if (settled) {
         return;
@@ -1738,7 +1739,7 @@ async function connectClientOnce(params: { url: string; token: string; timeoutMs
         resolve(nextClient as GatewayClient);
       }
     };
-    client = new GatewayClient({
+    const client: GatewayClient | undefined = new GatewayClient({
       url: params.url,
       token: params.token,
       requestTimeoutMs: Math.max(timeoutMs, GATEWAY_LIVE_MODEL_TIMEOUT_MS),
@@ -1901,7 +1902,9 @@ async function waitForSessionAssistantText(params: {
         `${params.context}: waiting for transcript (${Math.max(1, Math.round((Date.now() - startedAt) / 1_000))}s)`,
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
     delayMs = Math.min(delayMs * 2, 250);
   }
   throw new Error(`${timeoutLabel} timeout after ${timeoutMs}ms (${params.context})`);
@@ -2542,8 +2545,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     agentDir: process.env.OPENCLAW_AGENT_DIR,
     stateDir: process.env.OPENCLAW_STATE_DIR,
   };
-  let tempAgentDir: string | undefined;
-  let tempStateDir: string | undefined;
 
   process.env.OPENCLAW_SKIP_CHANNELS = "1";
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -2571,9 +2572,16 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   });
-  tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+  const tempStateDir: string | undefined = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-live-state-"),
+  );
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
-  tempAgentDir = path.join(tempStateDir, "agents", DEFAULT_AGENT_ID, "agent");
+  const tempAgentDir: string | undefined = path.join(
+    tempStateDir,
+    "agents",
+    DEFAULT_AGENT_ID,
+    "agent",
+  );
   saveAuthProfileStore(sanitizedStore, tempAgentDir);
   const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
   if (tempSessionAgentDir !== tempAgentDir) {

@@ -31,6 +31,14 @@ type McpOAuthConfig = {
   clientMetadataUrl?: unknown;
 };
 
+export type McpOAuthCredentialsStatus = {
+  hasTokens: boolean;
+  hasClientInformation: boolean;
+  hasCodeVerifier: boolean;
+  hasDiscoveryState: boolean;
+  hasLastAuthorizationUrl: boolean;
+};
+
 const DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
 
 function oauthStorePath(serverName: string, serverUrl: string): string {
@@ -165,6 +173,20 @@ export async function clearMcpOAuthCredentials(params: {
   serverUrl: string;
 }): Promise<void> {
   await fs.rm(oauthStorePath(params.serverName, params.serverUrl), { force: true });
+}
+
+export async function readMcpOAuthCredentialsStatus(params: {
+  serverName: string;
+  serverUrl: string;
+}): Promise<McpOAuthCredentialsStatus> {
+  const store = await readStore(oauthStorePath(params.serverName, params.serverUrl));
+  return {
+    hasTokens: Boolean(store.tokens),
+    hasClientInformation: Boolean(store.clientInformation),
+    hasCodeVerifier: Boolean(store.codeVerifier),
+    hasDiscoveryState: Boolean(store.discoveryState),
+    hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
+  };
 }
 
 export async function runMcpOAuthLogin(params: {

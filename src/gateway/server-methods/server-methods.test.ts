@@ -1520,22 +1520,8 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {
-  it("uses gateway.webchat.chatHistoryMaxChars when RPC maxChars is absent", () => {
-    expect(
-      resolveEffectiveChatHistoryMaxChars(
-        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
-        undefined,
-      ),
-    ).toBe(123);
-  });
-
-  it("prefers RPC maxChars over config", () => {
-    expect(
-      resolveEffectiveChatHistoryMaxChars(
-        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
-        45,
-      ),
-    ).toBe(45);
+  it("uses the RPC maxChars override when present", () => {
+    expect(resolveEffectiveChatHistoryMaxChars({}, 45)).toBe(45);
   });
 
   it("falls back to the default hardcoded limit", () => {
@@ -1726,7 +1712,8 @@ describe("exec approval handlers", () => {
       ...defaultExecApprovalRequestParams,
       ...params.params,
     } as unknown as ExecApprovalRequestArgs["params"];
-    const hasExplicitPlan = !!params.params && Object.hasOwn(params.params, "systemRunPlan");
+    const hasExplicitPlan =
+      params.params !== undefined && Object.hasOwn(params.params, "systemRunPlan");
     if (
       !hasExplicitPlan &&
       (requestParams as { host?: string }).host === "node" &&
@@ -1842,7 +1829,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
     return {
@@ -2076,7 +2063,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
     const ownerClient = {
       connId: "conn-owner",
@@ -2695,7 +2682,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
 
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
@@ -2717,7 +2704,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
     };
 
     void manager.register(
@@ -2767,7 +2754,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (eventValue: string, _payload: unknown) => {},
+      broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
     const respondOne = vi.fn();

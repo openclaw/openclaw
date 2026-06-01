@@ -270,9 +270,9 @@ async function allocatePort() {
   });
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  await new Promise((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  await new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
   if (!port) {
     throw new Error("failed to allocate a local port");
   }
@@ -556,15 +556,7 @@ function serviceManagerEnv(source) {
 
 async function startGateway(envCtx, port, token = TOKEN_V1) {
   const command = await resolveOpenClawCommand(
-    [
-      "gateway",
-      "run",
-      "--port",
-      String(port),
-      "--bind",
-      "loopback",
-      "--allow-unconfigured",
-    ],
+    ["gateway", "run", "--port", String(port), "--bind", "loopback", "--allow-unconfigured"],
     envCtx.env,
     {
       detached: process.platform !== "win32",
@@ -725,15 +717,7 @@ async function expectReloadMayCloseForAuthChange(env, port, token) {
 
 async function expectGatewayStartupFails(envCtx, port, reason) {
   const command = await resolveOpenClawCommand(
-    [
-      "gateway",
-      "run",
-      "--port",
-      String(port),
-      "--bind",
-      "loopback",
-      "--allow-unconfigured",
-    ],
+    ["gateway", "run", "--port", String(port), "--bind", "loopback", "--allow-unconfigured"],
     envCtx.env,
     {
       detached: process.platform !== "win32",
@@ -1119,10 +1103,10 @@ async function p8ManagedServiceEnvProof() {
       }
     }
     if (proofError) {
-      throw proofError;
+      throw toLintErrorObject(proofError, "Non-Error thrown");
     }
     if (cleanupError) {
-      throw cleanupError;
+      throw toLintErrorObject(cleanupError, "Non-Error thrown");
     }
   });
   return "real managed service install preserved auth-profile exec provider passEnv";
@@ -1344,28 +1328,16 @@ async function p12OpenAiLiveProof() {
 async function runPtySecretsConfigurePreset(envCtx) {
   const { spawn } = await import("@lydell/node-pty");
   const command = await resolveOpenClawCommand(
-    [
-      "secrets",
-      "configure",
-      "--providers-only",
-      "--apply",
-      "--yes",
-      "--allow-exec",
-      "--json",
-    ],
+    ["secrets", "configure", "--providers-only", "--apply", "--yes", "--allow-exec", "--json"],
     envCtx.env,
   );
-  const child = spawn(
-    command.command,
-    command.args,
-    {
-      name: "xterm-256color",
-      cols: 100,
-      rows: 30,
-      cwd: command.options.cwd ?? process.cwd(),
-      env: command.options.env ?? envCtx.env,
-    },
-  );
+  const child = spawn(command.command, command.args, {
+    name: "xterm-256color",
+    cols: 100,
+    rows: 30,
+    cwd: command.options.cwd ?? process.cwd(),
+    env: command.options.env ?? envCtx.env,
+  });
   let output = "";
   let phase = "providers-menu";
   const sendKeys = (keys) => {
@@ -1606,7 +1578,7 @@ async function main() {
     });
   }
   if (runError) {
-    throw runError;
+    throw toLintErrorObject(runError, "Non-Error thrown");
   }
   const failed = results.filter((entry) => entry.status !== "pass");
   if (failed.length > 0) {
@@ -1618,4 +1590,18 @@ export { gatewayCall, runCommand, startGateway, waitForManagedGatewayStatus };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   await main();
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

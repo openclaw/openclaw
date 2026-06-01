@@ -83,7 +83,6 @@ const AcpBindingSchema = z
         path: ["match", "peer"],
         message: "ACP bindings require match.peer.id to target a concrete conversation.",
       });
-      return;
     }
   });
 

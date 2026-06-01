@@ -1,9 +1,33 @@
 import { spawnSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/qa-otel-smoke.ts";
 
 describe("qa-otel-smoke receiver bounds", () => {
+  let configuredBodyLimitLoad: ReturnType<typeof spawnSync>;
+
+  beforeAll(() => {
+    configuredBodyLimitLoad = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        'await import("./scripts/qa-otel-smoke.ts");',
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_QA_OTEL_MAX_CAPTURED_BODY_TEXT_BYTES: "1024",
+          OPENCLAW_QA_OTEL_MAX_COMPRESSED_BODY_BYTES: "2048",
+          OPENCLAW_QA_OTEL_MAX_DECODED_BODY_BYTES: "4096",
+        },
+      },
+    );
+  });
+
   it("accepts package-manager forwarded arguments", () => {
     expect(
       testing.parseArgs([
@@ -40,28 +64,8 @@ describe("qa-otel-smoke receiver bounds", () => {
   });
 
   it("loads with configured body-size limit env values", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "--eval",
-        'await import("./scripts/qa-otel-smoke.ts");',
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_QA_OTEL_MAX_CAPTURED_BODY_TEXT_BYTES: "1024",
-          OPENCLAW_QA_OTEL_MAX_COMPRESSED_BODY_BYTES: "2048",
-          OPENCLAW_QA_OTEL_MAX_DECODED_BODY_BYTES: "4096",
-        },
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("ReferenceError");
+    expect(configuredBodyLimitLoad.status).toBe(0);
+    expect(configuredBodyLimitLoad.stderr).not.toContain("ReferenceError");
   });
 
   it("rejects identity OTLP bodies above the decoded byte ceiling", () => {

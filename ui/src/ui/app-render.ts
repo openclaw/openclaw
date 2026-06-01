@@ -13,8 +13,6 @@ import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
-  renderChatMobileToggle,
-  renderChatSessionSelect,
   renderTab,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
@@ -24,10 +22,11 @@ import {
   dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
-import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
+  renderChatSessionSelect,
   resolveChatAgentFilterId,
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
@@ -66,6 +65,7 @@ import {
   updateConfigRawValue,
   updateConfigFormValue,
   removeConfigFormValue,
+  updateMcpServerEnabled,
 } from "./controllers/config.ts";
 import {
   loadCronJobsPage,
@@ -170,7 +170,7 @@ import {
 import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
-import type { GatewaySessionRow } from "./types.ts";
+import type { AgentsFilesGetResult, AgentsFilesListResult, GatewaySessionRow } from "./types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -195,11 +195,20 @@ import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
+import { renderMcp } from "./views/mcp.ts";
 import { renderOverview } from "./views/overview.ts";
 
 let pendingUpdate: (() => void) | undefined;
 
 const notifyLazyViewChanged = () => pendingUpdate?.();
+
+function runUiTask<Args extends unknown[]>(
+  task: (...args: Args) => Promise<unknown>,
+): (...args: Args) => void {
+  return (...args) => {
+    void task(...args);
+  };
+}
 
 function renderSettingsSectionNav(state: AppViewState) {
   if (!isSettingsTab(state.tab)) {
@@ -345,6 +354,13 @@ function renderSidebarSessions(state: AppViewState) {
               >${t("chat.runControls.newSession")}</span
             >`}
       </button>
+      <div class="sidebar-session-select ${collapsed ? "sidebar-session-select--collapsed" : ""}">
+        ${renderChatSessionSelect(state, switchChatSession, {
+          compact: collapsed,
+          sessionSwitcherOnly: true,
+          surface: "sidebar",
+        })}
+      </div>
       ${collapsed || recent.length === 0
         ? nothing
         : html`
@@ -388,6 +404,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
     <a
       href=${href}
       class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
+      data-session-key=${row.key}
       title=${`${label} · ${row.key}`}
       @click=${(event: MouseEvent) => {
         if (
@@ -435,6 +452,38 @@ const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyVie
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
+
+type ChatWorkspaceFilesState = {
+  activeName: string | null;
+  agentId: string;
+  error: string | null;
+  list: AgentsFilesListResult | null;
+  loading: boolean;
+  requestId: number;
+};
+
+const chatWorkspaceFilesStates = new WeakMap<AppViewState, ChatWorkspaceFilesState>();
+const chatWorkspaceFileOpenRequests = new WeakMap<
+  AppViewState,
+  { agentId: string; id: number; name: string; sessionKey: string }
+>();
+
+function getChatWorkspaceFilesState(state: AppViewState, agentId: string): ChatWorkspaceFilesState {
+  const current = chatWorkspaceFilesStates.get(state);
+  if (current?.agentId === agentId) {
+    return current;
+  }
+  const next = {
+    activeName: null,
+    agentId,
+    error: null,
+    list: null,
+    loading: false,
+    requestId: 0,
+  };
+  chatWorkspaceFilesStates.set(state, next);
+  return next;
+}
 
 export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   return (
@@ -964,6 +1013,14 @@ function renderCronQuickCreateForTab(
   });
 }
 
+function buildWorkspaceFileSidebarContent(name: string, content: string): string {
+  if (/\.(?:md|markdown|mdx)$/i.test(name)) {
+    return content;
+  }
+  const language = name.match(/\.([a-z0-9_-]+)$/i)?.[1]?.toLowerCase() ?? "";
+  return `# ${name}\n\n\`\`\`${language}\n${content}\n\`\`\``;
+}
+
 export function renderApp(state: AppViewState) {
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
   const requestHostUpdate =
@@ -983,9 +1040,10 @@ export function renderApp(state: AppViewState) {
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
-  const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
-  const chatHeaderHidden = isChat && (chatFocus || state.chatHeaderControlsHidden);
-  const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
+  const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
+  const chatViewError = state.lastError;
+  const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
+  const navDrawerOpen = state.navDrawerOpen && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -1147,10 +1205,35 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.agents?.[0]?.id ??
     null;
   const resolvedAgentId = resolveSelectedAgentId();
-  const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
-  const toolsPanelUsesActiveSession = Boolean(
-    resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
+  const normalizedChatSessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
+  const activeSessionAgentId =
+    normalizedChatSessionKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
+  const scopedChatAgentId = scopedAgentParamsForSession(state, state.sessionKey).agentId;
+  const chatFallbackAgentId = normalizeAgentId(
+    state.assistantAgentId ??
+      state.agentsList?.defaultId ??
+      state.agentsList?.agents?.[0]?.id ??
+      "main",
   );
+  const resolveChatWorkspaceAgentId = () => {
+    const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
+    const activeAgentId =
+      normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
+    const scopedAgentId = scopedAgentParamsForSession(state, state.sessionKey).agentId;
+    return normalizedKey === "global"
+      ? (scopedAgentId ?? chatFallbackAgentId)
+      : (activeAgentId ?? scopedAgentId ?? chatFallbackAgentId);
+  };
+  const chatAgentId =
+    normalizedChatSessionKey === "global"
+      ? (scopedChatAgentId ?? chatFallbackAgentId)
+      : (activeSessionAgentId ?? scopedChatAgentId ?? chatFallbackAgentId);
+  const toolsPanelUsesActiveSession = Boolean(resolvedAgentId && resolvedAgentId === chatAgentId);
+  const chatWorkspaceFiles = getChatWorkspaceFilesState(state, chatAgentId);
+  const currentChatWorkspaceFilesState = () =>
+    resolveChatWorkspaceAgentId() === chatAgentId
+      ? getChatWorkspaceFilesState(state, chatAgentId)
+      : null;
   const getCurrentConfigValue = () =>
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const findAgentIndex = (agentId: string) =>
@@ -1246,12 +1329,12 @@ export function renderApp(state: AppViewState) {
     onRequestUpdate: requestHostUpdate,
     onFormPatch: (path: Array<string | number>, value: unknown) =>
       updateConfigFormValue(state, path, value),
-    onReload: () => loadConfig(state, { discardPendingChanges: true }),
+    onReload: () => void loadConfig(state, { discardPendingChanges: true }),
     onReset: () => resetConfigPendingChanges(state),
-    onSave: () => saveConfig(state),
-    onApply: () => applyConfig(state),
-    onUpdate: () => runUpdate(state),
-    onOpenFile: () => openConfigFile(state),
+    onSave: () => void saveConfig(state),
+    onApply: () => void applyConfig(state),
+    onUpdate: () => void runUpdate(state),
+    onOpenFile: () => void openConfigFile(state),
     version: state.hello?.server?.version ?? "",
     theme: state.theme,
     themeMode: state.themeMode,
@@ -1278,8 +1361,8 @@ export function renderApp(state: AppViewState) {
     configPath: state.configSnapshot?.path ?? null,
     rawAvailable:
       typeof state.configSnapshot?.raw === "string" ||
-      !!state.configSnapshot?.config ||
-      !!state.configForm,
+      Boolean(state.configSnapshot?.config) ||
+      Boolean(state.configForm),
   } satisfies Omit<
     ConfigProps,
     | "formMode"
@@ -1416,8 +1499,7 @@ export function renderApp(state: AppViewState) {
               state.setTab("skills");
             },
             onConfigureMcp: () => {
-              state.infrastructureActiveSection = "mcp";
-              state.setTab("infrastructure");
+              state.setTab("mcp");
             },
             security: extractQuickSettingsSecurity(state),
             onSecurityConfigure: () => {
@@ -1498,8 +1580,8 @@ export function renderApp(state: AppViewState) {
               requestHostUpdate?.();
             },
             onResetConfig: () => resetConfigPendingChanges(state),
-            onSaveConfig: () => saveConfig(state),
-            onApplyConfig: () => applyConfig(state),
+            onSaveConfig: () => void saveConfig(state),
+            onApplyConfig: () => void applyConfig(state),
             onAdvancedSettings: () => {
               state.configSettingsMode = "advanced";
               requestHostUpdate?.();
@@ -1559,20 +1641,20 @@ export function renderApp(state: AppViewState) {
             configFormDirty: state.configFormDirty,
             nostrProfileFormState: state.nostrProfileFormState,
             nostrProfileAccountId: state.nostrProfileAccountId,
-            onRefresh: (probe) => loadChannels(state, probe),
-            onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
-            onWhatsAppWait: () => state.handleWhatsAppWait(),
-            onWhatsAppLogout: () => state.handleWhatsAppLogout(),
+            onRefresh: (probe) => void loadChannels(state, probe),
+            onWhatsAppStart: (force) => void state.handleWhatsAppStart(force),
+            onWhatsAppWait: () => void state.handleWhatsAppWait(),
+            onWhatsAppLogout: () => void state.handleWhatsAppLogout(),
             onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
-            onConfigSave: () => state.handleChannelConfigSave(),
-            onConfigReload: () => state.handleChannelConfigReload(),
+            onConfigSave: () => void state.handleChannelConfigSave(),
+            onConfigReload: () => void state.handleChannelConfigReload(),
             onNostrProfileEdit: (accountId, profile) =>
               state.handleNostrProfileEdit(accountId, profile),
             onNostrProfileCancel: () => state.handleNostrProfileCancel(),
             onNostrProfileFieldChange: (field, value) =>
               state.handleNostrProfileFieldChange(field, value),
-            onNostrProfileSave: () => state.handleNostrProfileSave(),
-            onNostrProfileImport: () => state.handleNostrProfileImport(),
+            onNostrProfileSave: () => void state.handleNostrProfileSave(),
+            onNostrProfileImport: () => void state.handleNostrProfileImport(),
             onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
           }),
         );
@@ -1598,9 +1680,9 @@ export function renderApp(state: AppViewState) {
             subscribed: state.webPushSubscribed,
             loading: state.webPushLoading,
           },
-          onWebPushSubscribe: () => state.handleWebPushSubscribe(),
-          onWebPushUnsubscribe: () => state.handleWebPushUnsubscribe(),
-          onWebPushTest: () => state.handleWebPushTest(),
+          onWebPushSubscribe: () => void state.handleWebPushSubscribe(),
+          onWebPushUnsubscribe: () => void state.handleWebPushUnsubscribe(),
+          onWebPushTest: () => void state.handleWebPushTest(),
         });
       case "appearance":
         return renderConfigTab({
@@ -1634,6 +1716,37 @@ export function renderApp(state: AppViewState) {
           onSubsectionChange: (section) => (state.automationActiveSubsection = section),
           navRootLabel: "Automation",
           includeSections: [...AUTOMATION_SECTION_KEYS],
+        });
+      case "mcp":
+        return renderMcp({
+          configObject:
+            state.configForm ??
+            ((state.configSnapshot?.config as Record<string, unknown> | null) || {}),
+          configDirty: state.configFormDirty,
+          configSaving: state.configSaving,
+          configApplying: state.configApplying,
+          connected: state.connected,
+          onSaveConfig: () => void saveConfig(state),
+          onApplyConfig: () => void applyConfig(state),
+          onServerEnabledChange: (name, enabled) => {
+            updateMcpServerEnabled(state, name, enabled);
+            requestHostUpdate?.();
+          },
+          editor: renderConfigTab({
+            formMode: "form",
+            searchQuery: "",
+            activeSection: "mcp",
+            activeSubsection: null,
+            onFormModeChange: () => undefined,
+            onSearchChange: () => undefined,
+            onSectionChange: () => {
+              state.infrastructureActiveSection = "mcp";
+              state.infrastructureActiveSubsection = null;
+            },
+            onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
+            navRootLabel: "MCP",
+            includeSections: ["mcp"],
+          }),
         });
       case "infrastructure":
         return renderConfigTab({
@@ -1685,11 +1798,9 @@ export function renderApp(state: AppViewState) {
       case "tools":
         void loadToolsCatalog(state, agentId);
         void refreshVisibleToolsEffectiveForCurrentSession(state);
-        return;
       case "overview":
       case "channels":
       case "cron":
-        return;
     }
   };
   const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
@@ -1721,6 +1832,114 @@ export function renderApp(state: AppViewState) {
     state.toolsCatalogLoading = false;
     resetToolsEffectiveState(state);
   };
+  if (
+    isChat &&
+    state.connected &&
+    state.agentsList &&
+    !chatWorkspaceFiles.loading &&
+    !chatWorkspaceFiles.error &&
+    chatWorkspaceFiles.list?.agentId !== chatAgentId
+  ) {
+    loadChatWorkspaceFiles();
+  }
+  const refreshChatWorkspaceFiles = () => {
+    loadChatWorkspaceFiles({ force: true });
+  };
+  function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
+    if (!state.client || !state.connected || chatWorkspaceFiles.loading) {
+      return;
+    }
+    const requestId = chatWorkspaceFiles.requestId + 1;
+    chatWorkspaceFiles.requestId = requestId;
+    chatWorkspaceFiles.loading = true;
+    chatWorkspaceFiles.error = null;
+    if (opts?.force) {
+      chatWorkspaceFiles.list = null;
+    }
+    const requestState = chatWorkspaceFiles;
+    void (async () => {
+      try {
+        const res = await state.client?.request<AgentsFilesListResult | null>("agents.files.list", {
+          agentId: chatAgentId,
+        });
+        const current = currentChatWorkspaceFilesState();
+        if (current !== requestState || current.requestId !== requestId) {
+          return;
+        }
+        current.list = res ?? null;
+        if (current.activeName && !res?.files.some((file) => file.name === current.activeName)) {
+          current.activeName = null;
+        }
+      } catch (err) {
+        const current = currentChatWorkspaceFilesState();
+        if (current === requestState && current.requestId === requestId) {
+          current.error = String(err);
+        }
+      } finally {
+        const current = currentChatWorkspaceFilesState();
+        if (current === requestState && current.requestId === requestId) {
+          current.loading = false;
+        }
+        requestHostUpdate?.();
+      }
+    })();
+  }
+  const openChatWorkspaceFile = (name: string) => {
+    chatWorkspaceFiles.activeName = name;
+    const previousRequest = chatWorkspaceFileOpenRequests.get(state);
+    const openRequest = {
+      agentId: chatAgentId,
+      id: (previousRequest?.id ?? 0) + 1,
+      name,
+      sessionKey: state.sessionKey,
+    };
+    chatWorkspaceFileOpenRequests.set(state, openRequest);
+    const isCurrentOpenRequest = () => {
+      const currentRequest = chatWorkspaceFileOpenRequests.get(state);
+      const currentFiles = currentChatWorkspaceFilesState();
+      return (
+        currentRequest?.id === openRequest.id &&
+        currentRequest.agentId === resolveChatWorkspaceAgentId() &&
+        currentRequest.name === name &&
+        currentRequest.sessionKey === state.sessionKey &&
+        currentFiles?.activeName === name
+      );
+    };
+    void (async () => {
+      if (!state.client || !state.connected) {
+        return;
+      }
+      chatWorkspaceFiles.error = null;
+      try {
+        const res = await state.client.request<AgentsFilesGetResult | null>("agents.files.get", {
+          agentId: chatAgentId,
+          name,
+        });
+        const content = res?.file?.content;
+        if (typeof content !== "string") {
+          if (isCurrentOpenRequest()) {
+            chatWorkspaceFiles.error = `Failed to load ${name}`;
+            requestHostUpdate?.();
+          }
+          return;
+        }
+        if (!isCurrentOpenRequest()) {
+          return;
+        }
+        state.handleOpenSidebar({
+          kind: "markdown",
+          content: buildWorkspaceFileSidebarContent(name, content),
+          rawText: content,
+        });
+      } catch (err) {
+        if (isCurrentOpenRequest()) {
+          chatWorkspaceFiles.error = String(err);
+        }
+      } finally {
+        requestHostUpdate?.();
+      }
+    })();
+  };
 
   return html`
     ${renderCommandPalette({
@@ -1745,11 +1964,11 @@ export function renderApp(state: AppViewState) {
       },
     })}
     <div
-      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus
-        ? "shell--chat-focus"
-        : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen
-        ? "shell--nav-drawer-open"
-        : ""} ${state.onboarding ? "shell--onboarding" : ""}"
+      class="shell ${isChat ? "shell--chat" : ""} ${navCollapsed
+        ? "shell--nav-collapsed"
+        : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${state.onboarding
+        ? "shell--onboarding"
+        : ""}"
       style=${styleMap(
         state.chatMessageMaxWidth ? { "--chat-message-max-width": state.chatMessageMaxWidth } : {},
       )}
@@ -1762,7 +1981,11 @@ export function renderApp(state: AppViewState) {
           state.navDrawerOpen = false;
         }}
       ></button>
-      <header class="topbar" ?inert=${chatFocus} aria-hidden=${chatFocus ? "true" : nothing}>
+      <header
+        class="topbar"
+        ?inert=${state.onboarding}
+        aria-hidden=${state.onboarding ? "true" : nothing}
+      >
         <div class="topnav-shell">
           <button
             type="button"
@@ -1798,10 +2021,7 @@ export function renderApp(state: AppViewState) {
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
-            <div class="topbar-status">
-              ${isChat ? renderChatMobileToggle(state) : nothing}
-              ${renderTopbarThemeModeToggle(state)}
-            </div>
+            <div class="topbar-status">${renderTopbarThemeModeToggle(state)}</div>
           </div>
         </div>
       </header>
@@ -1956,7 +2176,7 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>`
           : nothing}
-        ${state.tab === "config"
+        ${state.tab === "config" || isChat
           ? nothing
           : html`<section
               class=${chatHeaderHidden
@@ -1966,10 +2186,8 @@ export function renderApp(state: AppViewState) {
               aria-hidden=${chatHeaderHidden ? "true" : nothing}
             >
               <div>
-                ${isChat
-                  ? renderChatSessionSelect(state)
-                  : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
-                ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
+                <div class="page-title">${titleForTab(state.tab)}</div>
+                <div class="page-sub">${subtitleForTab(state.tab)}</div>
               </div>
               <div class="page-meta">
                 ${state.tab === "dreams"
@@ -1999,10 +2217,7 @@ export function renderApp(state: AppViewState) {
                       </div>
                     `
                   : nothing}
-                ${state.lastError
-                  ? html`<div class="pill danger">${state.lastError}</div>`
-                  : nothing}
-                ${isChat ? renderChatControls(state) : nothing}
+                ${headerError ? html`<div class="pill danger">${headerError}</div>` : nothing}
               </div>
             </section>`}
         ${state.tab === "overview"
@@ -2042,9 +2257,9 @@ export function renderApp(state: AppViewState) {
                 state.overviewShowGatewayPassword = !state.overviewShowGatewayPassword;
               },
               onConnect: () => state.connect(),
-              onRefresh: () => state.loadOverview({ refresh: true }),
+              onRefresh: () => void state.loadOverview({ refresh: true }),
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
-              onRefreshLogs: () => state.loadOverview({ refresh: true }),
+              onRefreshLogs: () => void state.loadOverview({ refresh: true }),
             })
           : nothing}
         ${state.tab === "activity"
@@ -2103,7 +2318,7 @@ export function renderApp(state: AppViewState) {
                 entries: state.presenceEntries,
                 lastError: state.presenceError,
                 statusMessage: state.presenceStatus,
-                onRefresh: () => loadPresence(state),
+                onRefresh: () => void loadPresence(state),
               }),
             )
           : nothing}
@@ -2202,8 +2417,8 @@ export function renderApp(state: AppViewState) {
                   state.sessionsPageSize = s;
                   state.sessionsPage = 0;
                 },
-                onRefresh: () => loadSessions(state),
-                onPatch: (key, patch) => patchSession(state, key, patch),
+                onRefresh: () => void loadSessions(state),
+                onPatch: (key, patch) => void patchSession(state, key, patch),
                 onToggleSelect: (key) => {
                   const next = new Set(state.sessionsSelectedKeys);
                   if (next.has(key)) {
@@ -2230,7 +2445,7 @@ export function renderApp(state: AppViewState) {
                 onDeselectAll: () => {
                   state.sessionsSelectedKeys = new Set();
                 },
-                onDeleteSelected: async () => {
+                onDeleteSelected: runUiTask(async () => {
                   const keys = [...state.sessionsSelectedKeys];
                   const deleted = await deleteSessionsAndRefresh(state, keys);
                   if (deleted.length > 0) {
@@ -2240,14 +2455,14 @@ export function renderApp(state: AppViewState) {
                     }
                     state.sessionsSelectedKeys = next;
                   }
-                },
+                }),
                 onNavigateToChat: (sessionKey) => {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
                 onAddToWorkboard:
                   workboardEnabled && operatorCanWrite
-                    ? async (session) => {
+                    ? runUiTask(async (session) => {
                         await captureSessionToWorkboard({
                           host: state,
                           client: state.client,
@@ -2255,11 +2470,11 @@ export function renderApp(state: AppViewState) {
                           requestUpdate: requestHostUpdate,
                         });
                         state.setTab("workboard" as import("./navigation.ts").Tab);
-                      }
+                      })
                     : undefined,
                 onToggleCheckpointDetails: (sessionKey) =>
-                  toggleSessionCompactionCheckpoints(state, sessionKey),
-                onBranchFromCheckpoint: async (sessionKey, checkpointId) => {
+                  void toggleSessionCompactionCheckpoints(state, sessionKey),
+                onBranchFromCheckpoint: runUiTask(async (sessionKey, checkpointId) => {
                   const nextKey = await branchSessionFromCheckpoint(
                     state,
                     sessionKey,
@@ -2269,22 +2484,23 @@ export function renderApp(state: AppViewState) {
                     switchChatSession(state, nextKey);
                     state.setTab("chat" as import("./navigation.ts").Tab);
                   }
-                },
+                }),
                 onRestoreCheckpoint: (sessionKey, checkpointId) =>
-                  restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
+                  void restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
               });
             })
           : nothing}
         ${state.tab === "workboard"
-          ? renderLazyView(lazyWorkboard, (m) =>
-              m.renderWorkboard({
+          ? renderLazyView(lazyWorkboard, (m) => {
+              const auth =
+                (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                null;
+              return m.renderWorkboard({
                 host: state,
                 client: state.client,
                 connected: state.connected,
-                canWrite: hasOperatorWriteAccess(
-                  (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
-                    null,
-                ),
+                canWrite: hasOperatorWriteAccess(auth),
+                canModelOverride: hasOperatorAdminAccess(auth),
                 pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
                   enabledByDefault: false,
                 }),
@@ -2295,8 +2511,8 @@ export function renderApp(state: AppViewState) {
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
                 onRequestUpdate: requestHostUpdate,
-              }),
-            )
+              });
+            })
           : nothing}
         ${renderUsageTab(state)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
@@ -2349,7 +2565,7 @@ export function renderApp(state: AppViewState) {
                   state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
                   state.cronFieldErrors = validateCronForm(state.cronForm);
                 },
-                onRefresh: () => state.loadCron(),
+                onRefresh: () => void state.loadCron(),
                 onAdd: () => {
                   void (async () => {
                     const saved = await addCronJob(state);
@@ -2376,21 +2592,22 @@ export function renderApp(state: AppViewState) {
                   state.cronFormCollapsed = collapsed;
                   requestHostUpdate?.();
                 },
-                onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
-                onRun: (job, mode) => runCronJob(state, job, mode ?? "force"),
-                onRemove: (job) => removeCronJob(state, job),
+                onToggle: (job, enabled) => void toggleCronJob(state, job, enabled),
+                onRun: (job, mode) => void runCronJob(state, job, mode ?? "force"),
+                onRemove: (job) => void removeCronJob(state, job),
                 onQuickCreate: () => {
                   state.cronQuickCreateOpen = true;
                   state.cronQuickCreateStep = "what";
                   state.cronQuickCreateDraft = createDefaultDraft();
                   requestHostUpdate?.();
                 },
-                onLoadRuns: async (jobId) => {
+                onLoadRuns: runUiTask(async (jobId) => {
                   updateCronRunsFilter(state, { cronRunsScope: "job" });
                   await loadCronRuns(state, jobId);
-                },
-                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true, tableFilters: true }),
-                onJobsFiltersChange: async (patch) => {
+                }),
+                onLoadMoreJobs: () =>
+                  void loadCronJobsPage(state, { append: true, tableFilters: true }),
+                onJobsFiltersChange: runUiTask(async (patch) => {
                   updateCronJobsFilter(state, patch);
                   const shouldReload =
                     typeof patch.cronJobsQuery === "string" ||
@@ -2402,8 +2619,8 @@ export function renderApp(state: AppViewState) {
                   if (shouldReload) {
                     await loadCronJobsPage(state, { append: false, tableFilters: true });
                   }
-                },
-                onJobsFiltersReset: async () => {
+                }),
+                onJobsFiltersReset: runUiTask(async () => {
                   updateCronJobsFilter(state, {
                     cronJobsQuery: "",
                     cronJobsEnabledFilter: "all",
@@ -2413,16 +2630,16 @@ export function renderApp(state: AppViewState) {
                     cronJobsSortDir: "asc",
                   });
                   await loadCronJobsPage(state, { append: false, tableFilters: true });
-                },
-                onLoadMoreRuns: () => loadMoreCronRuns(state),
-                onRunsFiltersChange: async (patch) => {
+                }),
+                onLoadMoreRuns: () => void loadMoreCronRuns(state),
+                onRunsFiltersChange: runUiTask(async (patch) => {
                   updateCronRunsFilter(state, patch);
                   if (state.cronRunsScope === "all") {
                     await loadCronRuns(state, null);
                     return;
                   }
                   await loadCronRuns(state, state.cronRunsJobId);
-                },
+                }),
                 onNavigateToChat: (sessionKey) => {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
@@ -2489,7 +2706,7 @@ export function renderApp(state: AppViewState) {
                 runtimeSessionKey: state.sessionKey,
                 runtimeSessionMatchesSelectedAgent: toolsPanelUsesActiveSession,
                 modelCatalog: state.chatModelCatalog ?? [],
-                onRefresh: async () => {
+                onRefresh: runUiTask(async () => {
                   await loadAgents(state);
                   const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
                   if (agentIds.length > 0) {
@@ -2497,7 +2714,7 @@ export function renderApp(state: AppViewState) {
                   }
                   loadAgentPanelDataForSelectedAgent(resolveSelectedAgentId());
                   refreshAgentsPanelSupplementalData(state.agentsPanel);
-                },
+                }),
                 onSelectAgent: (agentId) => {
                   if (state.agentsSelectedId === agentId) {
                     return;
@@ -2527,7 +2744,7 @@ export function renderApp(state: AppViewState) {
                     ) {
                       void loadToolsCatalog(state, resolvedAgentId);
                     }
-                    if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                    if (resolvedAgentId === chatAgentId) {
                       const toolsRequestKey = buildToolsEffectiveRequestKey(state, {
                         agentId: resolvedAgentId,
                         sessionKey: state.sessionKey,
@@ -2547,7 +2764,7 @@ export function renderApp(state: AppViewState) {
                   }
                   refreshAgentsPanelSupplementalData(panel);
                 },
-                onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
+                onLoadFiles: (agentId) => void loadAgentFiles(state, agentId),
                 onSelectFile: (name) => {
                   state.agentFileActive = name;
                   if (!resolvedAgentId) {
@@ -2571,42 +2788,45 @@ export function renderApp(state: AppViewState) {
                   void saveAgentFile(state, resolvedAgentId, name, content);
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
-                  const basePath = resolveAgentToolsPath(agentId, Boolean(profile || clearAllow));
-                  if (!basePath) {
+                  const basePathItem = resolveAgentToolsPath(
+                    agentId,
+                    Boolean(profile || clearAllow),
+                  );
+                  if (!basePathItem) {
                     return;
                   }
                   if (profile) {
-                    updateConfigFormValue(state, [...basePath, "profile"], profile);
+                    updateConfigFormValue(state, [...basePathItem, "profile"], profile);
                   } else {
-                    removeConfigFormValue(state, [...basePath, "profile"]);
+                    removeConfigFormValue(state, [...basePathItem, "profile"]);
                   }
                   if (clearAllow) {
-                    removeConfigFormValue(state, [...basePath, "allow"]);
+                    removeConfigFormValue(state, [...basePathItem, "allow"]);
                   }
                 },
                 onToolsOverridesChange: (agentId, alsoAllow, deny) => {
-                  const basePath = resolveAgentToolsPath(
+                  const basePathCandidate = resolveAgentToolsPath(
                     agentId,
                     alsoAllow.length > 0 || deny.length > 0,
                   );
-                  if (!basePath) {
+                  if (!basePathCandidate) {
                     return;
                   }
                   if (alsoAllow.length > 0) {
-                    updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);
+                    updateConfigFormValue(state, [...basePathCandidate, "alsoAllow"], alsoAllow);
                   } else {
-                    removeConfigFormValue(state, [...basePath, "alsoAllow"]);
+                    removeConfigFormValue(state, [...basePathCandidate, "alsoAllow"]);
                   }
                   if (deny.length > 0) {
-                    updateConfigFormValue(state, [...basePath, "deny"], deny);
+                    updateConfigFormValue(state, [...basePathCandidate, "deny"], deny);
                   } else {
-                    removeConfigFormValue(state, [...basePath, "deny"]);
+                    removeConfigFormValue(state, [...basePathCandidate, "deny"]);
                   }
                 },
-                onConfigReload: () => loadConfig(state, { discardPendingChanges: true }),
-                onConfigSave: () => saveAgentsConfig(state),
-                onChannelsRefresh: () => loadChannels(state, false),
-                onCronRefresh: () => state.loadCron(),
+                onConfigReload: () => void loadConfig(state, { discardPendingChanges: true }),
+                onConfigSave: () => void saveAgentsConfig(state),
+                onChannelsRefresh: () => void loadChannels(state, false),
+                onCronRefresh: () => void state.loadCron(),
                 onCronRunNow: (jobId) => {
                   const job = state.cronJobs.find((entry) => entry.id === jobId);
                   if (!job) {
@@ -2669,20 +2889,18 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   const modelEntry = resolveAgentModelFormEntry(index);
-                  const { basePath, existing } = modelEntry;
+                  const { basePath: basePathEntry, existing } = modelEntry;
                   if (!modelId) {
-                    removeConfigFormValue(state, basePath);
+                    removeConfigFormValue(state, basePathEntry);
+                  } else if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                    const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                    const next = {
+                      primary: modelId,
+                      ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                    };
+                    updateConfigFormValue(state, basePathEntry, next);
                   } else {
-                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                      const next = {
-                        primary: modelId,
-                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                      };
-                      updateConfigFormValue(state, basePath, next);
-                    } else {
-                      updateConfigFormValue(state, basePath, modelId);
-                    }
+                    updateConfigFormValue(state, basePathEntry, modelId);
                   }
                   void refreshVisibleToolsEffectiveForCurrentSession(state);
                 },
@@ -2708,7 +2926,7 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
-                  const { basePath, existing } = resolveAgentModelFormEntry(index);
+                  const { basePath: basePathResult, existing } = resolveAgentModelFormEntry(index);
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
@@ -2725,16 +2943,16 @@ export function renderApp(state: AppViewState) {
                   const primary = resolvePrimary() ?? effectivePrimary;
                   if (normalized.length === 0) {
                     if (primary) {
-                      updateConfigFormValue(state, basePath, primary);
+                      updateConfigFormValue(state, basePathResult, primary);
                     } else {
-                      removeConfigFormValue(state, basePath);
+                      removeConfigFormValue(state, basePathResult);
                     }
                     return;
                   }
                   if (!primary) {
                     return;
                   }
-                  updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
+                  updateConfigFormValue(state, basePathResult, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
                   stageDefaultAgentConfigEntry(state, agentId);
@@ -2774,12 +2992,12 @@ export function renderApp(state: AppViewState) {
                 clawhubInstallMessage: state.clawhubInstallMessage,
                 onFilterChange: (next) => (state.skillsFilter = next),
                 onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
-                onRefresh: () => loadSkills(state, { clearMessages: true }),
-                onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
+                onRefresh: () => void loadSkills(state, { clearMessages: true }),
+                onToggle: (key, enabled) => void updateSkillEnabled(state, key, enabled),
                 onEdit: (key, value) => updateSkillEdit(state, key, value),
-                onSaveKey: (key) => saveSkillApiKey(state, key),
+                onSaveKey: (key) => void saveSkillApiKey(state, key),
                 onInstall: (skillKey, name, installId) =>
-                  installSkill(state, skillKey, name, installId),
+                  void installSkill(state, skillKey, name, installId),
                 onDetailOpen: (key) => {
                   state.skillsDetailKey = key;
                   state.skillsDetailTab = "overview";
@@ -2796,11 +3014,13 @@ export function renderApp(state: AppViewState) {
                   if (clawhubSearchTimer) {
                     clearTimeout(clawhubSearchTimer);
                   }
-                  clawhubSearchTimer = setTimeout(() => searchClawHub(state, query), 300);
+                  clawhubSearchTimer = setTimeout(() => {
+                    void searchClawHub(state, query);
+                  }, 300);
                 },
-                onClawHubDetailOpen: (slug) => loadClawHubDetail(state, slug),
+                onClawHubDetailOpen: (slug) => void loadClawHubDetail(state, slug),
                 onClawHubDetailClose: () => closeClawHubDetail(state),
-                onClawHubInstall: (slug) => installFromClawHub(state, slug),
+                onClawHubInstall: (slug) => void installFromClawHub(state, slug),
               }),
             )
           : nothing}
@@ -2827,20 +3047,21 @@ export function renderApp(state: AppViewState) {
                 execApprovalsSelectedAgent: state.execApprovalsSelectedAgent,
                 execApprovalsTarget: state.execApprovalsTarget,
                 execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
-                onRefresh: () => loadNodes(state),
-                onDevicesRefresh: () => loadDevices(state),
-                onDeviceApprove: (requestId) => approveDevicePairing(state, requestId),
-                onDeviceReject: (requestId) => rejectDevicePairing(state, requestId),
+                onRefresh: () => void loadNodes(state),
+                onDevicesRefresh: () => void loadDevices(state),
+                onDeviceApprove: (requestId) => void approveDevicePairing(state, requestId),
+                onDeviceReject: (requestId) => void rejectDevicePairing(state, requestId),
                 onDeviceRotate: (deviceId, role, scopes) =>
-                  rotateDeviceToken(state, { deviceId, role, scopes }),
-                onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
-                onLoadConfig: () => loadConfig(state, { discardPendingChanges: true }),
+                  void rotateDeviceToken(state, { deviceId, role, scopes }),
+                onDeviceRevoke: (deviceId, role) =>
+                  void revokeDeviceToken(state, { deviceId, role }),
+                onLoadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
                 onLoadExecApprovals: () => {
                   const target =
                     state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
                       ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
                       : { kind: "gateway" as const };
-                  return loadExecApprovals(state, target);
+                  void loadExecApprovals(state, target);
                 },
                 onBindDefault: (nodeId) => {
                   if (nodeId) {
@@ -2850,14 +3071,14 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onBindAgent: (agentIndex, nodeId) => {
-                  const basePath = ["agents", "list", agentIndex, "tools", "exec", "node"];
+                  const basePathLocal = ["agents", "list", agentIndex, "tools", "exec", "node"];
                   if (nodeId) {
-                    updateConfigFormValue(state, basePath, nodeId);
+                    updateConfigFormValue(state, basePathLocal, nodeId);
                   } else {
-                    removeConfigFormValue(state, basePath);
+                    removeConfigFormValue(state, basePathLocal);
                   }
                 },
-                onSaveBindings: () => saveConfig(state),
+                onSaveBindings: () => void saveConfig(state),
                 onExecApprovalsTargetChange: (kind, nodeId) => {
                   state.execApprovalsTarget = kind;
                   state.execApprovalsTargetNodeId = nodeId;
@@ -2877,7 +3098,7 @@ export function renderApp(state: AppViewState) {
                     state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
                       ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
                       : { kind: "gateway" as const };
-                  return saveExecApprovals(state, target);
+                  void saveExecApprovals(state, target);
                 },
               }),
             )
@@ -2924,25 +3145,28 @@ export function renderApp(state: AppViewState) {
                   connected: state.connected,
                   canSend: state.connected,
                   disabledReason: chatDisabledReason,
-                  error: state.lastError,
+                  error: chatViewError,
                   runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
                   sessions: state.sessionsResult,
-                  focusMode: chatFocus,
+                  composerControls: renderChatControls(state),
+                  workspaceFiles: {
+                    agentId: chatAgentId,
+                    list:
+                      chatWorkspaceFiles.list?.agentId === chatAgentId
+                        ? chatWorkspaceFiles.list
+                        : null,
+                    loading: chatWorkspaceFiles.loading,
+                    error: chatWorkspaceFiles.error,
+                    activeName: chatWorkspaceFiles.activeName,
+                    onRefresh: refreshChatWorkspaceFiles,
+                    onOpenFile: openChatWorkspaceFile,
+                  },
                   autoExpandToolCalls: false,
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
-                    return refreshChat(state, { awaitHistory: true, scheduleScroll: false });
-                  },
-                  onToggleFocusMode: () => {
-                    if (state.onboarding) {
-                      return;
-                    }
-                    state.applySettings({
-                      ...state.settings,
-                      chatFocusMode: !state.settings.chatFocusMode,
-                    });
+                    void refreshChat(state, { awaitHistory: true, scheduleScroll: false });
                   },
                   onChatScroll: (event) => state.handleChatScroll(event),
                   getDraft: () => state.chatMessage,
@@ -2951,8 +3175,8 @@ export function renderApp(state: AppViewState) {
                   onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
                   attachments: state.chatAttachments,
                   onAttachmentsChange: (next) => (state.chatAttachments = next),
-                  onSend: () => state.handleSendChat(),
-                  onCompact: () => state.handleSendChat("/compact", { restoreDraft: true }),
+                  onSend: () => void state.handleSendChat(),
+                  onCompact: () => void state.handleSendChat("/compact", { restoreDraft: true }),
                   onOpenSessionCheckpoints: () => {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;
                     state.setTab("sessions" as import("./navigation.ts").Tab);
@@ -2961,7 +3185,7 @@ export function renderApp(state: AppViewState) {
                       ...scopedAgentListParamsForSession(state, state.sessionKey),
                     });
                   },
-                  onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
+                  onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
                   onToggleRealtimeTalkOptions: () => {
                     state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
                   },
@@ -2975,7 +3199,7 @@ export function renderApp(state: AppViewState) {
                     state.chatSideResult = null;
                   },
                   onNewSession: () => void createChatSession(state),
-                  onClearHistory: async () => {
+                  onClearHistory: runUiTask(async () => {
                     if (!state.client || !state.connected) {
                       return;
                     }
@@ -3004,10 +3228,11 @@ export function renderApp(state: AppViewState) {
                       await loadChatHistory(state);
                     } catch (err) {
                       state.lastError = String(err);
+                      state.chatError = state.lastError;
                     }
-                  },
+                  }),
                   agentsList: state.agentsList,
-                  currentAgentId: resolvedAgentId ?? "main",
+                  currentAgentId: chatAgentId,
                   fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
                   onAgentChange: (agentId: string) => {
                     switchChatSession(state, buildAgentMainSessionKey({ agentId }));
@@ -3063,8 +3288,8 @@ export function renderApp(state: AppViewState) {
                   callError: state.debugCallError,
                   onCallMethodChange: (next) => (state.debugCallMethod = next),
                   onCallParamsChange: (next) => (state.debugCallParams = next),
-                  onRefresh: () => loadDebug(state),
-                  onCall: () => callDebugMethod(state),
+                  onRefresh: () => void loadDebug(state),
+                  onCall: () => void callDebugMethod(state),
                 }),
               ),
             )
@@ -3087,7 +3312,7 @@ export function renderApp(state: AppViewState) {
                     state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
                   },
                   onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
-                  onRefresh: () => loadLogs(state, { reset: true }),
+                  onRefresh: () => void loadLogs(state, { reset: true }),
                   onExport: (lines, label) => state.exportLogs(lines, label),
                   onScroll: (event) => state.handleLogsScroll(event),
                 }),
@@ -3153,7 +3378,7 @@ export function renderApp(state: AppViewState) {
                   await loadWikiMemoryPalace(state);
                 })();
               },
-              onOpenConfig: () => openConfigFile(state),
+              onOpenConfig: () => void openConfigFile(state),
               onOpenWikiPage: (lookup: string) => openWikiPage(lookup),
               onBackfillDiary: () => {
                 syncDreamingSelectedAgent();

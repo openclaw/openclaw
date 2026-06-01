@@ -25,6 +25,7 @@ function createFakeCodexClient(): CodexAppServerClient {
   return {
     initialize: vi.fn(async () => undefined),
     request: vi.fn(async () => ({ data: [] })),
+    setActiveSharedLeaseCountProviderForUnscopedNotifications: vi.fn(),
     addCloseHandler: vi.fn(() => () => undefined),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
@@ -265,7 +266,7 @@ describe("codex provider", () => {
       listModels: listTestCodexAppServerModels,
     });
 
-    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(client["close"]).toHaveBeenCalledTimes(1);
   });
 
   it("does not close an active shared app-server client during live discovery", async () => {
@@ -292,8 +293,8 @@ describe("codex provider", () => {
       listModels: listTestCodexAppServerModels,
     });
 
-    expect(activeClient.close).not.toHaveBeenCalled();
-    expect(discoveryClient.close).toHaveBeenCalledTimes(1);
+    expect(activeClient["close"]).not.toHaveBeenCalled();
+    expect(discoveryClient["close"]).toHaveBeenCalledTimes(1);
   });
 
   it("resolves arbitrary Codex app-server model ids as text-only until discovered", () => {

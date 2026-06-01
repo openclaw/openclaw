@@ -1065,7 +1065,7 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
     const toolCall = assistant.content.find(
       (block) =>
-        !!block &&
+        Boolean(block) &&
         typeof block === "object" &&
         (block as { type?: unknown }).type === "toolCall" &&
         typeof (block as { id?: unknown }).id === "string",

@@ -72,6 +72,28 @@ describe("scanOpenRouterModels", () => {
     expect(byPricing.image.skipped).toBe(true);
   });
 
+  it("drops out-of-range OpenRouter created_at timestamps", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/free-invalid-created:free",
+          name: "Free Invalid Created",
+          context_length: 16_384,
+          supported_parameters: [],
+          modality: "text",
+          created_at: 8_640_000_000_000_001,
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(result?.createdAtMs).toBeNull();
+  });
+
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {

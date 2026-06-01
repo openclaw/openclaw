@@ -197,6 +197,204 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBeNull();
   });
 
+  it("hides autonomous model override actions for non-admin operators", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Start with default model",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        canModelOverride: false,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    const startButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(".workboard-card__start"),
+    ];
+    expect(startButtons.map((button) => button.textContent?.trim())).toEqual([
+      "Start",
+      "codex",
+      "claude",
+    ]);
+    expect(startButtons.map((button) => button.title)).toEqual([
+      "Run default agent",
+      "Open codex",
+      "Open claude",
+    ]);
+  });
+
+  it("renders linked Gateway task status on cards", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Review task result",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey: "agent:main:subagent:workboard-default-card-1",
+        runId: "run-1",
+        taskId: "task-1",
+      },
+    ];
+    state.tasksByCardId.set("card-1", {
+      id: "task-1",
+      taskId: "task-1",
+      status: "completed",
+      title: "Review task result",
+      childSessionKey: "agent:main:subagent:workboard-default-card-1",
+      runId: "run-1",
+      terminalSummary: "Ready for operator review.",
+    });
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("task linked");
+    expect(container.textContent).toContain("Task complete");
+    expect(container.textContent).toContain("Ready for operator review.");
+  });
+
+  it("uses terminal session lifecycle when cached task status is stale", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Finished despite stale task",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey: "agent:main:subagent:workboard-default-card-1",
+        runId: "run-1",
+        taskId: "task-1",
+      },
+    ];
+    state.tasksByCardId.set("card-1", {
+      id: "task-1",
+      taskId: "task-1",
+      status: "running",
+      title: "Finished despite stale task",
+      childSessionKey: "agent:main:subagent:workboard-default-card-1",
+      runId: "run-1",
+      progressSummary: "Still running according to stale cache.",
+    });
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [
+          {
+            key: "agent:main:subagent:workboard-default-card-1",
+            kind: "direct",
+            displayName: "Finished session",
+            updatedAt: 2,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Done");
+    expect(container.textContent).toContain("Finished session");
+    expect(container.textContent).not.toContain("Task running");
+    expect(container.textContent).not.toContain("Still running according to stale cache.");
+  });
+
+  it("shows stop controls without start controls for active task-only cards", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Task only run",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        taskId: "task-1",
+      },
+    ];
+    state.tasksByCardId.set("card-1", {
+      id: "task-1",
+      taskId: "task-1",
+      status: "running",
+      title: "Task only run",
+      progressSummary: "Worker is active.",
+    });
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Task running");
+    expect(container.querySelector('button[title="Stop session"]')).not.toBeNull();
+    expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+    expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBeNull();
+  });
+
   it("hides write controls for read-only operators", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -345,39 +543,6 @@ describe("renderWorkboard", () => {
     expect(
       container.querySelector<HTMLTextAreaElement>(".workboard-draft__notes")?.value,
     ).toContain("Verification:");
-  });
-
-  it("opens and plays the mini game", () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    const container = document.createElement("div");
-    const props = {
-      host,
-      client: null,
-      connected: true,
-      pluginEnabled: true,
-      agentsList: null,
-      sessions: [],
-      onOpenSession: () => undefined,
-      onRequestUpdate: () => undefined,
-    };
-
-    render(renderWorkboard(props), container);
-    [...container.querySelectorAll<HTMLButtonElement>(".workboard-toolbar__actions .btn")]
-      .find((button) => button.textContent?.includes("Mini game"))
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render(renderWorkboard(props), container);
-
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Card Chase");
-    const controls = container.querySelector<HTMLElement>(".workboard-game__controls");
-    controls
-      ?.querySelector<HTMLButtonElement>('button[aria-label="Move right"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render(renderWorkboard(props), container);
-
-    expect(state.gamePlayerIndex).toBe(1);
-    expect(container.querySelector(".workboard-game__stats")?.textContent).toContain("Moves 1");
   });
 
   it("renders card event history", () => {
@@ -601,16 +766,33 @@ describe("renderWorkboard", () => {
         position: 1000,
         createdAt: 1,
         updatedAt: 1,
+        metadata: {
+          comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 2 }],
+        },
       },
     ];
-    const request = vi.fn(async () => ({
-      card: {
-        ...state.cards[0],
-        title: "Renamed",
-        priority: "high",
-        updatedAt: 2,
-      },
-    }));
+    const request = vi.fn(async (method: string) =>
+      method === "workboard.cards.comment"
+        ? {
+            card: {
+              ...state.cards[0],
+              metadata: {
+                comments: [
+                  ...(state.cards[0]?.metadata?.comments ?? []),
+                  { id: "comment-2", body: "Ship after CI", createdAt: 3 },
+                ],
+              },
+            },
+          }
+        : {
+            card: {
+              ...state.cards[0],
+              title: "Renamed",
+              priority: "high",
+              updatedAt: 2,
+            },
+          },
+    );
     const props = {
       host,
       client: { request } as unknown as GatewayBrowserClient,
@@ -630,6 +812,24 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Edit card");
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Needs owner check");
+    const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
+    commentInput!.value = "Ship after CI";
+    commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    render(renderWorkboard(props), container);
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Create"))
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.comment", {
+      id: "card-1",
+      body: "Ship after CI",
+    });
+    expect(state.cards[0]?.metadata?.comments?.at(-1)?.body).toBe("Ship after CI");
+    render(renderWorkboard(props), container);
+
     const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
     expect(title?.value).toBe("Rename me");
     title!.value = "Renamed";

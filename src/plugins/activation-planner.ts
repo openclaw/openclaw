@@ -271,7 +271,9 @@ function dedupeReasons(
   reasons: readonly (PluginActivationPlannerReason | null)[],
 ): PluginActivationPlannerReason[] {
   return [
-    ...new Set(reasons.filter((reason): reason is PluginActivationPlannerReason => !!reason)),
+    ...new Set(
+      reasons.filter((reason): reason is PluginActivationPlannerReason => Boolean(reason)),
+    ),
   ];
 }
 

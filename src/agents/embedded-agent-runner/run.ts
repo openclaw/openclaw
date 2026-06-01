@@ -11,7 +11,7 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -360,7 +360,7 @@ function createScopedAuthProfileStore(
   const profiles = store.profiles ?? {};
   const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
     .map((profileId) => profileId?.trim())
-    .filter((profileId): profileId is string => !!profileId);
+    .filter((profileId): profileId is string => Boolean(profileId));
   const scopedProfiles = Object.fromEntries(
     normalizedProfileIds.flatMap((profileId) => {
       const credential = profiles[profileId];
@@ -456,8 +456,9 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
 }
 
 export async function runEmbeddedAgent(
-  params: RunEmbeddedAgentParams,
+  paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
+  let params = paramsInput;
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
@@ -704,6 +705,8 @@ export async function runEmbeddedAgent(
             // first generating OpenClaw models.json. This keeps one-shot model runs from
             // blocking on unrelated provider discovery.
             skipAgentDiscovery: true,
+            allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
+            preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
             workspaceDir: resolvedWorkspace,
             authProfileId: params.authProfileId,
           },
@@ -716,7 +719,7 @@ export async function runEmbeddedAgent(
         }
       }
       if (!modelResolution && pluginHarnessOwnsTransport) {
-        modelResolution = firstModelResolution;
+        modelResolution ??= firstModelResolution;
       }
       if (!modelResolution) {
         await ensureOpenClawModelsJson(params.config, agentDir, {
@@ -1244,7 +1247,7 @@ export async function runEmbeddedAgent(
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
       };
-      const maybeEscalateRateLimitProfileFallback = (params: {
+      const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
         failoverModel: string;
         logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
@@ -1257,13 +1260,13 @@ export async function runEmbeddedAgent(
         log.warn(
           `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
         );
-        params.logFallbackDecision("fallback_model", { status });
+        paramsLocal.logFallbackDecision("fallback_model", { status });
         throw new FailoverError(
           "The AI service is temporarily rate-limited. Please try again in a moment.",
           {
             reason: "rate_limit",
-            provider: params.failoverProvider,
-            model: params.failoverModel,
+            provider: paramsLocal.failoverProvider,
+            model: paramsLocal.failoverModel,
             profileId: lastProfileId,
             sessionId: activeSessionId,
             lane: globalLane,
@@ -1346,6 +1349,10 @@ export async function runEmbeddedAgent(
           const nextSessionFile = compactResult.result?.sessionFile;
           if (nextSessionId && nextSessionId !== activeSessionId) {
             activeSessionId = nextSessionId;
+            // Keep the run context's sessionId tracking the live session so
+            // lifecycle persistence isn't treated as stale after a legitimate
+            // mid-run compaction rotation (#88538).
+            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
@@ -1704,6 +1711,8 @@ export async function runEmbeddedAgent(
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
+            // Track the live session for lifecycle persistence identity (#88538).
+            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
@@ -2413,7 +2422,7 @@ export async function runEmbeddedAgent(
               !hasRecoverableCodexAppServerTimeoutOutcome &&
               !shouldSurfaceCodexCompletionTimeout
             ) {
-              throw promptError;
+              throw toLintErrorObject(promptError, "Prompt failed");
             }
           }
 
@@ -2585,7 +2594,7 @@ export async function runEmbeddedAgent(
                   profileId: failedPromptProfileId,
                   reason: promptProfileFailureReason,
                   modelId,
-                }).catch((err) => {
+                }).catch((err: unknown) => {
                   log.warn(`prompt profile failure mark failed: ${String(err)}`);
                 });
               }
@@ -2677,7 +2686,7 @@ export async function runEmbeddedAgent(
               });
               logPromptFailoverDecision("surface_error");
             }
-            throw promptError;
+            throw toLintErrorObject(promptError, "Prompt failed");
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
@@ -3207,6 +3216,7 @@ export async function runEmbeddedAgent(
             : resolveIncompleteTurnPayloadText({
                 payloadCount,
                 aborted,
+                externalAbort,
                 timedOut,
                 attempt,
               });
@@ -3314,6 +3324,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
+                modelId,
               });
             }
             return {
@@ -3433,6 +3444,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
+                modelId,
               });
             }
 
@@ -3604,9 +3616,9 @@ export async function runEmbeddedAgent(
             step: "bundle-mcp-retire",
             log,
             cleanup: async () => {
-              const onError = (error: unknown, sessionId: string) => {
+              const onError = (errorLocal: unknown, sessionId: string) => {
                 log.warn(
-                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
+                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
                 );
               };
               const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
@@ -3640,4 +3652,18 @@ function resolveAuthProfileStateProvider(
   }
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

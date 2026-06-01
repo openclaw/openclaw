@@ -536,8 +536,8 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         : [];
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
-            .map((value) => normalizeIsoDay(String(value)))
-            .filter((value): value is string => value !== null)
+            .map((valueValue) => normalizeIsoDay(String(valueValue)))
+            .filter((valueLocal): valueLocal is string => valueLocal !== null)
         : [];
       const conceptTags = Array.isArray(entry.conceptTags)
         ? normalizeDistinctStrings(
@@ -751,7 +751,7 @@ async function ensureShortTermArtifactsDir(workspaceDir: string): Promise<void> 
   const ensuring = fs
     .mkdir(artifactsDir, { recursive: true })
     .then(() => undefined)
-    .catch((err) => {
+    .catch((err: unknown) => {
       ensuredShortTermDirs.delete(artifactsDir);
       throw err;
     });
@@ -953,8 +953,11 @@ async function readPhaseSignalStore(
       await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
       nowIso,
     );
-  } catch {
-    return emptyPhaseSignalStore(nowIso);
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      return emptyPhaseSignalStore(nowIso);
+    }
+    throw err;
   }
 }
 

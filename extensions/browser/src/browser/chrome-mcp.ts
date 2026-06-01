@@ -258,7 +258,7 @@ function extractJsonMessage(result: ChromeMcpToolResult): unknown {
     }
   }
   if (lastError) {
-    throw lastError;
+    throw toLintErrorObject(lastError, "Non-Error thrown");
   }
   return null;
 }
@@ -629,7 +629,7 @@ async function closeChromeMcpClientAndProcess(params: {
     return;
   }
   await params.client.close().catch(() => {});
-  await terminateChromeMcpProcessTree(rootPid, descendantPids).catch((err) => {
+  await terminateChromeMcpProcessTree(rootPid, descendantPids).catch((err: unknown) => {
     log.trace(
       `Unable to fully terminate Chrome MCP subprocess tree for pid ${rootPid}: ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -761,7 +761,8 @@ async function waitForChromeMcpReady(
     if (signal) {
       racers.push(
         new Promise<never>((_, reject) => {
-          abortListener = () => reject(signal.reason ?? new Error("aborted"));
+          abortListener = () =>
+            reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
           signal.addEventListener("abort", abortListener, { once: true });
         }),
       );
@@ -793,7 +794,8 @@ async function waitForChromeMcpPendingSession(
     return await Promise.race([
       pending,
       new Promise<never>((_, reject) => {
-        abortListener = () => reject(signal.reason ?? new Error("aborted"));
+        abortListener = () =>
+          reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         signal.addEventListener("abort", abortListener, { once: true });
       }),
     ]);
@@ -1022,7 +1024,8 @@ async function callTool(
     if (signal) {
       racers.push(
         new Promise<never>((_, reject) => {
-          abortListener = () => reject(signal.reason ?? new Error("aborted"));
+          abortListener = () =>
+            reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
           signal.addEventListener("abort", abortListener, { once: true });
         }),
       );
@@ -1539,4 +1542,18 @@ export async function resetChromeMcpSessionsForTest(): Promise<void> {
   pendingSessions.clear();
   await stopAllChromeMcpSessions();
   chromeMcpProcessCleanupDepsForTest = null;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -533,7 +533,7 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
   </Accordion>
 
   <Accordion title="Message IDs">
-    Inbound iMessage context includes both short `MessageSid` values and full message GUIDs when available. Short IDs are scoped to the recent in-memory reply cache and are checked against the current chat before use. If a short ID has expired or belongs to another chat, retry with the full `MessageSidFull`.
+    Inbound iMessage context includes both short `MessageSid` values and full message GUIDs when available. Short IDs are scoped to the recent SQLite-backed reply cache and are checked against the current chat before use. If a short ID has expired or belongs to another chat, retry with the full `MessageSidFull`.
 
   </Accordion>
 
@@ -714,7 +714,7 @@ Each replayed row is fed through the live dispatch path (`evaluateIMessageInboun
 
 ### Cursor and retry semantics
 
-Catchup keeps a per-account cursor at `<openclawStateDir>/imessage/catchup/<account>__<hash>.json` (the OpenClaw state dir defaults to `~/.openclaw`, overridable with `OPENCLAW_STATE_DIR`):
+Catchup keeps a per-account cursor in SQLite plugin state:
 
 ```json
 {
@@ -729,6 +729,7 @@ Catchup keeps a per-account cursor at `<openclawStateDir>/imessage/catchup/<acco
 - After the startup catchup query succeeds, later live-handled rows also advance the same cursor so a gateway restart does not replay messages that were already handled live. Live cursor writes do not jump past catchup failures that are still below `maxFailureRetries`.
 - After `maxFailureRetries` consecutive throws against the same `guid`, catchup logs a `warn` and force-advances the cursor past the wedged message so subsequent startups can make progress.
 - Already-given-up guids are skipped on sight (no dispatch attempt) on later runs and counted under `skippedGivenUp` in the run summary.
+- `openclaw doctor --fix` imports legacy `<openclawStateDir>/imessage/catchup/*.json` cursor files into SQLite plugin state and archives the old files.
 
 ### Operator-visible signals
 

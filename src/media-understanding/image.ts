@@ -187,7 +187,7 @@ async function resolveImageRuntime(params: {
     },
   );
   const { authStorage } = resolved;
-  let { model } = resolved;
+  const { model } = resolved;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }

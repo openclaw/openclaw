@@ -154,7 +154,7 @@ function normalizeAgentListModelRefsForConfigMutation(value: unknown): unknown {
     }
 
     let nextAgent = agent;
-    if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+    if (Object.hasOwn(agent, "model")) {
       const model = normalizeAgentDefaultModelValueForConfigMutation(agent.model);
       if (model !== agent.model) {
         nextAgent = { ...nextAgent, model };
@@ -455,7 +455,7 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
 }
 
 function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
+  return Object.hasOwn(value, key);
 }
 
 function formatDoctorHint(message: string): string {
@@ -1763,7 +1763,7 @@ function valueHasAutoManagedChild(value: unknown, childPath: ReadonlyArray<PathS
       return false;
     }
     const record = cursor as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(record, segment)) {
+    if (!Object.hasOwn(record, segment)) {
       return false;
     }
     cursor = record[segment];

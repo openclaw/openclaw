@@ -1,4 +1,5 @@
 import type { PluginStateKeyedStore } from "../../plugin-state/plugin-state-store.types.js";
+import type { ChannelIngressQueue, ChannelIngressQueuePruneOptions } from "./ingress-queue.js";
 
 export type DurableInboundReceivePendingRecord<TPayload, TMetadata = unknown> = {
   id: string;
@@ -70,6 +71,11 @@ export type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata
   ): Promise<void>;
   release(id: string, options?: DurableInboundReceiveReleaseOptions): Promise<boolean>;
   deletePending(id: string): Promise<boolean>;
+};
+
+export type DurableInboundReceiveQueueJournalOptions<TPayload, TMetadata, TCompletedMetadata> = {
+  queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
+  retention?: ChannelIngressQueuePruneOptions;
 };
 
 function normalizeDurableInboundReceiveId(id: string): string {
@@ -220,5 +226,82 @@ export function createDurableInboundReceiveJournal<
     complete,
     release,
     deletePending: (id) => options.pendingStore.delete(normalizeDurableInboundReceiveId(id)),
+  };
+}
+
+export function createDurableInboundReceiveJournalFromQueue<
+  TPayload,
+  TMetadata = unknown,
+  TCompletedMetadata = unknown,
+>(
+  options: DurableInboundReceiveQueueJournalOptions<TPayload, TMetadata, TCompletedMetadata>,
+): DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> {
+  const prune = async (protectId?: string) => {
+    if (options.retention) {
+      await options.queue.prune({
+        ...options.retention,
+        ...(protectId === undefined ? {} : { protectIds: [protectId] }),
+      });
+    }
+  };
+  return {
+    accept: async (id, payload, acceptOptions) => {
+      await prune();
+      const result = await options.queue.enqueue(normalizeDurableInboundReceiveId(id), payload, {
+        ...(acceptOptions?.metadata === undefined ? {} : { metadata: acceptOptions.metadata }),
+        ...(acceptOptions?.receivedAt === undefined
+          ? {}
+          : { receivedAt: acceptOptions.receivedAt }),
+      });
+      await prune(normalizeDurableInboundReceiveId(id));
+      if (result.kind === "accepted") {
+        return { kind: "accepted", duplicate: false, record: result.record };
+      }
+      if (result.kind === "completed") {
+        return { kind: "completed", duplicate: true, record: result.record };
+      }
+      if (result.kind === "pending" || result.kind === "claimed") {
+        return { kind: "pending", duplicate: true, record: result.record };
+      }
+      return {
+        kind: "pending",
+        duplicate: true,
+        record: {
+          id: result.record.id,
+          payload,
+          receivedAt: result.record.failedAt,
+          updatedAt: result.record.failedAt,
+          attempts: 0,
+        },
+      };
+    },
+    pending: async () => {
+      await prune();
+      return await options.queue.listPending({ limit: "all" });
+    },
+    complete: async (id, completeOptions) => {
+      await options.queue.complete(normalizeDurableInboundReceiveId(id), {
+        ...(completeOptions?.metadata === undefined ? {} : { metadata: completeOptions.metadata }),
+        ...(completeOptions?.completedAt === undefined
+          ? {}
+          : { completedAt: completeOptions.completedAt }),
+      });
+      await prune(normalizeDurableInboundReceiveId(id));
+    },
+    release: async (id, releaseOptions) => {
+      const released = await options.queue.release(normalizeDurableInboundReceiveId(id), {
+        ...(releaseOptions?.lastError === undefined ? {} : { lastError: releaseOptions.lastError }),
+        ...(releaseOptions?.releasedAt === undefined
+          ? {}
+          : { releasedAt: releaseOptions.releasedAt }),
+      });
+      await prune(normalizeDurableInboundReceiveId(id));
+      return released;
+    },
+    deletePending: async (id) => {
+      const deleted = await options.queue.delete(normalizeDurableInboundReceiveId(id));
+      await prune();
+      return deleted;
+    },
   };
 }

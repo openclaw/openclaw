@@ -106,7 +106,11 @@ describe("memory embedding timeout abort", () => {
         run: async (signal) => {
           signalSeen = signal;
           return await new Promise<number[]>((resolve, reject) => {
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener(
+              "abort",
+              () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+              { once: true },
+            );
           });
         },
       }),
@@ -198,3 +202,17 @@ describe("memory index concurrency resolution", () => {
     ).toBe(3);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

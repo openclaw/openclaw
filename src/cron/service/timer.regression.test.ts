@@ -452,7 +452,7 @@ describe("cron service timer regressions", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
-    let now = scheduledAt;
+    const now = scheduledAt;
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,

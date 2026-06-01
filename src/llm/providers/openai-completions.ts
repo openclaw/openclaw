@@ -430,8 +430,14 @@ export const streamOpenAICompletions: StreamFunction<
       }
 
       const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+      const hasVisibleText = output.content.some(
+        (block) => block.type === "text" && block.text.trim().length > 0,
+      );
       if (output.stopReason === "toolUse" && !hasToolCalls) {
         output.stopReason = "stop";
+      }
+      if (output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
+        output.stopReason = "toolUse";
       }
       if (hasToolCalls && output.stopReason !== "toolUse") {
         output.content = output.content.filter((block) => block.type !== "toolCall");
@@ -622,12 +628,12 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = !!options?.reasoningEffort;
+    params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-    params.enable_thinking = !!options?.reasoningEffort;
+    params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
     params.chat_template_kwargs = {
-      enable_thinking: !!options?.reasoningEffort,
+      enable_thinking: Boolean(options?.reasoningEffort),
       preserve_thinking: true,
     };
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
@@ -651,7 +657,7 @@ function buildParams(
       reasoning?: { enabled: boolean };
       reasoning_effort?: string;
     };
-    togetherParams.reasoning = { enabled: !!options?.reasoningEffort };
+    togetherParams.reasoning = { enabled: Boolean(options?.reasoningEffort) };
     if (options?.reasoningEffort && compat.supportsReasoningEffort) {
       togetherParams.reasoning_effort =
         model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
@@ -849,7 +855,7 @@ export function convertMessages(
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    params.push({ role: role, content: sanitizeSurrogates(context.systemPrompt) });
+    params.push({ role, content: sanitizeSurrogates(context.systemPrompt) });
   }
 
   let lastRole: string | null = null;

@@ -1009,7 +1009,7 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Bedrock answer." });
     expect(requireApiKeyMock).not.toHaveBeenCalled();
-    const [, , options] = streamSimpleMock.mock.calls.at(-1) ?? [];
+    const options = streamSimpleMock.mock.calls.at(-1)?.[2];
     expect((options as { apiKey?: string } | undefined)?.apiKey).toBeUndefined();
   });
 

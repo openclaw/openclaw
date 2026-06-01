@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -15,7 +16,6 @@ import {
   redactForDevToolLog,
   redactHomePath,
 } from "../lib/dev-tooling-safety.ts";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -140,7 +140,9 @@ const DISCORD_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 const WEBHOOK_CLEANUP_TIMEOUT_MS = 10_000;
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function remainingTimeoutMs(deadlineMs: number, nowMs = Date.now()): number {
@@ -473,10 +475,10 @@ async function discordWebhookApi<T>(params: {
   timeoutMs?: number;
 }): Promise<T> {
   const suffix = params.query ? `?${params.query}` : "";
-  const path = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
+  const pathLocal = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
   return requestDiscordJson<T>({
     method: params.method,
-    path,
+    path: pathLocal,
     headers: {
       "Content-Type": "application/json",
     },
@@ -532,7 +534,7 @@ async function requestDiscordJson<T>(params: {
           label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
           signal: controller.signal,
           maxBytes: responseBodyMaxBytes,
-        }).catch((error) => {
+        }).catch((error: unknown) => {
           if (isTooLargeError(error)) {
             throw error;
           }
@@ -761,10 +763,10 @@ async function run(): Promise<SuccessResult | FailureResult> {
   });
 
   let readAuthHeader = "";
-  let sentMessageId = "";
+  let sentMessageId;
   let setupStage: "discord-api" | "send-message" = "discord-api";
   let senderAuthorId: string | undefined;
-  let minBindingBoundAt = startedAt - 3_000;
+  let minBindingBoundAt;
   let webhookForCleanup: WebhookForCleanup | undefined;
 
   try {
@@ -1037,7 +1039,7 @@ async function main(): Promise<number> {
     return 0;
   }
   const result = await run().catch(
-    (err): FailureResult => ({
+    (err: unknown): FailureResult => ({
       ok: false,
       stage: "unexpected",
       smokeId: "n/a",

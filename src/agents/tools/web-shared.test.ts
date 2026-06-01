@@ -1,9 +1,13 @@
-import { MAX_TIMER_TIMEOUT_SECONDS } from "@openclaw/normalization-core/number-coercion";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+} from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readCache,
   resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
+  withTimeout,
   writeCache,
   type CacheEntry,
 } from "./web-shared.js";
@@ -62,5 +66,19 @@ describe("web shared timeout seconds", () => {
     expect(cache.size).toBe(100);
     expect(cache.get("key-0")?.value).toBe("value-0");
     expect(cache.has("invalid")).toBe(false);
+  });
+});
+
+describe("web shared withTimeout", () => {
+  it("clamps oversized timeoutMs before scheduling", () => {
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+
+    const signal = withTimeout(undefined, Number.MAX_SAFE_INTEGER);
+    signal.dispatchEvent(new Event("abort"));
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });

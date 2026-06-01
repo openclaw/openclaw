@@ -23,6 +23,12 @@ import {
   readNonNegativeIntegerParam,
   readStringParam,
 } from "./common.js";
+import {
+  canonicalizeCronToolObject,
+  hasCronCreateSignal,
+  isEmptyRecoveredCronPatch,
+  recoverCronObjectFromFlatParams,
+} from "./cron-tool-canonicalize.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -47,47 +53,6 @@ const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
-const CRON_FLAT_PAYLOAD_KEYS = [
-  "message",
-  "text",
-  "model",
-  "fallbacks",
-  "toolsAllow",
-  "thinking",
-  "timeoutSeconds",
-  "lightContext",
-  "allowUnsafeExternalContent",
-] as const;
-const CRON_FLAT_SCHEDULE_KEYS = [
-  "kind",
-  "at",
-  "atMs",
-  "every",
-  "everyMs",
-  "anchorMs",
-  "cron",
-  "expr",
-  "tz",
-  "stagger",
-  "staggerMs",
-  "exact",
-] as const;
-const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
-  "name",
-  "schedule",
-  "sessionTarget",
-  "wakeMode",
-  "payload",
-  "delivery",
-  "enabled",
-  "description",
-  "deleteAfterRun",
-  "agentId",
-  "sessionKey",
-  "failureAlert",
-  ...CRON_FLAT_PAYLOAD_KEYS,
-  ...CRON_FLAT_SCHEDULE_KEYS,
-]);
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
@@ -96,47 +61,6 @@ const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
 function isMissingOrEmptyObject(value: unknown): boolean {
   return !value || (isRecord(value) && Object.keys(value).length === 0);
-}
-
-function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
-  found: boolean;
-  value: Record<string, unknown>;
-} {
-  const value: Record<string, unknown> = {};
-  let found = false;
-  for (const key of Object.keys(params)) {
-    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-      value[key] = params[key];
-      found = true;
-    }
-  }
-  if (value.everyMs === undefined && value.every !== undefined) {
-    value.everyMs = value.every;
-  }
-  if (value.staggerMs === undefined && value.stagger !== undefined) {
-    value.staggerMs = value.stagger;
-  }
-  if (value.exact === true && value.staggerMs === undefined) {
-    value.staggerMs = 0;
-  }
-  delete value.every;
-  delete value.stagger;
-  delete value.exact;
-  return { found, value };
-}
-
-function hasCronCreateSignal(value: Record<string, unknown>): boolean {
-  return (
-    value.schedule !== undefined ||
-    value.at !== undefined ||
-    value.atMs !== undefined ||
-    value.everyMs !== undefined ||
-    value.cron !== undefined ||
-    value.expr !== undefined ||
-    value.payload !== undefined ||
-    value.message !== undefined ||
-    value.text !== undefined
-  );
 }
 
 function nullableStringSchema(description: string) {
@@ -662,10 +586,11 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
+          const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
           const job =
-            normalizeCronJobCreate(params.job, {
+            normalizeCronJobCreate(canonicalJob, {
               sessionContext: { sessionKey: opts?.agentSessionKey },
-            }) ?? params.job;
+            }) ?? canonicalJob;
           const cfg = getRuntimeConfig();
           if (job && typeof job === "object") {
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -775,13 +700,11 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
-          const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
-          if (
-            recoveredFlatPatch &&
-            typeof patch === "object" &&
-            patch !== null &&
-            Object.keys(patch as Record<string, unknown>).length === 0
-          ) {
+          const canonicalPatch = canonicalizeCronToolObject(
+            params.patch as Record<string, unknown>,
+          );
+          const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+          if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
             throw new Error("patch required");
           }
           return jsonResult(

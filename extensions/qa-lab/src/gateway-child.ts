@@ -8,6 +8,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -95,7 +96,7 @@ async function closeWriteStream(stream: WriteStream) {
 }
 
 async function writeSanitizedQaGatewayDebugLog(params: { sourcePath: string; targetPath: string }) {
-  const contents = await fs.readFile(params.sourcePath, "utf8").catch((error) => {
+  const contents = await fs.readFile(params.sourcePath, "utf8").catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return "";
     }
@@ -306,13 +307,17 @@ async function waitForQaGatewayRestartBoundary(params: {
   timeoutMs?: number;
 }) {
   const timeoutMs = params.timeoutMs ?? QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS;
-  const pollMs = params.pollMs ?? 100;
+  const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 100, 100, 0);
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (params.logs().slice(params.offset).includes("restart mode:")) {
       return;
     }
-    await sleep(pollMs);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(pollMs, remainingMs));
   }
   throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
 }
@@ -371,7 +376,9 @@ async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number)
     return true;
   }
   return await Promise.race([
-    new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+    new Promise<boolean>((resolve) => {
+      child.once("exit", () => resolve(true));
+    }),
     sleep(timeoutMs).then(() => false),
   ]);
 }
@@ -776,7 +783,10 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw lastRpcStartupError ?? new Error("qa gateway rpc client failed to start");
+            throw toLintErrorObject(
+              lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
+              "Non-Error thrown",
+            );
           }
         } catch (error) {
           await attemptRpcClient.stop().catch(() => {});
@@ -876,7 +886,10 @@ export async function startQaGatewayChild(params: {
             }
           }
           if (!rpcReady) {
-            throw lastRpcStartupError ?? new Error("qa gateway rpc client failed to start");
+            throw toLintErrorObject(
+              lastRpcStartupError ?? new Error("qa gateway rpc client failed to start"),
+              "Non-Error thrown",
+            );
           }
         } catch (error) {
           await nextRpcClient.stop().catch(() => {});
@@ -1028,3 +1041,17 @@ export async function startQaGatewayChild(params: {
   }
 }
 export { testing as __testing };
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

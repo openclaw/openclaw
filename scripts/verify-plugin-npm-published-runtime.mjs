@@ -230,7 +230,9 @@ function npmViewReadme(spec) {
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function readPositiveIntEnv(name, fallback, env = process.env) {
@@ -375,10 +377,12 @@ async function main(argv) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main(process.argv.slice(2)).catch((error) => {
-    console.error(
-      `plugin-npm-published-runtime-check: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    process.exitCode = 1;
-  });
+  main(process.argv.slice(2)).catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(
+        `plugin-npm-published-runtime-check: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exitCode = 1;
+    },
+  );
 }

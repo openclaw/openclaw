@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  createGatewayStartupMetadataPluginIdScope,
+  isMetadataSnapshotScopedForGatewayStartup,
   resolveGatewayStartupPluginPlanFromRegistry,
   type GatewayStartupPluginPlan,
 } from "./channel-plugin-ids.js";
@@ -81,14 +83,26 @@ function createPluginLookUpTableMemoKey(params: {
 
 export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): PluginLookUpTable {
   const requestedSnapshotConfig = params.activationSourceConfig ?? params.config;
+  const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    env: params.env,
+  });
   const metadataSnapshot =
     params.metadataSnapshot &&
     isPluginMetadataSnapshotCompatible({
       snapshot: params.metadataSnapshot,
       config: requestedSnapshotConfig,
       env: params.env,
+      allowScopedSnapshot: true,
       workspaceDir: params.workspaceDir,
       index: params.index,
+    }) &&
+    isMetadataSnapshotScopedForGatewayStartup({
+      metadataSnapshot: params.metadataSnapshot,
+      pluginIdScope,
     })
       ? params.metadataSnapshot
       : resolvePluginMetadataSnapshot({
@@ -97,6 +111,7 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
           env: params.env,
           allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
           ...(params.index ? { index: params.index } : {}),
+          pluginIdScope,
         });
   const memoKey = createPluginLookUpTableMemoKey({
     config: params.config,

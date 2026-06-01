@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  AgentsListResultSchema,
   SkillsProposalInspectResultSchema,
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
@@ -27,6 +28,31 @@ function toolsEffectiveResult() {
     ],
   };
 }
+
+describe("AgentsListResultSchema", () => {
+  it("accepts resolved per-agent thinking metadata", () => {
+    const result = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        {
+          id: "investment-master",
+          name: "Investment Master",
+          model: { primary: "deepseek/deepseek-v4-flash" },
+          thinkingLevels: [
+            { id: "off", label: "off" },
+            { id: "xhigh", label: "xhigh" },
+          ],
+          thinkingOptions: ["off", "xhigh"],
+          thinkingDefault: "xhigh",
+        },
+      ],
+    };
+
+    expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+  });
+});
 
 describe("ToolsEffectiveResultSchema", () => {
   it("accepts runtime tool quarantine notices", () => {

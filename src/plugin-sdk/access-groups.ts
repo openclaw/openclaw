@@ -100,7 +100,7 @@ export async function resolveAccessGroupAllowFromState(params: {
       continue;
     }
 
-    let allowed = false;
+    let allowed;
     try {
       allowed = await params.resolveMembership({
         name,

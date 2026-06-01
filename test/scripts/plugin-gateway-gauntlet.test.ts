@@ -553,14 +553,14 @@ describe("plugin gateway gauntlet helpers", () => {
           "const marker = process.argv[1];",
           "fs.writeFileSync(marker, 'start\\n');",
           "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
-          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 50);",
+          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 5);",
         ].join(""),
         markerPath,
       ],
       label: "live-timeout",
       phase: "probe",
-      timeoutMs: 1000,
-      timeoutKillGraceMs: 100,
+      timeoutMs: 100,
+      timeoutKillGraceMs: 10,
     });
 
     expect(row.status).toBe(1);
@@ -568,7 +568,9 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(row.spawnError?.code).toBe("ETIMEDOUT");
     expect(row.wallMs).toBeLessThan(5_000);
     const afterReturn = await fs.readFile(markerPath, "utf8");
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
 

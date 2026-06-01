@@ -233,14 +233,15 @@ export function createTalkTranscriptionRelaySession(
     },
     { onEvent: recordTalkObservabilityEvent },
   );
-  let relay: TranscriptionRelaySession | undefined;
   const emit = (event: TalkTranscriptionRelayEventPayload, talkEvent?: TalkEventInput): void => {
     broadcastToOwner(params.context, params.connId, {
       ...event,
       ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
     });
   };
+  const relayRef: { current?: TranscriptionRelaySession } = {};
   const ensureTurnId = (): string => {
+    const relay = relayRef.current;
     return relay ? ensureTranscriptionTurn(relay) : "turn-1";
   };
   const sttSession = params.provider.createSession({
@@ -271,6 +272,7 @@ export function createTalkTranscriptionRelaySession(
           final: true,
         },
       );
+      const relay = relayRef.current;
       if (relay) {
         const ended = relay.talk.endTurn({ turnId, payload: {} });
         if (ended.ok) {
@@ -293,12 +295,13 @@ export function createTalkTranscriptionRelaySession(
           final: true,
         },
       );
+      const relay = relayRef.current;
       if (relay) {
         closeTranscriptionSession(relay, "error");
       }
     },
   });
-  relay = {
+  const relay: TranscriptionRelaySession = {
     id: transcriptionSessionId,
     connId: params.connId,
     context: params.context,
@@ -314,6 +317,7 @@ export function createTalkTranscriptionRelaySession(
     }, TRANSCRIPTION_SESSION_TTL_MS),
     closed: false,
   };
+  relayRef.current = relay;
   relay.cleanupTimer.unref?.();
   transcriptionSessions.set(transcriptionSessionId, relay);
   sttSession

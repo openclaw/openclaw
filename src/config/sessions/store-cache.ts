@@ -211,7 +211,7 @@ function cloneJsonLikeValue<T>(value: T): T {
   }
   const cloned: Record<string, unknown> = {};
   for (const key in value as Record<string, unknown>) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+    if (!Object.hasOwn(value, key)) {
       continue;
     }
     const child = (value as Record<string, unknown>)[key];

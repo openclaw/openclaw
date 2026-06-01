@@ -313,7 +313,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       };
 
       const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
-      const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+      const hadOwnIsTTY = Object.hasOwn(stdin, "isTTY");
       const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
       Object.defineProperty(stdin, "isTTY", {
         configurable: true,
@@ -444,7 +444,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
     it("supports non-interactive (GUI/RPC) auth contexts without a TTY", async () => {
       const provider = await getProvider();
       const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
-      const hadOwnIsTTY = Object.prototype.hasOwnProperty.call(stdin, "isTTY");
+      const hadOwnIsTTY = Object.hasOwn(stdin, "isTTY");
       const previousIsTTYDescriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
       Object.defineProperty(stdin, "isTTY", {
         configurable: true,

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 
 type PluginPeerLinkLogger = {
@@ -73,12 +74,14 @@ async function listManagedNpmRootPackageDirs(npmRoot: string): Promise<string[]>
     }
     const entryPath = path.join(nodeModulesDir, entry.name);
     if (entry.name.startsWith("@")) {
-      const scopedEntries = await fs.readdir(entryPath, { withFileTypes: true }).catch((error) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return [];
-        }
-        throw error;
-      });
+      const scopedEntries = await fs
+        .readdir(entryPath, { withFileTypes: true })
+        .catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return [];
+          }
+          throw error;
+        });
       for (const scopedEntry of scopedEntries) {
         if (scopedEntry.isDirectory()) {
           packageDirs.push(path.join(entryPath, scopedEntry.name));
@@ -240,8 +243,8 @@ async function linkOpenClawPeerDependency(params: {
   }
 
   try {
-    const existing = await fs.lstat(linkPath).catch((err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") {
+    const existing = await fs.lstat(linkPath).catch((err: unknown) => {
+      if (hasErrnoCode(err, "ENOENT")) {
         return null;
       }
       throw err;

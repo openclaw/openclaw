@@ -654,7 +654,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
       continue;
     }
     const distDir = join(packageRoot, rootEntry.name);
-    let distEntries = [];
+    let distEntries;
     try {
       distEntries = readdirSync(distDir, { withFileTypes: true });
     } catch (error) {
@@ -668,7 +668,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
         continue;
       }
       const extensionsDir = join(distDir, distEntry.name);
-      let extensionEntries = [];
+      let extensionEntries;
       try {
         extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
       } catch (error) {
@@ -683,7 +683,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
           continue;
         }
         const extensionPath = join(extensionsDir, extensionEntry.name);
-        let stagingEntries = [];
+        let stagingEntries;
         try {
           stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
         } catch (error) {
@@ -2311,7 +2311,7 @@ async function runInstalledAgentTurn(params) {
 }
 
 export function verifyDevUpdateStatus(stdout, options = {}) {
-  let payload = null;
+  let payload;
   try {
     payload = JSON.parse(stdout);
   } catch {
@@ -3968,7 +3968,9 @@ function formatError(error) {
 }
 
 function sleep(ms) {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+  return new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, ms);
+  });
 }
 
 async function withAllocatedGatewayPort(lane, callback) {
@@ -3987,7 +3989,10 @@ async function withAllocatedGatewayPort(lane, callback) {
       await sleep(250 * attempt);
     }
   }
-  throw lastError ?? new Error("Failed to allocate a gateway port.");
+  throw toLintErrorObject(
+    lastError ?? new Error("Failed to allocate a gateway port."),
+    "Non-Error thrown",
+  );
 }
 
 function reservePort() {
@@ -4021,4 +4026,18 @@ function reservePort() {
 function isAddressInUseError(error) {
   const message = formatError(error);
   return message.includes("EADDRINUSE") || /address.+in use/iu.test(message);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }
