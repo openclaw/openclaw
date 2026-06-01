@@ -286,18 +286,30 @@ function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string
   return params.workKey ?? params.sessionId;
 }
 
-// Drops every embedded-run owner for a session at once. Used when an authority
-// (stuck-session recovery) declares the lane terminal and the per-run
-// markDiagnosticEmbeddedRunEnded may have been bypassed for some work keys.
-export function clearDiagnosticEmbeddedRunsForSession(params: {
+// Reconciles a session's terminal embedded-run activity at once. Used when an
+// authority (stuck-session recovery) declares the lane idle and the per-run
+// markDiagnosticEmbeddedRunEnded may have been bypassed. Clears the embedded-run
+// owners AND their tool/model markers, matching the default teardown so the lane
+// cannot be left as idle + orphaned tool/model activity (which
+// isIdleQueuedRecoverableSessionStall still treats as recoverable).
+export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   sessionId?: string;
   sessionKey?: string;
 }): void {
   const activity = resolveSessionActivity(params);
-  if (!activity || activity.activeEmbeddedRuns.size === 0) {
+  if (!activity) {
+    return;
+  }
+  if (
+    activity.activeEmbeddedRuns.size === 0 &&
+    activity.activeTools.size === 0 &&
+    activity.activeModelCalls.size === 0
+  ) {
     return;
   }
   activity.activeEmbeddedRuns.clear();
+  activity.activeTools.clear();
+  activity.activeModelCalls.clear();
   touchSessionActivity(activity, "embedded_run:ended");
 }
 

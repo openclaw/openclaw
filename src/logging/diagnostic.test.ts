@@ -2357,6 +2357,77 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(activity.hasActiveEmbeddedRun).toBeUndefined();
   });
 
+  it("clears a stale tool marker left by the aborted run so a queued idle lane converges", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    // The aborted run left a stale tool marker. If recovery clears only the
+    // embedded owner, the lane becomes idle + orphaned tool_call, which
+    // isIdleQueuedRecoverableSessionStall still treats as recoverable while work
+    // is queued — so the idle declaration must clear the tool marker too.
+    markDiagnosticToolStartedForTest({ sessionId, sessionKey, toolName: "Bash", toolCallId: "t1" });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    state.queueDepth = 2;
+
+    requestStuckSessionRecovery({
+      recover: () => Promise.resolve(abortedOutcome()),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("idle");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBeUndefined();
+    expect(activity.hasActiveEmbeddedRun).toBeUndefined();
+    expect(activity.activeToolName).toBeUndefined();
+  });
+
+  it("clears a stale model marker left by the aborted run so a queued idle lane converges", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    // Same hazard via a stale model-call marker: owner-only clearing would leave
+    // idle + orphaned model_call, which the idle-queued classifier still recovers.
+    markDiagnosticModelStartedForTest({
+      sessionId,
+      sessionKey,
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    state.queueDepth = 2;
+
+    requestStuckSessionRecovery({
+      recover: () => Promise.resolve(abortedOutcome()),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("idle");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBeUndefined();
+    expect(activity.hasActiveEmbeddedRun).toBeUndefined();
+  });
+
   it("preserves an active flag for a newer run that re-armed work mid-recovery", async () => {
     logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
     markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
