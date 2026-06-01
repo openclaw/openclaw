@@ -426,6 +426,50 @@ describe("refreshChat", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
+  it("records chat history timing when a reload resets active stream state", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return Promise.resolve({
+          messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+        });
+      }
+      return pendingPromise();
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatRunId: "run-main",
+      chatStream: "partial",
+      eventLogBuffer: [],
+    });
+
+    await refreshChat(host, { awaitHistory: true, scheduleScroll: false });
+
+    expect(host.chatStream).toBeNull();
+    expect(eventPayloads(host, "control-ui.chat.history")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "start",
+          sessionKey: "main",
+          previousRunId: "run-main",
+        }),
+        expect.objectContaining({
+          phase: "stream-reset",
+          sessionKey: "main",
+          previousRunId: "run-main",
+          activeRunId: "run-main",
+          visibleMessageCount: 1,
+        }),
+        expect.objectContaining({
+          phase: "applied",
+          sessionKey: "main",
+          previousRunId: "run-main",
+          resetStream: true,
+        }),
+      ]),
+    );
+  });
+
   it("drains a restored queue after refresh proves the selected session is idle", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.history") {
