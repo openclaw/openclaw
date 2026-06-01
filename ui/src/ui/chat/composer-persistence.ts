@@ -6,7 +6,7 @@ import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const MAX_STORED_SESSIONS = 20;
 const MAX_STORED_QUEUE_ITEMS = 50;
-const INTERRUPTED_MODEL_WAIT_ERROR =
+export const INTERRUPTED_MODEL_WAIT_ERROR =
   "Model selection was interrupted. Review and retry when ready.";
 
 type ChatComposerPersistenceState = {
@@ -395,6 +395,42 @@ export function removeStoredChatComposerQueueItem(
     writeStore(storage, key, store);
   } catch {
     // Best-effort only: queue persistence must not make cancellation fail.
+  }
+}
+
+export function persistStoredChatComposerQueue(
+  state: Pick<
+    ChatComposerPersistenceState,
+    "settings" | "assistantAgentId" | "agentsList" | "hello"
+  >,
+  sessionKey: string,
+  queue: ChatQueueItem[],
+): void {
+  const storage = getSafeSessionStorage();
+  if (!storage || !sessionKey.trim()) {
+    return;
+  }
+  try {
+    const key = storageKeyForGateway(state.settings?.gatewayUrl);
+    const store = readStore(storage, key);
+    const storeSessionKey = storageSessionKeyForState(state, sessionKey);
+    const session = normalizeStoredSession(store.sessions[storeSessionKey]);
+    const serializedQueue = queue
+      .slice(0, MAX_STORED_QUEUE_ITEMS)
+      .map(serializeQueueItem)
+      .filter((item): item is ChatQueueItem => item !== null);
+    if (!session?.draft && serializedQueue.length === 0) {
+      delete store.sessions[storeSessionKey];
+    } else {
+      store.sessions[storeSessionKey] = {
+        ...(session?.draft ? { draft: session.draft } : {}),
+        ...(serializedQueue.length ? { queue: serializedQueue } : {}),
+        updatedAt: Date.now(),
+      };
+    }
+    writeStore(storage, key, store);
+  } catch {
+    // Best-effort only: queue persistence must not make send recovery fail.
   }
 }
 

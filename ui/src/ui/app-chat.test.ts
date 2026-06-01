@@ -1562,7 +1562,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
   });
 
-  it("does not restore a canceled model-wait send into a different session", async () => {
+  it("keeps resolved model-wait sends queued under the submitted session after switching", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
@@ -1579,6 +1579,8 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(host.chatQueue[0]?.text).toBe("send from session a");
 
+    host.chatQueueBySession = { "agent:main": [...host.chatQueue] };
+    host.chatQueue = [];
     host.sessionKey = "agent:other";
     host.chatMessage = "session b draft";
     switchUpdate.resolve(true);
@@ -1587,9 +1589,13 @@ describe("handleSendChat", () => {
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("session b draft");
     expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatQueueBySession?.["agent:main"]?.[0]).toMatchObject({
+      sendState: undefined,
+      text: "send from session a",
+    });
   });
 
-  it("does not restore a failed model-wait send into a different session", async () => {
+  it("keeps failed model-wait sends retryable under the submitted session after switching", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
       throw new Error(`Unexpected request: ${method}`);
@@ -1614,7 +1620,11 @@ describe("handleSendChat", () => {
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("");
     expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatQueueBySession?.["agent:main"]).toBeUndefined();
+    expect(host.chatQueueBySession?.["agent:main"]?.[0]).toMatchObject({
+      sendError: "Model selection was interrupted. Review and retry when ready.",
+      sendState: "failed",
+      text: "send from session a",
+    });
   });
 
   it("does not flush model-wait sends before the model picker update finishes", async () => {

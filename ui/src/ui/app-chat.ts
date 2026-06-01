@@ -7,7 +7,11 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./chat/attachment-payload-store.ts";
-import { removeStoredChatComposerQueueItem } from "./chat/composer-persistence.ts";
+import {
+  INTERRUPTED_MODEL_WAIT_ERROR,
+  persistStoredChatComposerQueue,
+  removeStoredChatComposerQueueItem,
+} from "./chat/composer-persistence.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -461,6 +465,10 @@ function updateQueuedMessageForSession(
   });
   writeChatQueueForSession(host, sessionKey, nextQueue);
   return nextItem;
+}
+
+function persistQueuedMessagesForSession(host: ChatHost, sessionKey: string) {
+  persistStoredChatComposerQueue(host, sessionKey, readChatQueueForSession(host, sessionKey));
 }
 
 function removeQueuedMessageWithoutReleasing(
@@ -1406,19 +1414,28 @@ export async function handleSendChat(
     }
 
     if (modelSwitchReady !== true && !(await modelSwitchReady)) {
-      cancelPendingSendBeforeRequest(host, queued, {
-        previousDraft: cleared.previousDraft,
-        previousAttachments: cleared.previousAttachments,
-        restoreComposer: host.sessionKey === submittedSessionKey,
-      });
+      if (host.sessionKey === submittedSessionKey) {
+        cancelPendingSendBeforeRequest(host, queued, {
+          previousDraft: cleared.previousDraft,
+          previousAttachments: cleared.previousAttachments,
+        });
+      } else {
+        updateQueuedMessageForSession(host, submittedSessionKey, queued.id, (item) => ({
+          ...item,
+          sendError: INTERRUPTED_MODEL_WAIT_ERROR,
+          sendState: "failed",
+        }));
+        persistQueuedMessagesForSession(host, submittedSessionKey);
+      }
       return;
     }
     if (host.sessionKey !== submittedSessionKey) {
-      cancelPendingSendBeforeRequest(host, queued, {
-        previousDraft: cleared.previousDraft,
-        previousAttachments: cleared.previousAttachments,
-        restoreComposer: false,
-      });
+      updateQueuedMessageForSession(host, submittedSessionKey, queued.id, (item) => ({
+        ...item,
+        sendError: undefined,
+        sendState: undefined,
+      }));
+      persistQueuedMessagesForSession(host, submittedSessionKey);
       return;
     }
 
