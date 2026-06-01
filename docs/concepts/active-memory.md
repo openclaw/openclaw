@@ -797,6 +797,7 @@ If active memory is too slow:
 
 - lower `queryMode`
 - lower `timeoutMs`
+- keep the circuit breaker enabled so repeated timeouts skip recall briefly
 - reduce recent turn counts
 - reduce per-turn char caps
 
@@ -845,6 +846,19 @@ confirm `config.toolsAllow` names the tools that plugin actually registers.
 
     See [Cold-start grace](#cold-start-grace) under Recommended setup for the
     recommended `setupGraceTimeoutMs` value.
+
+  </Accordion>
+
+  <Accordion title="Every reply feels delayed after repeated Active Memory timeouts">
+    Active Memory keeps a small per-agent/model circuit breaker. After
+    consecutive `status=timeout` results, it skips recall for a short cooldown
+    instead of blocking every reply on the same failing path. The defaults are
+    `circuitBreakerMaxTimeouts: 3` and `circuitBreakerCooldownMs: 60000`.
+
+    If you already tuned `timeoutMs` and `setupGraceTimeoutMs` but still see
+    bursts of repeated timeouts, lower `circuitBreakerMaxTimeouts` to trip
+    sooner or raise `circuitBreakerCooldownMs` to give the memory backend more
+    time to recover.
 
   </Accordion>
 </AccordionGroup>
