@@ -1,12 +1,12 @@
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../../packages/normalization-core/src/string-coerce.js";
+import {
   MANAGED_MEMORY_DREAMING_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG,
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
 } from "../../../memory-host-sdk/dreaming.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../../../packages/normalization-core/src/string-coerce.js";
 
 type UnknownRecord = Record<string, unknown>;
 

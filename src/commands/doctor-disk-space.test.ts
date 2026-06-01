@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildDiskSpaceWarnings,
-  formatBytes,
-  noteDiskSpace,
-} from "./doctor-disk-space.js";
+import { buildDiskSpaceWarnings, formatBytes, noteDiskSpace } from "./doctor-disk-space.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),

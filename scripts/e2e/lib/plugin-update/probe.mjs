@@ -172,10 +172,7 @@ function assertCorruptPluginDetails(plugins, pluginId) {
   const evidence = collectPluginEvidence(plugins, pluginId);
   const outcome = evidence.outcome;
   const disabledAfterFailure = isCorruptPluginDisabledAfterUpdate(evidence, pluginId);
-  if (
-    !outcome ||
-    (outcome.status !== "error" && !disabledAfterFailure)
-  ) {
+  if (!outcome || (outcome.status !== "error" && !disabledAfterFailure)) {
     throw new Error(
       `expected error or disabled-after-failure outcome for ${pluginId}, got ${JSON.stringify({
         outcomes: plugins.npm?.outcomes ?? [],

@@ -38,11 +38,7 @@ function formatTraceValue(value: boolean | number | string): string {
   return JSON.stringify(value);
 }
 
-function tracePluginLifecyclePhase<T>(
-  phase: string,
-  fn: () => T,
-  details?: TraceDetails,
-): T {
+function tracePluginLifecyclePhase<T>(phase: string, fn: () => T, details?: TraceDetails): T {
   if (!isPluginLifecycleTraceEnabled()) {
     return fn();
   }

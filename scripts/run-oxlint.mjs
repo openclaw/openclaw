@@ -7,10 +7,7 @@ import {
   resolveLocalHeavyCheckEnv,
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
-import {
-  createManagedCommandInvocation,
-  runManagedCommand,
-} from "./lib/managed-child-process.mjs";
+import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
 const PREPARE_EXTENSION_BOUNDARY_ARGS = [

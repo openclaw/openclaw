@@ -71,7 +71,11 @@ function listChangedPaths(base, head = "HEAD") {
 }
 
 function listAvailableExtensionIdsFromGit() {
-  const packageFiles = runGit(["ls-files", "--", `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/package.json`])
+  const packageFiles = runGit([
+    "ls-files",
+    "--",
+    `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/package.json`,
+  ])
     .split("\n")
     .map((line) => normalizeRelative(line.trim()))
     .filter((line) => line.length > 0);

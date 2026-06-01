@@ -97,7 +97,9 @@ export async function runManagedCommand({
         if (managedChild.forceKillTimer) {
           clearTimeout(managedChild.forceKillTimer);
         }
-        resolve(managedChild.receivedSignal ? signalExitCode(managedChild.receivedSignal) : (status ?? 1));
+        resolve(
+          managedChild.receivedSignal ? signalExitCode(managedChild.receivedSignal) : (status ?? 1),
+        );
       });
     });
   } finally {

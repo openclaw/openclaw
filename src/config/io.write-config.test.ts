@@ -769,9 +769,7 @@ describe("config io write", () => {
         gateway: { mode: "local", port: 18790 },
       });
 
-      expect(warn.mock.calls).toContainEqual([
-        expect.stringContaining("Config write anomaly:"),
-      ]);
+      expect(warn.mock.calls).toContainEqual([expect.stringContaining("Config write anomaly:")]);
       expect(warn.mock.calls).toContainEqual([
         expect.stringContaining("missing-meta-before-write"),
       ]);

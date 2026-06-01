@@ -6,12 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   parseNonNegativeInt,
   parsePositiveInt,
   parsePositiveNumber,
 } from "./lib/numeric-options.mjs";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,

@@ -309,27 +309,24 @@ describe("real-behavior-proof-policy", () => {
     "did not test.",
     "could not test",
     "could not test.",
-  ])(
-    "fails external PRs with fenced missing-proof field values: %s",
-    (missingProof) => {
-      const evidence = [
-        "Terminal transcript:",
-        "```text",
-        "$ openclaw gateway status",
-        "discord ready",
-        "```",
-      ].join("\n");
-      const notTested = ["```text", missingProof, "```"].join("\n");
+  ])("fails external PRs with fenced missing-proof field values: %s", (missingProof) => {
+    const evidence = [
+      "Terminal transcript:",
+      "```text",
+      "$ openclaw gateway status",
+      "discord ready",
+      "```",
+    ].join("\n");
+    const notTested = ["```text", missingProof, "```"].join("\n");
 
-      const evaluation = evaluateRealBehaviorProof({
-        pullRequest: externalPr(proofBody(evidence, { notTested })),
-      });
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(proofBody(evidence, { notTested })),
+    });
 
-      expect(evaluation.status).toBe("missing");
-      expect(evaluation.missingFields).toEqual(["notTested"]);
-      expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
-    },
-  );
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingFields).toEqual(["notTested"]);
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+  });
 
   it("fails external PRs whose proof is only tests, mocks, snapshots, lint, typecheck, or CI", () => {
     const evaluation = evaluateRealBehaviorProof({

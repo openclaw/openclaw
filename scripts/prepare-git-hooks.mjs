@@ -32,13 +32,11 @@ export function configurePrepareGitHooks(params = {}) {
     return { configured: false, reason: "missing-hooks-dir" };
   }
 
-  const worktree = runGit(
-    spawn,
-    gitBin,
-    ["rev-parse", "--is-inside-work-tree"],
-    cwd,
-    ["ignore", "pipe", "ignore"],
-  );
+  const worktree = runGit(spawn, gitBin, ["rev-parse", "--is-inside-work-tree"], cwd, [
+    "ignore",
+    "pipe",
+    "ignore",
+  ]);
   const missingGitReason = getMissingGitReason(worktree.error);
   if (missingGitReason) {
     return { configured: false, reason: missingGitReason };
@@ -47,13 +45,11 @@ export function configurePrepareGitHooks(params = {}) {
     return { configured: false, reason: "not-worktree" };
   }
 
-  const configured = runGit(
-    spawn,
-    gitBin,
-    ["config", "core.hooksPath", "git-hooks"],
-    cwd,
-    ["ignore", "ignore", "pipe"],
-  );
+  const configured = runGit(spawn, gitBin, ["config", "core.hooksPath", "git-hooks"], cwd, [
+    "ignore",
+    "ignore",
+    "pipe",
+  ]);
   const configMissingGitReason = getMissingGitReason(configured.error);
   if (configMissingGitReason) {
     return { configured: false, reason: configMissingGitReason };

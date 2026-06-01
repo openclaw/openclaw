@@ -108,7 +108,10 @@ function tarballFileName(manifest: PackageManifest): string {
   return `${manifest.name.replace(/^@/, "").replace("/", "-")}-${manifest.version}.tgz`;
 }
 
-async function createPackStagingRoot(packageRoot: string, destinationRoot: string): Promise<string> {
+async function createPackStagingRoot(
+  packageRoot: string,
+  destinationRoot: string,
+): Promise<string> {
   const manifest = await readPackageManifest(packageRoot);
   const packageSlug = manifest.name.replace(/^@/, "").replace("/", "-");
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
