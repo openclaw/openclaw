@@ -222,6 +222,14 @@ export function isDependencyGuardAuthorizedForHead(comment, currentHeadSha) {
   );
 }
 
+export function isDependencyGuardTrustedForHead(comment, currentHeadSha) {
+  return (
+    Boolean(currentHeadSha) &&
+    comment?.body?.includes("### Dependency graph changes noted") === true &&
+    dependencyGuardCommentHeadSha(comment) === currentHeadSha
+  );
+}
+
 export function securityApproverSet(value) {
   return new Set(
     String(value ?? "")
@@ -287,6 +295,22 @@ export function renderAuthorizedDependencyComment(override) {
   }
   lines.push("", "A later push changes the PR head SHA and requires a fresh security approval.");
   return lines.join("\n");
+}
+
+export function renderTrustedDependencyComment({ actor, headSha }) {
+  return [
+    dependencyGraphGuardMarker,
+    "",
+    "### Dependency graph changes noted",
+    "",
+    "This PR includes dependency graph changes. The dependency guard is informational because the PR author is a repository admin or a member of `@openclaw/openclaw-secops`.",
+    "",
+    `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
+    `- Trusted actor: @${sanitizeDisplayValue(actor.login)}`,
+    `- Trusted role: ${markdownCode(actor.reason)}`,
+    "",
+    "Security review is still recommended before merge when the dependency graph change is intentional.",
+  ].join("\n");
 }
 
 export function renderAutoscrubbedDependencyComment({ baseBranch, lockfileChanges, commitSha }) {
@@ -413,6 +437,44 @@ function renderAutoscrubStatusLines(status) {
     ];
   }
   return [];
+}
+
+export function dependencyGuardTrustedActorCandidates({ pullRequest, event, currentHeadSha }) {
+  const eventHeadSha = event?.pull_request?.head?.sha;
+  const eventAfterSha = event?.after;
+  const eventMatchesCurrentHead =
+    Boolean(currentHeadSha) &&
+    (eventHeadSha === currentHeadSha || eventAfterSha === currentHeadSha);
+  if (!eventMatchesCurrentHead) {
+    return [];
+  }
+  const candidates = [];
+  const seen = new Set();
+  for (const [source, login] of [["pull request author", pullRequest?.user?.login]]) {
+    if (typeof login !== "string" || login.length === 0) {
+      continue;
+    }
+    const normalizedLogin = login.toLowerCase();
+    if (seen.has(normalizedLogin)) {
+      continue;
+    }
+    seen.add(normalizedLogin);
+    candidates.push({ login, source });
+  }
+  return candidates;
+}
+
+export async function findTrustedDependencyGuardActor({ candidates, isDependencyApprover }) {
+  for (const candidate of candidates) {
+    const role = await isDependencyApprover(candidate.login);
+    if (role) {
+      return {
+        login: candidate.login,
+        reason: `${candidate.source}; ${role}`,
+      };
+    }
+  }
+  return null;
 }
 
 function renderManifestChangeLine(change) {
@@ -794,6 +856,98 @@ async function main() {
     return;
   }
 
+  const membershipCache = new Map();
+  const permissionCache = new Map();
+  const isSecurityMember = async (login) => {
+    const normalizedLogin = login.toLowerCase();
+    if (explicitSecurityApprovers.has(normalizedLogin)) {
+      return true;
+    }
+    if (membershipCache.has(normalizedLogin)) {
+      return membershipCache.get(normalizedLogin);
+    }
+    try {
+      const membership = await api.request(
+        `/orgs/${owner}/teams/${securityTeamSlug}/memberships/${encodeURIComponent(login)}`,
+      );
+      const allowed = membership?.state === "active";
+      membershipCache.set(normalizedLogin, allowed);
+      return allowed;
+    } catch (error) {
+      if (error?.status !== 404) {
+        console.warn(`Could not verify ${login} against ${securityTeamSlug}: ${error.message}`);
+      }
+      membershipCache.set(normalizedLogin, false);
+      return false;
+    }
+  };
+  const isRepositoryAdmin = async (login) => {
+    const normalizedLogin = login.toLowerCase();
+    if (permissionCache.has(normalizedLogin)) {
+      return permissionCache.get(normalizedLogin);
+    }
+    try {
+      const result = await api.request(
+        `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+      );
+      const allowed = result?.permission === "admin";
+      permissionCache.set(normalizedLogin, allowed);
+      return allowed;
+    } catch (error) {
+      if (error?.status !== 404) {
+        console.warn(`Could not verify repository permission for ${login}: ${error.message}`);
+      }
+      permissionCache.set(normalizedLogin, false);
+      return false;
+    }
+  };
+  const isDependencyApprover = async (login) => {
+    if (await isSecurityMember(login)) {
+      return securityTeamSlug;
+    }
+    if (await isRepositoryAdmin(login)) {
+      return "repository admin";
+    }
+    return null;
+  };
+  const currentHeadSha = pullRequest.head?.sha;
+  if (isDependencyGuardTrustedForHead(existingGuardComment, currentHeadSha)) {
+    if (mode === "detect") {
+      await setOutput("autoscrub", "false");
+    }
+    await writeSummary(
+      [
+        "## Dependency Guard",
+        "",
+        `Dependency graph change remains informational for a trusted actor at ${markdownCode(currentHeadSha)}.`,
+      ].join("\n"),
+    );
+    console.log("Dependency graph change remains informational for this head SHA.");
+    return;
+  }
+  const trustedActor = await findTrustedDependencyGuardActor({
+    candidates: dependencyGuardTrustedActorCandidates({ pullRequest, event, currentHeadSha }),
+    isDependencyApprover,
+  });
+  if (trustedActor) {
+    if (mode === "detect") {
+      await setOutput("autoscrub", "false");
+    }
+    await upsertComment(
+      existingGuardComment,
+      renderTrustedDependencyComment({ actor: trustedActor, headSha: currentHeadSha }),
+    );
+    await writeSummary(
+      [
+        "## Dependency Guard",
+        "",
+        `Dependency graph change noted for trusted actor @${sanitizeDisplayValue(trustedActor.login)} and allowed to continue.`,
+      ].join("\n"),
+    );
+    console.log("Dependency graph change noted for trusted actor; guard is informational.");
+    return;
+  }
+
   const autoscrubCandidate = shouldAutoscrubDependencyLockfiles({
     dependencyFiles,
     lockfileChanges,
@@ -891,54 +1045,6 @@ async function main() {
       };
     }
   }
-  const membershipCache = new Map();
-  const permissionCache = new Map();
-  const isSecurityMember = async (login) => {
-    const normalizedLogin = login.toLowerCase();
-    if (explicitSecurityApprovers.has(normalizedLogin)) {
-      return true;
-    }
-    if (membershipCache.has(normalizedLogin)) {
-      return membershipCache.get(normalizedLogin);
-    }
-    try {
-      const membership = await api.request(
-        `/orgs/${owner}/teams/${securityTeamSlug}/memberships/${encodeURIComponent(login)}`,
-      );
-      const allowed = membership?.state === "active";
-      membershipCache.set(normalizedLogin, allowed);
-      return allowed;
-    } catch (error) {
-      if (error?.status !== 404) {
-        console.warn(`Could not verify ${login} against ${securityTeamSlug}: ${error.message}`);
-      }
-      membershipCache.set(normalizedLogin, false);
-      return false;
-    }
-  };
-  const isRepositoryAdmin = async (login) => {
-    const normalizedLogin = login.toLowerCase();
-    if (permissionCache.has(normalizedLogin)) {
-      return permissionCache.get(normalizedLogin);
-    }
-    try {
-      const result = await api.request(
-        `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      );
-      const allowed = result?.permission === "admin";
-      permissionCache.set(normalizedLogin, allowed);
-      return allowed;
-    } catch (error) {
-      if (error?.status !== 404) {
-        console.warn(`Could not verify repository permission for ${login}: ${error.message}`);
-      }
-      permissionCache.set(normalizedLogin, false);
-      return false;
-    }
-  };
-  const isDependencyApprover = async (login) =>
-    (await isSecurityMember(login)) || (await isRepositoryAdmin(login));
-  const currentHeadSha = pullRequest.head?.sha;
   if (isDependencyGuardAuthorizedForHead(existingGuardComment, currentHeadSha)) {
     await writeSummary(
       [
@@ -953,7 +1059,7 @@ async function main() {
   const override = await findDependencyOverrideCommandAsync({
     comments,
     expectedSha: dependencyOverrideExpectedSha(existingGuardComment, currentHeadSha),
-    isSecurityMember: isDependencyApprover,
+    isSecurityMember: async (login) => Boolean(await isDependencyApprover(login)),
     newerThan: existingGuardComment?.updated_at ?? existingGuardComment?.created_at,
   });
   if (override) {

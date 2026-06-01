@@ -5,22 +5,26 @@ import {
   createAutoscrubCommit,
   dependencyGuardCommentAuthors,
   dependencyGuardCommentHeadSha,
+  dependencyGuardTrustedActorCandidates,
   dependencyFieldChanges,
   dependencyOverrideExpectedSha,
   findDependencyOverrideCommand,
   findDependencyOverrideCommandAsync,
+  findTrustedDependencyGuardActor,
   githubApi,
   isAutoscrubbedDependencyComment,
   isDependencyGuardAuthorizedForHead,
   isDependencyFile,
   isDependencyGuardMarkerComment,
   isDependencyManifest,
+  isDependencyGuardTrustedForHead,
   isPackageLockfile,
   readBoundedGitHubErrorText,
   renderAuthorizedDependencyComment,
   renderAutoscrubbedDependencyComment,
   renderBlockedDependencyComment,
   renderClearedDependencyGuardComment,
+  renderTrustedDependencyComment,
   sanitizeDisplayValue,
   securityApproverSet,
   shouldAutoscrubDependencyLockfiles,
@@ -165,6 +169,64 @@ describe("dependency guard script", () => {
       sha: headSha,
       url: "https://example.test/comment",
     });
+  });
+
+  it("recognizes trusted dependency guard actors automatically", async () => {
+    const sameActorCandidates = dependencyGuardTrustedActorCandidates({
+      pullRequest: { user: { login: "repo-admin" } },
+      event: { pull_request: { head: { sha: headSha } }, sender: { login: "repo-admin" } },
+      currentHeadSha: headSha,
+    });
+    const untrustedAuthorCandidate = dependencyGuardTrustedActorCandidates({
+      pullRequest: { user: { login: "contributor" } },
+      event: { after: headSha, sender: { login: "security-user" } },
+      currentHeadSha: headSha,
+    });
+    const staleAuthorCandidate = dependencyGuardTrustedActorCandidates({
+      pullRequest: { user: { login: "repo-admin" } },
+      event: { pull_request: { head: { sha: staleSha } }, sender: { login: "repo-admin" } },
+      currentHeadSha: headSha,
+    });
+
+    expect(sameActorCandidates).toEqual([{ login: "repo-admin", source: "pull request author" }]);
+    expect(untrustedAuthorCandidate).toEqual([
+      { login: "contributor", source: "pull request author" },
+    ]);
+    expect(staleAuthorCandidate).toEqual([]);
+
+    await expect(
+      findTrustedDependencyGuardActor({
+        candidates: untrustedAuthorCandidate,
+        isDependencyApprover: async (login) =>
+          login === "security-user" || login === "repo-admin" ? "openclaw-secops" : null,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      findTrustedDependencyGuardActor({
+        candidates: sameActorCandidates,
+        isDependencyApprover: async (login) => (login === "repo-admin" ? "repository admin" : null),
+      }),
+    ).resolves.toEqual({
+      login: "repo-admin",
+      reason: "pull request author; repository admin",
+    });
+  });
+
+  it("renders trusted dependency graph comments without blocker language", () => {
+    const body = renderTrustedDependencyComment({
+      actor: { login: "repo-admin", reason: "pull request author; repository admin" },
+      headSha,
+    });
+
+    expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
+    expect(body).toContain("Dependency graph changes noted");
+    expect(body).toContain("informational");
+    expect(body).toContain("@repo-admin");
+    expect(body).toContain(headSha);
+    expect(body).not.toContain("are blocked");
+    expect(body).not.toContain("/allow-dependencies-change");
+    expect(isDependencyGuardTrustedForHead({ body }, headSha)).toBe(true);
+    expect(isDependencyGuardTrustedForHead({ body }, staleSha)).toBe(false);
   });
 
   it("rejects override commands without a freshness barrier", () => {
