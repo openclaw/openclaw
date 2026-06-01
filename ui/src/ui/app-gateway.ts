@@ -590,9 +590,11 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   let initialRefreshError: Error | undefined;
   const refreshBeforeAgents = canRefreshActiveTabBeforeAgents(host);
   const initialRefresh = refreshBeforeAgents
-    ? refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]).catch((err: unknown) => {
-        initialRefreshError = normalizeStartupRefreshError(err);
-      })
+    ? refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]).catch(
+        (err: unknown) => {
+          initialRefreshError = normalizeStartupRefreshError(err);
+        },
+      )
     : Promise.resolve();
   let refreshAfterAgents = !refreshBeforeAgents;
   let agentsError: Error | undefined;
