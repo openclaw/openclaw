@@ -321,6 +321,38 @@ describe("exec approvals safe bins", () => {
       safeBins: ["tr"],
       executableName: "tr",
     },
+    {
+      name: "auto-allows wc line count via boolean flag",
+      argv: ["wc", "-l"],
+      resolvedPath: "/usr/bin/wc",
+      expected: true,
+      safeBins: ["wc"],
+      executableName: "wc",
+    },
+    {
+      name: "auto-allows wc word count via boolean long flag",
+      argv: ["wc", "--words"],
+      resolvedPath: "/usr/bin/wc",
+      expected: true,
+      safeBins: ["wc"],
+      executableName: "wc",
+    },
+    {
+      name: "auto-allows uniq count via boolean flag",
+      argv: ["uniq", "-c"],
+      resolvedPath: "/usr/bin/uniq",
+      expected: true,
+      safeBins: ["uniq"],
+      executableName: "uniq",
+    },
+    {
+      name: "auto-allows tr delete via boolean flag",
+      argv: ["tr", "-d", "abc"],
+      resolvedPath: "/usr/bin/tr",
+      expected: true,
+      safeBins: ["tr"],
+      executableName: "tr",
+    },
   ];
 
   it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
