@@ -146,16 +146,21 @@ function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: Sess
   return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
 }
 
-function listSessionCandidates(storePath: string) {
-  return listSessionEntries({ storePath })
-    // Compatibility aggregate buckets are not real user sessions.
-    .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
-    .map(({ sessionKey, entry }) => ({
-      key: sessionKey,
-      entry,
-      updatedAt: entry?.updatedAt ?? null,
-    }))
-    .toSorted(compareSessionCandidatesByUpdatedAt);
+function listSessionCandidates(storePath: string, agentId?: string) {
+  return (
+    listSessionEntries({
+      ...(agentId ? { agentId } : {}),
+      storePath,
+    })
+      // Compatibility aggregate buckets are not real user sessions.
+      .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
+      .map(({ sessionKey, entry }) => ({
+        key: sessionKey,
+        entry,
+        updatedAt: entry?.updatedAt ?? null,
+      }))
+      .toSorted(compareSessionCandidatesByUpdatedAt)
+  );
 }
 
 /** Removes session paths and recent session details from a status summary. */
@@ -308,13 +313,14 @@ export async function getStatusSummary(
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const candidateCache = new Map<string, SessionCandidate[]>();
-  const loadSessionCandidates = (storePath: string) => {
-    const cached = candidateCache.get(storePath);
+  const loadSessionCandidates = (storePath: string, agentId?: string) => {
+    const cacheKey = `${storePath}\0${agentId ?? ""}`;
+    const cached = candidateCache.get(cacheKey);
     if (cached) {
       return cached;
     }
-    const candidates = listSessionCandidates(storePath);
-    candidateCache.set(storePath, candidates);
+    const candidates = listSessionCandidates(storePath, agentId);
+    candidateCache.set(cacheKey, candidates);
     return candidates;
   };
   const buildSessionRows = async (
@@ -411,12 +417,21 @@ export async function getStatusSummary(
       }),
     );
 
+  const storeSources = agentList.agents.map((agent) => ({
+    agentId: agent.id,
+    storePath: resolveStorePath(cfg.session?.store, { agentId: agent.id }),
+  }));
   const paths = new Set<string>();
+  const pathCounts = new Map<string, number>();
+  for (const source of storeSources) {
+    paths.add(source.storePath);
+    pathCounts.set(source.storePath, (pathCounts.get(source.storePath) ?? 0) + 1);
+  }
+
   const byAgent = await Promise.all(
     agentList.agents.map(async (agent) => {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
-      paths.add(storePath);
-      const candidates = loadSessionCandidates(storePath);
+      const candidates = loadSessionCandidates(storePath, agent.id);
       const sessions = await buildSessionRows(candidates.slice(0, RECENT_SESSION_LIMIT), {
         agentIdOverride: agent.id,
       });
@@ -429,8 +444,16 @@ export async function getStatusSummary(
     }),
   );
 
-  const allSessions = Array.from(paths)
-    .flatMap((storePath) => loadSessionCandidates(storePath))
+  const allSessions = storeSources
+    .filter((source, index, sources) => {
+      return sources.findIndex((candidate) => candidate.storePath === source.storePath) === index;
+    })
+    .flatMap((source) =>
+      loadSessionCandidates(
+        source.storePath,
+        pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
+      ),
+    )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   const recent = await buildSessionRows(allSessions.slice(0, RECENT_SESSION_LIMIT));
   const totalSessions = allSessions.length;

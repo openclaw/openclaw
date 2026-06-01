@@ -7,9 +7,12 @@ const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   resolveProviderStaticModel: vi.fn(),
-  listSessionEntries: vi.fn<() => Array<{ sessionKey: string; entry: Record<string, unknown> }>>(
-    () => [],
-  ),
+  listSessionEntries: vi.fn<
+    (scope?: { agentId?: string; storePath?: string }) => Array<{
+      sessionKey: string;
+      entry: Record<string, unknown>;
+    }>
+  >(() => []),
   configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
@@ -162,6 +165,8 @@ vi.mock("./status.link-channel.js", () => ({
 }));
 
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
+const { resolveStorePath } = await import("../config/sessions/paths.js");
+const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
 let getStatusSummary: typeof import("./status.summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("./status.summary.runtime.js").statusSummaryRuntime;
@@ -228,6 +233,13 @@ describe("getStatusSummary", () => {
           : undefined,
     );
     statusSummaryMocks.listSessionEntries.mockReturnValue([]);
+    vi.mocked(resolveStorePath).mockReturnValue("/tmp/sessions.json");
+    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }],
+    });
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -451,6 +463,69 @@ describe("getStatusSummary", () => {
       .mock.calls.map(([params]) => params.sessionKey);
     expect(hydratedKeys).not.toContain("agent:main:session-1");
     expect(hydratedKeys).not.toContain("agent:main:session-2");
+  });
+
+  it("passes agent scope when listing configured agent session stores", async () => {
+    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "ops" }],
+    });
+    vi.mocked(resolveStorePath).mockImplementation((_store, opts) => {
+      return `/tmp/${opts?.agentId ?? "main"}/sessions.json`;
+    });
+    statusSummaryMocks.listSessionEntries.mockImplementation((scope) =>
+      scope?.agentId === "ops"
+        ? toSessionEntrySummaries({
+            main: { sessionId: "ops-session", updatedAt: 2 },
+          })
+        : toSessionEntrySummaries({
+            main: { sessionId: "main-session", updatedAt: 1 },
+          }),
+    );
+
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/tmp/main/sessions.json",
+    });
+    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+      agentId: "ops",
+      storePath: "/tmp/ops/sessions.json",
+    });
+    expect(summary.sessions.count).toBe(2);
+    expect(summary.sessions.byAgent.map((agent) => [agent.agentId, agent.count])).toEqual([
+      ["main", 1],
+      ["ops", 1],
+    ]);
+  });
+
+  it("aggregates shared file session stores only once", async () => {
+    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "ops" }],
+    });
+    vi.mocked(resolveStorePath).mockReturnValue("/tmp/shared-sessions.json");
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        main: { sessionId: "shared-session", updatedAt: 1 },
+      }),
+    );
+
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(summary.sessions.count).toBe(1);
+    expect(summary.sessions.byAgent.map((agent) => [agent.agentId, agent.count])).toEqual([
+      ["main", 1],
+      ["ops", 1],
+    ]);
+    expect(statusSummaryMocks.listSessionEntries).toHaveBeenCalledWith({
+      storePath: "/tmp/shared-sessions.json",
+    });
   });
 
   it("includes configured and selected model labels for pinned sessions", async () => {
