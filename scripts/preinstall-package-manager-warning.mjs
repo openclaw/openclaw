@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
 const GIB = 1024 ** 3;
 const DEFAULT_MIN_MEM_AVAILABLE_BYTES = 2 * GIB;
-const DEFAULT_MIN_SWAP_FREE_BYTES = 1 * GIB;
+const DEFAULT_MIN_SWAP_FREE_BYTES = GIB;
 const DEFAULT_MAX_LOAD1 = 10;
 
 function normalizeEnvValue(value) {
