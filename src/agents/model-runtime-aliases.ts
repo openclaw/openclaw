@@ -12,7 +12,13 @@ import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
-type LegacyRuntimeModelProviderAlias = {
+type RuntimeAliasComparisonOptions = {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  includeSetupRegistry?: boolean;
+};
+
+type RuntimeModelProviderAlias = {
   /** Legacy provider id that encoded the runtime in the model ref. */
   legacyProvider: string;
   /** Canonical provider id that should own model selection. */
@@ -23,7 +29,7 @@ type LegacyRuntimeModelProviderAlias = {
   cli: boolean;
 };
 
-const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
+const BUILTIN_RUNTIME_MODEL_PROVIDER_ALIASES = [
   {
     legacyProvider: "codex",
     provider: "openai",
@@ -36,27 +42,15 @@ const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
     runtime: "codex",
     cli: false,
   },
-  {
-    legacyProvider: "claude-cli",
-    provider: "anthropic",
-    runtime: "claude-cli",
-    cli: true,
-  },
-  {
-    legacyProvider: "google-gemini-cli",
-    provider: "google",
-    runtime: "google-gemini-cli",
-    cli: true,
-  },
-] as const satisfies readonly LegacyRuntimeModelProviderAlias[];
+] as const satisfies readonly RuntimeModelProviderAlias[];
 
 function normalizeLegacyRuntimeProviderId(provider: string): string {
   const normalized = provider.trim().toLowerCase();
   return normalized === "anthropic-cli" ? "claude-cli" : normalizeProviderId(normalized);
 }
 
-const LEGACY_ALIAS_BY_PROVIDER = new Map(
-  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.map((entry) => [
+const BUILTIN_ALIAS_BY_PROVIDER = new Map(
+  BUILTIN_RUNTIME_MODEL_PROVIDER_ALIASES.map((entry) => [
     normalizeLegacyRuntimeProviderId(entry.legacyProvider),
     entry,
   ]),
@@ -64,11 +58,34 @@ const LEGACY_ALIAS_BY_PROVIDER = new Map(
 
 function resolveLegacyRuntimeModelProviderAlias(
   provider: string,
-): LegacyRuntimeModelProviderAlias | undefined {
-  return LEGACY_ALIAS_BY_PROVIDER.get(normalizeLegacyRuntimeProviderId(provider));
+  options: RuntimeAliasComparisonOptions = {},
+): RuntimeModelProviderAlias | undefined {
+  const runtime = normalizeLegacyRuntimeProviderId(provider);
+  const builtin = BUILTIN_ALIAS_BY_PROVIDER.get(runtime);
+  if (builtin) {
+    return builtin;
+  }
+  const canonicalProvider = resolveCliRuntimeCanonicalProvider({
+    runtime,
+    config: options.config,
+    env: options.env,
+    includeSetupRegistry:
+      options.includeSetupRegistry ?? (options.config !== undefined || options.env !== undefined),
+  });
+  return canonicalProvider
+    ? {
+        legacyProvider: runtime,
+        provider: canonicalProvider,
+        runtime,
+        cli: true,
+      }
+    : undefined;
 }
 
-export function migrateLegacyRuntimeModelRef(raw: string): {
+export function migrateLegacyRuntimeModelRef(
+  raw: string,
+  options: RuntimeAliasComparisonOptions = {},
+): {
   ref: string;
   legacyProvider: string;
   provider: string;
@@ -81,7 +98,7 @@ export function migrateLegacyRuntimeModelRef(raw: string): {
   if (slash <= 0 || slash >= trimmed.length - 1) {
     return null;
   }
-  const alias = resolveLegacyRuntimeModelProviderAlias(trimmed.slice(0, slash));
+  const alias = resolveLegacyRuntimeModelProviderAlias(trimmed.slice(0, slash), options);
   if (!alias) {
     return null;
   }
@@ -132,12 +149,6 @@ export function isCliRuntimeAliasForProvider(params: {
     config: params.cfg,
   });
 }
-
-type RuntimeAliasComparisonOptions = {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  includeSetupRegistry?: boolean;
-};
 
 function canonicalizeRuntimeAliasProvider(
   provider: string,

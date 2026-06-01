@@ -80,10 +80,10 @@ type ParsedModelsCommand =
       modelId?: string;
     };
 
-function isModelsBrowseVisibleProvider(provider: string): boolean {
+function isModelsBrowseVisibleProvider(provider: string, cfg: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
   return (
-    isCliRuntimeProvider(normalized, { includeSetupRegistry: true }) ||
+    isCliRuntimeProvider(normalized, { config: cfg, includeSetupRegistry: true }) ||
     isModelPickerVisibleProvider(normalized)
   );
 }
@@ -151,13 +151,17 @@ function addRuntimeChoice(
 
 function addExplicitLegacyRuntimeModelRef(
   explicitLegacyRuntimeModelKeys: Set<string>,
+  cfg: OpenClawConfig,
   raw?: string,
 ): void {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return;
   }
-  const migrated = migrateLegacyRuntimeModelRef(trimmed);
+  const migrated = migrateLegacyRuntimeModelRef(trimmed, {
+    config: cfg,
+    includeSetupRegistry: true,
+  });
   if (!migrated?.cli) {
     return;
   }
@@ -177,16 +181,20 @@ function hasExplicitLegacyRuntimeModelRef(params: {
 
 function pruneImplicitRuntimeAliasProviderModels(params: {
   byProvider: Map<string, Set<string>>;
+  cfg: OpenClawConfig;
   explicitLegacyRuntimeModelKeys: ReadonlySet<string>;
   canonicalRuntimeAliasModelKeys: ReadonlySet<string>;
   canonicalRuntimeAliasProviderWildcards: ReadonlySet<string>;
 }): void {
   for (const [provider, models] of params.byProvider.entries()) {
-    if (!isCliRuntimeProvider(provider)) {
+    if (!isCliRuntimeProvider(provider, { config: params.cfg, includeSetupRegistry: true })) {
       continue;
     }
     for (const model of models) {
-      const migrated = migrateLegacyRuntimeModelRef(modelKey(provider, model));
+      const migrated = migrateLegacyRuntimeModelRef(modelKey(provider, model), {
+        config: params.cfg,
+        includeSetupRegistry: true,
+      });
       if (!migrated?.cli) {
         continue;
       }
@@ -263,7 +271,7 @@ export async function buildModelsProviderData(
   const canonicalRuntimeAliasProviderWildcards = new Set<string>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
-    if (!isModelsBrowseVisibleProvider(key)) {
+    if (!isModelsBrowseVisibleProvider(key, cfg)) {
       return;
     }
     if (
@@ -301,7 +309,10 @@ export async function buildModelsProviderData(
 
   const addCanonicalRuntimeAliasModelRef = (raw?: string) => {
     const resolved = resolveRawModelRef(raw);
-    if (!resolved || isCliRuntimeProvider(resolved.provider)) {
+    if (
+      !resolved ||
+      isCliRuntimeProvider(resolved.provider, { config: cfg, includeSetupRegistry: true })
+    ) {
       return;
     }
     const provider = normalizeProviderId(resolved.provider);
@@ -313,7 +324,7 @@ export async function buildModelsProviderData(
   };
 
   const addRawModelRef = (raw?: string) => {
-    addExplicitLegacyRuntimeModelRef(explicitLegacyRuntimeModelKeys, raw);
+    addExplicitLegacyRuntimeModelRef(explicitLegacyRuntimeModelKeys, cfg, raw);
     const resolved = resolveRawModelRef(raw);
     if (!resolved) {
       return;
@@ -343,14 +354,14 @@ export async function buildModelsProviderData(
     }
 
     for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
-      addExplicitLegacyRuntimeModelRef(explicitLegacyRuntimeModelKeys, raw);
+      addExplicitLegacyRuntimeModelRef(explicitLegacyRuntimeModelKeys, cfg, raw);
     }
   };
 
   for (const entry of visibleCatalog) {
     add(entry.provider, entry.id);
     const provider = normalizeProviderId(entry.provider);
-    if (!isCliRuntimeProvider(provider)) {
+    if (!isCliRuntimeProvider(provider, { config: cfg, includeSetupRegistry: true })) {
       canonicalRuntimeAliasModelKeys.add(modelKey(provider, entry.id));
     }
   }
@@ -388,6 +399,7 @@ export async function buildModelsProviderData(
   if (options.view !== "all") {
     pruneImplicitRuntimeAliasProviderModels({
       byProvider,
+      cfg,
       explicitLegacyRuntimeModelKeys,
       canonicalRuntimeAliasModelKeys,
       canonicalRuntimeAliasProviderWildcards,
@@ -405,7 +417,10 @@ export async function buildModelsProviderData(
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeBindings = [
     { provider: "openai", runtime: "codex", cli: false },
-    ...listCliRuntimeModelBackendBindings().map((binding) => ({
+    ...listCliRuntimeModelBackendBindings({
+      config: cfg,
+      includeSetupRegistry: true,
+    }).map((binding) => ({
       provider: binding.provider,
       runtime: binding.runtime,
       cli: true,
