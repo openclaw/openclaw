@@ -73,6 +73,11 @@ function expectLogExcludes(source: MockCallSource, text: string): void {
   expect(logIncludes(source, text), `Expected log not to include ${text}`).toBe(false);
 }
 
+async function flushNarrativeSettleTimers<T>(operation: Promise<T>): Promise<T> {
+  await vi.runAllTimersAsync();
+  return operation;
+}
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   const accessResult = await fs
     .access(targetPath)
@@ -684,48 +689,85 @@ describe("generateAndAppendDreamNarrative", () => {
   });
 
   it("waits for persisted assistant text before falling back", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.getSessionMessages
-      .mockResolvedValueOnce({
-        messages: [{ role: "user", content: "prompt" }],
-      })
-      .mockResolvedValueOnce({
-        messages: [
-          { role: "user", content: "prompt" },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "The delayed diary text finally settled." }],
-          },
-        ],
+    vi.useFakeTimers();
+    try {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+      const subagent = createMockSubagent("");
+      subagent.getSessionMessages
+        .mockResolvedValueOnce({
+          messages: [{ role: "user", content: "prompt" }],
+        })
+        .mockResolvedValueOnce({
+          messages: [
+            { role: "user", content: "prompt" },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "The delayed diary text finally settled." }],
+            },
+          ],
+        });
+      const logger = createMockLogger();
+
+      const operation = generateAndAppendDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: {
+          phase: "light",
+          snippets: ["The narrative assistant persisted after the run completed."],
+        },
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+        logger,
       });
-    const logger = createMockLogger();
+      await flushNarrativeSettleTimers(operation);
 
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: {
-        phase: "light",
-        snippets: ["The narrative assistant persisted after the run completed."],
-      },
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-      logger,
-    });
+      expect(subagent.getSessionMessages).toHaveBeenCalledTimes(2);
+      expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(1, {
+        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+        limit: expect.any(Number),
+      });
+      expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(2, {
+        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+        limit: expect.any(Number),
+      });
+      const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(content).toContain("The delayed diary text finally settled.");
+      expect(content).not.toContain("A memory trace surfaced");
+      expectLogExcludes(logger.warn, "produced no text");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    expect(subagent.getSessionMessages).toHaveBeenCalledTimes(2);
-    expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(1, {
-      sessionKey: expect.stringContaining("dreaming-narrative-light-"),
-      limit: 5,
-    });
-    expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(2, {
-      sessionKey: expect.stringContaining("dreaming-narrative-light-"),
-      limit: 5,
-    });
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("The delayed diary text finally settled.");
-    expect(content).not.toContain("A memory trace surfaced");
-    expectLogExcludes(logger.warn, "produced no text");
+  it("falls back after settled assistant text never appears", async () => {
+    vi.useFakeTimers();
+    try {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+      const subagent = createMockSubagent("");
+      const logger = createMockLogger();
+
+      const operation = generateAndAppendDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: {
+          phase: "light",
+          snippets: ["The narrative assistant never persisted text."],
+        },
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+        logger,
+      });
+      await flushNarrativeSettleTimers(operation);
+
+      expect(subagent.getSessionMessages).toHaveBeenCalledTimes(5);
+      const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(content).toContain(
+        "A memory trace surfaced, but details were unavailable in this run.",
+      );
+      expectLogIncludes(logger.warn, "produced no text");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries with the session default when the configured model cannot start", async () => {

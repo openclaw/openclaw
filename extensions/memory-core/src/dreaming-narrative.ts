@@ -102,7 +102,7 @@ const NARRATIVE_TIMEOUT_MS = 60_000;
 const NARRATIVE_MESSAGE_FETCH_LIMIT = 5;
 // A completed run can reach the session reader before the final assistant text
 // is visible, so retry briefly before falling back to synthetic diary text.
-const NARRATIVE_MESSAGE_SETTLE_DELAYS_MS = [50, 150, 300] as const;
+const NARRATIVE_MESSAGE_SETTLE_DELAYS_MS = [50, 150, 300, 750] as const;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
@@ -352,19 +352,29 @@ function waitForNarrativeMessagesToSettle(delayMs: number): Promise<void> {
   });
 }
 
+async function readNarrativeText(params: {
+  subagent: SubagentSurface;
+  sessionKey: string;
+}): Promise<string | null> {
+  const { messages } = await params.subagent.getSessionMessages({
+    sessionKey: params.sessionKey,
+    limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
+  });
+  return extractNarrativeText(messages);
+}
+
 async function readSettledNarrativeText(params: {
   subagent: SubagentSurface;
   sessionKey: string;
 }): Promise<string | null> {
-  for (let attempt = 0; attempt <= NARRATIVE_MESSAGE_SETTLE_DELAYS_MS.length; attempt += 1) {
-    if (attempt > 0) {
-      await waitForNarrativeMessagesToSettle(NARRATIVE_MESSAGE_SETTLE_DELAYS_MS[attempt - 1]);
-    }
-    const { messages } = await params.subagent.getSessionMessages({
-      sessionKey: params.sessionKey,
-      limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
-    });
-    const narrative = extractNarrativeText(messages);
+  const immediateNarrative = await readNarrativeText(params);
+  if (immediateNarrative) {
+    return immediateNarrative;
+  }
+
+  for (const delayMs of NARRATIVE_MESSAGE_SETTLE_DELAYS_MS) {
+    await waitForNarrativeMessagesToSettle(delayMs);
+    const narrative = await readNarrativeText(params);
     if (narrative) {
       return narrative;
     }
