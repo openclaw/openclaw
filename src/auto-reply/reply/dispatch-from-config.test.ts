@@ -1372,6 +1372,7 @@ describe("dispatchReplyFromConfig", () => {
         channel: "feishu",
         to: "user:ou_123",
         accountId: "work",
+        threadId: "thread:om_123",
       },
       lastChannel: "feishu",
       lastTo: "user:ou_123",
@@ -1398,11 +1399,12 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
+      | { accountId?: unknown; channel?: unknown; threadId?: unknown; to?: unknown }
       | undefined;
     expect(routeCall?.channel).toBe("feishu");
     expect(routeCall?.to).toBe("user:ou_123");
     expect(routeCall?.accountId).toBe("work");
+    expect(routeCall?.threadId).toBe("thread:om_123");
     const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
       | [
           {

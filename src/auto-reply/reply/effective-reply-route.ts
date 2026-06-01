@@ -21,6 +21,7 @@ export type EffectiveReplyRoute = {
   channel?: string;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
   inheritedExternalRoute?: boolean;
 };
 
@@ -57,6 +58,9 @@ export function resolveEffectiveReplyRoute(params: {
       channel: persistedDeliveryChannel,
       to: persistedDeliveryContext.to,
       accountId: persistedDeliveryContext.accountId,
+      ...(persistedDeliveryContext.threadId !== undefined
+        ? { threadId: persistedDeliveryContext.threadId }
+        : {}),
       inheritedExternalRoute: true,
     };
   }

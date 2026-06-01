@@ -79,6 +79,7 @@ describe("resolveEffectiveReplyRoute", () => {
             channel: "feishu",
             to: "user:ou_123",
             accountId: "work",
+            threadId: "thread:om_123",
           },
           lastChannel: "webchat",
           lastTo: "session:dashboard",
@@ -89,6 +90,7 @@ describe("resolveEffectiveReplyRoute", () => {
       channel: "feishu",
       to: "user:ou_123",
       accountId: "work",
+      threadId: "thread:om_123",
       inheritedExternalRoute: true,
     });
   });
