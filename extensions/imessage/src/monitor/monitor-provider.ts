@@ -24,7 +24,7 @@ import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -891,6 +891,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
     });
+    let directTypingController:
+      | Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0]
+      | undefined;
+    const directToolTypingOptions = !decision.isGroup
+      ? ({
+          // iMessage's native typing bubble is channel-owned UI, not a
+          // visible tool-progress message. The suppress flag is what lets
+          // dispatch forward this callback even when verbose progress is off.
+          // Keep this direct-DM-only so group typing still follows core
+          // mention/renderable-text policy. Route through the core typing
+          // controller so dispatcher cleanup owns the matching stop callback.
+          suppressDefaultToolProgressMessages: true,
+          onTypingController: (typing) => {
+            directTypingController = typing;
+            typingReplyOptions.onTypingController?.(typing);
+          },
+          onToolStart: async () => {
+            await directTypingController?.startTypingLoop();
+          },
+        } as const)
+      : {};
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route: decision.route,
       sessionKey: decision.route.sessionKey,
@@ -968,9 +989,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                       ? !accountInfo.config.blockStreaming
                       : undefined,
                   onModelSelected,
-                  ...(typingReplyOptions.onReplyStart
-                    ? { onToolStart: typingReplyOptions.onReplyStart }
-                    : {}),
+                  ...directToolTypingOptions,
                 },
               });
             } finally {

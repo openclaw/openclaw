@@ -16,6 +16,17 @@ import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 type DispatchInboundMessageParams = {
   ctx: MsgContext;
   replyOptions?: {
+    suppressDefaultToolProgressMessages?: boolean;
+    onReplyStart?: () => Promise<void> | void;
+    onTypingCleanup?: () => void;
+    onTypingController?: (typing: {
+      startTypingLoop: () => Promise<void>;
+      refreshTypingTtl: () => void;
+      isActive: () => boolean;
+      markRunComplete: () => void;
+      markDispatchIdle: () => void;
+      cleanup: () => void;
+    }) => void;
     onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
   };
 };
@@ -145,7 +156,40 @@ describe("iMessage monitor last-route updates", () => {
       rpcMethods: ["watch.subscribe", "send", "typing"],
     });
     dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
+      expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      let active = false;
+      let runComplete = false;
+      let dispatchIdle = false;
+      const stopIfSettled = () => {
+        if (active && runComplete && dispatchIdle) {
+          active = false;
+          params.replyOptions?.onTypingCleanup?.();
+        }
+      };
+      const typingController = {
+        startTypingLoop: async () => {
+          active = true;
+          await params.replyOptions?.onReplyStart?.();
+        },
+        refreshTypingTtl: () => {},
+        isActive: () => active,
+        markRunComplete: () => {
+          runComplete = true;
+          stopIfSettled();
+        },
+        markDispatchIdle: () => {
+          dispatchIdle = true;
+          stopIfSettled();
+        },
+        cleanup: () => {
+          active = false;
+          params.replyOptions?.onTypingCleanup?.();
+        },
+      };
+      params.replyOptions?.onTypingController?.(typingController);
       await params.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      typingController.markRunComplete();
+      typingController.markDispatchIdle();
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
     });
 
