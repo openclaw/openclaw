@@ -357,6 +357,126 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       expect(fs.existsSync(customStorePath)).toBe(false);
     });
 
+    it("serializes concurrent SQLite entry patches and updates", async () => {
+      const scope = sqliteAdapter.entryScope(paths);
+
+      await upsertSqliteSessionEntry(scope, {
+        model: "base",
+        sessionId: "patch-session",
+        updatedAt: 10,
+      });
+
+      let firstPatch!: Promise<SessionEntry | null>;
+      let releasePatch!: () => void;
+      const patchStarted = new Promise<void>((resolve) => {
+        const blockedPatch = new Promise<void>((release) => {
+          releasePatch = release;
+        });
+        firstPatch = patchSqliteSessionEntry(scope, async () => {
+          resolve();
+          await blockedPatch;
+          return { model: "first" };
+        });
+      });
+      await patchStarted;
+      const secondPatch = patchSqliteSessionEntry(scope, () => ({
+        providerOverride: "openai",
+      }));
+      releasePatch();
+      await Promise.all([firstPatch, secondPatch]);
+
+      expect(loadSqliteSessionEntry(scope)).toMatchObject({
+        model: "first",
+        providerOverride: "openai",
+      });
+
+      let firstUpdate!: Promise<SessionEntry | null>;
+      let releaseUpdate!: () => void;
+      const updateStarted = new Promise<void>((resolve) => {
+        const blockedUpdate = new Promise<void>((release) => {
+          releaseUpdate = release;
+        });
+        firstUpdate = updateSqliteSessionEntry(scope, async () => {
+          resolve();
+          await blockedUpdate;
+          return { model: "updated" };
+        });
+      });
+      await updateStarted;
+      const secondUpdate = updateSqliteSessionEntry(scope, () => ({
+        providerOverride: "anthropic",
+      }));
+      releaseUpdate();
+      await Promise.all([firstUpdate, secondUpdate]);
+
+      expect(loadSqliteSessionEntry(scope)).toMatchObject({
+        model: "updated",
+        providerOverride: "anthropic",
+      });
+    });
+
+    it("dedupes SQLite transcript identities inside the writer path", async () => {
+      const scope = sqliteAdapter.transcriptScope(paths, "session-dedupe");
+      const event = {
+        id: "event-dedupe",
+        message: { role: "assistant", content: "first" },
+        parentId: null,
+        type: "message",
+      };
+
+      await appendSqliteTranscriptEvent(scope, event);
+      await appendSqliteTranscriptEvent(scope, {
+        ...event,
+        message: { role: "assistant", content: "duplicate" },
+      });
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          appendSqliteTranscriptMessage(scope, {
+            idempotencyLookup: "scan",
+            message: {
+              role: "assistant",
+              content: "keyed",
+              idempotencyKey: "keyed-once",
+            },
+          }),
+        ),
+      );
+
+      expect(new Set(results.map((result) => result?.messageId)).size).toBe(1);
+      expect(results.filter((result) => result?.appended)).toHaveLength(1);
+      await expect(loadSqliteTranscriptEvents(scope)).resolves.toEqual([
+        event,
+        expect.objectContaining({
+          message: expect.objectContaining({ idempotencyKey: "keyed-once" }),
+          type: "message",
+        }),
+      ]);
+    });
+
+    it("does not report success for unchecked duplicate SQLite transcript keys", async () => {
+      const scope = sqliteAdapter.transcriptScope(paths, "session-unchecked-dedupe");
+      const message = {
+        role: "assistant",
+        content: "unchecked",
+        idempotencyKey: "unchecked-once",
+      };
+
+      await appendSqliteTranscriptMessage(scope, { message });
+      await expect(appendSqliteTranscriptMessage(scope, { message })).rejects.toThrow();
+
+      const events = await loadSqliteTranscriptEvents(scope);
+      const keyedEvents = events.filter((event): event is { message: typeof message } => {
+        return (
+          Boolean(event) &&
+          typeof event === "object" &&
+          !Array.isArray(event) &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            "unchecked-once"
+        );
+      });
+      expect(keyedEvents).toHaveLength(1);
+    });
+
     it("conforms for transcript message append, idempotency, and update publication", async () => {
       const scope = adapter.transcriptScope(paths, "session-2");
       const updates: unknown[] = [];

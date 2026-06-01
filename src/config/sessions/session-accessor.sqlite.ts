@@ -12,9 +12,11 @@ import {
 import { redactSecrets } from "../../logging/redact.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
@@ -70,6 +72,8 @@ type ResolvedSqliteStoreTarget = {
   agentId?: string;
   path?: string;
 };
+
+const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
 
 /** Loads one session entry from the additive SQLite session store. */
 export function loadSqliteSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
@@ -146,26 +150,38 @@ export async function patchSqliteSessionEntry(
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
   const resolved = resolveSqliteScope(scope);
-  const existing = loadSqliteSessionEntry(scope);
-  const base = existing ?? options.fallbackEntry;
-  if (!base) {
-    return null;
-  }
-  const patch = await update(cloneSessionEntry(base), {
-    existingEntry: existing ? cloneSessionEntry(existing) : undefined,
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+    const base = existing ?? options.fallbackEntry;
+    if (!base) {
+      return null;
+    }
+    const patch = await update(cloneSessionEntry(base), {
+      existingEntry: existing ? cloneSessionEntry(existing) : undefined,
+    });
+    if (!patch) {
+      return cloneSessionEntry(base);
+    }
+
+    let result: SessionEntry | null = null;
+    runOpenClawAgentWriteTransaction((writeDatabase) => {
+      const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey)?.entry;
+      const writeBase = fresh ?? options.fallbackEntry;
+      if (!writeBase) {
+        result = null;
+        return;
+      }
+      const next = options.replaceEntry
+        ? cloneSessionEntry(patch as SessionEntry)
+        : options.preserveActivity
+          ? mergeSessionEntryPreserveActivity(writeBase, patch)
+          : mergeSessionEntry(writeBase, patch);
+      writeSessionEntry(writeDatabase, resolved.sessionKey, next);
+      result = cloneSessionEntry(next);
+    }, toDatabaseOptions(resolved));
+    return result;
   });
-  if (!patch) {
-    return cloneSessionEntry(base);
-  }
-  const next = options.replaceEntry
-    ? cloneSessionEntry(patch as SessionEntry)
-    : options.preserveActivity
-      ? mergeSessionEntryPreserveActivity(base, patch)
-      : mergeSessionEntry(base, patch);
-  runOpenClawAgentWriteTransaction((database) => {
-    writeSessionEntry(database, resolved.sessionKey, next);
-  }, toDatabaseOptions(resolved));
-  return cloneSessionEntry(next);
 }
 
 /** Updates an existing entry in the additive SQLite session store. */
@@ -176,20 +192,31 @@ export async function updateSqliteSessionEntry(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   _options: SessionEntryUpdateOptions = {},
 ): Promise<SessionEntry | null> {
-  const existing = loadSqliteSessionEntry(scope);
-  if (!existing) {
-    return null;
-  }
-  const patch = await update(cloneSessionEntry(existing));
-  if (!patch) {
-    return cloneSessionEntry(existing);
-  }
-  const next = mergeSessionEntry(existing, patch);
   const resolved = resolveSqliteScope(scope);
-  runOpenClawAgentWriteTransaction((database) => {
-    writeSessionEntry(database, resolved.sessionKey, next);
-  }, toDatabaseOptions(resolved));
-  return cloneSessionEntry(next);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+    if (!existing) {
+      return null;
+    }
+    const patch = await update(cloneSessionEntry(existing));
+    if (!patch) {
+      return cloneSessionEntry(existing);
+    }
+
+    let result: SessionEntry | null = null;
+    runOpenClawAgentWriteTransaction((writeDatabase) => {
+      const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey)?.entry;
+      if (!fresh) {
+        result = null;
+        return;
+      }
+      const next = mergeSessionEntry(fresh, patch);
+      writeSessionEntry(writeDatabase, resolved.sessionKey, next);
+      result = cloneSessionEntry(next);
+    }, toDatabaseOptions(resolved));
+    return result;
+  });
 }
 
 /** Loads raw transcript events from the additive SQLite transcript store. */
@@ -223,9 +250,11 @@ export async function appendSqliteTranscriptEvent(
   event: TranscriptEvent,
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptScope(scope);
-  runOpenClawAgentWriteTransaction((database) => {
-    appendTranscriptEventInTransaction(database, resolved, event);
-  }, toDatabaseOptions(resolved));
+  await runExclusiveSqliteSessionWrite(resolved, async () => {
+    runOpenClawAgentWriteTransaction((database) => {
+      appendTranscriptEventInTransaction(database, resolved, event);
+    }, toDatabaseOptions(resolved));
+  });
 }
 
 /** Appends one transcript message to the additive SQLite transcript store. */
@@ -244,45 +273,67 @@ export async function appendSqliteTranscriptMessage<TMessage>(
   options: TranscriptMessageAppendOptions<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
   const resolved = resolveSqliteTranscriptScope(scope);
-  const idempotencyKey = readMessageIdempotencyKey(options.message);
-  if (idempotencyKey && options.idempotencyLookup === "scan") {
-    const existing = readTranscriptMessageByIdempotencyKey(resolved, idempotencyKey);
-    if (existing) {
-      return {
-        appended: false,
-        message: existing.message as TMessage,
-        messageId: existing.messageId,
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let result: TranscriptMessageAppendResult<TMessage> | undefined;
+    runOpenClawAgentWriteTransaction((database) => {
+      const idempotencyKey = readMessageIdempotencyKey(options.message);
+      if (idempotencyKey && options.idempotencyLookup === "scan") {
+        const existing = readTranscriptMessageByIdempotencyKey(database, resolved, idempotencyKey);
+        if (existing) {
+          result = {
+            appended: false,
+            message: existing.message as TMessage,
+            messageId: existing.messageId,
+          };
+          return;
+        }
+      }
+
+      const prepared = options.prepareMessageAfterIdempotencyCheck
+        ? options.prepareMessageAfterIdempotencyCheck(options.message)
+        : options.message;
+      if (prepared === undefined) {
+        result = undefined;
+        return;
+      }
+
+      const messageId = randomUUID();
+      const now = options.now ?? Date.now();
+      const finalMessage = redactTranscriptMessageForStorage(prepared, options);
+      ensureTranscriptHeader(database, resolved, options.cwd, now);
+      const parentId = readLatestTranscriptMessageId(database, resolved.sessionId);
+      const event = {
+        type: "message",
+        id: messageId,
+        parentId: parentId ?? null,
+        timestamp: resolveTimestampMsToIsoString(now),
+        message: finalMessage,
       };
-    }
-  }
-
-  const prepared = options.prepareMessageAfterIdempotencyCheck
-    ? options.prepareMessageAfterIdempotencyCheck(options.message)
-    : options.message;
-  if (prepared === undefined) {
-    return undefined;
-  }
-
-  const messageId = randomUUID();
-  const now = options.now ?? Date.now();
-  const finalMessage = redactTranscriptMessageForStorage(prepared, options);
-  runOpenClawAgentWriteTransaction((database) => {
-    ensureTranscriptHeader(database, resolved, options.cwd, now);
-    const parentId = readLatestTranscriptMessageId(database, resolved.sessionId);
-    const event = {
-      type: "message",
-      id: messageId,
-      parentId: parentId ?? null,
-      timestamp: resolveTimestampMsToIsoString(now),
-      message: finalMessage,
-    };
-    appendTranscriptEventInTransaction(database, resolved, event);
-  }, toDatabaseOptions(resolved));
-  return {
-    appended: true,
-    message: finalMessage,
-    messageId,
-  };
+      const appended = appendTranscriptEventInTransaction(database, resolved, event, {
+        dedupeByMessageIdempotency: options.idempotencyLookup === "scan",
+      });
+      if (!appended && idempotencyKey && options.idempotencyLookup === "scan") {
+        const existing = readTranscriptMessageByIdempotencyKey(database, resolved, idempotencyKey);
+        if (existing) {
+          result = {
+            appended: false,
+            message: existing.message as TMessage,
+            messageId: existing.messageId,
+          };
+          return;
+        }
+      }
+      if (!appended) {
+        throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
+      }
+      result = {
+        appended: true,
+        message: finalMessage,
+        messageId,
+      };
+    }, toDatabaseOptions(resolved));
+    return result;
+  });
 }
 
 /** Publishes a transcript update using the SQLite transcript scope target. */
@@ -299,6 +350,19 @@ export async function publishSqliteTranscriptUpdate(
 
 function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SessionSqliteDatabase>(database);
+}
+
+async function runExclusiveSqliteSessionWrite<T>(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const databaseOptions = toDatabaseOptions(scope);
+  return await runQueuedStoreWrite({
+    queues: SQLITE_SESSION_WRITER_QUEUES,
+    storePath: resolveOpenClawAgentSqlitePath(databaseOptions),
+    label: "runExclusiveSqliteSessionWrite",
+    fn,
+  });
 }
 
 function resolveSqliteScope(
@@ -537,10 +601,26 @@ function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
-): void {
+  options: { dedupeByMessageIdempotency?: boolean } = {},
+): boolean {
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(event) ?? Date.now();
   ensureTranscriptSessionRoot(database, scope, createdAt);
+  const identity = readTranscriptEventIdentity(event);
+  if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
+    return false;
+  }
+  if (
+    identity?.messageIdempotencyKey &&
+    options.dedupeByMessageIdempotency &&
+    readTranscriptIdentityByMessageIdempotencyKey(
+      database,
+      scope.sessionId,
+      identity.messageIdempotencyKey,
+    )
+  ) {
+    return false;
+  }
   const seq = readNextTranscriptSeq(database, scope.sessionId);
   executeSqliteQuerySync(
     database.db,
@@ -551,9 +631,8 @@ function appendTranscriptEventInTransaction(
       created_at: createdAt,
     }),
   );
-  const identity = readTranscriptEventIdentity(event);
   if (!identity) {
-    return;
+    return true;
   }
   executeSqliteQuerySync(
     database.db,
@@ -570,6 +649,7 @@ function appendTranscriptEventInTransaction(
       })
       .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing()),
   );
+  return true;
 }
 
 function ensureTranscriptHeader(
@@ -619,25 +699,56 @@ function readLatestTranscriptMessageId(
   return row?.event_id;
 }
 
-function readTranscriptMessageByIdempotencyKey(
-  scope: ResolvedTranscriptScope,
-  idempotencyKey: string,
-): { messageId: string; message: unknown } | undefined {
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+function readTranscriptIdentityByEventId(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  eventId: string,
+): { eventId: string; seq: number } | undefined {
   const db = getSessionKysely(database.db);
-  const identity = executeSqliteQueryTakeFirstSync(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .selectFrom("transcript_event_identities")
       .select(["event_id", "seq"])
-      .where("session_id", "=", scope.sessionId)
+      .where("session_id", "=", sessionId)
+      .where("event_id", "=", eventId),
+  );
+  return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+}
+
+function readTranscriptIdentityByMessageIdempotencyKey(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  idempotencyKey: string,
+): { eventId: string; seq: number } | undefined {
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_event_identities")
+      .select(["event_id", "seq"])
+      .where("session_id", "=", sessionId)
       .where("message_idempotency_key", "=", idempotencyKey)
       .orderBy("seq", "desc")
       .limit(1),
   );
+  return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+}
+
+function readTranscriptMessageByIdempotencyKey(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  idempotencyKey: string,
+): { messageId: string; message: unknown } | undefined {
+  const identity = readTranscriptIdentityByMessageIdempotencyKey(
+    database,
+    scope.sessionId,
+    idempotencyKey,
+  );
   if (!identity) {
     return undefined;
   }
+  const db = getSessionKysely(database.db);
   const eventRow = executeSqliteQueryTakeFirstSync(
     database.db,
     db
@@ -651,7 +762,7 @@ function readTranscriptMessageByIdempotencyKey(
   }
   const event = JSON.parse(eventRow.event_json) as { message?: unknown };
   return {
-    messageId: identity.event_id,
+    messageId: identity.eventId,
     message: event.message,
   };
 }
