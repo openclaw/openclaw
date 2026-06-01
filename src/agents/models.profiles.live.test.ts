@@ -299,7 +299,12 @@ function applyLiveOllamaProviderEnvCompat(params: {
   const liveBaseUrl = params.env?.OPENCLAW_LIVE_OLLAMA_BASE_URL?.trim();
   const baseUrl = liveBaseUrl || configuredBaseUrl || OLLAMA_DEFAULT_BASE_URL;
   const shouldPreserveConfiguredApiKey =
-    !liveBaseUrl || Boolean(configuredBaseUrl && configuredBaseUrl === baseUrl);
+    !liveBaseUrl ||
+    Boolean(
+      configuredBaseUrl &&
+      canonicalOllamaCredentialBaseUrl(configuredBaseUrl) ===
+        canonicalOllamaCredentialBaseUrl(baseUrl),
+    );
   const apiKey = resolveLiveOllamaProviderApiKey({
     baseUrl,
     existingApiKey: existingProvider?.apiKey,
@@ -1065,6 +1070,39 @@ describe("explicit live model discovery scope", () => {
       api: "ollama",
       baseUrl: "http://127.0.0.1:11434",
       apiKey: OLLAMA_LOCAL_API_KEY_MARKER,
+      models: [],
+    });
+  });
+
+  it("preserves configured Ollama auth for equivalent live env base URLs", () => {
+    const cfg = {
+      plugins: {
+        bundledDiscovery: "compat",
+      },
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = applyLiveProviderDiscoveryPluginCompat({
+      config: cfg,
+      providers: ["ollama"],
+      env: {
+        OPENCLAW_LIVE_OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+      },
+    });
+
+    expect(result.models?.providers?.ollama).toEqual({
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
       models: [],
     });
   });
