@@ -3,7 +3,7 @@ import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
 import type { AnthropicOptions } from "../llm/providers/anthropic.js";
 import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
+import { normalizeStreamingJsonPathEscapes, parseStreamingJson } from "../llm/utils/json-parse.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -511,7 +511,8 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
 }
 
 function parseAnthropicToolCallArguments(inputJson: string): unknown {
-  return parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson);
+  const parsed = parseJsonObjectPreservingUnsafeIntegers(inputJson);
+  return parsed ? normalizeStreamingJsonPathEscapes(parsed) : parseStreamingJson(inputJson);
 }
 
 function mapStopReason(reason: string | undefined): string {

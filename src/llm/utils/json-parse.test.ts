@@ -35,9 +35,24 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     });
   });
 
+  it("normalizes decoded Windows path escapes after mixed separators in path fields", () => {
+    expect(parseStreamingJson('{"path":"C:/tmp\\new.txt"}')).toEqual({
+      path: "C:/tmp\\new.txt",
+    });
+  });
+
   it("does not rewrite legitimate non-path control escapes", () => {
     expect(parseStreamingJson('{"message":"first\\nsecond"}')).toEqual({
       message: "first\nsecond",
+    });
+  });
+
+  it("does not rewrite non-path content that starts with a drive prefix", () => {
+    expect(parseStreamingJson('{"content":"C:/\\nnext"}')).toEqual({
+      content: "C:/\nnext",
+    });
+    expect(parseStreamingJson('{"content":"C:\\nnext"}')).toEqual({
+      content: "C:\nnext",
     });
   });
 });

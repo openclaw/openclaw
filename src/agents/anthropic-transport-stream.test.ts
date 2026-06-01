@@ -545,7 +545,7 @@ describe("anthropic transport stream", () => {
           delta: {
             type: "input_json_delta",
             partial_json:
-              '{"to":1481220477346119781,"safe":42,"maxSafe":9007199254740991,"nested":{"ids":[9007199254740993,-9007199254740992]}}',
+              '{"to":1481220477346119781,"safe":42,"maxSafe":9007199254740991,"path":"C:/tmp\\new.txt","content":"C:\\nnext","nested":{"ids":[9007199254740993,-9007199254740992]}}',
           },
         },
         { type: "content_block_stop", index: 0 },
@@ -575,6 +575,8 @@ describe("anthropic transport stream", () => {
       to: "1481220477346119781",
       safe: 42,
       maxSafe: 9007199254740991,
+      path: "C:/tmp\\new.txt",
+      content: "C:\nnext",
       nested: { ids: ["9007199254740993", "-9007199254740992"] },
     });
   });

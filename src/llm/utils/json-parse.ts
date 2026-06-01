@@ -9,6 +9,20 @@ const DECODED_WINDOWS_PATH_ESCAPES = new Map([
   ["\r", "\\r"],
   ["\t", "\\t"],
 ]);
+const PATH_LIKE_JSON_KEY_WORDS = new Set([
+  "cwd",
+  "dir",
+  "dirs",
+  "directories",
+  "directory",
+  "file",
+  "files",
+  "folder",
+  "folders",
+  "path",
+  "paths",
+  "root",
+]);
 
 function isControlCharacter(char: string): boolean {
   const codePoint = char.codePointAt(0);
@@ -36,9 +50,19 @@ function isLikelyWindowsPathPrefix(value: string): boolean {
   return /^[A-Za-z]:(?:[\\/].*)?$/u.test(value);
 }
 
-function normalizeDecodedWindowsPathEscapes(value: unknown): unknown {
+function isPathLikeJsonKey(key: string | undefined): boolean {
+  if (!key) {
+    return false;
+  }
+  return key
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .split(/[^A-Za-z0-9]+/u)
+    .some((word) => PATH_LIKE_JSON_KEY_WORDS.has(word.toLowerCase()));
+}
+
+export function normalizeStreamingJsonPathEscapes(value: unknown, key?: string): unknown {
   if (typeof value === "string") {
-    if (!/^[A-Za-z]:[\\/\b\f\n\r\t]/u.test(value)) {
+    if (!isPathLikeJsonKey(key) || !/^[A-Za-z]:[\\/\b\f\n\r\t]/u.test(value)) {
       return value;
     }
     return value.replace(
@@ -47,11 +71,14 @@ function normalizeDecodedWindowsPathEscapes(value: unknown): unknown {
     );
   }
   if (Array.isArray(value)) {
-    return value.map((item) => normalizeDecodedWindowsPathEscapes(item));
+    return value.map((item) => normalizeStreamingJsonPathEscapes(item, key));
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, normalizeDecodedWindowsPathEscapes(item)]),
+      Object.entries(value).map(([entryKey, item]) => [
+        entryKey,
+        normalizeStreamingJsonPathEscapes(item, entryKey),
+      ]),
     );
   }
   return value;
@@ -66,6 +93,16 @@ export function repairJson(json: string): string {
   let repaired = "";
   let inString = false;
   let stringPrefix = "";
+  let stringRole: "key" | "value" = "value";
+  let stringKey: string | undefined;
+  const stack: Array<
+    | {
+        kind: "object";
+        expectingKey: boolean;
+        pendingKey?: string;
+      }
+    | { kind: "array" }
+  > = [];
 
   for (let index = 0; index < json.length; index++) {
     const char = json[index];
@@ -75,14 +112,40 @@ export function repairJson(json: string): string {
       if (char === '"') {
         inString = true;
         stringPrefix = "";
+        const container = stack.at(-1);
+        stringRole = container?.kind === "object" && container.expectingKey ? "key" : "value";
+        stringKey =
+          stringRole === "value" && container?.kind === "object" ? container.pendingKey : undefined;
+      } else if (char === "{") {
+        stack.push({ kind: "object", expectingKey: true });
+      } else if (char === "[") {
+        stack.push({ kind: "array" });
+      } else if (char === "}" || char === "]") {
+        stack.pop();
+      } else if (char === ":") {
+        const container = stack.at(-1);
+        if (container?.kind === "object") {
+          container.expectingKey = false;
+        }
+      } else if (char === ",") {
+        const container = stack.at(-1);
+        if (container?.kind === "object") {
+          container.expectingKey = true;
+          container.pendingKey = undefined;
+        }
       }
       continue;
     }
 
     if (char === '"') {
       repaired += char;
+      const container = stack.at(-1);
+      if (stringRole === "key" && container?.kind === "object") {
+        container.pendingKey = stringPrefix;
+      }
       inString = false;
       stringPrefix = "";
+      stringKey = undefined;
       continue;
     }
 
@@ -111,7 +174,11 @@ export function repairJson(json: string): string {
         continue;
       }
 
-      if (JSON_CONTROL_ESCAPES.has(nextChar) && isLikelyWindowsPathPrefix(stringPrefix)) {
+      if (
+        JSON_CONTROL_ESCAPES.has(nextChar) &&
+        isPathLikeJsonKey(stringKey) &&
+        isLikelyWindowsPathPrefix(stringPrefix)
+      ) {
         repaired += "\\\\";
         stringPrefix += "\\";
         continue;
@@ -141,7 +208,7 @@ export function parseJsonWithRepair(
   options?: { normalizeWindowsPathEscapes?: boolean },
 ): unknown {
   const normalize = (value: unknown): unknown =>
-    options?.normalizeWindowsPathEscapes ? normalizeDecodedWindowsPathEscapes(value) : value;
+    options?.normalizeWindowsPathEscapes ? normalizeStreamingJsonPathEscapes(value) : value;
 
   try {
     return normalize(JSON.parse(json) as unknown);
@@ -173,11 +240,11 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
   } catch {
     try {
       const result = partialParse(partialJson);
-      return normalizeDecodedWindowsPathEscapes(result ?? {}) as Record<string, unknown>;
+      return normalizeStreamingJsonPathEscapes(result ?? {}) as Record<string, unknown>;
     } catch {
       try {
         const result = partialParse(repairJson(partialJson));
-        return normalizeDecodedWindowsPathEscapes(result ?? {}) as Record<string, unknown>;
+        return normalizeStreamingJsonPathEscapes(result ?? {}) as Record<string, unknown>;
       } catch {
         return {};
       }
