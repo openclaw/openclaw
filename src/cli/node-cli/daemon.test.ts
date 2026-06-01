@@ -381,8 +381,9 @@ describe("runNodeDaemonStatus", () => {
       service?: { runtime?: Record<string, unknown> };
     };
     expect(payload.service?.runtime?.status).toBe("unknown");
-    const detail = payload.service?.runtime?.detail;
-    expect(typeof detail === "string" ? detail : "").toContain("permission denied");
+    const raw = payload.service?.runtime?.detail;
+    const detail = typeof raw === "string" ? raw : "";
+    expect(detail).toContain("permission denied");
   });
 
   it("emits a service-unit-not-found error to stderr while keeping recovery hints on stdout", async () => {
