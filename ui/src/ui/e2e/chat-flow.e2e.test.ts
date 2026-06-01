@@ -145,6 +145,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
 
       const prompt = "stream markdown through the GUI";
+      await gateway.deferNext("chat.send");
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
 
@@ -171,6 +172,17 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         timeout: 10_000,
       });
       expect(await page.locator(".markdown-plain-text-fallback strong").count()).toBe(0);
+
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await page.waitForFunction(() => {
+        const app = document.querySelector("openclaw-app") as
+          | (Element & { chatSending?: unknown })
+          | null;
+        return app?.chatSending === false;
+      });
+      await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
+        timeout: 10_000,
+      });
 
       await gateway.emitChatFinal({
         runId,

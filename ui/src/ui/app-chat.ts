@@ -703,10 +703,17 @@ async function sendQueuedChatMessage(
         );
         void loadChatHistory(host as unknown as ChatState);
       } else {
+        const hasAlreadyAdoptedRunStream =
+          host.chatRunId === ack.runId && typeof host.chatStream === "string";
         host.chatRunId = ack.runId;
-        host.chatStream = "";
-        (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt =
-          startedAt;
+        // Gateway can deliver the first delta before the chat.send ACK resolves.
+        // Preserve that adopted stream; resetting here makes first replies vanish
+        // until a later delta or final event arrives.
+        if (!hasAlreadyAdoptedRunStream) {
+          host.chatStream = "";
+          (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt =
+            startedAt;
+        }
       }
     }
     if (prepared.refreshSessions) {
