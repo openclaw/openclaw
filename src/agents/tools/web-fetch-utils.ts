@@ -27,9 +27,16 @@ export function normalizeWhitespace(value: string): string {
     .trim();
 }
 
-export function htmlToMarkdown(html: string): { text: string; title?: string } {
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
+function extractBodyHtml(html: string): string | undefined {
+  const bodyMatch = html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch) {
+    return bodyMatch[1];
+  }
+  const openBodyMatch = html.match(/<body\b[^>]*>([\s\S]*)/i);
+  return openBodyMatch?.[1];
+}
+
+function renderHtmlToMarkdownText(html: string): string {
   let text = html
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -54,7 +61,15 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
     .replace(/<(br|hr)\s*\/?>/gi, "\n")
     .replace(/<\/(p|div|section|article|header|footer|table|tr|ul|ol)>/gi, "\n");
   text = stripTags(text);
-  text = normalizeWhitespace(text);
+  return normalizeWhitespace(text);
+}
+
+export function htmlToMarkdown(html: string): { text: string; title?: string } {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
+  const bodyHtml = extractBodyHtml(html);
+  const bodyText = bodyHtml === undefined ? "" : renderHtmlToMarkdownText(bodyHtml);
+  const text = bodyText || renderHtmlToMarkdownText(html);
   return { text, title };
 }
 
