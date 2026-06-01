@@ -8,6 +8,7 @@ import {
   readFileSync,
   readSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -387,6 +388,21 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
   }
 
   const content = readFileSync(filePath, "utf8");
+  const entries = parseJsonlEntries(content);
+
+  // Validate session header
+  if (entries.length === 0) {
+    return entries;
+  }
+  const header = entries[0];
+  if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
+    return [];
+  }
+
+  return entries;
+}
+
+function parseJsonlEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   const lines = content.trim().split("\n");
 
@@ -402,16 +418,43 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
     }
   }
 
-  // Validate session header
-  if (entries.length === 0) {
-    return entries;
-  }
+  return entries;
+}
+
+function hasReadableSessionHeader(entries: FileEntry[]): boolean {
   const header = entries[0];
-  if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
-    return [];
+  return header?.type === "session" && typeof (header as { id?: unknown }).id === "string";
+}
+
+function buildCorruptSessionBackupPath(filePath: string): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${filePath}.corrupt-${timestamp}-${randomUUID().slice(0, 8)}.jsonl`;
+}
+
+function recoverCorruptSessionEntries(filePath: string, cwd: string): FileEntry[] | null {
+  const content = readFileSync(filePath, "utf8");
+  if (content.trim().length === 0) {
+    return null;
   }
 
-  return entries;
+  const parsedEntries = parseJsonlEntries(content);
+  const recoveredHeader = parsedEntries.find(
+    (entry): entry is SessionHeader =>
+      entry.type === "session" && typeof (entry as { id?: unknown }).id === "string",
+  );
+  const header: SessionHeader =
+    recoveredHeader ??
+    ({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: createSessionId(),
+      timestamp: new Date().toISOString(),
+      cwd,
+    } satisfies SessionHeader);
+  const recoveredEntries = parsedEntries.filter((entry) => entry.type !== "session");
+
+  writeFileSync(buildCorruptSessionBackupPath(filePath), content, "utf8");
+  return [header, ...recoveredEntries];
 }
 
 function isValidSessionFile(filePath: string): boolean {
@@ -725,6 +768,17 @@ export class SessionManager {
       // If file was empty or corrupted (no valid header), truncate and start fresh
       // to avoid appending messages without a session header (which breaks the session)
       if (this.fileEntries.length === 0) {
+        const recoveredEntries = recoverCorruptSessionEntries(this.sessionFile, this.cwd);
+        if (recoveredEntries && hasReadableSessionHeader(recoveredEntries)) {
+          this.fileEntries = recoveredEntries;
+          const header = this.fileEntries.find((e) => e.type === "session");
+          this.sessionId = header?.id ?? createSessionId();
+          this.rewriteFile();
+          this.buildIndex();
+          this.flushed = true;
+          return;
+        }
+
         const explicitPath = this.sessionFile;
         this.newSession();
         this.sessionFile = explicitPath;
