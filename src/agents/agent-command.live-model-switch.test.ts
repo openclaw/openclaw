@@ -536,11 +536,58 @@ vi.mock("./model-selection.js", () => {
       const fallback = allowedCatalog[0];
       return fallback ? { provider: fallback.provider, model: fallback.id } : null;
     },
+    buildModelAliasIndex: ({
+      cfg,
+    }: {
+      cfg?: { agents?: { defaults?: { models?: Record<string, { alias?: string }> } } };
+    }) => {
+      const byAlias = new Map<string, { alias: string; ref: { provider: string; model: string } }>();
+      const byKey = new Map<string, string[]>();
+      for (const [ref, entry] of Object.entries(cfg?.agents?.defaults?.models ?? {})) {
+        const alias = entry?.alias?.trim();
+        if (!alias) {
+          continue;
+        }
+        const [provider, ...modelParts] = ref.split("/");
+        const model = modelParts.join("/");
+        byAlias.set(alias.toLowerCase(), { alias, ref: { provider, model } });
+        byKey.set(`${provider}/${model}`, [alias]);
+      }
+      return { byAlias, byKey };
+    },
     modelKey: (p: string, m: string) => `${p}/${m}`,
     normalizeModelRef: (p: string, m: string) => ({ provider: normalizeProviderId(p), model: m }),
     normalizeProviderId,
     normalizeProviderIdForAuth: normalizeProviderId,
-    parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
+    parseModelRef: (m: string, p: string) => {
+      const slash = m.indexOf("/");
+      return slash > 0
+        ? { provider: m.slice(0, slash), model: m.slice(slash + 1) }
+        : { provider: p, model: m };
+    },
+    resolveModelRefFromString: ({
+      raw,
+      defaultProvider,
+      aliasIndex,
+    }: {
+      raw: string;
+      defaultProvider: string;
+      aliasIndex?: {
+        byAlias: Map<string, { alias: string; ref: { provider: string; model: string } }>;
+      };
+    }) => {
+      const aliasMatch = aliasIndex?.byAlias.get(raw.trim().toLowerCase());
+      if (aliasMatch) {
+        return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+      }
+      const slash = raw.indexOf("/");
+      return {
+        ref:
+          slash > 0
+            ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
+            : { provider: defaultProvider, model: raw },
+      };
+    },
     resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
         ?.agents?.defaults?.model;
@@ -1825,6 +1872,66 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       id: "gpt-5.4",
       compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
     });
+  });
+
+  it("resolves explicit model aliases before thinking validation", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "openai/*": {},
+            "codex/gpt-5.5": {
+              alias: "code",
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          codex: {
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT 5.5 Codex",
+                reasoning: true,
+                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+              },
+            ],
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("codex", "gpt-5.5"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      model: "code",
+      thinking: "xhigh",
+      allowModelOverride: true,
+    });
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("codex");
+    expect(fallbackParams.model).toBe("gpt-5.5");
+    const thinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock),
+      "thinking args",
+    );
+    expect(thinkingArgs.provider).toBe("codex");
+    expect(thinkingArgs.model).toBe("gpt-5.5");
+    expect(thinkingArgs.level).toBe("xhigh");
   });
 
   it("records fallback steps to the session trajectory runtime", async () => {

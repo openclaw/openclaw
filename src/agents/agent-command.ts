@@ -105,12 +105,14 @@ import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
+  buildModelAliasIndex,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "./model-selection.js";
 import {
@@ -201,10 +203,19 @@ function parseAgentCommandModelRef(
   defaultProvider: string,
   modelManifestContext: ModelManifestNormalizationContext,
 ) {
-  const parsed = parseModelRef(raw, defaultProvider, {
+  const parsed = resolveModelRefFromString({
+    cfg,
+    raw,
+    defaultProvider,
+    aliasIndex: buildModelAliasIndex({
+      cfg,
+      defaultProvider,
+      ...modelManifestContext,
+      allowPluginNormalization: false,
+    }),
     ...modelManifestContext,
     allowPluginNormalization: false,
-  });
+  })?.ref;
   return parsed
     ? normalizeAgentCommandModelRef(cfg, parsed.provider, parsed.model, modelManifestContext)
     : null;
