@@ -97,7 +97,7 @@ export type AcpRunTurnInput = {
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onBeforeTurnSaveHook?: (
     context: AcpTurnCompletionHookContext,
-  ) => Promise<AcpTurnSaveHookResult | false> | AcpTurnSaveHookResult | false;
+  ) => Promise<AcpTurnSaveHookResult | false | void> | AcpTurnSaveHookResult | false | void;
 };
 
 export type AcpTurnLifecycleEvent = {

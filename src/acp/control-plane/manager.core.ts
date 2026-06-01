@@ -14,7 +14,6 @@ import {
   triggerInternalHook,
 } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { runManagerCancelSession } from "./manager.cancel-session.js";
@@ -482,7 +481,7 @@ export class AcpSessionManager {
   }
 
   private normalizeTurnSaveHookResult(
-    result: AcpTurnSaveHookResult | boolean | void,
+    result: AcpTurnSaveHookResult | false | void,
   ): AcpTurnSaveHookResult {
     if (result === false) {
       return { saveOutcome: "skipped", saveSkipReason: "declined" };

@@ -407,7 +407,7 @@ describe("AcpSessionManager", () => {
       text: "hello",
       mode: "prompt",
       requestId: "turn-save-no-evidence",
-      onBeforeTurnSaveHook: (() => undefined) as never,
+      onBeforeTurnSaveHook: () => undefined,
     });
 
     await vi.waitFor(() => {
@@ -434,7 +434,7 @@ describe("AcpSessionManager", () => {
   it("emits agent:turn:end after terminal ACP events are delivered", async () => {
     const runtimeState = createRuntime();
     runtimeState.runTurn.mockImplementation(async function* () {
-      yield { type: "text_delta" as const, text: "remember this", stream: "content" as const };
+      yield { type: "text_delta" as const, text: "remember this", stream: "output" as const };
       yield { type: "done" as const };
     });
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
