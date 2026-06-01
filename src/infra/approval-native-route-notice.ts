@@ -2,7 +2,12 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import { formatHumanList } from "../shared/human-list.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 
-/** Summarize where a native approval was delivered for origin-chat notices. */
+/**
+ * Summarizes where a native approval was delivered for origin-chat notices.
+ *
+ * Approver-DM-only delivery names DMs explicitly; mixed or origin delivery uses the channel label so
+ * the notice stays accurate without exposing transport target ids.
+ */
 export function describeApprovalDeliveryDestination(params: {
   channelLabel: string;
   deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
@@ -13,7 +18,11 @@ export function describeApprovalDeliveryDestination(params: {
     : params.channelLabel;
 }
 
-/** Build the notice shown in the origin chat when approval was routed elsewhere. */
+/**
+ * Builds the notice shown in the origin chat when approval was routed elsewhere.
+ *
+ * Destinations are trimmed, deduped, and sorted so repeated delivery attempts produce stable copy.
+ */
 export function resolveApprovalRoutedElsewhereNoticeText(
   destinations: readonly string[],
 ): string | null {
@@ -28,7 +37,12 @@ export function resolveApprovalRoutedElsewhereNoticeText(
   )}, not this chat.`;
 }
 
-/** Build the manual /approve fallback notice when native delivery reaches no targets. */
+/**
+ * Builds the manual /approve fallback notice when native delivery reaches no targets.
+ *
+ * Exec approvals prefer an 8-character command id for readability, while plugin approvals keep the
+ * full id because their ids are not part of the exec short-code ambiguity flow.
+ */
 export function resolveApprovalDeliveryFailedNoticeText(params: {
   approvalId: string;
   approvalKind: "exec" | "plugin";
