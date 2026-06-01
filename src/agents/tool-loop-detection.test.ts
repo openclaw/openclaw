@@ -656,6 +656,23 @@ describe("tool-loop-detection", () => {
             messageId: `plugin_volatile_${index}`,
           }),
         },
+        {
+          name: "qa-channel plugin message result",
+          payloadAt: (index: number) => ({
+            message: {
+              id: `qa_volatile_${index}`,
+              accountId: "default",
+              direction: "outbound",
+              conversation: {
+                id: "loop-room",
+                chatType: "channel",
+              },
+              senderId: "openclaw",
+              text: "hello",
+              timestamp: 1_800_000_000_000 + index,
+            },
+          }),
+        },
       ];
 
       for (const { name, payloadAt } of cases) {
@@ -685,37 +702,62 @@ describe("tool-loop-detection", () => {
     });
 
     it("does not block repeated message sends when stable delivery facts change", () => {
-      const state = createState();
       const params = { action: "send", to: "feishu:chat-1", content: "hello" };
+      const cases = [
+        {
+          name: "chat id changes",
+          payloadAt: (index: number) => ({
+            channel: "feishu",
+            to: "feishu:chat-1",
+            via: "direct",
+            result: {
+              ok: true,
+              chatId: `oc_chat_${index}`,
+              messageId: `om_volatile_${index}`,
+            },
+          }),
+        },
+        {
+          name: "qa-channel conversation id changes",
+          payloadAt: (index: number) => ({
+            message: {
+              id: `qa_volatile_${index}`,
+              accountId: "default",
+              direction: "outbound",
+              conversation: {
+                id: `loop-room-${index}`,
+                chatType: "channel",
+              },
+              senderId: "openclaw",
+              text: "hello",
+              timestamp: 1_800_000_000_000 + index,
+            },
+          }),
+        },
+      ];
 
-      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
-        const payload = {
-          channel: "feishu",
-          to: "feishu:chat-1",
-          via: "direct",
-          result: {
-            ok: true,
-            chatId: `oc_chat_${index}`,
-            messageId: `om_volatile_${index}`,
-          },
-        };
-        recordSuccessfulCall(
-          state,
-          "message",
-          params,
-          {
-            content: [{ type: "text", text: JSON.stringify(payload) }],
-            details: payload,
-          },
-          index,
-        );
-      }
+      for (const { name, payloadAt } of cases) {
+        const state = createState();
+        for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+          const payload = payloadAt(index);
+          recordSuccessfulCall(
+            state,
+            "message",
+            params,
+            {
+              content: [{ type: "text", text: JSON.stringify(payload) }],
+              details: payload,
+            },
+            index,
+          );
+        }
 
-      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
-      expect(loopResult.stuck).toBe(true);
-      if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("generic_repeat");
+        const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+        expect(loopResult.stuck, name).toBe(true);
+        if (loopResult.stuck) {
+          expect(loopResult.level, name).toBe("warning");
+          expect(loopResult.detector, name).toBe("generic_repeat");
+        }
       }
     });
 

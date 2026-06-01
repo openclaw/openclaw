@@ -1098,11 +1098,17 @@ describe("message tool loop detection action runner proof", () => {
         to,
         handledBy: "plugin",
         payload: {
-          channel: "qa-channel",
-          to,
-          via: "gateway",
-          result: {
-            messageId: `qa-message-${callIndex}`,
+          message: {
+            id: `qa-message-${callIndex}`,
+            accountId: "default",
+            direction: "outbound",
+            conversation: {
+              id: "loop-room",
+              chatType: "channel",
+            },
+            senderId: "openclaw",
+            text: "same visible reply",
+            timestamp: 1_800_000_000_000 + callIndex,
           },
         },
         dryRun: false,
@@ -1132,9 +1138,12 @@ describe("message tool loop detection action runner proof", () => {
     for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       const result = await wrappedTool.execute(`message-tool-send-${i}`, params);
       expect(result.details).toMatchObject({
-        channel: "qa-channel",
-        to: "channel:loop-room",
-        via: "gateway",
+        message: {
+          conversation: {
+            id: "loop-room",
+          },
+          text: "same visible reply",
+        },
       });
     }
 
@@ -1146,6 +1155,16 @@ describe("message tool loop detection action runner proof", () => {
     });
     const blockedDetails = blocked.details as { reason?: unknown } | undefined;
     expect(String(blockedDetails?.reason)).toContain("CRITICAL");
+
+    const blockedAgain = await wrappedTool.execute(
+      `message-tool-send-${CRITICAL_THRESHOLD + 1}`,
+      params,
+    );
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+    expect(blockedAgain.details).toMatchObject({
+      status: "blocked",
+      deniedReason: "tool-loop",
+    });
   });
 });
 

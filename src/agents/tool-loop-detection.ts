@@ -203,6 +203,17 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   }
 }
 
+function isMessageDeliveryObject(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.id === "string" &&
+    typeof value.text === "string" &&
+    (typeof value.direction === "string" ||
+      typeof value.senderId === "string" ||
+      typeof value.accountId === "string" ||
+      isPlainObject(value.conversation))
+  );
+}
+
 function normalizeMessageSendOutcome(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((entry) => normalizeMessageSendOutcome(entry));
@@ -211,6 +222,7 @@ function normalizeMessageSendOutcome(value: unknown): unknown {
     return value;
   }
 
+  const stripMessageObjectId = isMessageDeliveryObject(value);
   const normalized: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (
@@ -218,6 +230,7 @@ function normalizeMessageSendOutcome(value: unknown): unknown {
       key === "messageIds" ||
       key === "platformMessageIds" ||
       key === "receipt" ||
+      (key === "id" && stripMessageObjectId) ||
       key === "timestamp"
     ) {
       continue;

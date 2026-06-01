@@ -1140,13 +1140,17 @@ export function wrapToolWithBeforeToolCallHook(
           reason: outcome.reason,
           deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
         });
-        await recordLoopOutcome({
-          ctx,
-          toolName: normalizedToolName,
-          toolParams: outcome.params ?? hookParams,
-          toolCallId,
-          result: blockedResult,
-        });
+        // A loop detector veto is not tool progress. Recording it would replace
+        // the repeated successful outcome and let the same loop resume.
+        if (outcome.deniedReason !== "tool-loop") {
+          await recordLoopOutcome({
+            ctx,
+            toolName: normalizedToolName,
+            toolParams: outcome.params ?? hookParams,
+            toolCallId,
+            result: blockedResult,
+          });
+        }
         return blockedResult;
       }
       const executeParams = reconcileCodeModeExecBeforeHookParams({
