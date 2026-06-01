@@ -56,6 +56,10 @@ function normalizeCodexModelId(modelId: string | undefined): string {
 }
 
 export function shouldUseDirectCodexDynamicToolsForModel(modelId: string | undefined): boolean {
+  return shouldDisableCodexToolSearchForModel(modelId);
+}
+
+export function shouldDisableCodexToolSearchForModel(modelId: string | undefined): boolean {
   return normalizeCodexModelId(modelId) === "gpt-5.4-nano";
 }
 

@@ -20,6 +20,7 @@ import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+import { shouldDisableCodexToolSearchForModel } from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   isCodexPluginThreadBindingStale,
@@ -112,6 +113,10 @@ export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
 
 const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
+};
+
+const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
+  "features.multi_agent": false,
 };
 
 type CodexThreadLifecycleTimingSpan = {
@@ -948,7 +953,14 @@ function buildCodexRuntimeThreadConfigForRun(
   config: JsonObject | undefined,
   options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
 ): JsonObject {
-  const runtimeConfig = buildCodexRuntimeThreadConfig(config, options);
+  const baseConfig = buildCodexRuntimeThreadConfig(config, options);
+  const runtimeConfig =
+    mergeCodexThreadConfigs(
+      baseConfig,
+      shouldDisableCodexToolSearchForModel(params.modelId)
+        ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
+        : undefined,
+    ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
   }
