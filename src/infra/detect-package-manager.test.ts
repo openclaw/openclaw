@@ -29,6 +29,32 @@ describe("detectPackageManager", () => {
     );
   });
 
+  it("uses npm-shrinkwrap.json as npm package install evidence", async () => {
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@10.8.1" }) },
+        { path: "npm-shrinkwrap.json", content: "" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("npm");
+      },
+    );
+  });
+
+  it("does not treat a pnpm workspace source checkout shrinkwrap as npm install evidence", async () => {
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@10.8.1" }) },
+        { path: "pnpm-workspace.yaml", content: "packages: []\n" },
+        { path: "pnpm-lock.yaml", content: "" },
+        { path: "npm-shrinkwrap.json", content: "" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("pnpm");
+      },
+    );
+  });
+
   it.each([
     {
       name: "uses bun.lock",
@@ -45,6 +71,14 @@ describe("detectPackageManager", () => {
       files: [
         { path: "package.json", content: JSON.stringify({ packageManager: "yarn@4.0.0" }) },
         { path: "package-lock.json", content: "" },
+      ],
+      expected: "npm",
+    },
+    {
+      name: "falls back to npm shrinkwrap for unsupported packageManager values",
+      files: [
+        { path: "package.json", content: JSON.stringify({ packageManager: "yarn@4.0.0" }) },
+        { path: "npm-shrinkwrap.json", content: "" },
       ],
       expected: "npm",
     },
