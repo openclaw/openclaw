@@ -71,4 +71,22 @@ describe("SessionManager.open", () => {
       expect(backupStat.mode & 0o777).toBe(0o600);
     }
   });
+
+  it("does not duplicate the header after recovering a header-only corrupt file", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(sessionFile, '{"type":"session","version":3,"id":"sess', "utf8");
+
+    const sessionManager = SessionManager.open(sessionFile, dir, "/tmp/task-repo");
+    sessionManager.appendMessage({ role: "user", content: "hello" });
+    sessionManager.appendMessage({ role: "assistant", content: "hi" });
+
+    const entries = (await fs.readFile(sessionFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+
+    expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message"]);
+    expect(entries.filter((entry) => entry.type === "session")).toHaveLength(1);
+  });
 });

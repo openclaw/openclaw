@@ -777,9 +777,16 @@ export class SessionManager {
           this.fileEntries = recoveredEntries;
           const header = this.fileEntries.find((e) => e.type === "session");
           this.sessionId = header?.id ?? createSessionId();
-          this.rewriteFile();
           this.buildIndex();
-          this.flushed = true;
+          const hasAssistant = this.fileEntries.some(
+            (e) => e.type === "message" && e.message.role === "assistant",
+          );
+          if (hasAssistant) {
+            this.rewriteFile();
+            this.flushed = true;
+          } else {
+            this.flushed = false;
+          }
           return;
         }
 
@@ -896,7 +903,7 @@ export class SessionManager {
     }
 
     if (!this.flushed) {
-      appendJsonlEntriesSync(this.sessionFile, this.fileEntries);
+      writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
       this.flushed = true;
     } else {
       appendJsonlEntrySync(this.sessionFile, entry);
