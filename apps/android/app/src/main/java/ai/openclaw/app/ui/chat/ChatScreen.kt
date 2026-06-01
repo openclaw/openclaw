@@ -453,6 +453,8 @@ private data class StarterPrompt(
   val message: String,
 )
 
+internal const val CHAT_SCREEN_BUBBLE_WIDTH_FRACTION = 0.90f
+
 /** Default prompts shown only for an empty, connected session. */
 private val starterPrompts =
   listOf(
@@ -485,7 +487,7 @@ private fun ChatBubble(
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.64f else 0.56f),
+      modifier = Modifier.fillMaxWidth(CHAT_SCREEN_BUBBLE_WIDTH_FRACTION),
       shape = RoundedCornerShape(7.dp),
       color = ClawTheme.colors.surfaceRaised,
       contentColor = ClawTheme.colors.text,
@@ -528,15 +530,7 @@ private fun ChatText(
   text: String,
   textColor: Color,
 ) {
-  if (text.hasMarkdownSyntax()) {
-    ChatMarkdown(text = text, textColor = textColor)
-  } else {
-    Text(
-      text = text,
-      style = ClawTheme.type.body,
-      color = textColor,
-    )
-  }
+  ChatMarkdown(text = text, textColor = textColor)
 }
 
 @Composable
@@ -861,9 +855,3 @@ private fun thinkingMeterWidth(value: String): Float =
 private fun contextPercent(value: String): Int = (thinkingMeterWidth(value) * 100).toInt()
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
-
-/** Quick markdown detector used to avoid routing plain chat text through the markdown renderer. */
-private fun String.hasMarkdownSyntax(): Boolean =
-  any { it == '#' || it == '*' || it == '`' || it == '[' || it == '|' } ||
-    contains("\n- ") ||
-    contains("\n1. ")
