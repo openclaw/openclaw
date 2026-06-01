@@ -53,6 +53,7 @@ const MAX_EMBEDDING_INPUTS = 128;
 const MAX_EMBEDDING_INPUT_CHARS = 8_192;
 const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER = "openai-compatible";
 type EmbeddingProviderRequest = string;
 
 function coerceRequest(value: unknown): EmbeddingsRequest {
@@ -150,6 +151,15 @@ async function createConfiguredEmbeddingProvider(params: {
     return result.provider ? adaptGenericEmbeddingProvider(result.provider) : null;
   };
 
+  const genericAdapter = getGenericEmbeddingProvider(providerId, params.cfg);
+  if (providerId === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER && genericAdapter) {
+    const provider = await createWithGenericAdapter(genericAdapter);
+    if (!provider) {
+      throw new Error(`Embedding provider ${providerId} is unavailable.`);
+    }
+    return provider;
+  }
+
   const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
   if (adapter) {
     const provider = await createWithAdapter(adapter);
@@ -159,7 +169,6 @@ async function createConfiguredEmbeddingProvider(params: {
     return provider;
   }
 
-  const genericAdapter = getGenericEmbeddingProvider(providerId, params.cfg);
   if (!genericAdapter) {
     throw new Error(`Unknown memory embedding provider: ${providerId}`);
   }
