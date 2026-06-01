@@ -238,7 +238,8 @@ describe("CronToolSchema", () => {
       | Record<string, { properties?: Record<string, { type?: unknown }> }>
       | undefined;
 
-    // Must be plain "array" — not ["array", "null"] — for provider compat.
+    // Provider-facing schemas must be plain "array" rather than JSON Schema
+    // unions so OpenAPI 3.0 subset validators accept them.
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
   });
 
@@ -248,7 +249,7 @@ describe("CronToolSchema", () => {
     const json = JSON.stringify(providerSchemaRecord);
     // type arrays like ["string","null"] are not valid in OpenAPI 3.0
     expect(json).not.toMatch(/"type"\s*:\s*\[/);
-    // "not" composition keyword is not supported by OpenAPI 3.0
+    // The "not" composition keyword is not supported by OpenAPI 3.0.
     expect(json).not.toMatch(/"not"\s*:\s*\{/);
   });
 });
