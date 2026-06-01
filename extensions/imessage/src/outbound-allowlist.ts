@@ -90,7 +90,7 @@ function resolveIMessageOutboundGroupAllowFrom(
   if (account.config.groupAllowFrom !== undefined) {
     return [...account.config.groupAllowFrom];
   }
-  return [...(account.config.allowFrom ?? []).filter(isIMessageConversationAllowTarget)];
+  return (account.config.allowFrom ?? []).filter(isIMessageConversationAllowTarget);
 }
 
 function getIMessageConversationFacts(
