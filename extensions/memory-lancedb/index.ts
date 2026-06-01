@@ -681,8 +681,8 @@ const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
  * `buildInboundUserContextPrefix`. Covers both `(untrusted metadata):` labels
  * (Conversation info, Sender, Forwarded, Location, Structured object, plus any
  * future `<label> (untrusted metadata):` produced from `UntrustedStructuredContext`)
- * and `(untrusted, for context):` blocks (Thread starter, Replied message,
- * Chat history). Anchored to line start AND end of line so a user message
+ * and `(untrusted, for context):` / `(untrusted, nearest first):` blocks
+ * (Thread starter, Replied message, Reply chain, Chat history). Anchored to line start AND end of line so a user message
  * that quotes the phrase mid-sentence is not flagged. The canonical injection
  * always puts the sentinel alone on its own line followed by a ```json fence,
  * so requiring `):` to terminate the line catches every real injection while
@@ -692,7 +692,9 @@ const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
  * pathological inputs.
  */
 const INBOUND_META_LABEL_RE =
-  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context)\):[ \t]*$/m;
+  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first)\):[ \t]*$/m;
+const INBOUND_META_LABEL_JSON_BLOCK_RE =
+  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first)\):[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
 
 const UNTRUSTED_CONTEXT_HEADER_RE = /^Untrusted context \(metadata/m;
 
@@ -787,6 +789,11 @@ const INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE: RegExp | null = ENVELOPE_KNOWN_C
  */
 const ENVELOPE_BODY_SENDER_PREFIX_RE = /^([^\n:]{1,120}):\s/;
 const ENVELOPE_BODY_SELF_PREFIX = "(self)";
+const SENDER_PREFIXED_ENVELOPE_CHANNEL_RE =
+  /^(?:discord|imessage|line|mattermost|qqbot|signal|slack|telegram|whatsapp)(?:\s|$)/i;
+const NON_DIRECT_ENVELOPE_HEADER_RE =
+  /(?:^|\s)(?:#[^\s]+|group:[^\s]+|group\s+id:[^\s]+|room:[^\s]+|channel\s+id:[^\s]+|id:-[^\s]+|unknown-group|[^\s]+@g\.us)(?:\s|$)/i;
+const USER_AUTHORED_BODY_LABEL_RE = /^(?:action|decision|fixme|note|question|reminder|todo)$/i;
 
 /**
  * Returns true if `text` looks like it contains OpenClaw-injected envelope or
@@ -857,13 +864,12 @@ const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2
  *   - `(self): ` for direct chats with `fromMe`, OR
  *   - `<resolvedSender>: ` for non-direct chats with a sender label.
  *
- * The sender label always appears verbatim somewhere in the envelope header
- * (channels either pass it as `from` directly or fold it into a composite
- * label such as `Group id:123 Alice`). We therefore only strip when the body
- * label exactly matches a whitespace-separated token of the captured header,
- * or is the literal `(self)` sentinel. Conservative on purpose: leaving a
- * stray `Alice: hello` body in a noisy memory is far less harmful than
- * truncating a legitimate `TODO: fix this` DM to `fix this`.
+ * Some channel paths call `formatInboundEnvelope` and therefore put the room in
+ * the header while keeping the sender as the body label, for example
+ * `[Slack #general] Alice: text`. Generic `formatAgentEnvelope` callers and
+ * direct `formatInboundEnvelope` bodies do not add that body label, so require
+ * structural non-direct markers and preserve common user-authored labels like
+ * `TODO:`.
  */
 function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): string {
   const match = body.match(ENVELOPE_BODY_SENDER_PREFIX_RE);
@@ -872,6 +878,13 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
   }
   const label = match[1];
   if (label === ENVELOPE_BODY_SELF_PREFIX) {
+    return body.slice(match[0].length);
+  }
+  if (
+    SENDER_PREFIXED_ENVELOPE_CHANNEL_RE.test(headerInside) &&
+    NON_DIRECT_ENVELOPE_HEADER_RE.test(headerInside) &&
+    !USER_AUTHORED_BODY_LABEL_RE.test(label)
+  ) {
     return body.slice(match[0].length);
   }
   const headerTokens = headerInside.split(/\s+/);
@@ -917,10 +930,16 @@ export function sanitizeForMemoryCapture(text: string): string {
     cleaned = stripEnvelopeBodySenderPrefix(afterBracket, headerInside);
   }
 
-  // Strip inbound metadata blocks: sentinel line + optional ```json + content + ```
-  // First pass strips every sentinel+code-fence block; each replace removes
-  // the entire block including its sentinel header so iteration order does
-  // not matter.
+  // Strip inbound metadata blocks: generic label line + optional ```json +
+  // content + ```. This deliberately mirrors `looksLikeEnvelopeSludge`'s
+  // generic label coverage so current reply-chain, location, and plugin-owned
+  // structured-context labels do not make `shouldCapture` reject the useful
+  // user body that follows.
+  cleaned = cleaned.replace(INBOUND_META_LABEL_JSON_BLOCK_RE, "");
+
+  // First strip legacy/inline sentinel+code-fence blocks; each replace removes
+  // the entire block including its sentinel header so iteration order does not
+  // matter.
   for (const sentinel of INBOUND_META_SENTINELS) {
     const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const blockRe = new RegExp(
@@ -929,36 +948,34 @@ export function sanitizeForMemoryCapture(text: string): string {
     );
     cleaned = cleaned.replace(blockRe, "");
   }
-  // For sentinels that survived the code-fence strip (plain-text body, no
-  // JSON fence), act on the earliest line-anchored sentinel across the WHOLE
-  // list each pass. Iterating per-sentinel and truncating at each first
-  // match independently can leave a later (earlier-positioned) sentinel
-  // intact in the kept-prefix range and preserve metadata that belonged to
-  // an outer sentinel's plain-text body. Looping until no leading sentinel
-  // remains preserves the original behavior of stripping every
-  // back-to-back header at the start of the message while staying
-  // declaration-order-independent. A bounded retry cap rules out pathological
-  // input from spinning forever.
+  // For labels/sentinels that survived the code-fence strip (plain-text body,
+  // no JSON fence), act on the earliest line-anchored metadata header each
+  // pass. A bounded retry cap rules out pathological input from spinning
+  // forever.
   for (let pass = 0; pass < INBOUND_META_SENTINELS.length + 1; pass += 1) {
-    let earliestSentinelIndex = -1;
-    let earliestSentinel: string | null = null;
+    let earliestMetaIndex = -1;
+    let earliestMetaRe: RegExp | null = null;
+    const labelMatch = cleaned.match(INBOUND_META_LABEL_RE);
+    if (labelMatch?.index !== undefined) {
+      earliestMetaIndex = labelMatch.index;
+      earliestMetaRe = INBOUND_META_LABEL_RE;
+    }
     for (const sentinel of INBOUND_META_SENTINELS) {
       const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const trailerRe = new RegExp(`^${escapedSentinel}`, "m");
       const trailerMatch = cleaned.match(trailerRe);
       if (
         trailerMatch?.index !== undefined &&
-        (earliestSentinelIndex === -1 || trailerMatch.index < earliestSentinelIndex)
+        (earliestMetaIndex === -1 || trailerMatch.index < earliestMetaIndex)
       ) {
-        earliestSentinelIndex = trailerMatch.index;
-        earliestSentinel = sentinel;
+        earliestMetaIndex = trailerMatch.index;
+        earliestMetaRe = new RegExp(`^${escapedSentinel}.*$`, "gm");
       }
     }
-    if (earliestSentinel === null) {
+    if (earliestMetaRe === null) {
       break;
     }
-    const escapedSentinel = earliestSentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const before = cleaned.slice(0, earliestSentinelIndex);
+    const before = cleaned.slice(0, earliestMetaIndex);
     if (before.trim().length > 0) {
       // User content exists before the earliest sentinel -- truncate here to
       // drop every metadata block that follows (chat history, thread starter,
@@ -967,11 +984,10 @@ export function sanitizeForMemoryCapture(text: string): string {
       cleaned = before;
       break;
     }
-    // Sentinel is at the very beginning -- strip every line that exact
-    // sentinel begins so the user text that follows it is preserved. Loop
-    // continues so a back-to-back second sentinel at the new start is also
-    // handled.
-    cleaned = cleaned.replace(new RegExp(`^${escapedSentinel}.*$`, "gm"), "");
+    // Metadata header is at the very beginning -- strip it so the user text
+    // that follows survives. Loop continues so back-to-back headers at the new
+    // start are also handled.
+    cleaned = cleaned.replace(earliestMetaRe, "");
   }
 
   // Strip the "Untrusted context (metadata..." header and everything after it,

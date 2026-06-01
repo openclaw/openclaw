@@ -2963,6 +2963,9 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge("Structured object (untrusted metadata):")).toBe(true);
     expect(looksLikeEnvelopeSludge("Calendar event (untrusted metadata):")).toBe(true);
     expect(looksLikeEnvelopeSludge("Custom plugin label (untrusted metadata):")).toBe(true);
+    expect(
+      looksLikeEnvelopeSludge("Reply chain of current user message (untrusted, nearest first):"),
+    ).toBe(true);
   });
 
   test("looksLikeEnvelopeSludge does not false-positive on mid-line untrusted metadata phrase", () => {
@@ -3100,6 +3103,39 @@ describe("memory plugin e2e", () => {
     ).toBe("I prefer dark mode");
   });
 
+  test("sanitizeForMemoryCapture strips sender label from real room-label envelope shapes", () => {
+    // Real group/channel callers pass the room/conversation as `from` and the
+    // sender separately; the sender is not necessarily present in the header.
+    expect(sanitizeForMemoryCapture("[Telegram group:123] Alice: I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
+    expect(sanitizeForMemoryCapture("[Slack #general] Alice: I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
+    expect(
+      sanitizeForMemoryCapture(
+        "[Discord OpenClaw #dev channel id:456 +5m] Alice: I prefer dark mode",
+      ),
+    ).toBe("I prefer dark mode");
+    expect(sanitizeForMemoryCapture("[Telegram OpenClaw id:-100] Alice: I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
+    expect(sanitizeForMemoryCapture("[Signal Signal Group id:123] Bob (42): ping")).toBe("ping");
+  });
+
+  test("sanitizeForMemoryCapture preserves user labels in generic room envelopes", () => {
+    expect(
+      sanitizeForMemoryCapture(
+        "[Nextcloud Talk room:ops Mon 2026-05-17 14:30 UTC] TODO: keep this",
+      ),
+    ).toBe("TODO: keep this");
+    expect(sanitizeForMemoryCapture("[Slack #general] TODO: keep this")).toBe("TODO: keep this");
+    expect(sanitizeForMemoryCapture("[WhatsApp Family Chat] Alice: hello")).toBe("Alice: hello");
+    expect(sanitizeForMemoryCapture("[Telegram Alice] Bob (42): I prefer dark mode")).toBe(
+      "Bob (42): I prefer dark mode",
+    );
+  });
+
   test("sanitizeForMemoryCapture leaves text with no envelope prefix alone", () => {
     // No bracket envelope: the `Name: ` sender-stripper must NOT fire on
     // user-typed text that happens to look like `Name: body`.
@@ -3193,6 +3229,38 @@ describe("memory plugin e2e", () => {
     const input =
       "Conversation info (untrusted metadata): {some inline json}\nI prefer verbose output";
     expect(sanitizeForMemoryCapture(input)).toBe("I prefer verbose output");
+  });
+
+  test("sanitizeForMemoryCapture strips generic current inbound metadata blocks", () => {
+    const locationInput = [
+      "Location (untrusted metadata):",
+      "```json",
+      '{"lat": 48.2, "lng": 16.3}',
+      "```",
+      "",
+      "I always prefer dark mode",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(locationInput)).toBe("I always prefer dark mode");
+
+    const replyChainInput = [
+      "Reply chain of current user message (untrusted, nearest first):",
+      "```json",
+      '[{"body":"quoted context"}]',
+      "```",
+      "",
+      "I always prefer concise replies",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(replyChainInput)).toBe("I always prefer concise replies");
+
+    const customInput = [
+      "Calendar event (untrusted metadata):",
+      "```json",
+      '{"title":"Focus"}',
+      "```",
+      "",
+      "I always prefer morning meetings",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(customInput)).toBe("I always prefer morning meetings");
   });
 
   test("sanitizeForMemoryCapture strips media annotations", () => {
