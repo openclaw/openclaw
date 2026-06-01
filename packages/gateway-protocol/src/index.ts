@@ -1,4 +1,5 @@
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+export * from "./dijie-execution-token.js";
 import {
   type AgentEvent,
   AgentEventSchema,

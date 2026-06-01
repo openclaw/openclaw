@@ -815,6 +815,7 @@ export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    modelPrompt?: string;
     attachments?: ChatAttachment[];
     runId: string;
     sessionKey?: string;
@@ -839,6 +840,7 @@ export async function requestChatSend(
     ...(isGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
     message: params.message,
+    ...(params.modelPrompt ? { modelPrompt: params.modelPrompt } : {}),
     deliver: false,
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),

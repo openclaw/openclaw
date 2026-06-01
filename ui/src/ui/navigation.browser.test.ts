@@ -37,6 +37,20 @@ function expectButtonWithText(app: ReturnType<typeof mountApp>, text: string): H
   return button;
 }
 
+function expectButtonContainingText(
+  app: ReturnType<typeof mountApp>,
+  text: string,
+): HTMLButtonElement {
+  const button = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find((candidate) =>
+    candidate.textContent?.includes(text),
+  );
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button containing text "${text}"`);
+  }
+  return button;
+}
+
 function createSessionsResult(sessions: Array<Record<string, unknown>>) {
   return {
     ts: 0,
@@ -64,6 +78,31 @@ function expectConfirmedGatewayChange(app: ReturnType<typeof mountApp>) {
   expect(window.location.hash).toBe("");
 }
 
+function fillAicsRoleBuilderRequiredFields(
+  app: ReturnType<typeof mountApp>,
+  overrides: Record<string, string> = {},
+) {
+  const fields = {
+    requestZh: "生成一个客服质检岗位包",
+    roleBuildBriefJson: JSON.stringify({
+      name: "客服质检岗位",
+      deliverables: ["role_package/manifest.json"],
+    }),
+    cloudAccessToken: "cloud_customer_token",
+    executionId: "exec_123",
+    executionToken: "token_123",
+    roleListingId: "role_123",
+    entitlementId: "ent_123",
+    deviceId: "device_123",
+    workspaceRef: "workspace_123",
+    localGatewayId: "gateway_123",
+    ...overrides,
+  };
+  for (const [field, value] of Object.entries(fields)) {
+    app.updateAicsRoleBuilderField(field as never, value);
+  }
+}
+
 describe("control UI routing", () => {
   it("renders responsive navigation shell, drawer, and collapsed states", async () => {
     const app = mountApp("/chat");
@@ -74,7 +113,7 @@ describe("control UI routing", () => {
     expectElement(app, 'a.nav-item[href="/dreaming"]', HTMLAnchorElement);
   });
 
-  it("renders the dashboard breadcrumb as an overview link", async () => {
+  it("renders the dashboard breadcrumb as an AICS home link", async () => {
     const app = mountApp("/channels");
     await app.updateComplete;
 
@@ -83,13 +122,545 @@ describe("control UI routing", () => {
       "dashboard-header .dashboard-header__breadcrumb-link",
       HTMLAnchorElement,
     );
-    expect(breadcrumb.getAttribute("href")).toBe("/overview");
+    expect(breadcrumb.getAttribute("href")).toBe("/aics");
 
     breadcrumb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
-    expect(app.tab).toBe("overview");
-    expect(window.location.pathname).toBe("/overview");
+    expect(app.tab).toBe("aics");
+    expect(window.location.pathname).toBe("/aics");
+  });
+
+  it("keeps AICS from rendering a second role-builder conversation form", async () => {
+    const app = mountApp("/aics");
+    await app.updateComplete;
+
+    const aicsPage = expectElement(app, ".aics-page", HTMLElement);
+    expect(aicsPage.textContent).not.toContain("中文需求");
+    expect(aicsPage.textContent).not.toContain("RoleBuildBrief JSON");
+    expect(
+      Array.from(aicsPage.querySelectorAll<HTMLButtonElement>("button")).some(
+        (candidate) => candidate.textContent?.trim() === "启动生成",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps AICS customer-facing copy in Chinese without internal platform names", async () => {
+    const app = mountApp("/aics");
+    await app.updateComplete;
+
+    const aicsPage = expectElement(app, ".aics-page", HTMLElement);
+    const text = aicsPage.textContent ?? "";
+    expect(text).toContain("岗位工作台");
+    expect(text).toContain("我的岗位");
+    expect(text).toContain("已安装岗位");
+    expect(text).toContain("使用记录");
+    for (const hiddenWord of [
+      "OpenClaw",
+      "Mercur",
+      "Medusa",
+      "主系统",
+      "API Bridge",
+      "Gateway",
+      "runtime",
+      "授权与审计状态",
+      "云端授权凭证",
+      "执行授权凭证",
+      "roleListingId",
+      "role_quality_agent",
+      "cloud access token",
+      "cloud_customer_token",
+      "execution token",
+      "token_123",
+      "dijie.marketplace.roles.list",
+      "RoleBuildBrief",
+    ]) {
+      expect(text).not.toContain(hiddenWord);
+    }
+  });
+
+  it("syncs installed marketplace roles through Gateway without rendering fake cards", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({
+      ok: true,
+      roles: [
+        {
+          entitlementId: "ordgrp_001",
+          orderId: "order_001",
+          authorizedAt: "2026-05-31T00:00:00.000Z",
+          role: {
+            id: "role_quality_agent",
+            title: "客服质检岗位",
+            description: "检查客服对话质量",
+            listingStatus: "published",
+          },
+        },
+      ],
+    }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.updateComplete;
+
+    expect(expectElement(app, ".aics-page", HTMLElement).textContent).toContain("暂无已安装岗位");
+    expectButtonWithText(app, "同步岗位").dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await app.updateComplete;
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith("dijie.marketplace.roles.list", {
+      cloud_access_token: "cloud_customer_token",
+      workspace_ref: "workspace_123",
+      device_id: "device_123",
+    });
+    expect(app.aicsMarketplace.error).toBeNull();
+    expect(app.aicsMarketplace.roles).toEqual([
+      {
+        id: "role_quality_agent",
+        title: "客服质检岗位",
+        detail: "检查客服对话质量",
+        status: "published",
+        roleListingId: "role_quality_agent",
+        entitlementId: "ordgrp_001",
+      },
+    ]);
+    expect(expectElement(app, ".aics-page", HTMLElement).textContent).toContain("客服质检岗位");
+    expect(JSON.stringify(app.aicsMarketplace.result)).not.toContain("cloud_customer_token");
+  });
+
+  it("uses a marketplace role by jumping into the existing main chat draft", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({
+      ok: true,
+      roles: [
+        {
+          id: "role_quality_agent",
+          title: "客服质检岗位",
+          description: "检查客服对话质量",
+          status: "installed",
+        },
+      ],
+    }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.refreshAicsMarketplaceRoles();
+    await app.updateComplete;
+
+    expectButtonWithText(app, "使用岗位").dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await app.updateComplete;
+
+    expect(app.tab).toBe("chat");
+    expect(window.location.pathname).toBe("/chat");
+    expect(app.chatMessage).toContain("客服质检岗位");
+    expect(app.chatMessage).not.toContain("role_quality_agent");
+    expect(app.chatMessage).not.toContain("cloud_customer_token");
+    expect(app.chatMessage).not.toContain("token_123");
+    expect(app.chatMessage).not.toContain("dijie");
+    expect(app.chatMessage).not.toContain("Gateway");
+    expect(app.chatMessage).not.toContain("execution");
+    expect(app.chatMessages).toEqual([]);
+    expect(app.aicsRoleBuilder.form.roleListingId).toBe("role_quality_agent");
+  });
+
+  it("starts developer mode from AICS without rendering platform internals", async () => {
+    const app = mountApp("/aics");
+    await app.updateComplete;
+
+    expectButtonWithText(app, "开发岗位").dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await app.updateComplete;
+
+    expect(app.tab).toBe("chat");
+    expect(window.location.pathname).toBe("/chat");
+    expect(app.aicsConversationMode).toBe("developer");
+    expect(app.aicsConversationStage).toBe("idle");
+    expect(app.aicsConversationProtocol).toMatchObject({
+      role: "developerAssistant",
+      roleLabel: "岗位开发专属助手",
+      stage: "idle",
+      stageLabel: "开发待命",
+    });
+    expect(app.chatMessage).toContain("你只需要讲清楚这个岗位要解决什么业务问题");
+    const text = app.textContent ?? "";
+    expect(text).toContain("开发者模式");
+    expect(text).toContain("使用者模式");
+    expect(text).toContain("当前角色");
+    expect(text).toContain("工作身份");
+    expect(text).toContain("当前流程阶段");
+    expect(text).toContain("岗位开发专属助手");
+    expect(text).toContain("岗位使用与执行助手");
+    expect(text).toContain("开发待命");
+    expect(text).toContain("只讲业务逻辑");
+    expect(text).not.toContain(`对话${"对象"}`);
+    for (const hiddenWord of [
+      "RoleBuildBrief",
+      "execution token",
+      "cloud bearer",
+      "entitlementId",
+      "roleListingId",
+      "cloud_customer_token",
+      "token_123",
+    ]) {
+      expect(text).not.toContain(hiddenWord);
+    }
+  });
+
+  it("keeps developer mode context out of the visible chat transcript", async () => {
+    const app = mountApp("/chat");
+    const request = vi.fn(async () => ({ runId: "run_1", status: "ok" }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    await app.updateComplete;
+
+    expectButtonContainingText(app, "开发者模式").dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await app.updateComplete;
+
+    app.chatMessage = "我想做一个发票审核岗位，按金额和供应商风险分流。";
+    await app.handleSendChat();
+    await app.updateComplete;
+
+    expect(app.aicsConversationStage).toBe("intake");
+    expect(app.aicsConversationProtocol).toMatchObject({
+      roleLabel: "岗位开发专属助手",
+      stage: "intake",
+      stageLabel: "收集业务逻辑",
+    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "我想做一个发票审核岗位，按金额和供应商风险分流。",
+        modelPrompt: expect.stringContaining("[迭界AI开发者模式]"),
+      }),
+    );
+    const sentPayload = request.mock.calls[0]?.[1] as
+      | { message?: string; modelPrompt?: string }
+      | undefined;
+    expect(sentPayload?.modelPrompt).toContain("当前角色：岗位开发专属助手");
+    expect(sentPayload?.modelPrompt).toContain("工作身份：同一个聊天框下的岗位开发工作身份");
+    expect(sentPayload?.modelPrompt).toContain("当前流程阶段：收集业务逻辑");
+    expect(sentPayload?.modelPrompt).toContain("开发者只需要用自然语言讲业务逻辑");
+    expect(sentPayload?.modelPrompt).toContain(
+      "输入、输出、规则、验收标准、岗位包结构、协议映射、验证材料和上传标准都是平台职责",
+    );
+    expect(sentPayload?.modelPrompt).toContain("不要让开发者定义、填写或逐项确认");
+    expect(sentPayload?.message).not.toContain("[迭界AI开发者模式]");
+    const transcript = JSON.stringify(app.chatMessages);
+    expect(transcript).toContain("发票审核岗位");
+    expect(transcript).not.toContain("[迭界AI开发者模式]");
+    expect(transcript).not.toContain("执行 token");
+
+    expectButtonContainingText(app, "使用者模式").dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    await app.updateComplete;
+
+    expect(app.aicsConversationMode).toBe("user");
+    expect(app.aicsConversationStage).toBe("ready");
+    expect(app.aicsConversationProtocol).toMatchObject({
+      roleLabel: "岗位使用与执行助手",
+      stage: "ready",
+      stageLabel: "使用就绪",
+    });
+    app.chatMessage = "使用我的质检岗位处理今天的记录。";
+    await app.handleSendChat();
+    const chatSendCalls = request.mock.calls.filter(([method]) => method === "chat.send");
+    const secondPayload = chatSendCalls[1]?.[1] as
+      | { message?: string; modelPrompt?: string }
+      | undefined;
+    expect(secondPayload?.message).toBe("使用我的质检岗位处理今天的记录。");
+    expect(secondPayload?.modelPrompt).toBeUndefined();
+  });
+
+  it("fails marketplace role sync clearly before RPC when cloud auth is missing", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({ ok: true }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app, { cloudAccessToken: "" });
+    await app.updateComplete;
+
+    await app.refreshAicsMarketplaceRoles();
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(app.aicsMarketplace.error).toContain("需要先连接岗位商场账号");
+    expect(app.aicsMarketplace.roles).toEqual([]);
+  });
+
+  it("fails marketplace role sync clearly when Gateway is disconnected", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({ ok: true }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = false;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.updateComplete;
+
+    await app.refreshAicsMarketplaceRoles();
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(app.aicsMarketplace.error).toContain("本机连接未就绪");
+  });
+
+  it("does not fake marketplace role sync success when Gateway returns ok=false", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({
+      ok: false,
+      error: "marketplace unavailable",
+    }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.updateComplete;
+
+    await app.refreshAicsMarketplaceRoles();
+    await app.updateComplete;
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith("dijie.marketplace.roles.list", expect.any(Object));
+    expect(app.aicsMarketplace.error).toBe("岗位同步失败，请检查岗位商场连接状态。");
+    expect(app.aicsMarketplace.roles).toEqual([]);
+  });
+
+  it("submits the AICS role-builder handler through the Gateway RPC", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({
+      ok: true,
+      summary: "done",
+      executionId: "exec_role_builder_123",
+      executionEngine: "openclaw-native",
+      changedFiles: ["role_package/manifest.json"],
+    }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.updateComplete;
+
+    await app.runAicsRoleBuilder();
+    await app.updateComplete;
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith(
+      "dijie.roleBuilder.run",
+      expect.objectContaining({
+        request_zh: "生成一个客服质检岗位包",
+        confirm_brief: true,
+        role_build_brief_json: expect.stringContaining("客服质检岗位"),
+        execution_token: "token_123",
+        role_listing_id: "role_123",
+        entitlement_id: "ent_123",
+        device_id: "device_123",
+        workspace_ref: "workspace_123",
+        local_gateway_id: "gateway_123",
+        timeout_ms: 120000,
+      }),
+    );
+    expect(app.aicsRoleBuilder.error).toBeNull();
+    expect(app.aicsRoleBuilder.result).toMatchObject({
+      ok: true,
+      executionEngine: "openclaw-native",
+    });
+    expect(app.aicsRoleBuilder.form.executionId).toBe("exec_role_builder_123");
+  });
+
+  it("fails the AICS role-builder form before RPC when the execution token is missing", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({ ok: true }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app, { executionToken: "" });
+    await app.updateComplete;
+
+    await app.runAicsRoleBuilder();
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(app.aicsRoleBuilder.error).toContain("执行授权凭证不能为空");
+  });
+
+  it("requests an AICS execution token through the Gateway RPC and fills the form", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({
+      ok: true,
+      summary: "issued",
+      grant: {
+        executionId: "exec_123",
+        token: "short_lived_execution_token",
+      },
+    }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app, {
+      cloudAccessToken: "cloud_customer_token",
+      executionId: "",
+      executionToken: "",
+    });
+    await app.updateComplete;
+    await app.requestAicsExecutionToken();
+    await app.updateComplete;
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith("dijie.executionToken.request", {
+      cloud_access_token: "cloud_customer_token",
+      role_listing_id: "role_123",
+      entitlement_id: "ent_123",
+      device_id: "device_123",
+      workspace_ref: "workspace_123",
+      local_gateway_id: "gateway_123",
+    });
+    expect(app.aicsRoleBuilder.form.executionToken).toBe("short_lived_execution_token");
+    expect(app.aicsRoleBuilder.form.executionId).toBe("exec_123");
+    expect(app.aicsRoleBuilder.error).toBeNull();
+    expect(JSON.stringify(app.aicsRoleBuilder.result)).not.toContain("cloud_customer_token");
+  });
+
+  it("fails the AICS execution-token request before RPC when the cloud bearer is missing", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({ ok: true }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app, {
+      cloudAccessToken: "",
+      executionToken: "",
+    });
+    await app.updateComplete;
+    await app.requestAicsExecutionToken();
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(app.aicsRoleBuilder.error).toContain("云端授权凭证不能为空");
+  });
+
+  it("reads an AICS execution audit through Gateway without storing the cloud bearer in result", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({
+      ok: true,
+      summary: "read",
+      execution: {
+        executionId: "exec_123",
+        status: "completed",
+        note: "cloud_customer_token should be redacted if returned",
+      },
+    }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.updateComplete;
+    await app.readAicsExecutionAudit();
+    await app.updateComplete;
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith("dijie.executionAudit.read", {
+      cloud_access_token: "cloud_customer_token",
+      execution_id: "exec_123",
+    });
+    expect(app.aicsRoleBuilder.error).toBeNull();
+    expect(app.aicsRoleBuilder.result).toMatchObject({
+      ok: true,
+      execution: {
+        executionId: "exec_123",
+        status: "completed",
+        note: "[redacted_cloud_access_token] should be redacted if returned",
+      },
+    });
+    expect(JSON.stringify(app.aicsRoleBuilder.result)).not.toContain("cloud_customer_token");
+  });
+
+  it("fails the AICS execution audit read before RPC when executionId is missing", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({ ok: true }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app, { executionId: "" });
+    await app.updateComplete;
+    await app.readAicsExecutionAudit();
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(app.aicsRoleBuilder.error).toContain("执行编号不能为空");
+  });
+
+  it("fails the AICS execution audit read before RPC when the cloud bearer is missing", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({ ok: true }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app, { cloudAccessToken: "" });
+    await app.updateComplete;
+    await app.readAicsExecutionAudit();
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(app.aicsRoleBuilder.error).toContain("云端授权凭证不能为空");
+  });
+
+  it("fails the AICS execution audit read when Gateway is disconnected", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({ ok: true }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = false;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.readAicsExecutionAudit();
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(app.aicsRoleBuilder.error).toContain("本机连接未就绪");
+  });
+
+  it("surfaces Gateway ok=false audit read failures without storing the cloud bearer", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({
+      ok: false,
+      summary: "rejected",
+      error: "cloud_customer_token is not authorized",
+    }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.updateComplete;
+    await app.readAicsExecutionAudit();
+    await app.updateComplete;
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith("dijie.executionAudit.read", expect.any(Object));
+    expect(app.aicsRoleBuilder.error).toBe("审计记录查询失败。");
+    expect(JSON.stringify(app.aicsRoleBuilder.result)).not.toContain("cloud_customer_token");
+  });
+
+  it("surfaces Gateway ok=false executor failures in the AICS role-builder result", async () => {
+    const app = mountApp("/aics");
+    const request = vi.fn(async () => ({
+      ok: false,
+      summary: "failed",
+      error:
+        "No role-builder executor is configured. Configure OpenClaw-native runEmbeddedAgent or aics.localExecutorCommand before confirming a brief.",
+    }));
+    app.client = { request, stop: vi.fn() } as never;
+    app.connected = true;
+    fillAicsRoleBuilderRequiredFields(app);
+    await app.updateComplete;
+
+    await app.runAicsRoleBuilder();
+    await app.updateComplete;
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith("dijie.roleBuilder.run", expect.any(Object));
+    expect(app.aicsRoleBuilder.error).toBe("迭界AI生成请求失败。");
+    expect(app.aicsRoleBuilder.result).toMatchObject({ ok: false });
   });
 
   it("keeps the dashboard breadcrumb link inside the configured base path", async () => {
@@ -101,7 +672,7 @@ describe("control UI routing", () => {
       "dashboard-header .dashboard-header__breadcrumb-link",
       HTMLAnchorElement,
     );
-    expect(breadcrumb.getAttribute("href")).toBe("/ui/overview");
+    expect(breadcrumb.getAttribute("href")).toBe("/ui/aics");
   });
 
   it("renders the dreaming view on the /dreaming route", async () => {
@@ -453,7 +1024,7 @@ describe("control UI routing", () => {
 
     app.applySettings({
       ...app.settings,
-      navGroupsCollapsed: { ...app.settings.navGroupsCollapsed, chat: true },
+      navGroupsCollapsed: { ...app.settings.navGroupsCollapsed, aics: true },
     });
     await app.updateComplete;
 

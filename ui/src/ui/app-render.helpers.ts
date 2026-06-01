@@ -100,7 +100,7 @@ export function resolveDashboardHeaderContext(
     normalizeOptionalString(agent?.identity?.name) ??
     normalizeOptionalString(agent?.name) ??
     agentId;
-  return { agentLabel };
+  return { agentLabel: agentLabel === "main" ? "主系统" : agentLabel };
 }
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {

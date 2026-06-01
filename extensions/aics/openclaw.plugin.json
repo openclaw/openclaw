@@ -1,0 +1,122 @@
+{
+  "id": "aics",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "name": "迭界AI",
+  "description": "Adds 迭界AI main-system role-builder, marketplace bridge, and governance entrypoints to the OpenClaw-derived runtime.",
+  "contracts": {
+    "tools": [
+      "aics_status",
+      "dijie_execution_token_request",
+      "dijie_execution_audit_read",
+      "dijie_marketplace_roles_list",
+      "dijie_role_builder"
+    ],
+    "gatewayMethods": [
+      "dijie.execution.preflight",
+      "dijie.executionToken.request",
+      "dijie.executionAudit.read",
+      "dijie.marketplace.roles.list",
+      "dijie.roleBuilder.run"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "repoRoot": {
+        "type": "string"
+      },
+      "pythonBinary": {
+        "type": "string"
+      },
+      "rolePackageOutputRoot": {
+        "type": "string"
+      },
+      "allowWrites": {
+        "type": "boolean",
+        "default": false
+      },
+      "maxOutputChars": {
+        "type": "number",
+        "minimum": 1000,
+        "default": 12000
+      },
+      "executionTokenPublicKeyPem": {
+        "type": "string"
+      },
+      "localExecutorCommand": {
+        "type": "string"
+      },
+      "localExecutorArgs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "localExecutorModel": {
+        "type": "string"
+      },
+      "localExecutorProfile": {
+        "type": "string"
+      },
+      "codexBinary": {
+        "type": "string",
+        "description": "Deprecated compatibility alias for localExecutorCommand."
+      },
+      "codexModel": {
+        "type": "string",
+        "description": "Deprecated compatibility alias for localExecutorModel."
+      },
+      "codexProfile": {
+        "type": "string",
+        "description": "Deprecated compatibility alias for localExecutorProfile."
+      },
+      "localExecutorMode": {
+        "type": "string",
+        "enum": ["auto", "native", "subprocess"],
+        "default": "auto"
+      },
+      "cloudBaseUrl": {
+        "type": "string"
+      },
+      "cloudExecutionTokenUrl": {
+        "type": "string"
+      },
+      "cloudExecutionTokenPath": {
+        "type": "string",
+        "default": "/dijie/execution-token"
+      },
+      "cloudExecutionReadUrl": {
+        "type": "string"
+      },
+      "cloudExecutionReadPath": {
+        "type": "string",
+        "default": "/dijie/executions"
+      },
+      "cloudMarketplaceInstalledRolesUrl": {
+        "type": "string"
+      },
+      "cloudMarketplaceInstalledRolesPath": {
+        "type": "string",
+        "default": "/dijie/my-roles"
+      },
+      "cloudAuditUrl": {
+        "type": "string"
+      },
+      "cloudAuditPath": {
+        "type": "string"
+      },
+      "cloudAuditUploadEnabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "cloudAuditUploadRequired": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  }
+}

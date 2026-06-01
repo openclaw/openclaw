@@ -14,12 +14,13 @@ describe("TAB_GROUPS", () => {
     expect(SETTINGS_TABS.every((tab) => isSettingsTab(tab))).toBe(true);
   });
 
-  it("keeps channel management out of the primary control sidebar", () => {
+  it("keeps business workbench routes out of the primary control sidebar", () => {
+    const aics = TAB_GROUPS.find((group) => group.label === "aics");
     const control = TAB_GROUPS.find((group) => group.label === "control");
+    expect(aics?.tabs).toEqual(["aics", "workboard", "chat"]);
     expect(control?.tabs).toEqual([
       "overview",
       "activity",
-      "workboard",
       "instances",
       "sessions",
       "usage",

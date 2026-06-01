@@ -7,11 +7,11 @@ export class DashboardHeader extends LitElement {
     return this;
   }
 
-  @property() tab: Tab = "overview";
+  @property() tab: Tab = "aics";
   @property() basePath = "";
   @property() agentLabel = "";
 
-  private readonly handleOverviewClick = (event: MouseEvent) => {
+  private readonly handleHomeClick = (event: MouseEvent) => {
     if (
       event.defaultPrevented ||
       event.button !== 0 ||
@@ -24,7 +24,7 @@ export class DashboardHeader extends LitElement {
     }
     event.preventDefault();
     this.dispatchEvent(
-      new CustomEvent("navigate", { detail: "overview", bubbles: true, composed: true }),
+      new CustomEvent("navigate", { detail: "aics", bubbles: true, composed: true }),
     );
   };
 
@@ -37,10 +37,10 @@ export class DashboardHeader extends LitElement {
         <div class="dashboard-header__breadcrumb">
           <a
             class="dashboard-header__breadcrumb-link"
-            href=${pathForTab("overview", this.basePath)}
-            @click=${this.handleOverviewClick}
+            href=${pathForTab("aics", this.basePath)}
+            @click=${this.handleHomeClick}
           >
-            OpenClaw
+            迭界AI
           </a>
           ${agentLabel
             ? html`

@@ -27,6 +27,7 @@ const leadingSlashNormalizerCases = [
 describe("iconForTab", () => {
   it("returns stable icons for every tab", () => {
     expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, iconForTab(tab)]))).toEqual({
+      aics: "brain",
       chat: "messageSquare",
       overview: "barChart",
       activity: "activity",
@@ -63,14 +64,15 @@ describe("iconForTab", () => {
 describe("titleForTab", () => {
   it("returns expected titles for every tab", () => {
     expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, titleForTab(tab)]))).toEqual({
-      chat: "Chat",
+      aics: "Role Workbench",
+      chat: "Main Chat",
       overview: "Overview",
       activity: "Activity",
       workboard: "Workboard",
       channels: "Channels",
       instances: "Instances",
       sessions: "Sessions",
-      usage: "Usage",
+      usage: "Usage Records",
       cron: "Cron Jobs",
       agents: "Agents",
       skills: "Skills",
@@ -93,14 +95,15 @@ describe("titleForTab", () => {
 describe("subtitleForTab", () => {
   it("returns expected subtitles for every tab", () => {
     expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, subtitleForTab(tab)]))).toEqual({
-      chat: "Gateway chat for quick interventions.",
+      aics: "Your roles, recent work, and usage records.",
+      chat: "Start work in natural language.",
       overview: "Status, entry points, health.",
       activity: "Browser-local tool activity summaries.",
       workboard: "Agent work queue and session handoff.",
       channels: "Channels and settings.",
       instances: "Connected clients and nodes.",
       sessions: "Active sessions and defaults.",
-      usage: "API usage and costs.",
+      usage: "Conversation, role task, and cost records.",
       cron: "Wakeups and recurring runs.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
@@ -160,6 +163,7 @@ describe("normalizePath", () => {
 
 describe("pathForTab", () => {
   it("returns correct path without base", () => {
+    expect(pathForTab("aics")).toBe("/aics");
     expect(pathForTab("chat")).toBe("/chat");
     expect(pathForTab("overview")).toBe("/overview");
   });
@@ -173,6 +177,7 @@ describe("pathForTab", () => {
 describe("tabFromPath", () => {
   it("returns tab for valid path", () => {
     expect(tabFromPath("/chat")).toBe("chat");
+    expect(tabFromPath("/aics")).toBe("aics");
     expect(tabFromPath("/overview")).toBe("overview");
     expect(tabFromPath("/activity")).toBe("activity");
     expect(tabFromPath("/sessions")).toBe("sessions");
@@ -180,8 +185,8 @@ describe("tabFromPath", () => {
     expect(tabFromPath("/dreams")).toBe("dreams");
   });
 
-  it("returns chat for root path", () => {
-    expect(tabFromPath("/")).toBe("chat");
+  it("returns AICS for root path", () => {
+    expect(tabFromPath("/")).toBe("aics");
   });
 
   it("handles base paths", () => {
@@ -205,6 +210,7 @@ describe("inferBasePathFromPathname", () => {
   });
 
   it("returns empty string for direct tab path", () => {
+    expect(inferBasePathFromPathname("/aics")).toBe("");
     expect(inferBasePathFromPathname("/chat")).toBe("");
     expect(inferBasePathFromPathname("/overview")).toBe("");
     expect(inferBasePathFromPathname("/dreaming")).toBe("");
@@ -224,7 +230,7 @@ describe("inferBasePathFromPathname", () => {
 
 describe("TAB_GROUPS", () => {
   it("contains all expected groups", () => {
-    expect(TAB_GROUPS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
+    expect(TAB_GROUPS.map((g) => g.label)).toEqual(["aics", "control", "agent", "settings"]);
   });
 
   it("all tabs are unique", () => {

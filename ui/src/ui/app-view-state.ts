@@ -1,4 +1,5 @@
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
+import type { AicsConversationMode, AicsConversationStage } from "./aics-conversation-mode.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
@@ -50,6 +51,12 @@ import type {
   ToolsCatalogResult,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
+import type {
+  AicsMarketplaceRole,
+  AicsMarketplaceState,
+  AicsRoleBuilderForm,
+  AicsRoleBuilderState,
+} from "./views/aics.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
@@ -62,6 +69,19 @@ export type AppViewState = {
   onboarding: boolean;
   basePath: string;
   connected: boolean;
+  aicsRoleBuilder: AicsRoleBuilderState;
+  aicsMarketplace: AicsMarketplaceState;
+  aicsConversationMode: AicsConversationMode;
+  aicsConversationStage: AicsConversationStage;
+  setAicsConversationMode: (mode: AicsConversationMode) => void;
+  setAicsConversationStage: (stage: AicsConversationStage) => void;
+  startAicsDeveloperMode: () => void;
+  updateAicsRoleBuilderField: (field: keyof AicsRoleBuilderForm, value: string) => void;
+  refreshAicsMarketplaceRoles: () => Promise<void>;
+  useAicsMarketplaceRole: (role: AicsMarketplaceRole) => void;
+  requestAicsExecutionToken: () => Promise<void>;
+  readAicsExecutionAudit: () => Promise<void>;
+  runAicsRoleBuilder: () => Promise<void>;
   theme: ThemeName;
   themeMode: ThemeMode;
   themeResolved: ResolvedTheme;

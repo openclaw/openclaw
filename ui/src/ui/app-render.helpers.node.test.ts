@@ -531,6 +531,20 @@ describe("resolveDashboardHeaderContext", () => {
       } as unknown as AppViewState),
     ).toEqual({ agentLabel: "beta" });
   });
+
+  it("uses a Chinese label for the default main agent", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "main",
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "user",
+          agents: [],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "主系统" });
+  });
 });
 
 describe("isCronSessionKey", () => {

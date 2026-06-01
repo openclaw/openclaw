@@ -3,10 +3,10 @@ import type { IconName } from "./icons.js";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 export const TAB_GROUPS = [
-  { label: "chat", tabs: ["chat"] },
+  { label: "aics", tabs: ["aics", "workboard", "chat"] },
   {
     label: "control",
-    tabs: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
+    tabs: ["overview", "activity", "instances", "sessions", "usage", "cron"],
   },
   { label: "agent", tabs: ["agents", "skills", "skillWorkshop", "nodes", "dreams"] },
   {
@@ -16,6 +16,7 @@ export const TAB_GROUPS = [
 ] as const;
 
 export type Tab =
+  | "aics"
   | "agents"
   | "activity"
   | "overview"
@@ -54,6 +55,7 @@ export const SETTINGS_TABS = [
 ] as const satisfies readonly Tab[];
 
 const TAB_PATHS: Record<Tab, string> = {
+  aics: "/aics",
   agents: "/agents",
   activity: "/activity",
   overview: "/overview",
@@ -169,7 +171,7 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
     normalized = "/";
   }
   if (normalized === "/") {
-    return "chat";
+    return "aics";
   }
   return PATH_TO_TAB.get(normalized) ?? null;
 }
@@ -198,6 +200,8 @@ export function inferBasePathFromPathname(pathname: string): string {
 
 export function iconForTab(tab: Tab): IconName {
   switch (tab) {
+    case "aics":
+      return "brain";
     case "agents":
       return "folder";
     case "chat":

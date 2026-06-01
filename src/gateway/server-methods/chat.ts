@@ -2891,6 +2891,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId?: string;
       sessionId?: string;
       message: string;
+      modelPrompt?: string;
       thinking?: string;
       fastMode?: boolean;
       deliver?: boolean;
@@ -2944,12 +2945,26 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const sanitizedModelPromptResult =
+      typeof p.modelPrompt === "string" && p.modelPrompt.trim()
+        ? sanitizeChatSendMessageInput(p.modelPrompt)
+        : undefined;
+    if (sanitizedModelPromptResult && !sanitizedModelPromptResult.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, sanitizedModelPromptResult.error),
+      );
+      return;
+    }
     const systemReceiptResult = normalizeOptionalChatSystemReceipt(p.systemProvenanceReceipt);
     if (!systemReceiptResult.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, systemReceiptResult.error));
       return;
     }
     const inboundMessage = sanitizedMessageResult.message;
+    const modelPromptMessage =
+      sanitizedModelPromptResult?.ok === true ? sanitizedModelPromptResult.message : undefined;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
     const stopCommand = isChatStopCommandText(inboundMessage);
@@ -3307,9 +3322,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const commandSource = trimmedMessage.startsWith("/") ? "text" : undefined;
+      const modelParsedMessage = modelPromptMessage ?? parsedMessage;
       const messageForAgent = systemProvenanceReceipt
-        ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
-        : parsedMessage;
+        ? [systemProvenanceReceipt, modelParsedMessage].filter(Boolean).join("\n\n")
+        : modelParsedMessage;
       const {
         originatingChannel,
         originatingTo,

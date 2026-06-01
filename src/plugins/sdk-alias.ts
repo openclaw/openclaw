@@ -562,6 +562,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/gateway-protocol",
     packageDir: "gateway-protocol",
+    subpath: "dijie-execution-token",
+    srcFile: "dijie-execution-token.ts",
+    distFile: "dijie-execution-token.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
     subpath: "schema",
     srcFile: "schema.ts",
     distFile: "schema.mjs",

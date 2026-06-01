@@ -4,6 +4,12 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
+import {
+  resolveAicsConversationProtocol,
+  type AicsConversationMode,
+  type AicsConversationProtocol,
+  type AicsConversationStage,
+} from "../aics-conversation-mode.ts";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   getChatAttachmentPreviewUrl,
@@ -104,6 +110,9 @@ export type ChatProps = {
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
+  aicsMode?: AicsConversationMode;
+  aicsStage?: AicsConversationStage;
+  onAicsModeChange?: (mode: AicsConversationMode) => void;
   queue: ChatQueueItem[];
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
@@ -1130,6 +1139,92 @@ function tokenEstimate(draft: string): string | null {
   return `~${Math.ceil(draft.length / 4)} tokens`;
 }
 
+function renderAicsModeSwitch(props: ChatProps): TemplateResult | typeof nothing {
+  if (!props.onAicsModeChange) {
+    return nothing;
+  }
+  const mode = props.aicsMode ?? "user";
+  const currentProtocol = resolveAicsConversationProtocol(mode, props.aicsStage);
+  const options: Array<{
+    mode: AicsConversationMode;
+    label: string;
+    protocol: AicsConversationProtocol;
+    icon: TemplateResult;
+  }> = [
+    {
+      mode: "user",
+      label: "使用者模式",
+      protocol: resolveAicsConversationProtocol("user"),
+      icon: icons.messageSquare,
+    },
+    {
+      mode: "developer",
+      label: "开发者模式",
+      protocol: resolveAicsConversationProtocol(
+        "developer",
+        mode === "developer" ? props.aicsStage : undefined,
+      ),
+      icon: icons.wrench,
+    },
+  ];
+  return html`
+    <div class="agent-chat__aics-mode" aria-label="迭界AI对话模式">
+      <div
+        class="agent-chat__aics-mode-current"
+        data-aics-mode=${currentProtocol.mode}
+        data-aics-role=${currentProtocol.role}
+        data-aics-stage=${currentProtocol.stage}
+      >
+        <span>
+          <span class="agent-chat__aics-mode-meta-label">当前角色</span>
+          <strong>${currentProtocol.roleLabel}</strong>
+        </span>
+        <span>
+          <span class="agent-chat__aics-mode-meta-label">工作身份</span>
+          <strong>${currentProtocol.workIdentityLabel}</strong>
+        </span>
+        <span>
+          <span class="agent-chat__aics-mode-meta-label">当前流程阶段</span>
+          <strong>${currentProtocol.stageLabel}</strong>
+        </span>
+        <span>
+          <span class="agent-chat__aics-mode-meta-label">阶段说明</span>
+          <strong>${currentProtocol.stageDetail}</strong>
+        </span>
+      </div>
+      ${options.map(
+        (option) => html`
+          <button
+            type="button"
+            class="agent-chat__aics-mode-option ${mode === option.mode
+              ? "agent-chat__aics-mode-option--active"
+              : ""}"
+            aria-pressed=${mode === option.mode ? "true" : "false"}
+            @click=${() => props.onAicsModeChange?.(option.mode)}
+          >
+            <span class="agent-chat__aics-mode-icon" aria-hidden="true">${option.icon}</span>
+            <span>
+              <span class="agent-chat__aics-mode-label">${option.label}</span>
+              <span class="agent-chat__aics-mode-detail"
+                >当前角色：${option.protocol.roleLabel}</span
+              >
+              <span class="agent-chat__aics-mode-detail"
+                >工作身份：${option.protocol.workIdentityLabel}</span
+              >
+              <span class="agent-chat__aics-mode-detail"
+                >当前流程阶段：${option.protocol.stageLabel}</span
+              >
+              <span class="agent-chat__aics-mode-detail"
+                >阶段说明：${option.protocol.stageDetail}</span
+              >
+            </span>
+          </button>
+        `,
+      )}
+    </div>
+  `;
+}
+
 /**
  * Export chat markdown - delegates to shared utility.
  */
@@ -1860,7 +1955,8 @@ export function renderChat(props: ChatProps) {
         class="agent-chat__input"
         @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
       >
-        ${renderSlashMenu(requestUpdate, props, visibleDraft)} ${renderAttachmentPreview(props)}
+        ${renderAicsModeSwitch(props)} ${renderSlashMenu(requestUpdate, props, visibleDraft)}
+        ${renderAttachmentPreview(props)}
         <div class="agent-chat__composer-status-stack">
           ${renderFallbackIndicator(props.fallbackStatus)}
           ${renderCompactionIndicator(props.compactionStatus)}

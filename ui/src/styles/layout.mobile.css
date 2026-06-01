@@ -699,6 +699,18 @@
     margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
 
+  .agent-chat__aics-mode {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-chat__aics-mode-current {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-chat__aics-mode-detail {
+    white-space: normal;
+  }
+
   .agent-chat__toolbar {
     align-items: stretch;
     gap: 8px;

@@ -3,6 +3,14 @@ import { state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {
+  AICS_DEVELOPER_MODE_OPENING,
+  getDefaultAicsConversationStage,
+  resolveAicsConversationProtocol,
+  type AicsConversationMode,
+  type AicsConversationProtocol,
+  type AicsConversationStage,
+} from "./aics-conversation-mode.ts";
+import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
   handleNostrProfileCancel as handleNostrProfileCancelInternal,
@@ -143,6 +151,12 @@ import type {
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
+import type {
+  AicsMarketplaceRole,
+  AicsMarketplaceState,
+  AicsRoleBuilderForm,
+  AicsRoleBuilderState,
+} from "./views/aics.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 declare global {
@@ -154,6 +168,140 @@ declare global {
 const bootAssistantIdentity = normalizeAssistantIdentity({});
 const bootLocalUserIdentity = loadLocalUserIdentity();
 const FULL_MESSAGE_SIDEBAR_MAX_CHARS = 500_000;
+
+const DEFAULT_AICS_ROLE_BUILDER_FORM: AicsRoleBuilderForm = {
+  requestZh: "",
+  roleBuildBriefJson: "",
+  cloudAccessToken: "",
+  executionId: "",
+  executionToken: "",
+  roleListingId: "",
+  entitlementId: "",
+  deviceId: "",
+  workspaceRef: "",
+  localGatewayId: "",
+  developerId: "",
+  outputRoot: "",
+  timeoutMs: "120000",
+};
+
+const AICS_REQUIRED_ROLE_BUILDER_FIELDS: Array<[keyof AicsRoleBuilderForm, string]> = [
+  ["executionToken", "执行授权凭证不能为空；需要迭界AI岗位商场签发的一次执行授权。"],
+  ["roleListingId", "岗位编号不能为空。"],
+  ["entitlementId", "授权编号不能为空。"],
+  ["deviceId", "设备编号不能为空。"],
+  ["workspaceRef", "工作区编号不能为空。"],
+  ["localGatewayId", "本地连接编号不能为空。"],
+];
+
+const DEFAULT_AICS_MARKETPLACE_STATE: AicsMarketplaceState = {
+  roles: [],
+  loading: false,
+  error: null,
+  result: null,
+};
+
+function redactAicsCloudAccessTokenText(value: string, cloudAccessToken: string): string {
+  return cloudAccessToken
+    ? value.replaceAll(cloudAccessToken, "[redacted_cloud_access_token]")
+    : value;
+}
+
+function redactAicsCloudAccessTokenValue(value: unknown, cloudAccessToken: string): unknown {
+  if (typeof value === "string") {
+    return redactAicsCloudAccessTokenText(value, cloudAccessToken);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactAicsCloudAccessTokenValue(entry, cloudAccessToken));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => {
+      const normalizedKey = key.replaceAll("_", "").toLowerCase();
+      if (
+        normalizedKey === "cloudaccesstoken" ||
+        normalizedKey === "authorization" ||
+        normalizedKey === "bearertoken"
+      ) {
+        return [key, "[redacted_cloud_access_token]"];
+      }
+      return [key, redactAicsCloudAccessTokenValue(entry, cloudAccessToken)];
+    }),
+  );
+}
+
+function toAicsUserErrorMessage(value: unknown, fallback: string): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) {
+    return fallback;
+  }
+  return /[A-Za-z_]/.test(text) ? fallback : text;
+}
+
+function normalizeAicsMarketplaceRoles(value: unknown): AicsMarketplaceRole[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    const record = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+    if (!record) {
+      return [];
+    }
+    const roleRecord =
+      record.role && typeof record.role === "object" && !Array.isArray(record.role)
+        ? (record.role as Record<string, unknown>)
+        : record;
+    const id =
+      typeof roleRecord.id === "string" && roleRecord.id.trim()
+        ? roleRecord.id.trim()
+        : typeof roleRecord.roleListingId === "string" && roleRecord.roleListingId.trim()
+          ? roleRecord.roleListingId.trim()
+          : "";
+    const title =
+      typeof roleRecord.title === "string" && roleRecord.title.trim()
+        ? roleRecord.title.trim()
+        : typeof roleRecord.name === "string" && roleRecord.name.trim()
+          ? roleRecord.name.trim()
+          : "";
+    if (!id || !title) {
+      return [];
+    }
+    const entitlementId =
+      typeof record.entitlementId === "string" && record.entitlementId.trim()
+        ? record.entitlementId.trim()
+        : typeof record.orderGroupId === "string" && record.orderGroupId.trim()
+          ? record.orderGroupId.trim()
+          : "";
+    const detail =
+      typeof roleRecord.description === "string" && roleRecord.description.trim()
+        ? roleRecord.description.trim()
+        : typeof record.authorizedAt === "string" && record.authorizedAt.trim()
+          ? `授权时间 ${record.authorizedAt.trim()}`
+          : typeof roleRecord.listingStatus === "string" && roleRecord.listingStatus.trim()
+            ? roleRecord.listingStatus.trim()
+            : typeof record.status === "string" && record.status.trim()
+              ? record.status.trim()
+              : undefined;
+    const status =
+      typeof roleRecord.listingStatus === "string" && roleRecord.listingStatus.trim()
+        ? roleRecord.listingStatus.trim()
+        : typeof record.status === "string" && record.status.trim()
+          ? record.status.trim()
+          : undefined;
+    return [
+      {
+        id,
+        title,
+        detail,
+        status,
+        roleListingId: id,
+        ...(entitlementId ? { entitlementId } : {}),
+      },
+    ];
+  });
+}
 
 function isSidebarMarkdownLike(content: SidebarContent | null): content is SidebarContent {
   return Boolean(content && (content.kind === "markdown" || content.kind === "canvas"));
@@ -199,9 +347,20 @@ export class OpenClawApp extends LitElement {
   @state() password = "";
   @state() loginShowGatewayToken = false;
   @state() loginShowGatewayPassword = false;
-  @state() tab: Tab = "chat";
+  @state() tab: Tab = "aics";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
+  @state() aicsRoleBuilder: AicsRoleBuilderState = {
+    form: { ...DEFAULT_AICS_ROLE_BUILDER_FORM },
+    running: false,
+    tokenRunning: false,
+    auditRunning: false,
+    result: null,
+    error: null,
+  };
+  @state() aicsMarketplace: AicsMarketplaceState = { ...DEFAULT_AICS_MARKETPLACE_STATE };
+  @state() aicsConversationMode: AicsConversationMode = "user";
+  @state() aicsConversationStage: AicsConversationStage = "ready";
   @state() theme: ThemeName = this.settings.theme ?? "claw";
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
@@ -919,6 +1078,401 @@ export class OpenClawApp extends LitElement {
       this.setChatMobileControlsOpen(false);
     }
     this.navDrawerOpen = false;
+  }
+
+  updateAicsRoleBuilderField(field: keyof AicsRoleBuilderForm, value: string) {
+    this.aicsRoleBuilder = {
+      ...this.aicsRoleBuilder,
+      form: {
+        ...this.aicsRoleBuilder.form,
+        [field]: value,
+      },
+      error: null,
+    };
+  }
+
+  setAicsConversationMode(mode: AicsConversationMode) {
+    this.aicsConversationMode = mode;
+    this.aicsConversationStage = getDefaultAicsConversationStage(mode);
+    if (mode === "developer" && !this.chatMessage.trim()) {
+      this.chatMessage = AICS_DEVELOPER_MODE_OPENING;
+    }
+    if (mode === "user" && this.chatMessage.trim() === AICS_DEVELOPER_MODE_OPENING) {
+      this.chatMessage = "";
+    }
+  }
+
+  setAicsConversationStage(stage: AicsConversationStage) {
+    this.aicsConversationStage = resolveAicsConversationProtocol(
+      this.aicsConversationMode,
+      stage,
+    ).stage;
+  }
+
+  get aicsConversationProtocol(): AicsConversationProtocol {
+    return resolveAicsConversationProtocol(this.aicsConversationMode, this.aicsConversationStage);
+  }
+
+  startAicsDeveloperMode() {
+    this.setAicsConversationMode("developer");
+    this.setTab("chat");
+  }
+
+  useAicsMarketplaceRole(role: AicsMarketplaceRole) {
+    const roleTitle = role.title.trim();
+    if (!roleTitle) {
+      return;
+    }
+    const roleListingId = (role.roleListingId ?? role.id).trim();
+    const entitlementId = role.entitlementId?.trim() ?? "";
+    this.aicsRoleBuilder = {
+      ...this.aicsRoleBuilder,
+      form: {
+        ...this.aicsRoleBuilder.form,
+        roleListingId: roleListingId || this.aicsRoleBuilder.form.roleListingId,
+        entitlementId: entitlementId || this.aicsRoleBuilder.form.entitlementId,
+      },
+      error: null,
+    };
+    this.setAicsConversationMode("user");
+    const roleInstruction = `使用「${roleTitle}」这个岗位，帮我开始处理任务。`;
+    const existingDraft = this.chatMessage.trim();
+    this.chatMessage = existingDraft ? `${roleInstruction}\n\n${existingDraft}` : roleInstruction;
+    this.setTab("chat");
+  }
+
+  async refreshAicsMarketplaceRoles() {
+    if (this.aicsMarketplace.loading) {
+      return;
+    }
+    if (!this.client || !this.connected) {
+      this.aicsMarketplace = {
+        ...this.aicsMarketplace,
+        error: "本机连接未就绪，暂时不能同步岗位。",
+      };
+      return;
+    }
+
+    const cloudAccessToken = this.aicsRoleBuilder.form.cloudAccessToken.trim();
+    if (!cloudAccessToken) {
+      this.aicsMarketplace = {
+        ...this.aicsMarketplace,
+        error: "需要先连接岗位商场账号，才能同步已安装岗位。",
+      };
+      return;
+    }
+
+    this.aicsMarketplace = {
+      ...this.aicsMarketplace,
+      loading: true,
+      error: null,
+    };
+    try {
+      const payload: Record<string, unknown> = {
+        cloud_access_token: cloudAccessToken,
+      };
+      if (this.aicsRoleBuilder.form.workspaceRef.trim()) {
+        payload.workspace_ref = this.aicsRoleBuilder.form.workspaceRef.trim();
+      }
+      if (this.aicsRoleBuilder.form.deviceId.trim()) {
+        payload.device_id = this.aicsRoleBuilder.form.deviceId.trim();
+      }
+      const result = await this.client.request("dijie.marketplace.roles.list", payload);
+      const safeResult = redactAicsCloudAccessTokenValue(result, cloudAccessToken);
+      const resultRecord =
+        safeResult && typeof safeResult === "object" ? (safeResult as Record<string, unknown>) : {};
+      const roles = normalizeAicsMarketplaceRoles(resultRecord.roles);
+      this.aicsMarketplace = {
+        roles: resultRecord.ok === false ? [] : roles,
+        loading: false,
+        result: safeResult,
+        error:
+          resultRecord.ok === false
+            ? toAicsUserErrorMessage(
+                resultRecord.error ?? resultRecord.summary,
+                "岗位同步失败，请检查岗位商场连接状态。",
+              )
+            : roles.length > 0
+              ? null
+              : "岗位商场没有返回可显示的岗位。",
+      };
+    } catch (error) {
+      this.aicsMarketplace = {
+        ...this.aicsMarketplace,
+        loading: false,
+        error: toAicsUserErrorMessage(
+          error instanceof Error ? error.message : String(error),
+          "岗位同步失败，请检查岗位商场连接状态。",
+        ),
+      };
+    }
+  }
+
+  async requestAicsExecutionToken() {
+    if (this.aicsRoleBuilder.tokenRunning || this.aicsRoleBuilder.running) {
+      return;
+    }
+    if (!this.client || !this.connected) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        error: "本机连接未就绪，暂时不能获取执行授权。",
+      };
+      return;
+    }
+
+    const form = this.aicsRoleBuilder.form;
+    const requiredFields: Array<[keyof AicsRoleBuilderForm, string]> = [
+      ["cloudAccessToken", "云端授权凭证不能为空；需要岗位商场登录态对应的授权。"],
+      ["roleListingId", "岗位编号不能为空。"],
+      ["entitlementId", "授权编号不能为空。"],
+      ["deviceId", "设备编号不能为空。"],
+      ["workspaceRef", "工作区编号不能为空。"],
+      ["localGatewayId", "本地连接编号不能为空。"],
+    ];
+    for (const [field, message] of requiredFields) {
+      if (!form[field].trim()) {
+        this.aicsRoleBuilder = {
+          ...this.aicsRoleBuilder,
+          error: message,
+        };
+        return;
+      }
+    }
+
+    this.aicsRoleBuilder = {
+      ...this.aicsRoleBuilder,
+      tokenRunning: true,
+      error: null,
+    };
+    try {
+      const result = await this.client.request("dijie.executionToken.request", {
+        cloud_access_token: form.cloudAccessToken.trim(),
+        role_listing_id: form.roleListingId.trim(),
+        entitlement_id: form.entitlementId.trim(),
+        device_id: form.deviceId.trim(),
+        workspace_ref: form.workspaceRef.trim(),
+        local_gateway_id: form.localGatewayId.trim(),
+      });
+      const resultRecord =
+        result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+      const grant =
+        resultRecord.grant && typeof resultRecord.grant === "object"
+          ? (resultRecord.grant as Record<string, unknown>)
+          : {};
+      const executionToken = typeof grant.token === "string" ? grant.token : "";
+      const executionId = typeof grant.executionId === "string" ? grant.executionId : "";
+      const safeResult = redactAicsCloudAccessTokenValue(result, form.cloudAccessToken.trim());
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        tokenRunning: false,
+        result: safeResult,
+        form: executionToken
+          ? {
+              ...this.aicsRoleBuilder.form,
+              executionToken,
+              executionId: executionId || this.aicsRoleBuilder.form.executionId,
+            }
+          : this.aicsRoleBuilder.form,
+        error:
+          resultRecord.ok === false
+            ? toAicsUserErrorMessage(
+                resultRecord.error ?? resultRecord.summary,
+                "迭界AI执行授权请求失败。",
+              )
+            : executionToken
+              ? null
+              : "迭界AI执行授权返回不完整。",
+      };
+    } catch (error) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        tokenRunning: false,
+        error: toAicsUserErrorMessage(
+          error instanceof Error ? error.message : String(error),
+          "执行授权请求失败，请检查本机连接和岗位商场状态。",
+        ),
+      };
+    }
+  }
+
+  async readAicsExecutionAudit() {
+    if (
+      this.aicsRoleBuilder.auditRunning ||
+      this.aicsRoleBuilder.tokenRunning ||
+      this.aicsRoleBuilder.running
+    ) {
+      return;
+    }
+    if (!this.client || !this.connected) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        error: "本机连接未就绪，暂时不能查询审计记录。",
+      };
+      return;
+    }
+
+    const form = this.aicsRoleBuilder.form;
+    const cloudAccessToken = form.cloudAccessToken.trim();
+    const executionId = form.executionId.trim();
+    if (!cloudAccessToken) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        error: "云端授权凭证不能为空；需要岗位商场登录态对应的授权。",
+      };
+      return;
+    }
+    if (!executionId) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        error: "执行编号不能为空；需要先获取执行授权或填写要查询的执行编号。",
+      };
+      return;
+    }
+
+    this.aicsRoleBuilder = {
+      ...this.aicsRoleBuilder,
+      auditRunning: true,
+      error: null,
+    };
+    try {
+      const result = await this.client.request("dijie.executionAudit.read", {
+        cloud_access_token: cloudAccessToken,
+        execution_id: executionId,
+      });
+      const safeResult = redactAicsCloudAccessTokenValue(result, cloudAccessToken);
+      const resultRecord =
+        safeResult && typeof safeResult === "object" ? (safeResult as { ok?: unknown }) : {};
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        auditRunning: false,
+        result: safeResult,
+        error:
+          resultRecord.ok === false
+            ? toAicsUserErrorMessage(
+                (safeResult as { error?: unknown; summary?: unknown }).error ??
+                  (safeResult as { summary?: unknown }).summary,
+                "审计记录查询失败。",
+              )
+            : null,
+      };
+    } catch (error) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        auditRunning: false,
+        error: toAicsUserErrorMessage(
+          error instanceof Error ? error.message : String(error),
+          "审计记录查询失败，请检查本机连接和岗位商场状态。",
+        ),
+      };
+    }
+  }
+
+  async runAicsRoleBuilder() {
+    if (this.aicsRoleBuilder.running) {
+      return;
+    }
+    if (!this.client || !this.connected) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        error: "本机连接未就绪，暂时不能启动生成。",
+      };
+      return;
+    }
+
+    const form = this.aicsRoleBuilder.form;
+    try {
+      if (!form.requestZh.trim()) {
+        throw new Error("中文需求不能为空。");
+      }
+      if (!form.roleBuildBriefJson.trim()) {
+        throw new Error("岗位说明不能为空。");
+      }
+      const brief = JSON.parse(form.roleBuildBriefJson);
+      if (!brief || typeof brief !== "object" || Array.isArray(brief)) {
+        throw new Error("岗位说明格式不正确。");
+      }
+      for (const [field, message] of AICS_REQUIRED_ROLE_BUILDER_FIELDS) {
+        if (!form[field].trim()) {
+          throw new Error(message);
+        }
+      }
+    } catch (error) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      return;
+    }
+
+    const timeoutMs = Number.parseInt(form.timeoutMs.trim(), 10);
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 300000) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        error: "超时时间必须是 1000 到 300000 之间的整数。",
+      };
+      return;
+    }
+
+    const payload: Record<string, unknown> = {
+      request_zh: form.requestZh.trim(),
+      confirm_brief: true,
+      role_build_brief_json: form.roleBuildBriefJson.trim(),
+      execution_token: form.executionToken.trim(),
+      role_listing_id: form.roleListingId.trim(),
+      entitlement_id: form.entitlementId.trim(),
+      device_id: form.deviceId.trim(),
+      workspace_ref: form.workspaceRef.trim(),
+      local_gateway_id: form.localGatewayId.trim(),
+    };
+    if (form.developerId.trim()) {
+      payload.developer_id = form.developerId.trim();
+    }
+    if (form.outputRoot.trim()) {
+      payload.output_root = form.outputRoot.trim();
+    }
+    payload.timeout_ms = timeoutMs;
+
+    this.aicsRoleBuilder = {
+      ...this.aicsRoleBuilder,
+      running: true,
+      result: null,
+      error: null,
+    };
+    try {
+      const result = await this.client.request("dijie.roleBuilder.run", payload);
+      const resultRecord = result && typeof result === "object" ? (result as { ok?: unknown }) : {};
+      const executionId =
+        result &&
+        typeof result === "object" &&
+        typeof (result as { executionId?: unknown }).executionId === "string"
+          ? (result as { executionId: string }).executionId
+          : "";
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        running: false,
+        result,
+        form: executionId
+          ? {
+              ...this.aicsRoleBuilder.form,
+              executionId,
+            }
+          : this.aicsRoleBuilder.form,
+        error:
+          resultRecord.ok === false
+            ? toAicsUserErrorMessage(
+                (result as { error?: unknown; summary?: unknown }).error ??
+                  (result as { summary?: unknown }).summary,
+                "迭界AI生成请求失败。",
+              )
+            : null,
+      };
+    } catch (error) {
+      this.aicsRoleBuilder = {
+        ...this.aicsRoleBuilder,
+        running: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   setChatMobileControlsOpen(

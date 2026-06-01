@@ -181,6 +181,7 @@ import {
   resolveModelPrimary,
   sortLocaleStrings,
 } from "./views/agents-utils.ts";
+import { renderAicsDashboard } from "./views/aics.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
 import { getPresetById } from "./views/config-presets.ts";
@@ -2077,11 +2078,11 @@ export function renderApp(state: AppViewState) {
                       <img
                         class="sidebar-brand__logo"
                         src="${agentLogoUrl(basePath)}"
-                        alt="OpenClaw"
+                        alt="迭界AI"
                       />
                       <span class="sidebar-brand__copy">
-                        <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
-                        <span class="sidebar-brand__title">OpenClaw</span>
+                        <span class="sidebar-brand__eyebrow">主系统</span>
+                        <span class="sidebar-brand__title">迭界AI</span>
                       </span>
                     `}
               </div>
@@ -2261,6 +2262,23 @@ export function renderApp(state: AppViewState) {
                 ${headerError ? html`<div class="pill danger">${headerError}</div>` : nothing}
               </div>
             </section>`}
+        ${state.tab === "aics"
+          ? renderAicsDashboard({
+              connected: state.connected,
+              version: state.hello?.server?.version ?? "",
+              roleBuilder: state.aicsRoleBuilder,
+              marketplace: state.aicsMarketplace,
+              onNavigate: (tab) => state.setTab(tab),
+              onRoleBuilderFieldChange: (field, value) =>
+                state.updateAicsRoleBuilderField(field, value),
+              onMarketplaceRolesRefresh: () => state.refreshAicsMarketplaceRoles(),
+              onMarketplaceRoleUse: (role) => state.useAicsMarketplaceRole(role),
+              onDeveloperModeStart: () => state.startAicsDeveloperMode(),
+              onExecutionTokenRequest: () => state.requestAicsExecutionToken(),
+              onExecutionAuditRead: () => state.readAicsExecutionAudit(),
+              onRoleBuilderRun: () => state.runAicsRoleBuilder(),
+            })
+          : nothing}
         ${state.tab === "overview"
           ? renderOverview({
               connected: state.connected,
@@ -3175,6 +3193,9 @@ export function renderApp(state: AppViewState) {
                   stream: state.chatStream,
                   streamStartedAt: state.chatStreamStartedAt,
                   draft: state.chatMessage,
+                  aicsMode: state.aicsConversationMode,
+                  aicsStage: state.aicsConversationStage,
+                  onAicsModeChange: (mode) => state.setAicsConversationMode(mode),
                   queue: state.chatQueue,
                   realtimeTalkActive: state.realtimeTalkActive,
                   realtimeTalkStatus: state.realtimeTalkStatus,

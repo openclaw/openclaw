@@ -10,6 +10,7 @@ export type ChatAttachment = {
 export type ChatQueueItem = {
   id: string;
   text: string;
+  apiText?: string;
   createdAt: number;
   kind?: "queued" | "steered";
   attachments?: ChatAttachment[];

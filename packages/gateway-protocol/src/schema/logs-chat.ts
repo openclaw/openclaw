@@ -66,6 +66,7 @@ export const ChatSendParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     sessionId: Type.Optional(NonEmptyString),
     message: Type.String(),
+    modelPrompt: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
     fastMode: Type.Optional(Type.Boolean()),
     deliver: Type.Optional(Type.Boolean()),
