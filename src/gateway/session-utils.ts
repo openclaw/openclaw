@@ -2598,6 +2598,18 @@ function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefin
   );
 }
 
+function isSpawnChildSessionEntry(key: string, entry: SessionEntry | undefined): boolean {
+  if (key.includes(":subagent:")) {
+    return true;
+  }
+  return Boolean(
+    normalizeOptionalString(entry?.spawnedBy) ||
+    normalizeOptionalString(entry?.parentSessionKey) ||
+    typeof entry?.spawnDepth === "number" ||
+    normalizeOptionalString(entry?.subagentRole),
+  );
+}
+
 function selectSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -2607,7 +2619,10 @@ function selectSessionEntries(params: {
   getRowContext?: SessionListRowContextProvider;
   defaultLimit?: number;
 }): SessionEntrySelection {
-  const filtered = filterSessionEntries(params);
+  let filtered = filterSessionEntries(params);
+  if (params.opts.includeSpawnChildren === false) {
+    filtered = filtered.filter(([key, entry]) => !isSpawnChildSessionEntry(key, entry));
+  }
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);

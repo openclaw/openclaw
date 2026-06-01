@@ -62,6 +62,11 @@ export const SessionsListParamsSchema = Type.Object(
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
     /**
+     * Include spawned subagent child sessions in broad listings. Chat pickers can
+     * disable this so pagination/counts are based on user-navigable sessions.
+     */
+    includeSpawnChildren: Type.Optional(Type.Boolean()),
+    /**
      * Limit returned agent-scoped rows to agents currently present in config.
      * Broad disk discovery remains the default for recovery/ACP consumers.
      */

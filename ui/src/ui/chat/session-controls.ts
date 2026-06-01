@@ -285,6 +285,7 @@ function createChatSessionPickerRequestParams(
   const params: Record<string, unknown> = {
     includeGlobal: overrides.includeGlobal,
     includeUnknown: overrides.includeUnknown,
+    includeSpawnChildren: false,
     configuredAgentsOnly: overrides.configuredAgentsOnly,
     limit: overrides.limit,
   };

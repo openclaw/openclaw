@@ -1813,6 +1813,7 @@ describe("chat session controls", () => {
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
       search: "telegram",
@@ -1878,6 +1879,7 @@ describe("chat session controls", () => {
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
       search: "tele",
@@ -2026,6 +2028,7 @@ describe("chat session controls", () => {
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
     });
@@ -2070,6 +2073,7 @@ describe("chat session controls", () => {
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
       search: "tele",
@@ -2082,6 +2086,7 @@ describe("chat session controls", () => {
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
       search: "telegram",
@@ -2168,6 +2173,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       configuredAgentsOnly: true,
+      includeSpawnChildren: false,
       includeGlobal: true,
       includeUnknown: true,
       limit: 50,
@@ -2250,6 +2256,7 @@ describe("chat session controls", () => {
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
     });
@@ -2257,6 +2264,7 @@ describe("chat session controls", () => {
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
       offset: 2,
@@ -2306,6 +2314,7 @@ describe("chat session controls", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
     });
@@ -2386,6 +2395,7 @@ describe("chat session controls", () => {
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
     });
@@ -2393,6 +2403,7 @@ describe("chat session controls", () => {
       agentId: "ops",
       configuredAgentsOnly: true,
       includeGlobal: true,
+      includeSpawnChildren: false,
       includeUnknown: true,
       limit: 50,
     });

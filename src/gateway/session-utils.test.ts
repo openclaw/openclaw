@@ -197,6 +197,73 @@ describe("gateway session utils", () => {
     expect(listed.hasMore).toBe(true);
   });
 
+  test("session lists can exclude spawned children before counting and paging", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries([
+      [
+        "agent:main:subagent:newest",
+        {
+          sessionId: "subagent-newest",
+          updatedAt: 1_000,
+          spawnedBy: "agent:main:main",
+        } satisfies SessionEntry,
+      ],
+      [
+        "agent:main:main",
+        {
+          sessionId: "main",
+          updatedAt: 900,
+        } satisfies SessionEntry,
+      ],
+      [
+        "agent:main:subagent:older",
+        {
+          sessionId: "subagent-older",
+          updatedAt: 800,
+          parentSessionKey: "agent:main:main",
+        } satisfies SessionEntry,
+      ],
+      [
+        "agent:main:telegram:direct:work",
+        {
+          sessionId: "work",
+          updatedAt: 700,
+          chatType: "direct",
+        } satisfies SessionEntry,
+      ],
+      [
+        "agent:main:discord:group:dev",
+        {
+          sessionId: "group",
+          updatedAt: 600,
+          chatType: "group",
+        } satisfies SessionEntry,
+      ],
+    ]);
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: {
+        agentId: "main",
+        includeGlobal: false,
+        includeUnknown: false,
+        includeSpawnChildren: false,
+        limit: 2,
+      },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+      "agent:main:telegram:direct:work",
+    ]);
+    expect(listed.count).toBe(2);
+    expect(listed.totalCount).toBe(3);
+    expect(listed.nextOffset).toBe(2);
+    expect(listed.hasMore).toBe(true);
+  });
+
   test("session list search includes direct-session origin display labels", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const store = {
