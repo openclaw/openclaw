@@ -1647,28 +1647,30 @@ function isGenericDailyHeadingForPromotion(heading: string): boolean {
   return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
-function findRelocatedDailyHeading(lines: string[], startLine: number): string | null {
-  for (let index = Math.max(0, startLine - 2); index >= 0; index -= 1) {
+function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
+  const headings: (string | null)[] = Array.from({ length: lines.length + 1 }, () => null);
+  let currentHeading: string | null = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    headings[index + 1] = currentHeading;
     const line = lines[index] ?? "";
     if (DREAMING_FENCE_START_RE.test(line) || DREAMING_FENCE_END_RE.test(line)) {
-      return null;
+      currentHeading = null;
+      continue;
     }
     if (/^#{1,6}\s+.+$/.test(line.trim())) {
-      return normalizeDailyHeadingForPromotion(line);
+      currentHeading = normalizeDailyHeadingForPromotion(line);
     }
   }
-  return null;
+  return headings;
 }
 
 function buildListMarkerFreeMatchSnippet(
-  lines: string[],
-  startLine: number,
+  heading: string | null,
   listMarkerFreeSnippet: string,
 ): string {
   if (!listMarkerFreeSnippet) {
     return listMarkerFreeSnippet;
   }
-  const heading = findRelocatedDailyHeading(lines, startLine);
   return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
 }
 
@@ -1751,6 +1753,7 @@ function relocateCandidateRange(
   }
 
   const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
+  const headingLookup = buildRelocatedDailyHeadingLookup(lines);
   let bestMatch:
     | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
     | undefined;
@@ -1762,8 +1765,7 @@ function relocateCandidateRange(
       const comparison = compareCandidateWindow(targetSnippet, snippet);
       const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
       const listMarkerFreeMatchSnippet = buildListMarkerFreeMatchSnippet(
-        lines,
-        startLine,
+        headingLookup[startLine] ?? null,
         listMarkerFreeSnippet,
       );
       const listMarkerFreeComparison =
