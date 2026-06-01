@@ -1712,6 +1712,28 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         return trace.setSpanContext(otelContextApi.active(), activeParentSpan.spanContext());
       };
+      const activeInternalOrTrustedContext = (
+        evt: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        if (!traceContext) {
+          return undefined;
+        }
+        const activeSpan =
+          (traceContext.spanId
+            ? (activeTrustedSpans.get(traceContext.spanId) ??
+              activeTrustedSpanAliases.get(traceContext.spanId))
+            : undefined) ??
+          (traceContext.parentSpanId
+            ? (activeTrustedSpans.get(traceContext.parentSpanId) ??
+              activeTrustedSpanAliases.get(traceContext.parentSpanId))
+            : undefined);
+        if (activeSpan) {
+          return trace.setSpanContext(otelContextApi.active(), activeSpan.spanContext());
+        }
+        return internalOrTrustedParentContext(evt, metadata);
+      };
       const trackTrustedSpan = (
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
@@ -2096,6 +2118,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const recordMessageDeliveryCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "message.delivery.completed" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
           ...messageDeliveryAttrs(evt),
@@ -2112,13 +2135,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             "openclaw.delivery.result_count": evt.resultCount,
           },
           evt.durationMs,
-          { endTimeMs: evt.ts },
+          { parentContext: activeInternalOrTrustedContext(evt, metadata), endTimeMs: evt.ts },
         );
         span.end(evt.ts);
       };
 
       const recordMessageDeliveryError = (
         evt: Extract<DiagnosticEventPayload, { type: "message.delivery.error" }>,
+        metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
           ...messageDeliveryAttrs(evt),
@@ -2130,6 +2154,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           return;
         }
         const span = spanWithDuration("openclaw.message.delivery", attrs, evt.durationMs, {
+          parentContext: activeInternalOrTrustedContext(evt, metadata),
           endTimeMs: evt.ts,
         });
         span.setStatus({
@@ -3175,10 +3200,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordMessageDeliveryStarted(evt);
               return;
             case "message.delivery.completed":
-              recordMessageDeliveryCompleted(evt);
+              recordMessageDeliveryCompleted(evt, metadata);
               return;
             case "message.delivery.error":
-              recordMessageDeliveryError(evt);
+              recordMessageDeliveryError(evt, metadata);
               return;
             case "talk.event":
               recordTalkEvent(evt, metadata);

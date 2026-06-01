@@ -1,6 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const telemetryState = vi.hoisted(() => {
+  type TestSpanContext = {
+    traceId: string;
+    spanId: string;
+    traceFlags: number;
+  };
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
   const spans: Array<{
@@ -9,7 +14,7 @@ const telemetryState = vi.hoisted(() => {
     end: ReturnType<typeof vi.fn>;
     setAttributes: ReturnType<typeof vi.fn>;
     setStatus: ReturnType<typeof vi.fn>;
-    spanContext: ReturnType<typeof vi.fn>;
+    spanContext: ReturnType<typeof vi.fn<() => TestSpanContext>>;
   }> = [];
   const tracer = {
     startSpan: vi.fn((name: string, _opts?: unknown, _ctx?: unknown) => {
@@ -20,7 +25,7 @@ const telemetryState = vi.hoisted(() => {
         end: vi.fn(),
         setAttributes: vi.fn(),
         setStatus: vi.fn(),
-        spanContext: vi.fn(() => ({
+        spanContext: vi.fn<() => TestSpanContext>(() => ({
           traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
           spanId,
           traceFlags: 1,
@@ -163,9 +168,13 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { runWithDiagnosticTraceContext } from "../../../src/infra/diagnostic-trace-context.js";
-import { logMessageDispatchStarted, logMessageProcessed } from "../../../src/logging/diagnostic.js";
+import {
+  emitInternalDiagnosticEventForTest,
+  logMessageDispatchStarted,
+  logMessageProcessed,
+  onTrustedInternalDiagnosticEvent,
+  runWithDiagnosticTraceContext,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
@@ -252,6 +261,16 @@ function startedSpanCall(name: string) {
 
 function startedSpanOptions(name: string) {
   return startedSpanCall(name)?.[1];
+}
+
+function startedSpanParentContexts(name: string) {
+  return telemetryState.tracer.startSpan.mock.calls
+    .filter((call) => call[0] === name)
+    .map(
+      (call) =>
+        (call[2] as { spanContext?: { traceId?: string; spanId?: string } } | undefined)
+          ?.spanContext,
+    );
 }
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, callIndex = 0): unknown[] {
@@ -2799,6 +2818,97 @@ describe("diagnostics-otel service", () => {
     expect(parentBySpanName["openclaw.model.usage"]?.spanId).toBe(harnessSpanContext.spanId);
     expect(messageSpanContext.traceId).toBe(TRACE_ID);
     expect(harnessSpanContext.traceId).toBe(TRACE_ID);
+    await service.stop?.(ctx);
+  });
+
+  test("parents outbound delivery spans under the active message lifecycle span", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    const messageTrace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: CHILD_SPAN_ID,
+      parentSpanId: SPAN_ID,
+      traceFlags: "01",
+    });
+
+    runWithDiagnosticTraceContext(messageTrace, () => {
+      logMessageDispatchStarted({
+        channel: "slack",
+        sessionKey: "agent:main:slack:channel:c1",
+        source: "replyResolver",
+      });
+      emitInternalDiagnosticEventForTest({
+        type: "message.delivery.completed",
+        channel: "slack",
+        deliveryKind: "text",
+        sessionKey: "agent:main:slack:channel:c1",
+        durationMs: 15,
+        resultCount: 1,
+      });
+      emitInternalDiagnosticEventForTest({
+        type: "message.delivery.error",
+        channel: "slack",
+        deliveryKind: "media",
+        sessionKey: "agent:main:slack:channel:c1",
+        durationMs: 25,
+        errorCategory: "network",
+      });
+      logMessageProcessed({
+        channel: "slack",
+        sessionKey: "agent:main:slack:channel:c1",
+        durationMs: 120,
+        outcome: "completed",
+      });
+    });
+    await flushDiagnosticEvents();
+
+    const messageSpanContext = spanByName("openclaw.message.processed").spanContext();
+    const deliveryParentContexts = startedSpanParentContexts("openclaw.message.delivery");
+
+    expect(deliveryParentContexts).toHaveLength(2);
+    expect(deliveryParentContexts[0]?.traceId).toBe(TRACE_ID);
+    expect(deliveryParentContexts[0]?.spanId).toBe(messageSpanContext.spanId);
+    expect(deliveryParentContexts[1]?.traceId).toBe(TRACE_ID);
+    expect(deliveryParentContexts[1]?.spanId).toBe(messageSpanContext.spanId);
+    await service.stop?.(ctx);
+  });
+
+  test("correlates skipped duplicate message lifecycle helpers to the active inbound trace", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    const messageTrace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: CHILD_SPAN_ID,
+      parentSpanId: SPAN_ID,
+      traceFlags: "01",
+    });
+
+    runWithDiagnosticTraceContext(messageTrace, () => {
+      logMessageProcessed({
+        channel: "slack",
+        messageId: "msg-duplicate",
+        chatId: "c1",
+        sessionKey: "agent:main:slack:channel:c1",
+        durationMs: 5,
+        outcome: "skipped",
+        reason: "duplicate",
+      });
+    });
+    await flushDiagnosticEvents();
+
+    const messageSpan = spanByName("openclaw.message.processed");
+    const messageSpanContext = messageSpan.spanContext();
+    const parentContext = startedSpanParentContexts("openclaw.message.processed")[0];
+
+    expect(messageSpanContext.traceId).toBe(TRACE_ID);
+    expect(parentContext?.traceId).toBe(TRACE_ID);
+    expect(parentContext?.spanId).toBe(SPAN_ID);
+    expect(firstSpanAttributes("openclaw.message.processed")["openclaw.reason"]).toBe("duplicate");
+    expect(messageSpan.end).toHaveBeenCalledTimes(1);
     await service.stop?.(ctx);
   });
 
