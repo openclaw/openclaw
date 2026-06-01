@@ -111,6 +111,33 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it("keeps claimed review cards in the owner running slot", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const review = await store.create({
+      title: "Claimed operator review",
+      status: "review",
+      priority: "normal",
+      agentId: "codex-main",
+    });
+    await store.claim(review.id, { ownerId: "codex-main", token: "review-token" });
+    await store.create({
+      title: "Next ready card",
+      status: "ready",
+      priority: "high",
+      agentId: "codex-main",
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-next" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 3 },
+    });
+
+    expect(result.started).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("blocks a card when worker start fails after claim", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Fail worker", status: "ready" });
