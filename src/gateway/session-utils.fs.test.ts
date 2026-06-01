@@ -839,7 +839,7 @@ describe("readSessionMessages", () => {
     ]);
     clearSessionTranscriptIndexCache();
 
-    const originalReaddir = fs.promises.readdir.bind(fs.promises) as typeof fs.promises.readdir;
+    const originalReaddir = fs.promises.readdir.bind(fs.promises);
     let wroteActiveTranscript = false;
     const readdirSpy = vi.spyOn(fs.promises, "readdir").mockImplementation((async (
       ...args: unknown[]
