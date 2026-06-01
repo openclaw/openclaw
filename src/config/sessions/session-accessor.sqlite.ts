@@ -68,7 +68,7 @@ type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
 
 type ResolvedSqliteStoreTarget = {
   agentId?: string;
-  path: string;
+  path?: string;
 };
 
 /** Loads one session entry from the additive SQLite session store. */
@@ -340,16 +340,19 @@ function resolveSqliteReadScope(
 
 function resolveSqliteTargetFromSessionStorePath(storePath: string): ResolvedSqliteStoreTarget {
   const resolved = path.resolve(storePath);
-  if (path.basename(resolved) !== "sessions.json") {
+  if (path.basename(resolved) === "openclaw-agent.sqlite" || resolved.endsWith(".sqlite")) {
     return { path: resolved };
+  }
+  if (path.basename(resolved) !== "sessions.json") {
+    return {};
   }
   const sessionsDir = path.dirname(resolved);
   if (path.basename(sessionsDir) !== "sessions") {
-    return { path: resolved };
+    return {};
   }
   const agentDir = path.dirname(sessionsDir);
   if (path.basename(path.dirname(agentDir)) !== "agents") {
-    return { path: resolved };
+    return {};
   }
   return {
     agentId: normalizeAgentId(path.basename(agentDir)),
