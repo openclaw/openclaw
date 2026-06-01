@@ -44,6 +44,64 @@ const loadSessionsMock = vi.hoisted(() =>
     }
   }),
 );
+const buildChatItemsMock = vi.hoisted(() =>
+  vi.fn(
+    (props: { messages: unknown[]; stream: string | null; streamStartedAt: number | null }) => {
+      if (
+        props.messages.some(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            (message as { __testDivider?: unknown })["__testDivider"] === true,
+        )
+      ) {
+        return [
+          {
+            kind: "divider",
+            key: "divider:compaction:test",
+            label: "Compacted history",
+            description:
+              "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+            action: {
+              kind: "session-checkpoints",
+              label: "Open checkpoints",
+            },
+            timestamp: 1,
+          },
+        ];
+      }
+      if (props.messages.length > 0) {
+        return [
+          {
+            kind: "group",
+            key: "group:assistant:test",
+            role: "assistant",
+            messages: props.messages.map((message, index) => ({
+              key: `message:${index}`,
+              message,
+            })),
+            timestamp: 1,
+            isStreaming: false,
+          },
+        ];
+      }
+      if (props.stream !== null) {
+        return props.stream
+          ? [
+              {
+                kind: "stream",
+                key: "stream:test",
+                text: props.stream,
+                startedAt: props.streamStartedAt ?? 1,
+                isStreaming: true,
+              },
+            ]
+          : [{ kind: "reading-indicator", key: "reading:test" }];
+      }
+      return [];
+    },
+  ),
+);
 
 function requireFirstAttachmentsChange(
   onAttachmentsChange: ReturnType<typeof vi.fn>,
@@ -64,64 +122,7 @@ vi.mock("../icons.ts", () => ({
 }));
 
 vi.mock("../chat/build-chat-items.ts", () => ({
-  buildChatItems: (props: {
-    messages: unknown[];
-    stream: string | null;
-    streamStartedAt: number | null;
-  }) => {
-    if (
-      props.messages.some(
-        (message) =>
-          typeof message === "object" &&
-          message !== null &&
-          (message as { __testDivider?: unknown })["__testDivider"] === true,
-      )
-    ) {
-      return [
-        {
-          kind: "divider",
-          key: "divider:compaction:test",
-          label: "Compacted history",
-          description:
-            "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
-          action: {
-            kind: "session-checkpoints",
-            label: "Open checkpoints",
-          },
-          timestamp: 1,
-        },
-      ];
-    }
-    if (props.messages.length > 0) {
-      return [
-        {
-          kind: "group",
-          key: "group:assistant:test",
-          role: "assistant",
-          messages: props.messages.map((message, index) => ({
-            key: `message:${index}`,
-            message,
-          })),
-          timestamp: 1,
-          isStreaming: false,
-        },
-      ];
-    }
-    if (props.stream !== null) {
-      return props.stream
-        ? [
-            {
-              kind: "stream",
-              key: "stream:test",
-              text: props.stream,
-              startedAt: props.streamStartedAt ?? 1,
-              isStreaming: true,
-            },
-          ]
-        : [{ kind: "reading-indicator", key: "reading:test" }];
-    }
-    return [];
-  },
+  buildChatItems: buildChatItemsMock,
 }));
 
 vi.mock("../chat/grouped-render.ts", () => ({
@@ -673,11 +674,50 @@ describe("chat composer workbench", () => {
 
 afterEach(() => {
   vi.useRealTimers();
+  buildChatItemsMock.mockClear();
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatViewState();
   resetChatAttachmentPayloadStoreForTest();
   vi.unstubAllGlobals();
+});
+
+describe("chat transcript rendering cache", () => {
+  it("does not rebuild transcript items for draft-only rerenders", () => {
+    const messages = [{ role: "assistant", content: "ready" }];
+    const toolMessages: unknown[] = [];
+    const streamSegments: Array<{ text: string; ts: number }> = [];
+    const queue: ChatQueueItem[] = [];
+
+    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "" });
+    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "h" });
+    renderChatView({ messages, toolMessages, streamSegments, queue, draft: "hello" });
+
+    expect(buildChatItemsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds transcript items when the transcript reference changes", () => {
+    const toolMessages: unknown[] = [];
+    const streamSegments: Array<{ text: string; ts: number }> = [];
+    const queue: ChatQueueItem[] = [];
+
+    renderChatView({
+      messages: [{ role: "assistant", content: "ready" }],
+      toolMessages,
+      streamSegments,
+      queue,
+      draft: "",
+    });
+    renderChatView({
+      messages: [{ role: "assistant", content: "new reply" }],
+      toolMessages,
+      streamSegments,
+      queue,
+      draft: "",
+    });
+
+    expect(buildChatItemsMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("chat loading skeleton", () => {

@@ -431,6 +431,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+          $workspaceNodeModules = Join-Path $workspace "node_modules"
+          if (Test-Path $workspaceNodeModules) {
+            $workspaceNodeModulesItem = Get-Item $workspaceNodeModules -Force
+            if (($workspaceNodeModulesItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+              throw "workspace node_modules exists and is not a link: $workspaceNodeModules"
+            }
+          } else {
+            New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR | Out-Null
+          }
+
           $corepackShimDir = Join-Path $nodeBin "node_modules\corepack\shims"
           if (Test-Path $corepackShimDir) {
             $env:PNPM_HOME = $corepackShimDir

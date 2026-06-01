@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
 
@@ -219,12 +220,9 @@ describe("models.list", () => {
     });
     await request;
 
-    const call = respond.mock.calls.at(0) as
-      | [boolean, unknown, { code?: number; message?: string }]
-      | undefined;
-    expect(call?.[0]).toBe(false);
-    expect(call?.[1]).toBeUndefined();
-    expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(call?.[2]?.message).toBe("Error: catalog failed");
+    expectGatewayErrorResponse(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: catalog failed",
+    });
   });
 });

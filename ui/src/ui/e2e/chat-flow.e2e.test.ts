@@ -1,4 +1,4 @@
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -47,6 +47,13 @@ async function waitForRequests(
     });
   }
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
+}
+
+async function chatThreadDistanceFromBottom(page: Page): Promise<number> {
+  return page.locator(".chat-thread").evaluate((element) => {
+    const thread = element as HTMLElement;
+    return Math.round(thread.scrollHeight - thread.scrollTop - thread.clientHeight);
+  });
 }
 
 function chatSessionListResponse() {
@@ -272,6 +279,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(params.sessionKey).toBe("main");
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await gateway.resolveDeferred("chat.history", {
         messages: [],
         sessionId: "control-ui-e2e-session",
@@ -310,12 +318,69 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.locator(".chat-queue").getByText("Sending").waitFor({ timeout: 10_000 });
       await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-thread").getByText(prompt).count()).toBe(0);
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
 
       await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("scrolls a delayed pending send into view before the ACK resolves", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
+      content: [
+        {
+          text: `History message ${index}\n${"extra transcript line\n".repeat(4)}`,
+          type: "text",
+        },
+      ],
+      role: index % 2 === 0 ? "assistant" : "user",
+      timestamp: baseTs + index,
+    }));
+    const gateway = await installMockGateway(page, { historyMessages });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("History message 49").waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(4);
+
+      await page.locator(".chat-thread").evaluate((element) => {
+        (element as HTMLElement).scrollTop = 0;
+      });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeGreaterThan(200);
+
+      await gateway.deferNext("chat.send");
+
+      const prompt = `pending send should scroll before ack\n${"visible now\n".repeat(6)}`;
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+
+      await page.locator(".chat-thread").getByText("pending send should scroll").waitFor({
+        timeout: 10_000,
+      });
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(4);
+
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
     } finally {
       await context.close();
     }

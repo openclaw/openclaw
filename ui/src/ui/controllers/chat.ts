@@ -1,14 +1,12 @@
 import { resetToolStream } from "../app-tool-stream.ts";
-import {
-  getChatAttachmentDataUrl,
-  getChatAttachmentPreviewUrl,
-} from "../chat/attachment-payload-store.ts";
+import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
+import { buildUserChatMessageContentBlocks } from "../chat/user-message-content.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
 import {
@@ -634,15 +632,6 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   return { mimeType: match[1], content: match[2] };
 }
 
-function isInlineDataUrl(value: string): boolean {
-  return /^\s*data:/iu.test(value);
-}
-
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
-  const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
-}
-
 function buildApiAttachments(attachments?: ChatAttachment[]) {
   const hasAttachments = attachments && attachments.length > 0;
   return hasAttachments
@@ -861,57 +850,11 @@ export function appendUserChatMessage(
   attachments?: ChatAttachment[],
   timestamp = Date.now(),
 ) {
-  const msg = message.trim();
-  const hasAttachments = attachments && attachments.length > 0;
-  const contentBlocks: Array<{
-    type: string;
-    text?: string;
-    url?: string;
-    source?: unknown;
-    attachment?: {
-      url: string;
-      kind: "audio" | "document";
-      label: string;
-      mimeType?: string;
-    };
-  }> = [];
-  if (msg) {
-    contentBlocks.push({ type: "text", text: msg });
-  }
-  if (hasAttachments) {
-    for (const att of attachments) {
-      const previewUrl = getChatAttachmentPreviewUrl(att);
-      if (!previewUrl) {
-        continue;
-      }
-      if (att.mimeType.startsWith("image/")) {
-        if (isInlineDataUrl(previewUrl)) {
-          contentBlocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(att) });
-          continue;
-        }
-        contentBlocks.push({
-          type: "image",
-          url: previewUrl,
-          source: { type: "url", url: previewUrl },
-        });
-        continue;
-      }
-      contentBlocks.push({
-        type: "attachment",
-        attachment: {
-          url: previewUrl,
-          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
-          label: att.fileName?.trim() || "Attached file",
-          mimeType: att.mimeType,
-        },
-      });
-    }
-  }
   state.chatMessages = [
     ...state.chatMessages,
     {
       role: "user",
-      content: contentBlocks,
+      content: buildUserChatMessageContentBlocks(message, attachments),
       timestamp,
     },
   ];

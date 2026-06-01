@@ -17,15 +17,12 @@ const { execFileMock, loadGatewayRuntimeConfigSchemaMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      execFile: Object.assign(execFileMock, {
-        __promisify__: vi.fn(),
-      }) as typeof import("node:child_process").execFile,
-    },
-  );
+  const { mockNodeChildProcessModule } = await import("./node-child-process.test-support.js");
+  return mockNodeChildProcessModule({
+    execFile: Object.assign(execFileMock, {
+      __promisify__: vi.fn(),
+    }) as typeof import("node:child_process").execFile,
+  });
 });
 
 vi.mock("../../config/runtime-schema.js", () => ({

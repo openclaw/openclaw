@@ -495,6 +495,14 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
+  it("isolates the Telegram extension lane so release shards do not accumulate suite state", () => {
+    const testConfig = requireTestConfig(defaultExtensionTelegramConfig);
+    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.isolate).toBe(true);
+    expect(testConfig.runner).toBeUndefined();
+    expect(testConfig.fileParallelism).toBe(false);
+  });
+
   it("serializes Slack extension files that share process globals", () => {
     expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(false);
   });

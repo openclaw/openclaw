@@ -65,6 +65,18 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("Parallels NPM Update Smoke");
   });
 
+  it("streams aggregate update logs instead of retaining them in memory", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+    const updateBlock = script.slice(
+      script.indexOf("  private spawnUpdate"),
+      script.indexOf("  private async runMacosUpdate"),
+    );
+
+    expect(updateBlock).toContain("appendFileSync(logPath, text");
+    expect(updateBlock).toContain("run: ({ signal }) => fn({ append, logPath, signal })");
+    expect(updateBlock).not.toContain("log += text");
+  });
+
   it("runs Windows updates through a detached done-file runner", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const transports = readFileSync(GUEST_TRANSPORTS_PATH, "utf8");

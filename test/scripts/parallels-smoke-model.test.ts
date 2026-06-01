@@ -2,6 +2,7 @@ import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
@@ -116,6 +117,26 @@ async function unusedLoopbackPort(): Promise<number> {
     throw new Error("Expected TCP server address.");
   }
   return address.port;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+    await delay(25);
+  }
+  throw new Error("condition was not met before timeout");
 }
 
 describe("Parallels smoke model selection", () => {
@@ -753,6 +774,133 @@ if (isPrlctl) {
     expect(result.status).toBe(124);
     expect(Date.now() - startedAt).toBeLessThan(500);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "throws checked timed host command timeouts",
+    () => {
+      expect(() =>
+        run(process.execPath, ["-e", "setInterval(() => {}, 1000);"], {
+          quiet: true,
+          timeoutMs: 50,
+        }),
+      ).toThrow(/timed out after 50ms/u);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves child exit 124 in timed host commands",
+    () => {
+      const result = run(process.execPath, ["-e", "process.exit(124)"], {
+        check: false,
+        quiet: true,
+        timeoutMs: 1_000,
+      });
+
+      expect(result.status).toBe(124);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "kills timed-out host command process groups",
+    async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-command-"));
+      const scriptPath = join(tempDir, "spawn-grandchild.mjs");
+      const grandchildPidPath = join(tempDir, "grandchild.pid");
+      let grandchildPid = 0;
+      writeFileSync(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+
+const grandchild = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "inherit" });
+writeFileSync(process.argv[2], String(grandchild.pid));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+
+      try {
+        const result = run(process.execPath, [scriptPath, grandchildPidPath], {
+          check: false,
+          quiet: true,
+          timeoutMs: 500,
+        });
+
+        expect(result.status).toBe(124);
+        grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves timed host command spawn errors",
+    () => {
+      expect(() =>
+        run("openclaw-definitely-missing-host-command", [], {
+          check: false,
+          quiet: true,
+          timeoutMs: 50,
+        }),
+      ).toThrow(/ENOENT/u);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not treat timed command stderr as wrapper control data",
+    () => {
+      const result = run(
+        process.execPath,
+        ["-e", "process.stderr.write('__OPENCLAW_HOST_COMMAND_SPAWN_ERROR__{}\\n')"],
+        {
+          check: false,
+          quiet: true,
+          timeoutMs: 500,
+        },
+      );
+
+      expect(result.status).toBe(0);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves timed host command output capture",
+    () => {
+      const expected = "x".repeat(256 * 1024);
+      const result = run(process.execPath, ["-e", "process.stdout.write('x'.repeat(256 * 1024))"], {
+        check: false,
+        quiet: true,
+        timeoutMs: 1_000,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(expected);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "ignores broken stdin pipes from timed host commands that exit early",
+    () => {
+      const result = run(process.execPath, ["-e", "process.exit(0)"], {
+        check: false,
+        input: "x".repeat(1024 * 1024),
+        quiet: true,
+        timeoutMs: 1_000,
+      });
+
+      expect(result.status).toBe(0);
+    },
+  );
 
   it("routes Windows host pnpm and npm shims through safe runners", () => {
     const comSpec = "C:\\Windows\\System32\\cmd.exe";

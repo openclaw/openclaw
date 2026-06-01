@@ -223,6 +223,7 @@ function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(command, args, {
       cwd: options.cwd ?? process.cwd(),
+      detached: options.detached ?? process.platform !== "win32",
       env: options.env ?? process.env,
       shell: options.shell,
       stdio: options.stdio ?? ["pipe", "pipe", "pipe"],
@@ -230,24 +231,58 @@ function runCommand(command, args, options = {}) {
     });
     const stdout = createOutputCapture("stdout");
     const stderr = createOutputCapture("stderr");
+    let timedOut = false;
+    let killTimer;
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 1000).unref();
-      reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
+      timedOut = true;
+      terminateProcessTree(child, "SIGTERM");
+      killTimer = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 1000);
+      killTimer.unref();
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
+    child.stdout?.on("data", (chunk) => {
       stdout.append(chunk);
     });
-    child.stderr.on("data", (chunk) => {
+    child.stderr?.on("data", (chunk) => {
       stderr.append(chunk);
     });
+    const parentSignalHandlers = new Map();
+    const removeParentSignalHandlers = () => {
+      for (const [signal, handler] of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.clear();
+    };
+    if (process.platform !== "win32" && child.pid) {
+      for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+        const handler = () => {
+          terminateProcessTree(child, signal);
+          removeParentSignalHandlers();
+          process.kill(process.pid, signal);
+        };
+        parentSignalHandlers.set(signal, handler);
+        process.once(signal, handler);
+      }
+    }
     child.on("error", (error) => {
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      removeParentSignalHandlers();
       reject(error instanceof Error ? error : new Error(formatErrorMessage(error)));
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      removeParentSignalHandlers();
       const result = { code: code ?? 0, signal, stdout: stdout.text(), stderr: stderr.text() };
+      if (timedOut) {
+        terminateProcessTree(child, "SIGKILL");
+        reject(new Error(scrub(`command timed out: ${command} ${args.join(" ")}`)));
+        return;
+      }
       if (result.code !== 0 && options.allowFailure !== true) {
         reject(
           new Error(
