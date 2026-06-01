@@ -736,6 +736,13 @@ describe("sessions_spawn tool", () => {
 
   it("forwards ACP sandbox options", async () => {
     registerAcpBackendForTest();
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:1",
+      runId: "run-acp",
+      mode: "run",
+      runTimeoutSeconds: 120,
+    });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:subagent:parent",
     });
@@ -758,6 +765,7 @@ describe("sessions_spawn tool", () => {
     expect(registration.requesterSessionKey).toBe("agent:main:subagent:parent");
     expect(registration.task).toBe("investigate");
     expect(registration.cleanup).toBe("keep");
+    expect(registration.runTimeoutSeconds).toBe(120);
     expect(registration.spawnMode).toBe("run");
   });
 

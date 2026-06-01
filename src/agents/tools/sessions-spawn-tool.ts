@@ -447,6 +447,7 @@ export function createSessionsSpawnTool(
               taskName,
               cleanup: trackedCleanup,
               label: label || undefined,
+              runTimeoutSeconds: result.runTimeoutSeconds,
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });

@@ -1089,6 +1089,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 45);
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
@@ -1126,6 +1127,7 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
+    expect(result).toHaveProperty("runTimeoutSeconds", 120);
     expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
