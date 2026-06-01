@@ -64,6 +64,7 @@ describe("cli progress", () => {
     expect(
       shouldUseInteractiveProgressSpinner({
         streamIsTty: true,
+        stdoutIsTty: true,
         stdinIsRaw: true,
       }),
     ).toBe(false);
@@ -73,9 +74,20 @@ describe("cli progress", () => {
     expect(
       shouldUseInteractiveProgressSpinner({
         streamIsTty: true,
+        stdoutIsTty: true,
         stdinIsRaw: false,
       }),
     ).toBe(true);
+  });
+
+  it("does not use the clack spinner when stdout is not tty-safe", () => {
+    expect(
+      shouldUseInteractiveProgressSpinner({
+        streamIsTty: true,
+        stdoutIsTty: false,
+        stdinIsRaw: false,
+      }),
+    ).toBe(false);
   });
 
   it("does not write terminal controls when raw TUI input suppresses the default spinner", () => {

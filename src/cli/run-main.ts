@@ -752,11 +752,15 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     const { createCliProgress } = await loadProgressModule();
-    const startupProgress = createCliProgress({
+    const startupProgressOptions: Parameters<typeof createCliProgress>[0] = {
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
-    });
+    };
+    if (hasJsonOutputFlag(normalizedArgv)) {
+      startupProgressOptions.enabled = false;
+    }
+    const startupProgress = createCliProgress(startupProgressOptions);
     let startupProgressStopped = false;
     const stopStartupProgress = () => {
       if (startupProgressStopped) {
