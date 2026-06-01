@@ -101,6 +101,39 @@ surfaces, make sure the tone still fits the room.
 
 Sharp is good. Annoying is not.
 
+## Letting SOUL.md evolve (opt-in)
+
+The template tells the agent _"this file is yours to evolve"_ — but by default
+nothing in the runtime makes it evolve. You restate the same preferences
+("no em-dashes", "be more terse") every session and they never land.
+
+Set `agents.defaults.soul.autoUpdate: true` and the runtime gives the agent a
+structured way to persist a rule when you express one:
+
+```toml
+[agents.defaults.soul]
+autoUpdate = true            # default false
+reflectionTurnInterval = 5   # optional; default 5
+```
+
+When enabled:
+
+- The agent gets a `soul_update` tool. Calling it appends one rule to a
+  managed `## Auto-added` section in `SOUL.md`, tagged with a date and the
+  user-quote evidence the agent used to justify it.
+- The runtime fires a brief reflection sub-turn when your message contains
+  a signal keyword (_stop, don't, never, please, prefer, no more_) or every
+  `reflectionTurnInterval` turns — whichever comes first. The agent decides
+  whether anything is worth persisting; if not, it returns a `noop`.
+- Duplicate rules are rejected by the helper, so the section won't bloat with
+  rephrased restatements of the same preference.
+
+To roll back the last entry: `openclaw soul undo`.
+
+This is opt-in for a reason — when the file mutates on its own, you want to
+trust _what_ the agent writes and have a clean way to revert. If you would
+rather keep `SOUL.md` static, leave the flag off; nothing changes.
+
 ## Related
 
 <CardGroup cols={2}>

@@ -270,6 +270,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerSkillsCli",
     },
     {
+      commandNames: ["soul"],
+      loadModule: () => import("../soul-cli.js"),
+      exportName: "registerSoulCli",
+    },
+    {
       commandNames: ["update"],
       loadModule: () => import("../update-cli.js"),
       exportName: "registerUpdateCli",

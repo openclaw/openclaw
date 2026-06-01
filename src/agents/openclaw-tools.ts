@@ -63,6 +63,7 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillWorkshopTool } from "./tools/skill-workshop-tool.js";
+import { createSoulUpdateTool } from "./tools/soul-update-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
@@ -436,6 +437,9 @@ export function createOpenClawTools(
         ]),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),
+    ...(resolvedConfig?.agents?.defaults?.soul?.autoUpdate === true
+      ? [createSoulUpdateTool({ workspaceDir })]
+      : []),
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: resolvedConfig,
