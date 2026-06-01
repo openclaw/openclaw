@@ -84,6 +84,19 @@ export async function upsertSessionEntry(
   });
 }
 
+/** Replaces one entry through the storage-neutral accessor seam. */
+export async function replaceSessionEntry(
+  scope: SessionAccessScope,
+  entry: SessionEntry,
+): Promise<SessionEntry | null> {
+  return await patchFileSessionEntry({
+    ...scope,
+    fallbackEntry: entry,
+    replaceEntry: true,
+    update: () => entry,
+  });
+}
+
 /** Updates an existing session entry through the storage-neutral accessor seam. */
 export async function updateSessionEntry(
   scope: SessionAccessScope,

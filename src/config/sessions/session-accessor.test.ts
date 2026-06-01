@@ -7,6 +7,7 @@ import {
   listSessionEntries,
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntry,
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
@@ -124,6 +125,32 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("replaces entries so deleted fields stay removed", async () => {
+    const scope = {
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, {
+      model: "gpt-5.5",
+      providerOverride: "openai",
+      sessionId: "session-1",
+      updatedAt: 10,
+    });
+
+    await replaceSessionEntry(scope, {
+      sessionId: "session-1",
+      updatedAt: 20,
+    });
+
+    expect(loadSessionEntry(scope)).toMatchObject({
+      sessionId: "session-1",
+      updatedAt: expect.any(Number),
+    });
+    expect(loadSessionEntry(scope)?.model).toBeUndefined();
+    expect(loadSessionEntry(scope)?.providerOverride).toBeUndefined();
   });
 
   it("loads and appends transcript events through a session scope", async () => {
