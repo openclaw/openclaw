@@ -444,6 +444,75 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
+  for (const service of ["iMessage", "SMS", "any"] as const) {
+    it(`treats ${service} direct chat GUIDs as DM allowlist targets`, async () => {
+      const client = createClient({ guid: `p:0/direct-guid-${service}` });
+      const chatGuid = `${service};-;+15551230000`;
+
+      await sendMessageIMessage(`chat_guid:${chatGuid}`, "hello", {
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+1 (555) 123-0000"],
+              groupPolicy: "disabled",
+            },
+          },
+        },
+        client,
+      });
+
+      expect(getClientMocks(client).request).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({ chat_guid: chatGuid }),
+        expect.any(Object),
+      );
+    });
+  }
+
+  it("treats direct chat GUID pairing replies as DM targets", async () => {
+    const client = createClient({ guid: "p:0/direct-guid-pairing" });
+
+    await sendMessageIMessage("chat_guid:SMS;-;+15551230000", "pairing code", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "pairing",
+            groupPolicy: "disabled",
+          },
+        },
+      },
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_guid: "SMS;-;+15551230000" }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps group chat GUIDs on the group allowlist policy", async () => {
+    const client = createClient({ guid: "p:0/group-guid" });
+
+    await expect(
+      sendMessageIMessage("chat_guid:iMessage;+;thread-42", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+1 (555) 123-0000"],
+              groupPolicy: "disabled",
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: group targets are disabled");
+
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
   it("honors wildcard iMessage DM allowlist entries for outbound sends", async () => {
     const client = createClient({ guid: "p:0/wildcard-dm" });
 

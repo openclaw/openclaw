@@ -854,9 +854,22 @@ function resolveIMessageDirectChatIdentifier(target: ParsedIMessageTarget): stri
   return handle || null;
 }
 
+function resolveIMessageDirectChatGuid(target: ParsedIMessageTarget): string | null {
+  if (target.kind !== "chat_guid") {
+    return null;
+  }
+  const match = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(target.chatGuid.trim());
+  const handle = match?.[1]?.trim();
+  return handle || null;
+}
+
 function normalizeIMessageOutboundTarget(target: ParsedIMessageTarget): string {
   if (target.kind === "chat_id") {
     return `chat_id:${target.chatId}`;
+  }
+  const directChatGuid = resolveIMessageDirectChatGuid(target);
+  if (directChatGuid) {
+    return normalizeIMessageHandle(directChatGuid);
   }
   if (target.kind === "chat_guid") {
     return `chat_guid:${target.chatGuid}`;
@@ -872,7 +885,11 @@ function normalizeIMessageOutboundTarget(target: ParsedIMessageTarget): string {
 }
 
 function isIMessageOutboundDmTarget(target: ParsedIMessageTarget): boolean {
-  return target.kind === "handle" || resolveIMessageDirectChatIdentifier(target) !== null;
+  return (
+    target.kind === "handle" ||
+    resolveIMessageDirectChatIdentifier(target) !== null ||
+    resolveIMessageDirectChatGuid(target) !== null
+  );
 }
 
 function isIMessageOutboundAllowlisted(params: {
