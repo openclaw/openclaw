@@ -43,6 +43,11 @@ var forwardedConnectionEnv = map[string]struct{}{
 	"HF_TOKEN": {},
 }
 
+const (
+	defaultRockielabAPIBase = "https://api.rockielab.com"
+	defaultRuntimeBinary    = "codex"
+)
+
 func tenantID() string {
 	return strings.TrimSpace(os.Getenv("ROCKIELAB_TENANT_ID"))
 }
@@ -84,6 +89,15 @@ func ownedChildEnv() []string {
 	copyAllowedEnv(env, allowed)
 	if env["PATH"] == "" {
 		env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	}
+	if env["ROCKIELAB_API_BASE"] == "" {
+		env["ROCKIELAB_API_BASE"] = defaultRockielabAPIBase
+	}
+	if env["ROCKIELAB_API_URL"] == "" {
+		env["ROCKIELAB_API_URL"] = env["ROCKIELAB_API_BASE"]
+	}
+	if env["BINARY"] == "" {
+		env["BINARY"] = defaultRuntimeBinary
 	}
 	if tid := tenantID(); tid != "" {
 		env["ROCKIELAB_TENANT_ID"] = tid

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -467,6 +468,84 @@ func TestClaudePTYArgsHasAutoExecuteAndSessionID(t *testing.T) {
 	if !strings.Contains(joined, "--output-format stream-json") {
 		t.Fatalf("expected stream-json output, got %q", joined)
 	}
+}
+
+func TestChatPTYChildReceivesSafeTenantRuntimeEnv(t *testing.T) {
+	withTempHome(t)
+	writeAuthFile(t, "claude")
+	setBrokerTestEnv(t, "tt")
+	t.Setenv("ROCKIELAB_TENANT_TOKEN", "service-token")
+	t.Setenv("ROCKIELAB_API_URL", "https://api.rockielab.test")
+	t.Setenv("BINARY", "codex")
+	t.Setenv("ROCKIELAB_API_PASSWORD", "platform-secret")
+
+	cwd := t.TempDir()
+	binDir := t.TempDir()
+	script := `#!/bin/sh
+{
+  printf 'has_token=%s\n' "$([ -n "${ROCKIELAB_TENANT_TOKEN:-}" ] && echo yes || echo no)"
+  printf 'token_distinct=%s\n' "$([ "${ROCKIELAB_TENANT_TOKEN:-}" != "${ROCKIELAB_TENANT_ID:-}" ] && echo yes || echo no)"
+  printf 'tenant_id=%s\n' "${ROCKIELAB_TENANT_ID:-}"
+  printf 'binary=%s\n' "${BINARY:-}"
+  printf 'api=%s\n' "${ROCKIELAB_API_URL:-}"
+  printf 'broker_token=%s\n' "${BROKER_TENANT_TOKEN:+leaked}"
+  printf 'api_password=%s\n' "${ROCKIELAB_API_PASSWORD:+leaked}"
+} > "$PWD/chat-pty-env.txt"
+first=1
+while IFS= read -r line; do
+  if [ "$first" = 1 ]; then
+    printf '{"type":"system","subtype":"init","session_id":"sid-env"}\n'
+    first=0
+  fi
+  printf '{"type":"result","is_error":false,"stop_reason":"end_turn"}\n'
+done
+`
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat-pty", chatPTYHandler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/chat-pty?token=tt&binary=claude&session_id=sid-env",
+		"application/json",
+		strings.NewReader(fmt.Sprintf(`{"prompt":"env probe","cwd":%q}`, cwd)),
+	)
+	if err != nil {
+		t.Fatalf("post chat-pty: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, body)
+	}
+	envProbe, err := os.ReadFile(filepath.Join(cwd, "chat-pty-env.txt"))
+	if err != nil {
+		t.Fatalf("read chat-pty env probe: %v body=%s", err, body)
+	}
+	for _, want := range []string{
+		"has_token=yes",
+		"token_distinct=yes",
+		"tenant_id=tenant-test",
+		"binary=codex",
+		"api=https://api.rockielab.test",
+		"broker_token=",
+		"api_password=",
+	} {
+		if !strings.Contains(string(envProbe), want) {
+			t.Fatalf("chat-pty child env missing %q in probe %q", want, envProbe)
+		}
+	}
+	globalPool.mu.Lock()
+	if sess := globalPool.sessions["sid-env"]; sess != nil {
+		sess.kill()
+		delete(globalPool.sessions, "sid-env")
+	}
+	globalPool.mu.Unlock()
 }
 
 // Sanity: spawnSession surfaces an error for unsupported binaries.

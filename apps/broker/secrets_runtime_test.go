@@ -216,6 +216,28 @@ func TestOwnedChildEnvDoesNotInventTenantToken(t *testing.T) {
 	}
 }
 
+func TestOwnedChildEnvSuppliesSafeRuntimeDefaults(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin")
+	t.Setenv("HOME", "/home/runtime")
+	t.Setenv("ROCKIELAB_TENANT_ID", "tenant-123")
+	env := ownedChildEnv()
+	for _, want := range []string{
+		"ROCKIELAB_API_BASE=https://api.rockielab.com",
+		"ROCKIELAB_API_URL=https://api.rockielab.com",
+		"BINARY=codex",
+	} {
+		found := false
+		for _, kv := range env {
+			if kv == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("owned child env missing default %q: %v", want, env)
+		}
+	}
+}
+
 // TestOwnedChildEnvForwardsConnectionCredentials is the fleet-task #573
 // layer-2 regression: a user who connects GitHub / HuggingFace lands
 // GH_TOKEN / HF_TOKEN in the container PID-1 env (layer 1, Fly app

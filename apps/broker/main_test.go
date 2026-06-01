@@ -113,6 +113,32 @@ func TestCodexResumeChatArgsForbidUnsupportedFlags(t *testing.T) {
 	}
 }
 
+func TestChatChildReceivesSafeTenantRuntimeEnv(t *testing.T) {
+	t.Setenv("ROCKIELAB_TENANT_TOKEN", "service-token")
+	t.Setenv("ROCKIELAB_API_URL", "https://api.rockielab.test")
+	t.Setenv("BINARY", "codex")
+	t.Setenv("ROCKIELAB_API_PASSWORD", "platform-secret")
+	record := runCodexChatWithRecordedCommand(t, `{"prompt":"env probe"}`)
+	if !record.Env.HasTenantToken {
+		t.Fatalf("chat child env missing tenant token marker: %+v", record.Env)
+	}
+	if !record.Env.TokenDistinctFromTenantID {
+		t.Fatalf("chat child env aliased tenant token to tenant id: %+v", record.Env)
+	}
+	if record.Env.TenantID != "tenant-test" {
+		t.Fatalf("chat child env tenant id mismatch: %+v", record.Env)
+	}
+	if record.Env.RuntimeBinary != "codex" {
+		t.Fatalf("chat child env BINARY mismatch: %+v", record.Env)
+	}
+	if record.Env.APIURL != "https://api.rockielab.test" {
+		t.Fatalf("chat child env API URL mismatch: %+v", record.Env)
+	}
+	if record.Env.HasBrokerTenantToken || record.Env.HasRockielabAPIPassword {
+		t.Fatalf("chat child env leaked platform secret marker: %+v", record.Env)
+	}
+}
+
 func TestConstantTimeStringEq(t *testing.T) {
 	if !constantTimeStringEq("abc", "abc") {
 		t.Fatal("equal strings should match")
@@ -217,6 +243,40 @@ func TestSpawnHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(resp.Stderr, "err") {
 		t.Fatalf("expected stderr 'err', got %q", resp.Stderr)
+	}
+}
+
+func TestSpawnChildReceivesSafeTenantRuntimeEnv(t *testing.T) {
+	setBrokerTestEnv(t, "tt")
+	t.Setenv("ROCKIELAB_TENANT_TOKEN", "service-token")
+	t.Setenv("ROCKIELAB_API_URL", "https://api.rockielab.test")
+	t.Setenv("BINARY", "codex")
+	t.Setenv("BROKER_TENANT_TOKEN", "broker-secret")
+	t.Setenv("ROCKIELAB_API_PASSWORD", "platform-secret")
+	body := strings.NewReader(`{"binary":"bash","args":["-c","printf 'has_token=%s\n' \"$([ -n \"${ROCKIELAB_TENANT_TOKEN:-}\" ] && echo yes || echo no)\"; printf 'token_distinct=%s\n' \"$([ \"${ROCKIELAB_TENANT_TOKEN:-}\" != \"${ROCKIELAB_TENANT_ID:-}\" ] && echo yes || echo no)\"; printf 'tenant_id=%s\n' \"${ROCKIELAB_TENANT_ID:-}\"; printf 'binary=%s\n' \"${BINARY:-}\"; printf 'api=%s\n' \"${ROCKIELAB_API_URL:-}\"; printf 'broker_token=%s\n' \"${BROKER_TENANT_TOKEN:+leaked}\"; printf 'api_password=%s\n' \"${ROCKIELAB_API_PASSWORD:+leaked}\""],"timeout_sec":5}`)
+	req := httptest.NewRequest(http.MethodPost, "/spawn?token=broker-secret", body)
+	rec := httptest.NewRecorder()
+	spawnHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp spawnResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad JSON: %v / %s", err, rec.Body.String())
+	}
+	for _, want := range []string{
+		"has_token=yes",
+		"token_distinct=yes",
+		"tenant_id=tenant-test",
+		"binary=codex",
+		"api=https://api.rockielab.test",
+		"broker_token=",
+		"api_password=",
+	} {
+		if !strings.Contains(resp.Stdout, want) {
+			t.Fatalf("spawn child env missing %q in stdout %q", want, resp.Stdout)
+		}
 	}
 }
 
@@ -341,8 +401,19 @@ func TestCodexChatHandlerPassesThroughResumeJSONL(t *testing.T) {
 }
 
 type recordedCommand struct {
-	Name string   `json:"name"`
-	Args []string `json:"args"`
+	Name string             `json:"name"`
+	Args []string           `json:"args"`
+	Env  recordedRuntimeEnv `json:"env"`
+}
+
+type recordedRuntimeEnv struct {
+	HasTenantToken            bool   `json:"has_tenant_token"`
+	TokenDistinctFromTenantID bool   `json:"token_distinct_from_tenant_id"`
+	TenantID                  string `json:"tenant_id"`
+	RuntimeBinary             string `json:"runtime_binary"`
+	APIURL                    string `json:"api_url"`
+	HasBrokerTenantToken      bool   `json:"has_broker_tenant_token"`
+	HasRockielabAPIPassword   bool   `json:"has_rockielab_api_password"`
 }
 
 func runCodexChatWithRecordedCommand(t *testing.T, requestBody string) recordedCommand {
@@ -411,6 +482,15 @@ func TestBrokerCommandHelperProcess(t *testing.T) {
 	record := recordedCommand{
 		Name: helperArgs[2],
 		Args: append([]string(nil), helperArgs[3:]...),
+		Env: recordedRuntimeEnv{
+			HasTenantToken:            os.Getenv("ROCKIELAB_TENANT_TOKEN") != "",
+			TokenDistinctFromTenantID: os.Getenv("ROCKIELAB_TENANT_TOKEN") != os.Getenv("ROCKIELAB_TENANT_ID"),
+			TenantID:                  os.Getenv("ROCKIELAB_TENANT_ID"),
+			RuntimeBinary:             os.Getenv("BINARY"),
+			APIURL:                    os.Getenv("ROCKIELAB_API_URL"),
+			HasBrokerTenantToken:      os.Getenv("BROKER_TENANT_TOKEN") != "",
+			HasRockielabAPIPassword:   os.Getenv("ROCKIELAB_API_PASSWORD") != "",
+		},
 	}
 	bs, err := json.Marshal(record)
 	if err != nil {
