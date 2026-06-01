@@ -151,6 +151,7 @@ describe("bash process registry", () => {
     session.command = "sleep 0.05";
     session.cwd = "/tmp/project";
     session.executionKey = "exec-key-a";
+    session.execReuseKey = "default-yield";
     session.scopeKey = "scope-a";
     session.sessionKey = "session-a";
     addSession(session);
@@ -160,6 +161,7 @@ describe("bash process registry", () => {
         command: "sleep 0.05",
         cwd: "/tmp/project",
         executionKey: "exec-key-a",
+        reuseKey: "default-yield",
         scopeKey: "scope-a",
       }),
     ).toBe(session);
@@ -168,41 +170,65 @@ describe("bash process registry", () => {
         command: "sleep 0.05",
         cwd: "/tmp/project",
         executionKey: "exec-key-a",
+        reuseKey: "default-yield",
         sessionKey: "session-a",
       }),
     ).toBe(session);
 
     const misses = [
-      { command: "sleep 0.05", cwd: "/tmp/project", executionKey: "exec-key-a" },
+      {
+        command: "sleep 0.05",
+        cwd: "/tmp/project",
+        executionKey: "exec-key-a",
+        reuseKey: "default-yield",
+      },
       { command: "sleep 0.05", cwd: "/tmp/project", scopeKey: "scope-a" },
       {
         command: "sleep 0.05",
         cwd: "/tmp/project",
-        executionKey: "exec-key-b",
+        executionKey: "exec-key-a",
         scopeKey: "scope-a",
       },
       {
         command: "sleep 0.05",
         cwd: "/tmp/project",
         executionKey: "exec-key-a",
+        reuseKey: "explicit-background",
+        scopeKey: "scope-a",
+      },
+      {
+        command: "sleep 0.05",
+        cwd: "/tmp/project",
+        executionKey: "exec-key-b",
+        reuseKey: "default-yield",
+        scopeKey: "scope-a",
+      },
+      {
+        command: "sleep 0.05",
+        cwd: "/tmp/project",
+        executionKey: "exec-key-a",
+        reuseKey: "default-yield",
         scopeKey: "scope-b",
       },
       {
         command: "sleep 0.05",
         cwd: "/tmp/project",
         executionKey: "exec-key-a",
+        reuseKey: "default-yield",
         sessionKey: "session-b",
       },
       {
         command: "sleep 0.1",
         cwd: "/tmp/project",
         executionKey: "exec-key-a",
+        reuseKey: "default-yield",
         scopeKey: "scope-a",
       },
       {
         command: "sleep 0.05",
         cwd: "/tmp/other",
         executionKey: "exec-key-a",
+        reuseKey: "default-yield",
         scopeKey: "scope-a",
       },
     ];
@@ -220,6 +246,7 @@ describe("bash process registry", () => {
     });
     session.command = "sleep 0.05";
     session.executionKey = "exec-key-a";
+    session.execReuseKey = "default-yield";
     session.scopeKey = "scope-a";
     addSession(session);
 
@@ -228,6 +255,7 @@ describe("bash process registry", () => {
         command: "sleep 0.05",
         cwd: session.cwd,
         executionKey: "exec-key-a",
+        reuseKey: "default-yield",
         scopeKey: "scope-a",
       }),
     ).toBeUndefined();

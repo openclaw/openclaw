@@ -727,6 +727,7 @@ export async function runExecProcess(opts: {
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   executionKey?: string;
+  execReuseKey?: string;
   initialBackgrounded?: boolean;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
@@ -745,6 +746,7 @@ export async function runExecProcess(opts: {
     id: sessionId,
     command: opts.command,
     executionKey,
+    execReuseKey: opts.execReuseKey,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     mainKey: opts.mainKey,

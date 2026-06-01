@@ -45,6 +45,7 @@ export interface ProcessSession {
   command: string;
   /** Opaque hash of the resolved exec request that created this process. */
   executionKey?: string;
+  execReuseKey?: string;
   scopeKey?: string;
   sessionKey?: string;
   /** `session.mainKey` from the runtime config, snapshotted at exec start.
@@ -329,14 +330,16 @@ export function findMatchingRunningBackgroundSession(params: {
   command: string;
   cwd?: string;
   executionKey?: string;
+  reuseKey?: string;
   scopeKey?: string;
   sessionKey?: string;
 }) {
   const executionKey = params.executionKey?.trim() || undefined;
+  const reuseKey = params.reuseKey?.trim() || undefined;
   const scopeKey = params.scopeKey?.trim() || undefined;
   const sessionKey = params.sessionKey?.trim() || undefined;
 
-  if (!executionKey || (!scopeKey && !sessionKey)) {
+  if (!executionKey || !reuseKey || (!scopeKey && !sessionKey)) {
     return undefined;
   }
 
@@ -353,6 +356,9 @@ export function findMatchingRunningBackgroundSession(params: {
       continue;
     }
     if ((session.executionKey?.trim() || undefined) !== executionKey) {
+      continue;
+    }
+    if ((session.execReuseKey?.trim() || undefined) !== reuseKey) {
       continue;
     }
     if (scopeKey && (session.scopeKey?.trim() || undefined) !== scopeKey) {
