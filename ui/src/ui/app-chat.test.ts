@@ -1528,6 +1528,42 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
   });
 
+  it("does not flush model-wait sends before the model picker update finishes", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "wait for selected model",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "waiting-model",
+      text: "wait for selected model",
+    });
+
+    await retryReconnectableQueuedChatSends(host);
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueue[0]?.sendState).toBe("waiting-model");
+
+    switchUpdate.resolve(true);
+    await send;
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe("wait for selected model");
+  });
+
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
     vi.stubGlobal(
       "fetch",

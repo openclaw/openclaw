@@ -1003,6 +1003,7 @@ async function flushChatQueue(host: ChatHost) {
     (item) =>
       !item.pendingRunId &&
       item.sendState !== "sending" &&
+      item.sendState !== "waiting-model" &&
       item.sendState !== "failed" &&
       (item.sessionKey == null || item.sessionKey === host.sessionKey),
   );
@@ -1250,7 +1251,13 @@ export async function retryReconnectableQueuedChatSends(host: ChatHost) {
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   const item = host.chatQueue.find((entry) => entry.id === id);
-  if (!item || item.localCommandName || item.pendingRunId || item.sendState === "sending") {
+  if (
+    !item ||
+    item.localCommandName ||
+    item.pendingRunId ||
+    item.sendState === "sending" ||
+    item.sendState === "waiting-model"
+  ) {
     return;
   }
   updateQueuedMessage(host, id, (entry) => ({
