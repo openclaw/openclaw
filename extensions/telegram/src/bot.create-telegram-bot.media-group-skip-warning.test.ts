@@ -200,7 +200,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       expect(sendMessageSpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
       expect(sendMessageSpy).toHaveBeenCalledWith(
         CHANNEL_ID,
         expect.stringContaining("1 of 2 images"),
@@ -234,7 +234,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       });
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("0 of 2 images");
       expect(warningText).toContain("2 could not be fetched and were skipped");
@@ -263,7 +263,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       });
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("1 of 3 images");
       expect(warningText).toContain("2 could not be fetched and were skipped");
