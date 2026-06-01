@@ -1,7 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
-import { CronToolSchema } from "./cron-tool.js";
+import { createCronToolSchema, CronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
 function keysAt(schema: Record<string, unknown>, path: string): string[] {
@@ -27,8 +27,8 @@ function propertyAt(
 }
 
 describe("CronToolSchema", () => {
-  const schemaRecord = CronToolSchema as unknown as Record<string, unknown>;
-  const providerSchemaRecord = normalizeToolParameterSchema(CronToolSchema, {
+  const schemaRecord = createCronToolSchema() as unknown as Record<string, unknown>;
+  const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
     modelProvider: "gemini",
   }) as unknown as Record<string, unknown>;
 
@@ -235,11 +235,12 @@ describe("CronToolSchema", () => {
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
     const patchProps = root?.patch?.properties as
-      | Record<string, { properties?: Record<string, { type?: unknown }> }>
+      | Record<string, { properties?: Record<string, { type?: unknown; description?: string }> }>
       | undefined;
 
     // Must be plain "array" — not ["array", "null"] — for provider compat.
     expect(patchProps?.payload?.properties?.toolsAllow?.type).toBe("array");
+    expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
   });
 
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the
