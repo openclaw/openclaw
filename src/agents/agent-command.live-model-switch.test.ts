@@ -57,7 +57,7 @@ const state = vi.hoisted(() => ({
   prepareInternalSessionEffectsTranscriptMock: vi.fn(),
   removeInternalSessionEffectsTranscriptMock: vi.fn(),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
-  sessionEntryMock: undefined as unknown,
+  sessionEntryMock: undefined as SessionEntry | undefined,
   sessionStoreMock: undefined as unknown,
   storePathMock: undefined as string | undefined,
   resolvedSessionKeyMock: undefined as string | undefined,
@@ -123,13 +123,11 @@ vi.mock("./command/session-store.runtime.js", () => ({
 
 vi.mock("./command/session.js", () => ({
   resolveSession: () => {
-    const sessionEntry: SessionEntry =
-      state.sessionEntryMock ??
-      {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        skillsSnapshot: { prompt: "", skills: [], version: 0 },
-      };
+    const sessionEntry: SessionEntry = state.sessionEntryMock ?? {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
     return {
       sessionId: "session-1",
       sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
@@ -549,7 +547,10 @@ vi.mock("./model-selection.js", () => {
     }: {
       cfg?: { agents?: { defaults?: { models?: Record<string, { alias?: string }> } } };
     }) => {
-      const byAlias = new Map<string, { alias: string; ref: { provider: string; model: string } }>();
+      const byAlias = new Map<
+        string,
+        { alias: string; ref: { provider: string; model: string } }
+      >();
       const byKey = new Map<string, string[]>();
       for (const [ref, entry] of Object.entries(cfg?.agents?.defaults?.models ?? {})) {
         const alias = entry?.alias?.trim();
@@ -897,8 +898,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = undefined;
     delete (state.defaultRuntimeConfig.agents as { list?: unknown }).list;
     state.isThinkingLevelSupportedMock.mockReturnValue(true);
-    state.resolveSupportedThinkingLevelMock.mockImplementation(({ level }: { level?: string }) =>
-      level,
+    state.resolveSupportedThinkingLevelMock.mockImplementation(
+      ({ level }: { level?: string }) => level,
     );
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
@@ -2212,7 +2213,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    } satisfies SessionEntry;
     state.sessionEntryMock = sessionEntry;
     state.runtimeConfigMock = {
       agents: {
