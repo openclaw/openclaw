@@ -191,12 +191,17 @@ export function resolveInFlightRunSnapshot(params: {
     if (entry.sessionKey !== key) {
       return false;
     }
-    if (key !== "global" || params.agentId === undefined) {
+    if (key !== "global") {
       return true;
+    }
+    const requestedAgentId =
+      normalizeActiveAgentId(params.agentId) ?? normalizeActiveAgentId(params.defaultAgentId);
+    if (!requestedAgentId) {
+      return false;
     }
     const runAgentId =
       normalizeActiveAgentId(entry.agentId) ?? normalizeActiveAgentId(params.defaultAgentId);
-    return runAgentId === normalizeActiveAgentId(params.agentId);
+    return runAgentId === requestedAgentId;
   };
   // Some callers/tests run without populated run state; guard like
   // collectTrackedActiveSessionRuns so a missing map is a no-op, not a throw.

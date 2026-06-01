@@ -2533,14 +2533,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: selectedAgent.agentId,
       modelCatalog,
     });
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const activeRunAgentId =
+      canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
     sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
       context,
       requestedKey: sessionKey,
       canonicalKey,
-      ...(canonicalKey === "global" && selectedAgent.agentId
-        ? { agentId: selectedAgent.agentId }
-        : {}),
-      defaultAgentId: resolveDefaultAgentId(cfg),
+      ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
+      defaultAgentId,
     });
     const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
     const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
@@ -2554,8 +2555,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       chatRunBuffers: context.chatRunBuffers,
       requestedSessionKey: sessionKey,
       canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
-      agentId: requestedAgentId,
-      defaultAgentId: resolveDefaultAgentId(cfg),
+      agentId: activeRunAgentId,
+      defaultAgentId,
     });
     const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
       snapshot: inFlightRun,

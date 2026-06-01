@@ -505,6 +505,26 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-a", text: "main agent global text" });
   });
 
+  it("resolves bare global history snapshots to the default agent", () => {
+    const controllers = new Map<string, ChatAbortControllerEntry>([
+      ["run-main", inFlightEntry("global", { agentId: "main", startedAtMs: 1_000 })],
+      ["run-work", inFlightEntry("global", { agentId: "work", startedAtMs: 2_000 })],
+    ]);
+    const buffers = new Map([
+      ["run-main", "main default text"],
+      ["run-work", "work global text"],
+    ]);
+
+    expect(
+      snap({
+        chatAbortControllers: controllers,
+        chatRunBuffers: buffers,
+        sessionKey: "global",
+        defaultAgentId: "main",
+      }),
+    ).toEqual({ runId: "run-main", text: "main default text" });
+  });
+
   it("prefers the newest startedAtMs when several runs match the same session+agent", () => {
     // A fast restart/retry/stale-controller race can leave two active entries for
     // the same key; selection must not depend on Map insertion order. Insert the
