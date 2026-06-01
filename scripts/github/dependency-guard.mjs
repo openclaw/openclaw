@@ -277,7 +277,7 @@ export function renderAuthorizedDependencyComment(override) {
     "",
     "### Dependency graph change authorized",
     "",
-    "This PR includes dependency graph changes. A member of `@openclaw/openclaw-secops` authorized this exact head SHA with `/allow-dependencies-change`.",
+    "This PR includes dependency graph changes. A repository admin or member of `@openclaw/openclaw-secops` authorized this exact head SHA with `/allow-dependencies-change`.",
     "",
     `- Approved SHA: ${markdownCode(override.sha)}`,
     `- Approved by: @${sanitizeDisplayValue(override.login)}`,
@@ -361,14 +361,14 @@ export function renderBlockedDependencyComment({
     "",
     "### Dependency graph changes are blocked",
     "",
-    "OpenClaw does not accept dependency graph changes through PRs unless security explicitly authorizes the current head SHA. Dependency updates are generated internally by maintainers so external PRs cannot change the resolved graph.",
+    "OpenClaw does not accept dependency graph changes through PRs unless a repository admin or security explicitly authorizes the current head SHA. Dependency updates are generated internally by maintainers so external PRs cannot change the resolved graph.",
     "",
     "Detected dependency graph changes:",
     ...reasons,
     ...autoscrubLines,
     ...removalSteps,
     "",
-    "If this PR intentionally needs a dependency graph change, ask a member of `@openclaw/openclaw-secops` to comment:",
+    "If this PR intentionally needs a dependency graph change, ask a repository admin or member of `@openclaw/openclaw-secops` to comment:",
     "",
     "```text",
     allowDependenciesCommand,
@@ -891,31 +891,53 @@ async function main() {
       };
     }
   }
-
   const membershipCache = new Map();
+  const permissionCache = new Map();
   const isSecurityMember = async (login) => {
     const normalizedLogin = login.toLowerCase();
-    if (explicitSecurityApprovers.size > 0) {
-      return explicitSecurityApprovers.has(normalizedLogin);
+    if (explicitSecurityApprovers.has(normalizedLogin)) {
+      return true;
     }
-    if (membershipCache.has(login)) {
-      return membershipCache.get(login);
+    if (membershipCache.has(normalizedLogin)) {
+      return membershipCache.get(normalizedLogin);
     }
     try {
       const membership = await api.request(
         `/orgs/${owner}/teams/${securityTeamSlug}/memberships/${encodeURIComponent(login)}`,
       );
       const allowed = membership?.state === "active";
-      membershipCache.set(login, allowed);
+      membershipCache.set(normalizedLogin, allowed);
       return allowed;
     } catch (error) {
       if (error?.status !== 404) {
         console.warn(`Could not verify ${login} against ${securityTeamSlug}: ${error.message}`);
       }
-      membershipCache.set(login, false);
+      membershipCache.set(normalizedLogin, false);
       return false;
     }
   };
+  const isRepositoryAdmin = async (login) => {
+    const normalizedLogin = login.toLowerCase();
+    if (permissionCache.has(normalizedLogin)) {
+      return permissionCache.get(normalizedLogin);
+    }
+    try {
+      const result = await api.request(
+        `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+      );
+      const allowed = result?.permission === "admin";
+      permissionCache.set(normalizedLogin, allowed);
+      return allowed;
+    } catch (error) {
+      if (error?.status !== 404) {
+        console.warn(`Could not verify repository permission for ${login}: ${error.message}`);
+      }
+      permissionCache.set(normalizedLogin, false);
+      return false;
+    }
+  };
+  const isDependencyApprover = async (login) =>
+    (await isSecurityMember(login)) || (await isRepositoryAdmin(login));
   const currentHeadSha = pullRequest.head?.sha;
   if (isDependencyGuardAuthorizedForHead(existingGuardComment, currentHeadSha)) {
     await writeSummary(
@@ -931,7 +953,7 @@ async function main() {
   const override = await findDependencyOverrideCommandAsync({
     comments,
     expectedSha: dependencyOverrideExpectedSha(existingGuardComment, currentHeadSha),
-    isSecurityMember,
+    isSecurityMember: isDependencyApprover,
     newerThan: existingGuardComment?.updated_at ?? existingGuardComment?.created_at,
   });
   if (override) {
@@ -943,7 +965,7 @@ async function main() {
         `Dependency graph change authorized by @${sanitizeDisplayValue(override.login)} for ${markdownCode(override.sha)}.`,
       ].join("\n"),
     );
-    console.log("Dependency graph change authorized by security override.");
+    console.log("Dependency graph change authorized by trusted override.");
     return;
   }
 
@@ -958,9 +980,11 @@ async function main() {
     }),
   );
   await writeSummary(
-    "## Dependency Guard\n\nDependency graph changes are blocked without a current secops override.",
+    "## Dependency Guard\n\nDependency graph changes are blocked without a current admin or secops override.",
   );
-  throw new Error("Dependency graph changes require removal or a current secops override.");
+  throw new Error(
+    "Dependency graph changes require removal or a current admin or secops override.",
+  );
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

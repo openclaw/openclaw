@@ -142,6 +142,31 @@ describe("dependency guard script", () => {
     ).resolves.toBeNull();
   });
 
+  it("accepts repository admins through the same sha-bound override command", async () => {
+    const comments = [
+      {
+        body: "/allow-dependencies-change admin reviewed",
+        created_at: "2026-05-28T20:03:00Z",
+        html_url: "https://example.test/comment",
+        user: { login: "repo-admin" },
+      },
+    ];
+
+    await expect(
+      findDependencyOverrideCommandAsync({
+        comments,
+        expectedSha: headSha,
+        isSecurityMember: async (login) => login === "repo-admin",
+        newerThan: "2026-05-28T20:02:00Z",
+      }),
+    ).resolves.toEqual({
+      login: "repo-admin",
+      reason: "admin reviewed",
+      sha: headSha,
+      url: "https://example.test/comment",
+    });
+  });
+
   it("rejects override commands without a freshness barrier", () => {
     const override = findDependencyOverrideCommand({
       comments: [
