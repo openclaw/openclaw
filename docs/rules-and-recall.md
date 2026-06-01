@@ -104,6 +104,15 @@ The DB-memory structure should evolve like a vector/semantic memory graph while 
 
 Superseded or bad process records are marked as superseded/deprecated with additive metadata. They are not deleted from source history.
 
+Live ANN maintenance remains source-preserving. A 2026-06-01 maintenance pass
+backfilled every eligible unified search-surface row into
+`memory_ann_embeddings`, including missing logic-rule rows; refreshed planner
+statistics on ANN, model-embedding, query-cache, semantic-edge, and neural
+result tables; added a bounded batch of `ann_nearest_neighbor` edges; and
+marked low-information derived ANN rows inactive when the payload was only a
+standalone HTML marker or date fragment. The original source rows, structured
+rules, and legacy embedding slots remain intact and rebuildable.
+
 ## Operator-visible rule recall repair
 
 When the operator reports that replies are still missing active rules, treat the reply format itself as part of the recall test. The assistant should retrieve the active database rules for memory-first behavior, visible timestamp/time-summary requirements, verified-memory wording, summary-before-mutation approval gates, backup gates, publication gates, rule-failure lockout, and completion verification before sending the next visible response.
