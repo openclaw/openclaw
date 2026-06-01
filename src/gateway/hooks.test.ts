@@ -284,6 +284,34 @@ describe("gateway hooks helpers", () => {
     expect(allowed).toEqual({ ok: true, value: "hook:gmail:1" });
   });
 
+  test("resolveHookSessionKey rejects internal control session namespaces", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowRequestSessionKey: true,
+        allowedSessionKeyPrefixes: ["hook:", "agent:"],
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfigOrThrow(cfg);
+
+    for (const sessionKey of [
+      "agent:main:subagent:worker",
+      "agent:main:acp:svc",
+      "cron:daily",
+      "agent:main:agent:hooks:subagent:worker",
+      "agent:main: subagent:worker",
+    ]) {
+      expect(
+        resolveHookSessionKey({
+          hooksConfig: resolved,
+          source: "request",
+          sessionKey,
+        }),
+      ).toMatchObject({ ok: false });
+    }
+  });
+
   test("resolveHookSessionKey blocks templated mapping sessionKey when request overrides are disabled", () => {
     const cfg = {
       hooks: {
@@ -378,6 +406,49 @@ describe("gateway hooks helpers", () => {
     ).toThrow(
       "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
     );
+  });
+
+  test("resolveHooksConfig rejects internal defaultSessionKey namespaces", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          defaultSessionKey: "agent:main:subagent:worker",
+          allowedSessionKeyPrefixes: ["hook:", "agent:"],
+        },
+      } as OpenClawConfig),
+    ).toThrow("hooks.defaultSessionKey may not target internal session namespace subagent:");
+
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          defaultSessionKey: "agent:main:agent:hooks:subagent:worker",
+          allowedSessionKeyPrefixes: ["hook:", "agent:"],
+        },
+      } as OpenClawConfig),
+    ).toThrow("hooks.defaultSessionKey may not target internal session namespace subagent:");
+  });
+
+  test("resolveHooksConfig ignores static session keys on wake mappings", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          mappings: [
+            {
+              match: { path: "wake" },
+              action: "wake",
+              textTemplate: "ping",
+              sessionKey: "agent:main:subagent:worker",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).not.toThrow();
   });
 
   test("resolveHooksConfig requires prefixes for templated mapping session keys", () => {
