@@ -1033,6 +1033,7 @@ export async function patchSessionEntry(
     replaceEntry?: boolean;
     update: (
       entry: SessionEntry,
+      context: { existingEntry?: SessionEntry },
     ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
   },
 ): Promise<SessionEntry | null> {
@@ -1044,7 +1045,9 @@ export async function patchSessionEntry(
     if (!existing) {
       return null;
     }
-    const patch = await params.update(cloneSessionEntry(existing));
+    const patch = await params.update(cloneSessionEntry(existing), {
+      existingEntry: resolved.existing ? cloneSessionEntry(resolved.existing) : undefined,
+    });
     if (!patch) {
       return existing;
     }

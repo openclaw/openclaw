@@ -13,6 +13,7 @@ import {
   upsertSessionEntry,
 } from "./session-accessor.js";
 import { loadSessionStore } from "./store.js";
+import type { SessionEntry } from "./types.js";
 
 describe("session accessor file-backed seam", () => {
   let tempDir: string;
@@ -159,13 +160,18 @@ describe("session accessor file-backed seam", () => {
       sessionKey: "agent:main:main",
       storePath,
     };
+    let missingContextEntry: SessionEntry | undefined;
+    let existingContextEntry: SessionEntry | undefined;
 
     await patchSessionEntry(
       scope,
-      (entry) => ({
-        ...entry,
-        model: "gpt-5.5",
-      }),
+      (entry, context) => {
+        missingContextEntry = context.existingEntry;
+        return {
+          ...entry,
+          model: "gpt-5.5",
+        };
+      },
       {
         fallbackEntry: {
           sessionId: "session-1",
@@ -177,14 +183,19 @@ describe("session accessor file-backed seam", () => {
 
     await patchSessionEntry(
       scope,
-      (entry) => ({
-        ...entry,
-        model: undefined,
-        providerOverride: "openai",
-      }),
+      (entry, context) => {
+        existingContextEntry = context.existingEntry;
+        return {
+          ...entry,
+          model: undefined,
+          providerOverride: "openai",
+        };
+      },
       { replaceEntry: true },
     );
 
+    expect(missingContextEntry).toBeUndefined();
+    expect(existingContextEntry).toMatchObject({ model: "gpt-5.5" });
     expect(loadSessionEntry(scope)).toMatchObject({
       providerOverride: "openai",
       sessionId: "session-1",

@@ -50,6 +50,10 @@ export type SessionEntryPatchOptions = {
   replaceEntry?: boolean;
 };
 
+export type SessionEntryPatchContext = {
+  existingEntry?: SessionEntry;
+};
+
 /** Loads one session entry through the storage-neutral accessor seam. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
   if (scope.clone === false) {
@@ -107,6 +111,7 @@ export async function patchSessionEntry(
   scope: SessionAccessScope,
   update: (
     entry: SessionEntry,
+    context: SessionEntryPatchContext,
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
