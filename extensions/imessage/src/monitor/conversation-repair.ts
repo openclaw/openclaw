@@ -64,6 +64,9 @@ function overlayRecoveredConversation(
 ): IMessagePayload {
   const repaired = { ...message };
 
+  if (isNonEmptyString(entry.sender)) {
+    repaired.sender = entry.sender;
+  }
   if (hasPositiveChatId(entry.chat_id)) {
     repaired.chat_id = entry.chat_id;
   }
@@ -89,10 +92,82 @@ function overlayRecoveredConversation(
   return repaired;
 }
 
+function normalizeComparableHandle(value: string | null | undefined): string {
+  return (value ?? "").trim().toLocaleLowerCase();
+}
+
+function resolveDirectMessagePeerSenderCandidate(message: IMessagePayload): string | null {
+  if (message.is_group === true || message.is_from_me === true) {
+    return null;
+  }
+  if (!hasPositiveChatId(message.chat_id) || !isNonEmptyString(message.guid)) {
+    return null;
+  }
+
+  const sender = normalizeComparableHandle(message.sender);
+  const destination = normalizeComparableHandle(message.destination_caller_id);
+  if (!sender || !destination || sender !== destination) {
+    return null;
+  }
+
+  const conversationHandles = [
+    ...(Array.isArray(message.participants) ? message.participants : []),
+    message.chat_identifier,
+  ];
+
+  for (const handle of conversationHandles) {
+    const normalized = normalizeComparableHandle(handle);
+    if (normalized && normalized !== sender) {
+      return handle?.trim() ?? null;
+    }
+  }
+  return null;
+}
+
+async function recoverMessageFromChatHistory(params: {
+  client: IMessageRpcClient;
+  chatId: number;
+  guid: string;
+  attachments: boolean;
+  perChatHistoryLimit: number;
+  rpcTimeoutMs: number;
+}): Promise<Record<string, unknown> | null> {
+  const historyResult = await params.client.request<MessagesHistoryResult>(
+    "messages.history",
+    {
+      attachments: params.attachments,
+      chat_id: params.chatId,
+      limit: params.perChatHistoryLimit,
+    },
+    { timeoutMs: params.rpcTimeoutMs },
+  );
+  const messages = Array.isArray(historyResult?.messages) ? historyResult.messages : [];
+  for (const raw of messages) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      continue;
+    }
+    const entry = raw as Record<string, unknown>;
+    if (entry.guid === params.guid) {
+      return entry;
+    }
+  }
+  return null;
+}
+
 export async function repairIMessageConversationAnchor(
   params: RepairIMessageConversationAnchorParams,
 ): Promise<IMessagePayload | null> {
   const { client, message, runtime } = params;
+  const rpcTimeoutMs = params.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+  const perChatHistoryLimit = params.perChatHistoryLimit ?? DEFAULT_PER_CHAT_HISTORY_LIMIT;
+
+  const peerSender = resolveDirectMessagePeerSenderCandidate(message);
+  if (peerSender) {
+    runtime?.log?.(
+      `imessage: repaired direct message sender GUID=${message.guid} chat_id=${message.chat_id}`,
+    );
+    return { ...message, sender: peerSender };
+  }
 
   if (!isIMessageAnchorless(message)) {
     return message;
@@ -123,31 +198,20 @@ export async function repairIMessageConversationAnchor(
       continue;
     }
 
-    let historyResult: MessagesHistoryResult | undefined;
+    let entry: Record<string, unknown> | null = null;
     try {
-      historyResult = await client.request<MessagesHistoryResult>(
-        "messages.history",
-        {
-          attachments: false,
-          chat_id: chatId,
-          limit: params.perChatHistoryLimit ?? DEFAULT_PER_CHAT_HISTORY_LIMIT,
-        },
-        { timeoutMs: params.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS },
-      );
+      entry = await recoverMessageFromChatHistory({
+        client,
+        chatId,
+        guid,
+        attachments: false,
+        perChatHistoryLimit,
+        rpcTimeoutMs,
+      });
     } catch {
       continue;
     }
-
-    const messages = Array.isArray(historyResult?.messages) ? historyResult.messages : [];
-    for (const raw of messages) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        continue;
-      }
-      const entry = raw as Record<string, unknown>;
-      if (entry.guid !== guid) {
-        continue;
-      }
-
+    if (entry) {
       const repaired = overlayRecoveredConversation(message, entry);
       if (isIMessageAnchorless(repaired)) {
         runtime?.error?.(

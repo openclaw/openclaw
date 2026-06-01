@@ -77,6 +77,52 @@ describe("repairIMessageConversationAnchor", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("repairs a direct-message sender that initially resolves to the local destination caller", async () => {
+    const peerHandle = "+15555550123";
+    const localSendHandle = "bot-account@example.com";
+    const message = anchorlessMessage({
+      guid: "DM-RACE-GUID-1",
+      chat_id: 1,
+      sender: localSendHandle,
+      destination_caller_id: localSendHandle,
+      chat_guid: `any;-;${peerHandle}`,
+      chat_identifier: peerHandle,
+      participants: [peerHandle],
+      is_group: false,
+    });
+    const client = mockClient([
+      {
+        id: 1,
+        messages: [
+          {
+            guid: "DM-RACE-GUID-1",
+            chat_id: 1,
+            sender: peerHandle,
+            destination_caller_id: localSendHandle,
+            chat_guid: `any;-;${peerHandle}`,
+            chat_identifier: peerHandle,
+            participants: [peerHandle],
+            is_group: false,
+          },
+        ],
+      },
+    ]);
+
+    const repaired = await repairIMessageConversationAnchor({
+      client: client as never,
+      message,
+    });
+
+    expect(repaired).toMatchObject({
+      sender: peerHandle,
+      chat_id: 1,
+      chat_identifier: peerHandle,
+      participants: [peerHandle],
+      is_group: false,
+    });
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("recovers the conversation from recent history by GUID", async () => {
     const message = anchorlessMessage();
     const client = mockClient([
