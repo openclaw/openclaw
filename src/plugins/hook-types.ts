@@ -87,6 +87,7 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "after_tools_resolved"
   | "tool_result_persist"
   | "before_message_write"
   | "session_start"
@@ -133,6 +134,7 @@ export const PLUGIN_HOOK_NAMES = [
   "message_sent",
   "before_tool_call",
   "after_tool_call",
+  "after_tools_resolved",
   "tool_result_persist",
   "before_message_write",
   "session_start",
@@ -561,6 +563,17 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+};
+
+export type PluginHookAfterToolsResolvedEvent = {
+  tools: Array<{
+    name: string;
+    label?: string;
+    description?: string;
+    parameters?: unknown;
+  }>;
+  provider: string;
+  model: string;
 };
 
 export type PluginHookToolResultPersistContext = {
@@ -1070,6 +1083,10 @@ export type PluginHookHandlerMap = {
   after_tool_call: (
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
+  ) => Promise<void> | void;
+  after_tools_resolved: (
+    event: PluginHookAfterToolsResolvedEvent,
+    ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,

@@ -19,6 +19,7 @@ import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-regist
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookAfterToolsResolvedEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
@@ -120,6 +121,7 @@ export type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookAgentEndEvent,
+  PluginHookAfterToolsResolvedEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
   PluginHookInboundClaimContext,
@@ -937,6 +939,18 @@ export function createHookRunner(
   }
 
   /**
+   * Run after_tools_resolved hook.
+   * Allows plugins to observe the final resolved tool list for this attempt.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runAfterToolsResolved(
+    event: PluginHookAfterToolsResolvedEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("after_tools_resolved", event, ctx);
+  }
+
+  /**
    * Run llm_input hook.
    * Allows plugins to observe the exact input payload sent to the LLM.
    * Runs in parallel (fire-and-forget).
@@ -1614,6 +1628,7 @@ export function createHookRunner(
     runLlmOutput,
     runBeforeAgentFinalize,
     runAgentEnd,
+    runAfterToolsResolved,
     runBeforeCompaction,
     runAfterCompaction,
     runBeforeReset,

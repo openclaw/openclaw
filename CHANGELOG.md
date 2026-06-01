@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Control UI: add a Dreaming-tab agent selector and propagate the selected agent through Dreaming status, diary, and diary actions. (#78748) Thanks @stevenepalmer.
 - Plugins: add a SecretRef provider integration manifest contract and extract shared LLM core packages for provider/plugin reuse. (#82326, #88117)
 - Skills: add the core skills index and centralize skills runtime loading, status, filtering, and prompt formatting.
+- Plugins: add an `after_tools_resolved` hook so trusted plugins can observe final post-policy tool names and JSON Schema snapshots for each embedded model attempt. Thanks @lan17.
 
 ### Fixes
 

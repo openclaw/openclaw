@@ -56,6 +56,7 @@ import {
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
+import type { PluginHookAfterToolsResolvedEvent } from "../../../plugins/types.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
@@ -490,6 +491,79 @@ export {
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
 
+export function buildAfterToolsResolvedToolMetadata(
+  tools: Array<{ name?: string; label?: string; description?: string; parameters?: unknown }>,
+): PluginHookAfterToolsResolvedEvent["tools"] {
+  return tools
+    .map((tool) => {
+      const name = typeof tool.name === "string" ? tool.name.trim() : "";
+      if (!name) {
+        return null;
+      }
+
+      const meta: PluginHookAfterToolsResolvedEvent["tools"][number] = { name };
+      if (typeof tool.label === "string" && tool.label.trim().length > 0) {
+        meta.label = tool.label;
+      }
+      if (typeof tool.description === "string" && tool.description.trim().length > 0) {
+        meta.description = tool.description;
+      }
+
+      if (tool.parameters !== undefined) {
+        try {
+          meta.parameters = structuredClone(tool.parameters);
+        } catch {
+          // Non-cloneable schemas stay out of the observation event.
+        }
+      }
+
+      return meta;
+    })
+    .filter((tool): tool is PluginHookAfterToolsResolvedEvent["tools"][number] => tool !== null);
+}
+
+export function buildAfterToolsResolvedSessionToolMetadata(
+  tools: Array<{ name?: string; label?: string; description?: string; parameters?: unknown }>,
+): PluginHookAfterToolsResolvedEvent["tools"] {
+  const toolByName = new Map<
+    string,
+    { name?: string; label?: string; description?: string; parameters?: unknown }
+  >();
+  for (const tool of tools) {
+    const name = typeof tool.name === "string" ? tool.name.trim() : "";
+    if (name) {
+      toolByName.set(name, { ...tool, name });
+    }
+  }
+
+  const sessionOrder = toSessionToolAllowlist(toolByName.keys());
+  return buildAfterToolsResolvedToolMetadata(
+    sessionOrder.flatMap((name) => {
+      const tool = toolByName.get(name);
+      return tool ? [tool] : [];
+    }),
+  );
+}
+export function resolveUnknownToolGuardThreshold(loopDetection?: {
+  enabled?: boolean;
+  unknownToolThreshold?: number;
+}): number {
+  // The unknown-tool guard is a safety net against the model hallucinating a
+  // tool name or calling a tool that has since been removed from the allowlist
+  // (for example after a `skills.allowBundled` config change). After `threshold`
+  // consecutive unknown-tool attempts the stream wrapper rewrites the assistant
+  // message content to tell the model to stop, which breaks otherwise-infinite
+  // Tool-not-found loops against the provider. Unlike the genericRepeat /
+  // pingPong / pollNoProgress detectors this guard has no false-positive
+  // surface because the tool is objectively not registered in this run, so it
+  // stays on regardless of `tools.loopDetection.enabled`.
+  const raw = loopDetection?.unknownToolThreshold;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return UNKNOWN_TOOL_THRESHOLD;
+}
+
 function pluginMetadataSnapshotCoversProvider(
   snapshot: PluginMetadataSnapshot | undefined,
   provider: string,
@@ -874,6 +948,7 @@ export async function runEmbeddedAttempt(
     config: params.config,
     agentId: params.agentId,
   });
+  const hookAgentId = sessionAgentId;
   const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
     config: params.config,
     sessionAgentId,
@@ -2214,6 +2289,36 @@ export async function runEmbeddedAttempt(
         collectRegisteredToolNames(allCustomTools),
       );
 
+      if (hookRunner?.hasHooks("after_tools_resolved")) {
+        // Mirror Pi's name-keyed session registry so duplicates report the active definition.
+        const resolvedTools = buildAfterToolsResolvedSessionToolMetadata(allCustomTools);
+        void hookRunner
+          .runAfterToolsResolved(
+            {
+              tools: resolvedTools,
+              provider: params.provider,
+              model: params.modelId,
+            },
+            {
+              runId: params.runId,
+              jobId: params.jobId,
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+              agentId: hookAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              modelProviderId: params.model.provider,
+              modelId: params.model.id,
+              messageProvider: params.messageProvider ?? undefined,
+              trigger: params.trigger,
+              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+            },
+          )
+          .catch((err) => {
+            log.warn(`after_tools_resolved hook failed: ${String(err)}`);
+          });
+      }
+
       const createdSession = await createEmbeddedAgentSessionWithResourceLoader<
         Awaited<ReturnType<typeof createAgentSession>>
       >({
@@ -3311,8 +3416,6 @@ export async function runEmbeddedAttempt(
       }
 
       // Hook runner was already obtained earlier before tool creation
-      const hookAgentId = sessionAgentId;
-
       const activeSessionManager = sessionManager;
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
       let promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
