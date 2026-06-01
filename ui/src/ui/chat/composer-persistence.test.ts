@@ -191,7 +191,7 @@ describe("chat composer persistence", () => {
     ).toBeNull();
   });
 
-  it("restores pre-request model-wait sends as queued messages", () => {
+  it("restores pre-request model-wait sends for manual retry only", () => {
     persistChatComposerState(
       createState({
         chatQueue: [
@@ -215,6 +215,8 @@ describe("chat composer persistence", () => {
         text: "not sent yet",
         createdAt: 1,
         sendRunId: "run-waiting-model",
+        sendState: "failed",
+        sendError: "Model selection was interrupted. Review and retry when ready.",
       },
     ]);
   });
