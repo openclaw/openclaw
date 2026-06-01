@@ -551,7 +551,9 @@ export class GatewayBrowserClient {
       const reason = ev.reason ?? "";
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
-      this.connectTiming.delete(generation);
+      this.emitConnectTiming(generation, "failed", {
+        errorCode: connectError?.code ?? "SOCKET_CLOSED",
+      });
       this.ws = null;
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
