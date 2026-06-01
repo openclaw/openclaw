@@ -12,6 +12,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -43,17 +44,12 @@ async function persistSessionEntryUpdate(params: {
   if (!params.storePath) {
     return;
   }
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      const next = { ...store[params.sessionKey!], ...params.nextEntry };
-      store[params.sessionKey!] = next;
-      return next;
-    },
+  await upsertSessionEntry(
     {
-      resolveSingleEntryPersistence: (entry) =>
-        entry && params.sessionKey ? { sessionKey: params.sessionKey, entry } : null,
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
     },
+    params.nextEntry,
   );
 }
 

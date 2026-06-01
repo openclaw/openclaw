@@ -8,7 +8,8 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -277,12 +278,12 @@ async function resetNoRealConversationTokenSnapshot(params: {
   }
   const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
   try {
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey: params.sessionKey,
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      update: async () => ({
+    await updateSessionEntry(
+      {
+        storePath,
+        sessionKey: params.sessionKey,
+      },
+      async () => ({
         totalTokens: 0,
         totalTokensFresh: true,
         inputTokens: undefined,
@@ -292,7 +293,11 @@ async function resetNoRealConversationTokenSnapshot(params: {
         contextBudgetStatus: undefined,
         updatedAt: Date.now(),
       }),
-    });
+      {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      },
+    );
   } catch (err) {
     log.warn(
       `[context-overflow-precheck] failed to reset stale context snapshot for ` +

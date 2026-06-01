@@ -23,13 +23,12 @@ import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../.
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  applySessionStoreEntryPatch,
   loadSessionStore,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
-  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
@@ -1245,12 +1244,9 @@ export async function runReplyAgent(params: {
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
-      await applySessionStoreEntryPatch({
-        storePath,
-        sessionKey,
+      await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
         skipMaintenance: true,
         takeCacheOwnership: true,
-        patch: { updatedAt },
       });
     }
   };
@@ -1490,14 +1486,16 @@ export async function runReplyAgent(params: {
       restartRecoveryDeliveryRunId,
       updatedAt,
     };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
         current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
           ? patch
           : null,
-    });
+    );
     if (persisted) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
@@ -1516,16 +1514,18 @@ export async function runReplyAgent(params: {
       restartRecoveryDeliveryRunId: undefined,
       updatedAt: Date.now(),
     };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
+    const persisted = await updateSessionEntry(
+      {
+        storePath,
+        sessionKey,
+      },
+      async (current) =>
         current.sessionId === replyOperation.sessionId &&
         current.abortedLastRun !== true &&
         current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
           ? patch
           : null,
-    });
+    );
     if (persisted) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
@@ -1742,16 +1742,17 @@ export async function runReplyAgent(params: {
       activeSessionEntry.updatedAt = updatedAt;
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             groupActivationNeedsSystemIntro: false,
             updatedAt,
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
 
@@ -1887,17 +1888,18 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = fallbackStateEntry;
       }
       if (sessionKey && storePath) {
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
             fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
             fallbackNoticeReason: fallbackTransition.nextState.reason,
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
     const usedCliProvider = isCliProvider(providerUsed, cfg);
@@ -2530,19 +2532,20 @@ export async function runReplyAgent(params: {
           runtimePolicySessionKey,
           opts,
         });
-        await applySessionStoreEntryPatch({
-          storePath,
-          sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          patch: {
+        await updateSessionEntry(
+          { storePath, sessionKey },
+          () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
             pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),
+          }),
+          {
+            skipMaintenance: true,
+            takeCacheOwnership: true,
           },
-        });
+        );
       }
     }
 
