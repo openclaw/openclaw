@@ -334,9 +334,10 @@ executed until they are explicitly enabled. For local development, run
 `openclaw plugins enable <plugin-id>` or set
 `plugins.entries.<plugin-id>.enabled: true`; if your config uses
 `plugins.allow`, include the same plugin id there too. This fail-closed rule also
-applies to setup-only validation paths, so local channel plugin setup code will
-not run while the workspace plugin remains disabled or excluded from the
-allowlist. See [Configure plugin policy](/tools/plugin#configure-plugin-policy)
+applies when channel setup explicitly targets a plugin for setup-only loading, so
+local channel plugin setup code will not run while the workspace plugin remains
+disabled or excluded from the allowlist. See
+[Configure plugin policy](/tools/plugin#configure-plugin-policy)
 and [Configuration reference](/gateway/configuration-reference#plugins).
 
 `--force` is not supported with `--link` because linked installs reuse the source path instead of copying over a managed install target.
