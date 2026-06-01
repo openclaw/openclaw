@@ -16,7 +16,11 @@ export function logAuthProfileFailureStateChange(params: {
   now: number;
 }): void {
   const windowType =
-    params.reason === "billing" || params.reason === "auth_permanent" || params.reason === "quota_exhausted" ? "disabled" : "cooldown";
+    params.reason === "billing" ||
+    params.reason === "auth_permanent" ||
+    params.reason === "quota_exhausted"
+      ? "disabled"
+      : "cooldown";
   const previousCooldownUntil = params.previous?.cooldownUntil;
   const previousDisabledUntil = params.previous?.disabledUntil;
   // Active cooldown/disable windows are intentionally immutable; log whether this
@@ -61,11 +65,11 @@ export function logAuthProfileFailureStateChange(params: {
   if (windowType === "disabled" && !windowReused) {
     // Fire internal hook async so ContextClaw can observe provider death
     triggerInternalHook(
-      createInternalHookEvent("agent", "provider_tripped", undefined, {
+      createInternalHookEvent("agent", "provider_tripped", "", {
         provider: params.provider,
         reason: params.reason,
-      })
-    ).catch(e => {
+      }),
+    ).catch((e) => {
       observationLog.error("failed to dispatch provider_tripped hook", { error: e?.message });
     });
   }

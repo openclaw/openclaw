@@ -387,6 +387,19 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
   return Array.isArray(context.bootstrapFiles);
 }
 
+export function isAgentProviderTrippedEvent(
+  event: InternalHookEvent,
+): event is AgentProviderTrippedHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "provider_tripped")) {
+    return false;
+  }
+  const context = getHookContext<AgentProviderTrippedHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return hasStringContextField(context, "provider") && hasStringContextField(context, "reason");
+}
+
 export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
   if (!isHookEventTypeAndAction(event, "gateway", "startup")) {
     return false;
