@@ -42,7 +42,10 @@ describe("QQBot token manager", () => {
       url: "https://bots.qq.com/app/getAppAccessToken",
       auditContext: "qqbot-token",
       capture: false,
-      policy: { allowRfc2544BenchmarkRange: true },
+      policy: {
+        hostnameAllowlist: ["bots.qq.com"],
+        allowRfc2544BenchmarkRange: true,
+      },
       init: {
         method: "POST",
         headers: {
@@ -66,7 +69,10 @@ describe("QQBot token manager", () => {
       expect.objectContaining({
         url: "https://bots.qq.com/app/getAppAccessToken",
         auditContext: "qqbot-token",
-        policy: { allowRfc2544BenchmarkRange: true },
+        policy: {
+          hostnameAllowlist: ["bots.qq.com"],
+          allowRfc2544BenchmarkRange: true,
+        },
       }),
     );
   });

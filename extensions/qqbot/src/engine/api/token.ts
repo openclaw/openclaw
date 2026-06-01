@@ -33,6 +33,7 @@ const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
  * See https://github.com/openclaw/openclaw/issues/88984.
  */
 const QQBOT_TOKEN_SSRF_POLICY: SsrFPolicy = {
+  hostnameAllowlist: ["bots.qq.com"],
   allowRfc2544BenchmarkRange: true,
 };
 
