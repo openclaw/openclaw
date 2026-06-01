@@ -21,6 +21,7 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
+const startBotIdentityRecoveryMock = vi.hoisted(() => vi.fn());
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 
@@ -41,6 +42,16 @@ vi.mock("./monitor.transport.js", () => ({
   monitorWebhook: monitorWebhookMock,
 }));
 
+vi.mock("./monitor.bot-identity.js", async () => {
+  const actual = await vi.importActual<typeof import("./monitor.bot-identity.js")>(
+    "./monitor.bot-identity.js",
+  );
+  return {
+    ...actual,
+    startBotIdentityRecovery: startBotIdentityRecoveryMock,
+  };
+});
+
 vi.mock("./thread-bindings.js", () => ({
   createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
 }));
@@ -49,6 +60,7 @@ afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./bot.js");
   vi.doUnmock("./monitor.transport.js");
+  vi.doUnmock("./monitor.bot-identity.js");
   vi.doUnmock("./thread-bindings.js");
   vi.resetModules();
 });
@@ -476,6 +488,7 @@ describe("monitorSingleAccount lifecycle", () => {
     createEventDispatcherMock.mockReset().mockReturnValue({
       register: vi.fn(),
     });
+    startBotIdentityRecoveryMock.mockReset();
   });
 
   it("stops the Feishu thread binding manager when the monitor exits", async () => {
@@ -521,6 +534,30 @@ describe("monitorSingleAccount lifecycle", () => {
       | { stop: ReturnType<typeof vi.fn> }
       | undefined;
     expect(manager?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts bot identity recovery when the startup probe loses an abort race", async () => {
+    setFeishuRuntime(createFeishuMonitorRuntime());
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: createNonExitingRuntimeEnv(),
+      abortSignal: abortController.signal,
+      botOpenIdSource: {
+        kind: "prefetched",
+      },
+    });
+
+    expect(startBotIdentityRecoveryMock).toHaveBeenCalledTimes(1);
+    expect(startBotIdentityRecoveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        abortSignal: undefined,
+      }),
+    );
   });
 });
 
