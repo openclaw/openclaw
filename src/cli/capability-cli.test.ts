@@ -2275,6 +2275,41 @@ describe("capability cli", () => {
     expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
   });
 
+  it("does not override existing direct TTS provider API keys", async () => {
+    const rawConfig = { messages: { tts: { openai: { apiKey: "config-key" } } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
+      apiKey: "profile-openai-key",
+      source: "profile:openai:qa",
+      mode: "api-key",
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "tts",
+        "convert",
+        "--text",
+        "hello",
+        "--model",
+        "openai/gpt-4o-mini-tts",
+        "--json",
+      ],
+    });
+
+    const cfg = firstTextToSpeechCall()?.cfg as {
+      messages?: {
+        tts?: {
+          openai?: { apiKey?: string };
+          providers?: { openai?: { apiKey?: string } };
+        };
+      };
+    };
+    expect(cfg.messages?.tts?.openai?.apiKey).toBe("config-key");
+    expect(cfg.messages?.tts?.providers?.openai).toBeUndefined();
+  });
+
   it("disables TTS fallback when explicit provider or voice/model selection is requested", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
