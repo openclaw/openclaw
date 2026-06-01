@@ -1693,12 +1693,15 @@ function extractTargetHeadingBodySnippet(
   if (bodySnippet.startsWith(targetSnippet)) {
     return null;
   }
-  const separatorIndex = targetSnippet.lastIndexOf(": ");
-  if (separatorIndex <= 0) {
-    return null;
+  const normalizedBody = normalizeSnippet(bodySnippet);
+  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0; ) {
+    const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
+    if (targetBody && normalizedBody.startsWith(targetBody)) {
+      return targetBody;
+    }
+    separatorIndex = targetSnippet.indexOf(": ", separatorIndex + 2);
   }
-  const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
-  return targetBody || null;
+  return null;
 }
 
 function compareCandidateWindow(

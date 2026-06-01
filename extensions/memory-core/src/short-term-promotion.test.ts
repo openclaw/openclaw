@@ -2389,6 +2389,59 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps renamed heading fallback bound to colon-prefixed list bodies", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+        "# 2026-05-28",
+        "",
+        "## Nearby shortcut",
+        "- use Mimo",
+        "",
+        "## New model routing",
+        "- **需求**: use Mimo",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-05-28",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-05-28",
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 7,
+            endLine: 7,
+            score: 0.91,
+            snippet: "Old model routing: **需求**: use Mimo",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(7);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(7);
+      expect(applied.appliedCandidates[0]?.snippet).toBe("New model routing: **需求**: use Mimo");
+      expect(applied.appliedCandidates[0]?.snippet).not.toContain("Nearby shortcut");
+    });
+  });
+
   it("preserves the full range for capped heading-prefixed multi-line list snippets", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxDailySnippetChars = 280;
