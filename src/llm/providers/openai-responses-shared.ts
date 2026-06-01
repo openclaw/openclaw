@@ -613,8 +613,13 @@ export async function processResponsesStream<TApi extends Api>(
     } else if (event.type === "response.content_part.added") {
       if (currentItem?.type === "message") {
         currentItem.content = currentItem.content || [];
-        // Filter out ReasoningText, only accept output_text and refusal
-        if (event.part.type === "output_text" || event.part.type === "refusal") {
+        // Accept output_text, text (Azure), and refusal content parts
+        // Azure OpenAI Responses may return "text" instead of "output_text"
+        if (
+          event.part.type === "output_text" ||
+          event.part.type === "text" ||
+          event.part.type === "refusal"
+        ) {
           currentItem.content.push(event.part);
         }
       }
@@ -625,6 +630,24 @@ export async function processResponsesStream<TApi extends Api>(
         }
         const lastPart = currentItem.content[currentItem.content.length - 1];
         if (lastPart?.type === "output_text") {
+          currentBlock.text += event.delta;
+          lastPart.text += event.delta;
+          stream.push({
+            type: "text_delta",
+            contentIndex: blockIndex(),
+            delta: event.delta,
+            partial: output,
+          });
+        }
+      }
+    } else if (event.type === "response.text.delta") {
+      // Azure OpenAI Responses may emit "text" events instead of "output_text"
+      if (currentItem?.type === "message" && currentBlock?.type === "text") {
+        if (!currentItem.content || currentItem.content.length === 0) {
+          continue;
+        }
+        const lastPart = currentItem.content[currentItem.content.length - 1];
+        if (lastPart?.type === "text") {
           currentBlock.text += event.delta;
           lastPart.text += event.delta;
           stream.push({
@@ -697,8 +720,11 @@ export async function processResponsesStream<TApi extends Api>(
         });
         currentBlock = null;
       } else if (item.type === "message" && currentBlock?.type === "text") {
+        // Support both OpenAI "output_text" and Azure "text" content types
         currentBlock.text = item.content
-          .map((c) => (c.type === "output_text" ? c.text : c.refusal))
+          .map((c) =>
+            c.type === "output_text" || c.type === "text" ? c.text : c.refusal,
+          )
           .join("");
         currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
         stream.push({

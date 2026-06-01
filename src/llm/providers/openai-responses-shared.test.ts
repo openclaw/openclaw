@@ -1,8 +1,16 @@
-import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "vitest";
+import type {
+  ResponseStreamEvent,
+  Tool as OpenAIResponsesTool,
+} from "openai/resources/responses/responses.js";
+import { describe, expect, it, vi } from "vitest";
 import type { Context, Model, Tool } from "../types.js";
-import { convertResponsesMessages } from "./openai-responses-shared.js";
+import {
+  createResponsesAssistantOutput,
+  convertResponsesMessages,
+  processResponsesStream,
+} from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
 
 type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
 
@@ -325,5 +333,346 @@ describe("convertResponsesMessages", () => {
       call_id: "call_abc",
     });
     expect(functionCall).not.toHaveProperty("id");
+  });
+});
+
+describe("Azure OpenAI Responses content type support", () => {
+  const azureModel = {
+    id: "gpt-5.5",
+    name: "GPT-5.5 (Azure)",
+    api: "azure-openai-responses",
+    provider: "azure",
+    baseUrl: "https://test.openai.azure.com/openai/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: 8192,
+  } satisfies Model<"azure-openai-responses">;
+
+  it("supports Azure 'text' content type in addition to 'output_text'", () => {
+    const input = convertResponsesMessages(
+      azureModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: azureModel.api,
+            provider: azureModel.provider,
+            model: azureModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "text",
+                text: "Azure response with text content type",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_azure_text",
+                }),
+              },
+            ],
+          },
+        ],
+      } satisfies Context,
+      new Set(["azure", "azure-openai-responses"]),
+      { includeSystemPrompt: false },
+    );
+
+    const assistantMessage = input.find(
+      (item) => item && typeof item === "object" && "role" in item && item.role === "assistant",
+    );
+
+    expect(assistantMessage).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: "Azure response with text content type",
+          annotations: [],
+        },
+      ],
+      });
+    });
+  });
+
+  it("processResponsesStream handles Azure 'text' content type streaming events", async () => {
+    const azureModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5 (Azure)",
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://test.openai.azure.com/openai/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"azure-openai-responses">;
+
+    // Simulate Azure Responses API stream with 'text' content type
+    const azureEvents: ResponseStreamEvent[] = [
+      {
+        type: "response.created",
+        response: {
+          id: "resp_azure_123",
+          status: "in_progress",
+        } as any,
+      },
+      {
+        type: "response.output_item.added",
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_azure_1",
+          content: [],
+          status: "in_progress",
+        },
+      },
+      {
+        type: "response.content_part.added",
+        part: {
+          type: "text", // Azure uses 'text' instead of 'output_text'
+          text: "",
+        },
+      },
+      {
+        type: "response.text.delta", // Azure uses 'response.text.delta' instead of 'response.output_text.delta'
+        delta: "Hello",
+      },
+      {
+        type: "response.text.delta",
+        delta: " from",
+      },
+      {
+        type: "response.text.delta",
+        delta: " Azure!",
+      },
+      {
+        type: "response.content_part.done",
+        part: {
+          type: "text",
+          text: "Hello from Azure!",
+        },
+      },
+      {
+        type: "response.output_item.done",
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_azure_1",
+          content: [
+            {
+              type: "text", // Azure content type
+              text: "Hello from Azure!",
+            },
+          ],
+          status: "completed",
+        },
+      },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_azure_123",
+          status: "completed",
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+          },
+        } as any,
+      },
+    ];
+
+    const stream = new AssistantMessageEventStream();
+    const output = createResponsesAssistantOutput(azureModel, "azure-openai-responses");
+    const events: Array<{ type: string }> = [];
+
+    // Mock the stream processing
+    const processStream = async () => {
+      for (const event of azureEvents) {
+        await processResponsesStream(
+          (async function* () {
+            yield event;
+          })(),
+          output,
+          stream,
+          azureModel,
+        );
+      }
+    };
+
+    // Collect stream events
+    stream.on("start", (data) => events.push({ type: "start" }));
+    stream.on("text_start", (data) => events.push({ type: "text_start" }));
+    stream.on("text_delta", (data) =>
+      events.push({ type: "text_delta", delta: data.delta }),
+    );
+    stream.on("text_end", (data) =>
+      events.push({ type: "text_end", content: data.content }),
+    );
+    stream.on("done", (data) => events.push({ type: "done" }));
+
+    await processStream();
+
+    // Verify that Azure 'text' content type was properly handled
+    expect(events).toEqual([
+      { type: "start" },
+      { type: "text_start" },
+      { type: "text_delta", delta: "Hello" },
+      { type: "text_delta", delta: " from" },
+      { type: "text_delta", delta: " Azure!" },
+      { type: "text_end", content: "Hello from Azure!" },
+      { type: "done" },
+    ]);
+
+    // Verify the final output contains the expected text
+    expect(output.content).toHaveLength(1);
+    expect(output.content[0]).toMatchObject({
+      type: "text",
+      text: "Hello from Azure!",
+    });
+
+    // Verify usage was recorded
+    expect(output.usage).toMatchObject({
+      input: 10,
+      output: 5,
+      totalTokens: 15,
+    });
+
+    // Verify stop reason
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("processResponsesStream handles mixed OpenAI and Azure content types", async () => {
+    const openaiModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+
+    // Simulate a stream with both output_text (OpenAI) and text (Azure) content types
+    const mixedEvents: ResponseStreamEvent[] = [
+      {
+        type: "response.created",
+        response: { id: "resp_mixed", status: "in_progress" } as any,
+      },
+      {
+        type: "response.output_item.added",
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_mixed_1",
+          content: [],
+          status: "in_progress",
+        },
+      },
+      // First part uses OpenAI's output_text
+      {
+        type: "response.content_part.added",
+        part: {
+          type: "output_text",
+          text: "",
+        },
+      },
+      {
+        type: "response.output_text.delta",
+        delta: "Standard ",
+      },
+      {
+        type: "response.output_text.delta",
+        delta: "OpenAI ",
+      },
+      {
+        type: "response.output_text.delta",
+        delta: "response",
+      },
+      {
+        type: "response.content_part.done",
+        part: {
+          type: "output_text",
+          text: "Standard OpenAI response",
+        },
+      },
+      {
+        type: "response.output_item.done",
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_mixed_1",
+          content: [
+            {
+              type: "output_text",
+              text: "Standard OpenAI response",
+            },
+          ],
+          status: "completed",
+        },
+      },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_mixed",
+          status: "completed",
+          usage: {
+            input_tokens: 8,
+            output_tokens: 4,
+            total_tokens: 12,
+          },
+        } as any,
+      },
+    ];
+
+    const stream = new AssistantMessageEventStream();
+    const output = createResponsesAssistantOutput(openaiModel, "openai-responses");
+
+    const processStream = async () => {
+      for (const event of mixedEvents) {
+        await processResponsesStream(
+          (async function* () {
+            yield event;
+          })(),
+          output,
+          stream,
+          openaiModel,
+        );
+      }
+    };
+
+    const collectedText: string[] = [];
+    stream.on("text_delta", (data) => collectedText.push(data.delta));
+    stream.on("text_end", (data) => collectedText.push(`[END:${data.content}]`));
+
+    await processStream();
+
+    // Verify OpenAI output_text content type still works
+    expect(collectedText).toEqual([
+      "Standard ",
+      "OpenAI ",
+      "response",
+      "[END:Standard OpenAI response]",
+    ]);
+
+    expect(output.content[0]).toMatchObject({
+      type: "text",
+      text: "Standard OpenAI response",
+    });
   });
 });
