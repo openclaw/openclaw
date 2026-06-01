@@ -302,6 +302,56 @@ describe("GatewayPlugin", () => {
     expect(thirdResolved).toBe(true);
   });
 
+  it("re-arms reconnect for unexpected abnormal closes after reconnect was cleared", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+
+    gateway.connect(false);
+    const socket = gateway.sockets[0];
+    socket?.emit("open");
+    (
+      gateway as unknown as { shouldReconnect: boolean; intentionalDisconnect: boolean }
+    ).shouldReconnect = false;
+    (
+      gateway as unknown as { shouldReconnect: boolean; intentionalDisconnect: boolean }
+    ).intentionalDisconnect = false;
+    socket?.emit("close", 1006);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(gateway.connectCalls).toEqual([false, true]);
+    expect(gateway.sockets).toHaveLength(2);
+  });
+
+  it("does not reconnect abnormal closes from intentional disconnects", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+
+    gateway.connect(false);
+    const socket = gateway.sockets[0];
+    socket?.emit("open");
+    (
+      gateway as unknown as { shouldReconnect: boolean; intentionalDisconnect: boolean }
+    ).shouldReconnect = false;
+    (
+      gateway as unknown as { shouldReconnect: boolean; intentionalDisconnect: boolean }
+    ).intentionalDisconnect = true;
+    socket?.emit("close", 1006);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(gateway.connectCalls).toEqual([false]);
+    expect(gateway.sockets).toHaveLength(1);
+  });
+
   it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     const dispatchGatewayEvent = vi.fn(async (_eventValue: string, _dataValue: unknown) => {});

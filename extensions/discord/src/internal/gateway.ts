@@ -89,6 +89,7 @@ export class GatewayPlugin extends Plugin {
   private resumeGatewayUrl: string | null = null;
   private reconnectAttempts = 0;
   private shouldReconnect = false;
+  private intentionalDisconnect = false;
   private isConnecting = false;
   private readonly heartbeatTimers = new GatewayHeartbeatTimers();
   private readonly reconnectTimer = new GatewayReconnectTimer();
@@ -147,6 +148,7 @@ export class GatewayPlugin extends Plugin {
       return;
     }
     this.shouldReconnect = true;
+    this.intentionalDisconnect = false;
     this.lastHeartbeatAck = true;
     this.ws?.close(1000, "Reconnecting");
     const baseUrl =
@@ -161,6 +163,7 @@ export class GatewayPlugin extends Plugin {
 
   disconnect(): void {
     this.shouldReconnect = false;
+    this.intentionalDisconnect = true;
     this.stopReconnectTimer();
     this.stopHeartbeat();
     this.outboundLimiter.clear();
@@ -209,7 +212,10 @@ export class GatewayPlugin extends Plugin {
       this.isConnected = false;
       this.emitter.emit("debug", `Gateway websocket closed: ${code}`);
       if (!this.shouldReconnect) {
-        return;
+        if (this.intentionalDisconnect || isNormalGatewayCloseCode(closeCode)) {
+          return;
+        }
+        this.shouldReconnect = true;
       }
       if (isFatalGatewayCloseCode(closeCode)) {
         this.shouldReconnect = false;
@@ -477,4 +483,8 @@ export class GatewayPlugin extends Plugin {
   hasIntent(intent: number): boolean {
     return Boolean((this.options.intents ?? 0) & intent);
   }
+}
+
+function isNormalGatewayCloseCode(code: number): boolean {
+  return code === 1000 || code === 1001;
 }
