@@ -127,7 +127,7 @@ describe("codex plugin", () => {
         .supported,
     ).toBe(true);
     const openAiCodex = harness.supports({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
       requestedRuntime: "auto",
     });
@@ -216,7 +216,7 @@ describe("codex plugin", () => {
 
   it("enables the native hook relay for public Codex side questions", async () => {
     const harness = createCodexAppServerAgentHarness({ pluginConfig: { appServer: {} } });
-    const runSideQuestion = harness.runSideQuestion;
+    const runSideQuestion = harness["runSideQuestion"];
     const result = { text: "ok" };
     runCodexAppServerSideQuestionMock.mockResolvedValueOnce(result);
 

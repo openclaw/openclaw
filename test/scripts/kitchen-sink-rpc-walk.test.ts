@@ -28,6 +28,7 @@ import {
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
+  shouldPrintHelp,
   stopGateway,
   summarizeProcessSamples,
   tailFile,
@@ -43,6 +44,25 @@ afterEach(() => {
 });
 
 describe("kitchen-sink RPC isolated state", () => {
+  it("prints help without creating temp state or installing the plugin", async () => {
+    const result = await runCommand(process.execPath, [
+      "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+      "--help",
+    ]);
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_NPM_SPEC");
+    expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
+    expect(result.stdout).not.toContain("temp root preserved");
+  });
+
+  it("detects short and long help flags", () => {
+    expect(shouldPrintHelp(["--help"])).toBe(true);
+    expect(shouldPrintHelp(["-h"])).toBe(true);
+    expect(shouldPrintHelp([])).toBe(false);
+  });
+
   it("keeps loose numeric env values from corrupting runtime guardrails", () => {
     expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
     expect(readPositiveInt("1000", 60_000)).toBe(1000);
@@ -104,6 +124,39 @@ describe("kitchen-sink RPC gateway teardown", () => {
     expect(child.unref).toHaveBeenCalledOnce();
   });
 
+  it("treats ESRCH during gateway teardown as already exited", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      const error = Object.assign(new Error("process already exited"), { code: "ESRCH" });
+      throw error;
+    });
+
+    await expect(stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 })).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("treats failed gateway kill signals as already exited", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => false);
+
+    await expect(stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 })).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
+
   it("fails readiness waits before polling after signaled gateway exits", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-signal-ready-"));
     try {
@@ -121,6 +174,32 @@ describe("kitchen-sink RPC gateway teardown", () => {
         }),
       ).rejects.toThrow("gateway exited before ready");
       expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps stalled readiness probes inside the caller deadline", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-stalled-ready-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "booting\n");
+      let calls = 0;
+      const startedAt = Date.now();
+
+      await expect(
+        waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
+          fetchImpl: () => {
+            calls += 1;
+            return new Promise(() => {});
+          },
+          pollDelayMs: 1,
+          timeoutMs: 25,
+        }),
+      ).rejects.toThrow("gateway did not become ready");
+
+      expect(calls).toBe(1);
+      expect(Date.now() - startedAt).toBeLessThan(500);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -267,8 +346,8 @@ setInterval(() => {}, 1000);
 
     const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
       detached: undefined,
-      timeoutKillGraceMs: 50,
-      timeoutMs: 1000,
+      timeoutKillGraceMs: 25,
+      timeoutMs: 500,
     });
 
     try {
@@ -277,7 +356,7 @@ setInterval(() => {}, 1000);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 1000ms");
+      await expect(runPromise).rejects.toThrow("timed out after 500ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -286,6 +365,48 @@ setInterval(() => {}, 1000);
       }
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("records resource samples for command process trees", async () => {
+    const samples: Array<{
+      aggregateRssMiB?: number;
+      elapsedMs?: number;
+      label?: string;
+      processId?: number;
+      rssMiB?: number;
+    }> = [];
+    const seenPids: number[] = [];
+
+    const result = await runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+      resourceLabel: "plugins install",
+      resourceSampleIntervalMs: 1,
+      resourceSamples: samples,
+      sampleProcessImpl: async (pid: number) => {
+        seenPids.push(pid);
+        return {
+          aggregateRssMiB: 640,
+          cpuPercent: 12,
+          processId: pid + 1,
+          rssMiB: 512,
+        };
+      },
+    });
+
+    expect(result.stdout).toBe("");
+    expect(seenPids.length).toBeGreaterThan(0);
+    expect(samples[0]).toMatchObject({
+      aggregateRssMiB: 640,
+      label: "plugins install",
+      processId: seenPids[0] + 1,
+      rssMiB: 512,
+    });
+    expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("rejects command spawn failures as Error objects", async () => {
+    await expect(runCommand("openclaw-definitely-missing-command", [])).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 
@@ -697,7 +818,7 @@ describe("kitchen-sink RPC process sampling", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: () => new Promise(() => undefined),
+      text: () => new Promise(() => {}),
     });
 
     const result = fetchJson("http://127.0.0.1:19680/readyz", {

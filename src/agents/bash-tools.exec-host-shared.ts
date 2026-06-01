@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -63,6 +64,8 @@ export type ExecApprovalRequestState = ExecApprovalPendingState & {
   noticeSeconds: number;
 };
 
+const EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS = 0;
+
 export type ExecApprovalUnavailableReason =
   | "no-approval-route"
   | "initiating-platform-disabled"
@@ -111,9 +114,11 @@ export function createExecApprovalPendingState(params: {
   warnings: string[];
   timeoutMs: number;
 }): ExecApprovalPendingState {
+  const expiresAtMs =
+    resolveExpiresAtMsFromDurationMs(params.timeoutMs) ?? EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS;
   return {
     warningText: params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "",
-    expiresAtMs: Date.now() + params.timeoutMs,
+    expiresAtMs,
     preResolvedDecision: undefined,
   };
 }
@@ -434,7 +439,7 @@ export async function sendExecApprovalFollowupResult(
           idempotencyKey: runtimeHandoff.idempotencyKey,
         }
       : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {

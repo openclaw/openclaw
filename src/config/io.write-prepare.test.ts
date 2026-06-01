@@ -355,6 +355,62 @@ describe("config io write prepare", () => {
     expect(persisted.gateway?.port).toBe(18888);
   });
 
+  it("normalizes manifest-backed provider catalog refs during unrelated config writes", () => {
+    const makeModel = (id: string) => ({
+      id,
+      name: "Custom latest",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    });
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            models: [makeModel("latest")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            models: [makeModel("vendor/modern-model")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+      modelIdNormalizationPolicies: new Map([
+        [
+          "myproxy",
+          {
+            aliases: { latest: "modern-model" },
+            prefixWhenBare: "vendor",
+          },
+        ],
+      ]),
+    }) as OpenClawConfig;
+
+    expect(persisted.models?.providers?.myproxy?.models).toEqual([
+      makeModel("vendor/modern-model"),
+    ]);
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
   it("allows explicit unsets to remove authored agent provider params", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {
@@ -705,7 +761,7 @@ describe("config io write prepare", () => {
         },
       },
     } satisfies OpenClawConfig;
-    (runtimeConfig.channels?.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
+    (runtimeConfig.channels!.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
 
     const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {

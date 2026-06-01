@@ -93,9 +93,7 @@ function getAgentIdentity(
   agentIdentityById: Record<string, AgentIdentityResult>,
   agentId: string,
 ): AgentIdentityResult | null {
-  return Object.prototype.hasOwnProperty.call(agentIdentityById, agentId)
-    ? (agentIdentityById[agentId] ?? null)
-    : null;
+  return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
 }
 
 function rowMatchesSessionDefaults(
@@ -434,9 +432,9 @@ function sessionDetailItems(params: {
   };
   add(t("sessionsView.status"), row.status);
   if (row.goal) {
-    details.push({ label: "Goal", value: formatGoalDetail(row.goal) });
+    details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
   }
-  add("Goal note", row.goal?.lastStatusNote);
+  add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
   add(t("sessionsView.runtime"), formatRuntimeMs(row.runtimeMs));

@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   hasEffectivePairedDeviceRole,
@@ -20,7 +21,6 @@ import {
   type ApnsRelayConfig,
 } from "../infra/push-apns.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const APPROVALS_SCOPE = "operator.approvals";
 const OPERATOR_ROLE = "operator";
@@ -309,7 +309,7 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
         const deliveryState: ApprovalDeliveryState = {
           nodeIds: plan.targets.map((target) => target.nodeId),
           requestPushPromise: sendRequestedPushes({ request, plan, log: params.log }).catch(
-            (err) => {
+            (err: unknown) => {
               const message = formatErrorMessage(err);
               params.log.error?.(`exec approvals: iOS request push failed: ${message}`);
               return { attempted: plan.targets.length, delivered: 0 };

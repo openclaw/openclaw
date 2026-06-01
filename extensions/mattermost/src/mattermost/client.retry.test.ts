@@ -1,7 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMattermostClient, createMattermostDirectChannelWithRetry } from "./client.js";
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 describe("createMattermostDirectChannelWithRetry", () => {
   const mockFetch = vi.fn<typeof fetch>();

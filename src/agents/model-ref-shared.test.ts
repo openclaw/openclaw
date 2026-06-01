@@ -29,6 +29,40 @@ describe("normalizeStaticProviderModelId", () => {
     );
   });
 
+  it("applies shipped bundled provider model aliases without manifest lookup", () => {
+    expect(normalizeStaticProviderModelId("anthropic", "sonnet-4.6")).toBe("claude-sonnet-4-6");
+    expect(normalizeStaticProviderModelId("vercel-ai-gateway", "sonnet-4.6")).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect(normalizeStaticProviderModelId("huggingface", "huggingface/vendor/model")).toBe(
+      "vendor/model",
+    );
+  });
+
+  it("strips native Anthropic provider prefixes from static catalog ids", () => {
+    expect(normalizeStaticProviderModelId("anthropic", "anthropic/claude-haiku-4-5")).toBe(
+      "claude-haiku-4-5",
+    );
+  });
+
+  it("uses supplied manifest normalization policies when provided", () => {
+    const manifestPlugins = [
+      {
+        modelIdNormalization: {
+          providers: {
+            custom: {
+              prefixWhenBare: "vendor",
+            },
+          },
+        },
+      },
+    ];
+
+    expect(normalizeStaticProviderModelId("custom", "model", { manifestPlugins })).toBe(
+      "vendor/model",
+    );
+  });
+
   it("keeps OpenRouter bare compatibility ids provider-qualified without manifest lookup", () => {
     expect(
       normalizeStaticProviderModelId("openrouter", "auto", {

@@ -23,7 +23,10 @@ import type {
 } from "./server-chat-state.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
+import {
+  deriveGatewaySessionLifecycleSnapshot,
+  isStaleLifecycleEventForSession,
+} from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -170,6 +173,19 @@ const CHAT_ERROR_KINDS = new Set<ErrorKind>([
   "context_length",
   "unknown",
 ]);
+
+function buildChatErrorMessage(error: unknown): Record<string, unknown> | undefined {
+  const raw = error ? formatForLog(error).trim() : "";
+  if (!raw) {
+    return undefined;
+  }
+  const text = raw.startsWith("⚠️") || raw.startsWith("Error:") ? raw : `Error: ${raw}`;
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: Date.now(),
+  };
+}
 
 function readChatErrorKind(value: unknown): ErrorKind | undefined {
   return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ErrorKind)
@@ -320,21 +336,26 @@ export function createAgentEventHandler({
   ) => {
     const row = loadGatewaySessionRowForSnapshot(sessionKey, agentId ? { agentId } : undefined);
     const omitUnscopedGlobalGoal = sessionKey === "global" && !agentId;
-    const lifecyclePatch = evt
-      ? deriveGatewaySessionLifecycleSnapshot({
-          session: row
-            ? {
-                updatedAt: row.updatedAt ?? undefined,
-                status: row.status,
-                startedAt: row.startedAt,
-                endedAt: row.endedAt,
-                runtimeMs: row.runtimeMs,
-                abortedLastRun: row.abortedLastRun,
-              }
-            : undefined,
-          event: evt,
-        })
-      : {};
+    const lifecyclePatch =
+      evt &&
+      !isStaleLifecycleEventForSession({
+        owningSessionId: evt.sessionId,
+        currentSessionId: row?.sessionId,
+      })
+        ? deriveGatewaySessionLifecycleSnapshot({
+            session: row
+              ? {
+                  updatedAt: row.updatedAt ?? undefined,
+                  status: row.status,
+                  startedAt: row.startedAt,
+                  endedAt: row.endedAt,
+                  runtimeMs: row.runtimeMs,
+                  abortedLastRun: row.abortedLastRun,
+                }
+              : undefined,
+            event: evt,
+          })
+        : {};
     const session = row ? { ...row, ...lifecyclePatch } : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;
@@ -758,6 +779,7 @@ export function createAgentEventHandler({
       seq,
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
+      message: buildChatErrorMessage(error),
       ...(errorKind && { errorKind }),
     };
     sendChatPayload(sessionKey, payload, opts);

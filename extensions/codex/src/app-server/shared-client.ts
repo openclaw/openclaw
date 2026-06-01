@@ -199,6 +199,7 @@ async function acquireSharedCodexAppServerClient(
     (entry.promise = (async () => {
       const client = CodexAppServerClient.start(startOptions);
       entry.client = client;
+      client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
       try {
         await client.initialize();
@@ -223,6 +224,7 @@ async function acquireSharedCodexAppServerClient(
       options?.timeoutMs ?? 0,
       "codex app-server initialize timed out",
     );
+    client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
     return release ? { client, release } : { client };
   } catch (error) {
@@ -260,7 +262,12 @@ export async function createIsolatedCodexAppServerClient(
 
 export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
+  const clients = collectSharedClients(state);
   state.clients.clear();
+  state.leasedReleases = new WeakMap();
+  for (const client of clients) {
+    client.close();
+  }
 }
 
 export function clearSharedCodexAppServerClient(): void {

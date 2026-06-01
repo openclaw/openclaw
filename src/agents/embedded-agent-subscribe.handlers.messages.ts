@@ -1,4 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
@@ -7,15 +10,12 @@ import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { createInlineCodeState } from "../markdown/code-spans.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -384,6 +384,63 @@ function mergeReplyDirectiveResults(
   };
 }
 
+function parseFullStreamingReplyText(text: string): string {
+  return parseReplyDirectives(splitTrailingDirective(text).text).text;
+}
+
+function containsCompleteMediaDirectiveLine(text: string): boolean {
+  return /(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(text);
+}
+
+function resolveIncrementalStreamingReplyText(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousRawText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+  shouldUsePhaseAwareBlockReply: boolean;
+}): string | undefined {
+  if (
+    params.evtType === "text_end" ||
+    !params.parsedStreamDirectives ||
+    params.parsedStreamDirectives.isSilent ||
+    hasReplyDirectiveMetadata(params.parsedStreamDirectives) ||
+    containsCompleteMediaDirectiveLine(params.visibleDelta) ||
+    params.parsedStreamDirectives.text !== params.visibleDelta
+  ) {
+    return undefined;
+  }
+
+  if (
+    !params.shouldUsePhaseAwareBlockReply &&
+    params.previousCleaned === params.previousRawText.trim()
+  ) {
+    return params.next;
+  }
+
+  const cleanedCandidate = `${params.previousCleaned}${params.parsedStreamDirectives.text}`.trim();
+  return cleanedCandidate === params.next ? cleanedCandidate : undefined;
+}
+
+function resolveStreamingReplyText(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousRawText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+  shouldUsePhaseAwareBlockReply: boolean;
+}): string {
+  if (!params.parsedStreamDirectives) {
+    return params.evtType === "text_delta"
+      ? params.previousCleaned
+      : parseFullStreamingReplyText(params.next);
+  }
+
+  return resolveIncrementalStreamingReplyText(params) ?? parseFullStreamingReplyText(params.next);
+}
+
 export function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
@@ -671,13 +728,20 @@ export function handleMessageUpdate(
     if (shouldUsePhaseAwareBlockReply) {
       recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
     }
-    const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text);
-    const cleanedText = parsedFull.text;
+    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+    const cleanedText = resolveStreamingReplyText({
+      evtType,
+      next,
+      previousRawText: ctx.state.lastStreamedAssistant ?? "",
+      previousCleaned,
+      visibleDelta,
+      parsedStreamDirectives,
+      shouldUsePhaseAwareBlockReply,
+    });
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
-    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
-    let shouldEmit = false;
+    let shouldEmit;
     let deltaText = "";
     let replace = false;
     if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
@@ -755,7 +819,7 @@ export function handleMessageUpdate(
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
     void Promise.resolve()
       .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex, final: true }))
-      .catch((err) => {
+      .catch((err: unknown) => {
         ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
       });
   }
@@ -814,8 +878,8 @@ export function handleMessageEnd(
   const parsedText = trimmedText
     ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
     : null;
-  let cleanedText = parsedText?.text ?? "";
-  let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+  const cleanedText = parsedText?.text ?? "";
+  const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
@@ -926,18 +990,20 @@ export function handleMessageEnd(
       return;
     }
     const {
-      text: cleanedText,
-      mediaUrls,
+      text: cleanedTextLocal,
+      mediaUrls: mediaUrlsLocal,
       audioAsVoice,
       replyToId,
       replyToTag,
       replyToCurrent,
     } = splitResult;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-    if (hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice })) {
+    if (
+      hasAssistantVisibleReply({ text: cleanedTextLocal, mediaUrls: mediaUrlsLocal, audioAsVoice })
+    ) {
       ctx.emitBlockReply({
-        text: cleanedText,
-        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        text: cleanedTextLocal,
+        mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
         audioAsVoice,
         replyToId,
         replyToTag,
@@ -957,7 +1023,8 @@ export function handleMessageEnd(
     onBlockReply &&
     (ctx.state.blockReplyBreak === "message_end" ||
       hasBufferedBlockReply ||
-      text !== ctx.state.lastBlockReplyText)
+      text !== ctx.state.lastBlockReplyText ||
+      hasMedia)
   ) {
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
       const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({
@@ -965,19 +1032,22 @@ export function handleMessageEnd(
         final: true,
       });
       if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-        void flushBlockReplyBufferResult.catch((err) => {
+        void flushBlockReplyBufferResult.catch((err: unknown) => {
           ctx.log.debug(`message_end block reply flush failed: ${String(err)}`);
         });
       }
       // Final-flush the streaming directive accumulator so any partial
-      // directive tail held back by splitTrailingDirective (for example a
-      // trailing `MEDIA:<path>` that arrived without a closing newline)
-      // gets emitted here. Without this, a reply ending in a directive
-      // line whose URL is complete but un-terminated would sit in
-      // pendingTail forever and the attachment would be silently dropped
-      // on the message_end / blockReplyChunking path.
-      emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
-    } else if (text !== ctx.state.lastBlockReplyText) {
+      // inline reply/audio tag held back by splitTrailingDirective gets
+      // emitted on the message_end / blockReplyChunking path.
+      emitSplitResultAsBlockReply(
+        hasMedia && parsedText
+          ? {
+              ...parsedText,
+              text: "",
+            }
+          : ctx.consumeReplyDirectives("", { final: true }),
+      );
+    } else if (text !== ctx.state.lastBlockReplyText || hasMedia) {
       // Guard: for text_end channels, if text_end already delivered content
       // (lastBlockReplyText is set), skip this safety send. The text comparison
       // here uses a different stripping pipeline (stripBlockTags with reset state)
@@ -985,13 +1055,17 @@ export function handleMessageEnd(
       // stripDowngradedToolCallText), which can false-positive. When text_end
       // didn't deliver (e.g. commentary suppressed, provider skipped text_end),
       // lastBlockReplyText is still null and message_end must deliver.
-      if (ctx.state.blockReplyBreak === "text_end" && ctx.state.lastBlockReplyText != null) {
+      if (
+        ctx.state.blockReplyBreak === "text_end" &&
+        ctx.state.lastBlockReplyText != null &&
+        !hasMedia
+      ) {
         ctx.log.debug(
           `Skipping message_end safety send for text_end channel - content already delivered via text_end`,
         );
       } else {
         // Check for duplicates before emitting (same logic as emitBlockChunk).
-        const normalizedText = normalizeTextForComparison(text);
+        const normalizedText = normalizeTextForComparison(hasMedia ? cleanedText : text);
         if (
           isMessagingToolDuplicateNormalized(
             normalizedText,
@@ -1002,10 +1076,20 @@ export function handleMessageEnd(
             `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
           );
         } else {
-          ctx.state.lastBlockReplyText = text;
-          ctx.state.lastDeliveredBlockReplyText = text;
+          const alreadyDeliveredFinalText = Boolean(
+            hasMedia && cleanedText && cleanedText === ctx.state.lastBlockReplyText,
+          );
+          ctx.state.lastBlockReplyText = hasMedia ? cleanedText || text : text;
+          ctx.state.lastDeliveredBlockReplyText = hasMedia ? cleanedText || text : text;
           ctx.state.toolExecutionSinceLastBlockReply = false;
-          emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
+          emitSplitResultAsBlockReply(
+            hasMedia && parsedText
+              ? {
+                  ...parsedText,
+                  text: alreadyDeliveredFinalText ? "" : cleanedText,
+                }
+              : ctx.consumeReplyDirectives(text, { final: true }),
+          );
         }
       }
     }

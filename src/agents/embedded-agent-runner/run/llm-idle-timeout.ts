@@ -1,10 +1,10 @@
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   finiteSecondsToTimerSafeMilliseconds,
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
-} from "../../../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
@@ -314,7 +314,10 @@ export function streamWithIdleTimeout(
             onThrow(streamIterator, error) {
               clearTimer();
               cleanupSourceSignal();
-              return streamIterator.throw?.(error) ?? Promise.reject(error);
+              return (
+                streamIterator.throw?.(error) ??
+                Promise.reject(toLintErrorObject(error, "Non-Error rejection"))
+              );
             },
           });
         };
@@ -341,7 +344,7 @@ export function streamWithIdleTimeout(
           clearStreamPromiseTimer();
           return wrapStream(stream);
         },
-        (error) => {
+        (error: unknown) => {
           clearStreamPromiseTimer();
           cleanupSourceSignal();
           throw error;
@@ -350,4 +353,18 @@ export function streamWithIdleTimeout(
     }
     return wrapStream(maybeStream);
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

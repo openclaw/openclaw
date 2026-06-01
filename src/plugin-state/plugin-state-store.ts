@@ -1,6 +1,7 @@
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  clearPluginStateSqliteStoreForTests,
-  closePluginStateSqliteStore,
+  clearPluginStateDatabaseForTests,
+  closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
   pluginStateConsume,
@@ -9,6 +10,7 @@ import {
   pluginStateLookup,
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
+  pluginStateUpdate,
 } from "./plugin-state-store.sqlite.js";
 import type {
   OpenKeyedStoreOptions,
@@ -31,11 +33,13 @@ export type {
 } from "./plugin-state-store.types.js";
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
+  closePluginStateDatabase,
   closePluginStateSqliteStore,
   countPluginStateLiveEntries,
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   isPluginStateDatabaseOpen,
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   probePluginStateStore,
+  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
@@ -111,7 +115,7 @@ function validateOptionalTtlMs(
   if (value == null) {
     return undefined;
   }
-  if (!Number.isInteger(value) || value < 1) {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw invalidInput("plugin state ttlMs must be a positive integer", operation);
   }
   return value;
@@ -276,6 +280,27 @@ function createKeyedStoreForPluginId<T>(
         ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
     },
+    async update(key, updateValue, opts) {
+      const normalizedKey = validateKey(key, "register");
+      return pluginStateUpdate({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        maxEntries,
+        updateValueJson: (current) => {
+          const next = updateValue(current as T | undefined);
+          if (next === undefined) {
+            return undefined;
+          }
+          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
+          return {
+            valueJson: params.valueJson,
+            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+          };
+        },
+        ...(env ? { env } : {}),
+      });
+    },
     async lookup(key) {
       const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({
@@ -351,6 +376,27 @@ function createSyncKeyedStoreForPluginId<T>(
         ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
       });
     },
+    update(key, updateValue, opts) {
+      const normalizedKey = validateKey(key, "register");
+      return pluginStateUpdate({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        maxEntries,
+        updateValueJson: (current) => {
+          const next = updateValue(current as T | undefined);
+          if (next === undefined) {
+            return undefined;
+          }
+          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
+          return {
+            valueJson: params.valueJson,
+            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+          };
+        },
+        ...(env ? { env } : {}),
+      });
+    },
     lookup(key) {
       const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({
@@ -424,13 +470,14 @@ export function createCorePluginStateSyncKeyedStore<T>(
 }
 
 export function clearPluginStateStoreForTests(): void {
-  clearPluginStateSqliteStoreForTests();
+  clearPluginStateDatabaseForTests();
   namespaceOptionSignatures.clear();
 }
 
 export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
   if (options.closeDatabase !== false) {
-    closePluginStateSqliteStore();
+    closePluginStateDatabase();
+    closeOpenClawStateDatabaseForTest();
   }
   namespaceOptionSignatures.clear();
 }

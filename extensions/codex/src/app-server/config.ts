@@ -5,6 +5,7 @@ import {
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
@@ -59,7 +60,30 @@ type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 export type CodexPluginDestructivePolicy = boolean;
 
-export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
+// OpenAI ships first-party Codex plugins across three marketplaces:
+// - openai-curated: remote curated marketplace, fetched via `codex plugin marketplace add`
+// - openai-bundled: local marketplace that ships with Codex.app and the Codex CLI
+//   (browser, chrome, computer-use, latex-tectonic)
+// - openai-primary-runtime: marketplace owned by the Codex primary runtime
+//   (documents, spreadsheets, presentations)
+// All three are owned by OpenAI. Allow activating plugins from any of them.
+export const CODEX_PLUGINS_MARKETPLACE_NAMES = [
+  "openai-curated",
+  "openai-bundled",
+  "openai-primary-runtime",
+] as const;
+export type CodexPluginsMarketplaceName = (typeof CODEX_PLUGINS_MARKETPLACE_NAMES)[number];
+
+// Back-compat constant for callers that still reference the curated marketplace by name.
+export const CODEX_PLUGINS_MARKETPLACE_NAME: CodexPluginsMarketplaceName = "openai-curated";
+
+export function isCodexPluginsMarketplaceName(
+  name: string | undefined,
+): name is CodexPluginsMarketplaceName {
+  return (
+    name !== undefined && (CODEX_PLUGINS_MARKETPLACE_NAMES as readonly string[]).includes(name)
+  );
+}
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -102,7 +126,7 @@ export type CodexAppServerExperimentalConfig = {
 
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
-  marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  marketplaceName: CodexPluginsMarketplaceName;
   pluginName: string;
   enabled: boolean;
   allowDestructiveActions: CodexPluginDestructivePolicy;
@@ -254,7 +278,7 @@ const codexAppServerExperimentalSchema = z
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME).optional(),
+    marketplaceName: z.enum(CODEX_PLUGINS_MARKETPLACE_NAMES).optional(),
     pluginName: z.string().trim().min(1).optional(),
     allow_destructive_actions: z.boolean().optional(),
   })
@@ -364,13 +388,13 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   const allowDestructiveActions = config?.allow_destructive_actions ?? true;
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
-      if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
+      if (!isCodexPluginsMarketplaceName(entry.marketplaceName) || !entry.pluginName) {
         return [];
       }
       return [
         {
           configKey,
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          marketplaceName: entry.marketplaceName,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
           allowDestructiveActions: entry.allow_destructive_actions ?? allowDestructiveActions,
@@ -1384,7 +1408,7 @@ export function isCodexFastServiceTier(value: unknown): boolean {
 }
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  return resolvePositiveTimerTimeoutMs(value, fallback);
 }
 
 function normalizeHeaders(value: unknown): Record<string, string> {

@@ -1,5 +1,4 @@
 import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
-import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import { Type } from "typebox";
 import {
   redactCodexSupervisorEndpoint,
@@ -74,14 +73,13 @@ function readIntegerParam(params: Record<string, unknown>, key: string): number 
   if (value === undefined) {
     return undefined;
   }
-  const integer = asSafeIntegerInRange(value, { min: 1, max: 1000 });
-  if (integer === undefined) {
-    if (typeof value === "number" && Number.isInteger(value)) {
-      throw new Error(`${key} must be between 1 and 1000`);
-    }
+  if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new Error(`${key} must be an integer`);
   }
-  return integer;
+  if (value < 1 || value > 1000) {
+    throw new Error(`${key} must be between 1 and 1000`);
+  }
+  return value;
 }
 
 function readModeParam(params: Record<string, unknown>): CodexSupervisorTurnMode | undefined {

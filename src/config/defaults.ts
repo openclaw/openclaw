@@ -1,8 +1,11 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  collectManifestModelIdNormalizationPolicies,
+  normalizeConfiguredProviderCatalogModelId,
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { isRecord } from "../shared/record-coerce.js";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
@@ -21,9 +24,10 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 type WarnState = { warned: boolean };
 type ProviderPolicyDefaultsOptions = {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
 
-let defaultWarnState: WarnState = { warned: false };
+const defaultWarnState: WarnState = { warned: false };
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
@@ -155,6 +159,10 @@ export function applyModelDefaults(
 
   const providerConfig = nextCfg.models?.providers;
   if (providerConfig) {
+    const manifestRegistry = options.manifestRegistry ?? options.loadManifestRegistry?.();
+    const modelIdNormalizationPolicies = manifestRegistry
+      ? collectManifestModelIdNormalizationPolicies(manifestRegistry.plugins)
+      : undefined;
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
       const normalizedProvider = normalizeProviderConfigForConfigDefaults({
@@ -171,7 +179,7 @@ export function applyModelDefaults(
         continue;
       }
       const providerApi = normalizedProvider.api;
-      let nextProvider = normalizedProvider;
+      const nextProvider = normalizedProvider;
       if (nextProvider !== provider) {
         mutated = true;
       }
@@ -179,7 +187,11 @@ export function applyModelDefaults(
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
         let modelMutated = false;
-        const id = normalizeConfiguredProviderCatalogModelId(providerId, raw.id);
+        const id = normalizeConfiguredProviderCatalogModelId(
+          providerId,
+          raw.id,
+          modelIdNormalizationPolicies,
+        );
         if (id !== raw.id) {
           modelMutated = true;
         }
@@ -273,7 +285,7 @@ export function applyModelDefaults(
         return agent;
       }
       let nextAgent = agent;
-      if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+      if (Object.hasOwn(agent, "model")) {
         const normalizedModel = normalizeAgentModelConfigForDefaults(agent.model);
         if (normalizedModel !== agent.model) {
           nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
