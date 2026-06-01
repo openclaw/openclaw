@@ -309,11 +309,16 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     );
   }
   if (response.status >= 400) {
-    const message =
+    // Preserve the HTTP status in the message: this error crosses the node.invoke
+    // boundary as a plain string (Error properties are dropped in transit), and the
+    // gateway's stale-target retry classifier keys off the leading `<status>:` token
+    // (e.g. "404: tab not found"). Without it, node-proxied browser errors can't be
+    // classified for retry on the gateway side.
+    const detail =
       response.body && typeof response.body === "object" && "error" in response.body
         ? String((response.body as { error?: unknown }).error)
-        : `HTTP ${response.status}`;
-    throw new Error(message);
+        : null;
+    throw new Error(detail !== null ? `${response.status}: ${detail}` : `HTTP ${response.status}`);
   }
 
   const result = response.body;

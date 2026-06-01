@@ -288,7 +288,7 @@ describe("runBrowserProxyCommand", () => {
     await result;
   });
 
-  it("keeps non-timeout browser errors intact", async () => {
+  it("prefixes the HTTP status onto non-timeout browser errors", async () => {
     dispatcherMocks.dispatch.mockResolvedValue({
       status: 500,
       body: { error: "tab not found" },
@@ -303,7 +303,27 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow("tab not found");
+    ).rejects.toThrow("500: tab not found");
+  });
+
+  it("preserves the 404 status so the gateway can classify a stale targetId", async () => {
+    // The gateway's stale-target retry only fires when the surfaced message carries
+    // both "404:" and "tab not found"; the node proxy must not strip the status.
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 404,
+      body: { error: 'tab not found: browser tab "abc"' },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/act",
+          profile: "openclaw",
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow("404: tab not found");
   });
 
   it("rejects unauthorized query.profile when allowProfiles is configured", async () => {
