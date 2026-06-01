@@ -1144,7 +1144,8 @@ describe("message tool loop detection action runner proof", () => {
       status: "blocked",
       deniedReason: "tool-loop",
     });
-    expect(String(blocked.details?.reason)).toContain("CRITICAL");
+    const blockedDetails = blocked.details as { reason?: unknown } | undefined;
+    expect(String(blockedDetails?.reason)).toContain("CRITICAL");
   });
 });
 
