@@ -10,6 +10,7 @@ import type { ExecApprovalRequest } from "./exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
+/** Chat delivery target resolved from an approval request's persisted session state. */
 export type ExecApprovalSessionTarget = {
   channel?: string;
   to: string;
