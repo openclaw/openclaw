@@ -2366,7 +2366,7 @@ describe("memory plugin e2e", () => {
     }));
 
     try {
-      const { default: memoryPlugin } = await import("./index.js");
+      const { default: memoryPluginWithMockedEmbeddings } = await import("./index.js");
       const registeredTools: any[] = [];
       const mockApi = {
         id: "memory-lancedb",
@@ -2399,7 +2399,7 @@ describe("memory plugin e2e", () => {
         resolvePath: (p: string) => p,
       };
 
-      memoryPlugin.register(mockApi as any);
+      memoryPluginWithMockedEmbeddings.register(mockApi as any);
       const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
       if (!recallTool) {
         throw new Error("memory_recall tool was not registered");
@@ -2515,7 +2515,7 @@ describe("memory plugin e2e", () => {
   });
 
   test("rejects non-positive embedding dimensions before truncation", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
+    const { default: memoryPluginWithInvalidDimensions } = await import("./index.js");
     const registeredTools: any[] = [];
     const mockApi = {
       id: "memory-lancedb",
@@ -2548,7 +2548,7 @@ describe("memory plugin e2e", () => {
       resolvePath: (p: string) => p,
     };
 
-    memoryPlugin.register(mockApi as any);
+    memoryPluginWithInvalidDimensions.register(mockApi as any);
     const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
     expect(recallTool).toBeUndefined();
   });
