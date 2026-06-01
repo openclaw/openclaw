@@ -1553,6 +1553,49 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("sends later final-shaped diagnostics separately after a streaming final claims the card", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    await options.deliver(
+      { text: "FINAL_DELIVERY_TEST_OK_20260601_FINAL_FIX_UI" },
+      { kind: "final" },
+    );
+    await options.deliver(
+      { text: "tool.result failed: No such file or directory" },
+      { kind: "final" },
+    );
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "FINAL_DELIVERY_TEST_OK_20260601_FINAL_FIX_UI",
+      { note: "Agent: agent" },
+    );
+    expect(
+      streamingInstances[0].update.mock.calls.some(
+        (call: unknown[]) =>
+          typeof call[0] === "string" && call[0].includes("No such file or directory"),
+      ),
+    ).toBe(false);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectLastMockArgFields(sendMessageFeishuMock, "separate diagnostic send", {
+      text: "tool.result failed: No such file or directory",
+    });
+  });
+
   it("shows raw command detail in streaming card tool status", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",

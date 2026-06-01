@@ -247,6 +247,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
   let streamingCloseErroredForReply = false;
+  let finalReplyCommitted = false;
+  const committedStreamingFinalTexts = new Set<string>();
   let visibleReplySent = false;
   let skippedFinalReason: string | null = null;
   let idleSideEffectsPromise: Promise<void> = Promise.resolve();
@@ -302,6 +304,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       mode?: StreamTextUpdateMode;
     },
   ) => {
+    if (finalReplyCommitted) {
+      return;
+    }
     if (!nextText) {
       return;
     }
@@ -334,6 +339,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const queueReasoningUpdate = (nextThinking: string) => {
+    if (finalReplyCommitted) {
+      return;
+    }
     if (!nextThinking) {
       return;
     }
@@ -396,6 +404,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     statusLine = "";
     snapshotBaseText = "";
     lastSnapshotTextLength = 0;
+    finalReplyCommitted = false;
+    committedStreamingFinalTexts.clear();
   };
 
   const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
@@ -445,6 +455,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     nextStatusLine: string,
     options?: { startIfNeeded?: boolean },
   ) => {
+    if (finalReplyCommitted) {
+      return;
+    }
     statusLine = nextStatusLine;
     const hasStreamingSession = Boolean(streaming?.isActive() || streamingStartPromise);
     if (!hasStreamingSession && (options?.startIfNeeded === false || renderMode !== "card")) {
@@ -604,6 +617,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!replyLifecycleStateInitialized) {
           replyLifecycleStateInitialized = true;
           deliveredFinalTexts.clear();
+          committedStreamingFinalTexts.clear();
+          finalReplyCommitted = false;
           streamingClosedForReply = false;
           streamingCloseErroredForReply = false;
           visibleReplySent = false;
@@ -639,16 +654,32 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           (renderMode === "card" ||
             (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
             (renderMode === "auto" && shouldUseCard(text)));
+        const skipTextForDuplicateFinal =
+          info?.kind === "final" &&
+          hasText &&
+          (deliveredFinalTexts.has(text) || committedStreamingFinalTexts.has(text));
+        const extendsCommittedStreamingFinal =
+          info?.kind === "final" &&
+          hasText &&
+          finalReplyCommitted &&
+          streamText &&
+          (mergeStreamingText(streamText, text) === text ||
+            text.includes(streamText.replace(/\n?```\s*$/u, "")));
+        const laterFinalAfterStreamingCommit =
+          info?.kind === "final" &&
+          hasText &&
+          finalReplyCommitted &&
+          !skipTextForDuplicateFinal &&
+          !extendsCommittedStreamingFinal;
         const useStreamingCard =
           hasText &&
           streamingEnabled &&
+          !laterFinalAfterStreamingCommit &&
           !finalTextExceedsStreamingLimit &&
           (info?.kind === "final" || useStaticCard);
         const finalTextWouldUseStreamingCard =
           info?.kind === "final" && hasText && streamingEnabled;
         const useCard = useStaticCard || useStreamingCard;
-        const skipTextForDuplicateFinal =
-          info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const skipTextForClosedStreamingFinal =
           info?.kind === "final" &&
           hasText &&
@@ -667,6 +698,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         if (!shouldDeliverText && !hasMedia) {
           return;
+        }
+
+        if (laterFinalAfterStreamingCommit && (streaming?.isActive() || streamingStartPromise)) {
+          await closeStreaming();
         }
 
         if (shouldDiscardStreamingPreview) {
@@ -702,6 +737,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             if (info?.kind === "final") {
               streamText = text;
+              finalReplyCommitted = true;
+              committedStreamingFinalTexts.add(text);
               snapshotBaseText = "";
               lastSnapshotTextLength = text.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
