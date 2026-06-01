@@ -26,6 +26,7 @@ import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js
 import { buildExplicitSessionIdSessionKey } from "../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
 import {
@@ -1408,11 +1409,22 @@ async function runTtsConvert(params: {
     commandName: "infer tts convert",
     targetIds: getTtsCommandSecretTargetIds(),
   });
-  const overrides = resolveExplicitTtsOverrides({
+  const ttsProvider = resolveTtsProviderForAuthHydration({
     cfg,
     provider: params.provider,
     modelId: params.modelId,
+    channelId: params.channel,
+  });
+  const effectiveCfg = await injectTtsAuthProfileApiKey({
+    cfg,
+    provider: ttsProvider,
+  });
+  const overrides = resolveExplicitTtsOverrides({
+    cfg: effectiveCfg,
+    provider: params.provider,
+    modelId: params.modelId,
     voiceId: params.voiceId,
+    channelId: params.channel,
   });
   const hasExplicitSelection = Boolean(
     overrides.provider ||
@@ -1421,7 +1433,7 @@ async function runTtsConvert(params: {
   );
   const result = await textToSpeech({
     text: params.text,
-    cfg,
+    cfg: effectiveCfg,
     channel: params.channel,
     overrides,
     disableFallback: hasExplicitSelection,
@@ -1450,6 +1462,74 @@ async function runTtsConvert(params: {
       },
     ],
   } satisfies CapabilityEnvelope;
+}
+
+function resolveTtsProviderForAuthHydration(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+  modelId?: string;
+  channelId?: string;
+}): string | undefined {
+  const explicitProvider =
+    params.provider ?? resolveSelectedProviderFromModelRef(normalizeOptionalString(params.modelId));
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+  const ttsConfig = resolveTtsConfig(params.cfg, { channelId: params.channelId });
+  return getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));
+}
+
+async function injectTtsAuthProfileApiKey(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+}): Promise<OpenClawConfig> {
+  if (!params.provider) {
+    return params.cfg;
+  }
+  const providerId =
+    canonicalizeSpeechProviderId(params.provider, params.cfg) ??
+    normalizeLowercaseStringOrEmpty(params.provider);
+  if (!providerId) {
+    return params.cfg;
+  }
+  const existingProviderConfig = params.cfg.messages?.tts?.providers?.[providerId];
+  if (
+    existingProviderConfig &&
+    typeof existingProviderConfig === "object" &&
+    !Array.isArray(existingProviderConfig) &&
+    "apiKey" in existingProviderConfig
+  ) {
+    return params.cfg;
+  }
+  const auth = await resolveApiKeyForProvider({
+    provider: providerId,
+    cfg: params.cfg,
+    credentialPrecedence: "profile-first",
+  }).catch(() => undefined);
+  if (!auth?.apiKey || auth.mode !== "api-key") {
+    return params.cfg;
+  }
+  const messages = { ...(params.cfg.messages ?? {}) };
+  const tts = { ...(messages.tts ?? {}) };
+  const providers = { ...(tts.providers ?? {}) };
+  providers[providerId] = {
+    ...(existingProviderConfig &&
+    typeof existingProviderConfig === "object" &&
+    !Array.isArray(existingProviderConfig)
+      ? existingProviderConfig
+      : {}),
+    apiKey: auth.apiKey,
+  };
+  return {
+    ...params.cfg,
+    messages: {
+      ...messages,
+      tts: {
+        ...tts,
+        providers,
+      },
+    },
+  };
 }
 
 async function runTtsProviders(transport: CapabilityTransport) {
