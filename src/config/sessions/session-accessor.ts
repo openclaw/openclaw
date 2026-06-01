@@ -20,6 +20,7 @@ import type { SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
   agentId?: string;
+  clone?: boolean;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
@@ -46,6 +47,13 @@ export type SessionEntryUpdateOptions = {
 
 /** Loads one session entry through the storage-neutral accessor seam. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
+  if (scope.clone === false) {
+    const store = loadSessionStore(resolveAccessStorePath(scope), {
+      clone: false,
+      ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+    });
+    return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;
+  }
   return getSessionEntry(scope);
 }
 
@@ -53,6 +61,14 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
 export function listSessionEntries(
   scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
 ): SessionEntrySummary[] {
+  if (scope.clone === false) {
+    return Object.entries(
+      loadSessionStore(resolveAccessStorePath({ ...scope, sessionKey: "" }), {
+        clone: false,
+        ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+      }),
+    ).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+  }
   return listFileSessionEntries(scope);
 }
 

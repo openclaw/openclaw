@@ -10,6 +10,7 @@ import {
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
+import { loadSessionStore } from "./store.js";
 
 describe("session accessor file-backed seam", () => {
   let tempDir: string;
@@ -76,6 +77,25 @@ describe("session accessor file-backed seam", () => {
     );
     expect(inserted?.sessionId).not.toBe(scope.sessionKey);
     expect(loadSessionEntry(scope)?.sessionId).toBe(inserted?.sessionId);
+  });
+
+  it("can borrow cached entry objects for read-only hot paths", async () => {
+    const scope = {
+      clone: false,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, {
+      sessionId: "session-1",
+      updatedAt: 10,
+    });
+    const cachedStore = loadSessionStore(storePath, { clone: false });
+
+    expect(loadSessionEntry(scope)).toBe(cachedStore["agent:main:main"]);
+    expect(listSessionEntries({ clone: false, storePath })[0]?.entry).toBe(
+      cachedStore["agent:main:main"],
+    );
   });
 
   it("updates existing entries without creating missing sessions", async () => {
