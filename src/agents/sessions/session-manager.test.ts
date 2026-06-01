@@ -51,10 +51,16 @@ describe("SessionManager persistence", () => {
     );
 
     const manager = SessionManager.open(sessionFile, path.dirname(sessionFile), "/tmp/openclaw");
+    manager.appendMessage({ role: "user", content: "follow-up" });
     manager.appendMessage({ role: "assistant", content: "answer" });
 
     const entries = await readEntries(sessionFile);
-    expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message"]);
+    expect(entries.map((entry) => entry.type)).toEqual([
+      "session",
+      "message",
+      "message",
+      "message",
+    ]);
     expect(entries.filter((entry) => entry.type === "session")).toHaveLength(1);
     expect(
       entries.filter(
@@ -62,6 +68,14 @@ describe("SessionManager persistence", () => {
           entry.type === "message" &&
           entry.message.role === "user" &&
           entry.message.content === "pending question",
+      ),
+    ).toHaveLength(1);
+    expect(
+      entries.filter(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "user" &&
+          entry.message.content === "follow-up",
       ),
     ).toHaveLength(1);
   });
