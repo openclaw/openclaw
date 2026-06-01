@@ -45,6 +45,7 @@ const state = vi.hoisted(() => ({
   persistSessionEntryMock: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
   clearSessionAuthProfileOverrideMock: vi.fn(),
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
+  resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
@@ -121,20 +122,26 @@ vi.mock("./command/session-store.runtime.js", () => ({
 }));
 
 vi.mock("./command/session.js", () => ({
-  resolveSession: () => ({
-    sessionId: "session-1",
-    sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
-    sessionEntry: state.sessionEntryMock ?? {
+  resolveSession: () => {
+    const sessionEntry: SessionEntry =
+      state.sessionEntryMock ??
+      {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      };
+    return {
       sessionId: "session-1",
-      updatedAt: Date.now(),
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    },
-    sessionStore: state.sessionStoreMock,
-    storePath: state.storePathMock,
-    isNewSession: false,
-    persistedThinking: undefined,
-    persistedVerbose: undefined,
-  }),
+      sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
+      sessionEntry,
+      sessionStore: state.sessionStoreMock,
+      storePath: state.storePathMock,
+      isNewSession: false,
+      persistedThinking:
+        typeof sessionEntry.thinkingLevel === "string" ? sessionEntry.thinkingLevel : undefined,
+      persistedVerbose: undefined,
+    };
+  },
 }));
 
 vi.mock("./command/types.js", () => ({}));
@@ -167,7 +174,8 @@ vi.mock("../auto-reply/thinking.js", () => ({
   normalizeThinkLevel: (v?: string) => v || undefined,
   normalizeVerboseLevel: (v?: string) => v || undefined,
   isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
-  resolveSupportedThinkingLevel: ({ level }: { level?: string }) => level,
+  resolveSupportedThinkingLevel: (args: { level?: string }) =>
+    state.resolveSupportedThinkingLevelMock(args),
   supportsXHighThinking: () => false,
 }));
 
@@ -889,6 +897,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = undefined;
     delete (state.defaultRuntimeConfig.agents as { list?: unknown }).list;
     state.isThinkingLevelSupportedMock.mockReturnValue(true);
+    state.resolveSupportedThinkingLevelMock.mockImplementation(({ level }: { level?: string }) =>
+      level,
+    );
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
@@ -1199,6 +1210,36 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     })?.[0] as { entry?: Record<string, unknown> } | undefined;
     expect(touchWrite?.entry?.lastInteractionAt).toBeDefined();
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not persist turn-local thinking fallback over a stored session override", async () => {
+    setupSingleAttemptFallback();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      thinkingLevel: "high",
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.isThinkingLevelSupportedMock.mockReturnValue(false);
+    state.resolveSupportedThinkingLevelMock.mockReturnValue("off");
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      resolvedThinkLevel: "off",
+    });
+    expect(sessionEntry.thinkingLevel).toBe("high");
+    expect(sessionStore["agent:main:main"]?.thinkingLevel).toBe("high");
+    expect(state.persistSessionEntryMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ thinkingLevel: "off" }),
+      }),
+    );
   });
 
   it("persists and clears current run delivery context for restart recovery", async () => {

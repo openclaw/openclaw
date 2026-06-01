@@ -1508,25 +1508,9 @@ async function agentCommandInternal(
         catalog: thinkingCatalog,
       });
       if (fallbackThinkLevel !== resolvedThinkLevel) {
-        const previousThinkLevel = resolvedThinkLevel;
+        // Execution fallbacks are turn-local; directive/model persistence owns
+        // durable thinking remaps so explicit session overrides survive runs.
         resolvedThinkLevel = fallbackThinkLevel;
-        if (
-          sessionEntry &&
-          sessionStore &&
-          sessionKey &&
-          sessionEntry.thinkingLevel === previousThinkLevel &&
-          !suppressVisibleSessionEffects
-        ) {
-          const entry = sessionEntry;
-          entry.thinkingLevel = fallbackThinkLevel;
-          entry.updatedAt = Date.now();
-          await persistSessionEntry({
-            sessionStore,
-            sessionKey,
-            storePath,
-            entry,
-          });
-        }
       }
     }
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
