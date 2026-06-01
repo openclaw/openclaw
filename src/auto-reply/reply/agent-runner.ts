@@ -226,8 +226,9 @@ function resolveReplyRunDeliveryContext(params: {
   sessionKey: string;
   runtimePolicySessionKey?: string;
   opts?: GetReplyOptions;
+  skipSuppressionCheck?: boolean;
 }): DeliveryContext | undefined {
-  if (resolveSourceReplyPolicy(params).suppressDelivery) {
+  if (!params.skipSuppressionCheck && resolveSourceReplyPolicy(params).suppressDelivery) {
     return undefined;
   }
   const threadId =
@@ -2579,14 +2580,13 @@ export async function runReplyAgent(params: {
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
       const assistantFinalText = rawAssistantText ?? "";
-      if (
-        shouldWarnAboutPrivateMessageToolFinal({
-          sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-          sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery,
-          finalText: assistantFinalText,
-        })
-      ) {
+      const isStrandedReply = shouldWarnAboutPrivateMessageToolFinal({
+        sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+        sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+        successfulSourceReplyDelivery,
+        finalText: assistantFinalText,
+      });
+      if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
           channel:
@@ -2596,8 +2596,14 @@ export async function runReplyAgent(params: {
             activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
+        // #85714: Mark final payloads for delivery despite source reply suppression,
+        // so dispatch-from-config delivers the stranded reply in this turn.
+        for (const payload of finalPayloads) {
+          markReplyPayloadForSourceSuppressionDelivery(payload);
+        }
       }
-      const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
+      const pendingText =
+        sourceReplyPolicy.suppressDelivery && !isStrandedReply ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
       const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
       const heartbeatAckMaxChars = Math.max(
@@ -2623,6 +2629,7 @@ export async function runReplyAgent(params: {
           sessionKey,
           runtimePolicySessionKey,
           opts,
+          skipSuppressionCheck: isStrandedReply,
         });
         await updateSessionEntry(
           { storePath, sessionKey },
