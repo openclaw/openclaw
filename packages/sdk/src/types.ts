@@ -209,9 +209,14 @@ export type RunResult = {
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
+    cachedInputTokens?: number;
     totalTokens?: number;
     costUsd?: number;
   };
+  /** Provider identifier surfaced from agent.wait meta.agentMeta (e.g. "anthropic"). */
+  provider?: string;
+  /** Model identifier surfaced from agent.wait meta.agentMeta (e.g. "claude-sonnet-4-6"). */
+  model?: string;
   artifacts?: ArtifactSummary[];
   error?: SDKError;
   raw?: unknown;

@@ -372,6 +372,68 @@ describe("waitForAgentRun", () => {
       stopReason: "aborted",
     });
   });
+
+  it("maps meta.agentMeta usage, costUsd, provider, and model into the result", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 1000,
+      endedAt: 2000,
+      meta: {
+        agentMeta: {
+          usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 10 },
+          costUsd: 0.0042,
+          provider: "anthropic",
+          model: "claude-3-5-sonnet-20241022",
+        },
+      },
+    });
+
+    const result = await waitForAgentRun({ runId: "run-with-telemetry", timeoutMs: 500 });
+
+    expect(result).toMatchObject({
+      status: "ok",
+      startedAt: 1000,
+      endedAt: 2000,
+      usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 10 },
+      costUsd: 0.0042,
+      provider: "anthropic",
+      model: "claude-3-5-sonnet-20241022",
+    });
+  });
+
+  it("omits usage fields when meta.agentMeta is absent from the gateway response", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    const result = await waitForAgentRun({ runId: "run-no-meta", timeoutMs: 500 });
+
+    expect(result.status).toBe("ok");
+    expect(result.usage).toBeUndefined();
+    expect(result.costUsd).toBeUndefined();
+    expect(result.provider).toBeUndefined();
+    expect(result.model).toBeUndefined();
+  });
+
+  it("omits usage when all token counts are zero", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      meta: {
+        agentMeta: {
+          usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
+          costUsd: 0,
+          provider: "openai",
+          model: "gpt-4o",
+        },
+      },
+    });
+
+    const result = await waitForAgentRun({ runId: "run-zero-tokens", timeoutMs: 500 });
+
+    expect(result.usage).toBeUndefined();
+    // costUsd 0 is still a valid number — include it
+    expect(result.costUsd).toBe(0);
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4o");
+  });
 });
 
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {

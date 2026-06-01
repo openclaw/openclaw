@@ -1,5 +1,5 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildAgentRunTerminalOutcome,
   isStickyAgentRunTerminalOutcome,
@@ -22,6 +22,16 @@ export type AgentWaitTerminalSnapshot = {
   pendingError?: boolean;
   timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
   providerStarted?: boolean;
+  agentMeta?: {
+    usage?: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cachedInputTokens?: number;
+    };
+    costUsd?: number;
+    provider?: string;
+    model?: string;
+  };
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -147,6 +157,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         timeoutPhase?: unknown;
         providerStarted?: unknown;
         result?: unknown;
+        agentMeta?: unknown;
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -156,6 +167,40 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
 
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
+  const rawAgentMeta = asRecord(payload?.agentMeta);
+  const usage = (() => {
+    const u = asRecord(rawAgentMeta?.usage);
+    if (!u) {
+      return undefined;
+    }
+    const inputTokens = asFiniteNumber(u.inputTokens);
+    const outputTokens = asFiniteNumber(u.outputTokens);
+    const cachedInputTokens = asFiniteNumber(u.cachedInputTokens);
+    if (
+      inputTokens === undefined &&
+      outputTokens === undefined &&
+      cachedInputTokens === undefined
+    ) {
+      return undefined;
+    }
+    return { inputTokens, outputTokens, cachedInputTokens };
+  })();
+  const costUsd = asFiniteNumber(rawAgentMeta?.costUsd);
+  const provider = asString(rawAgentMeta?.provider);
+  const model = asString(rawAgentMeta?.model);
+
+  const agentMeta: AgentWaitTerminalSnapshot["agentMeta"] =
+    usage !== undefined ||
+    costUsd !== undefined ||
+    provider !== undefined ||
+    model !== undefined
+      ? {
+          usage,
+          costUsd,
+          provider,
+          model,
+        }
+      : undefined;
   const resultMeta = asOptionalRecord(asOptionalRecord(payload?.result)?.meta);
   const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
   const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
@@ -178,7 +223,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
   if (!terminalStatus) {
     return null;
   }
-  return buildDedupeTerminalSnapshot({
+  const snapshot = buildDedupeTerminalSnapshot({
     status: terminalStatus,
     startedAt,
     endedAt,
@@ -189,6 +234,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
     timeoutPhase,
     providerStarted,
   });
+  return agentMeta ? { ...snapshot, agentMeta } : snapshot;
 }
 
 function terminalOutcomeFromWaitSnapshot(

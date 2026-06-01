@@ -125,6 +125,57 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
+  it("surfaces meta.agentMeta as usage/provider/model on wait result", async () => {
+    // Verifies the SDK maps the gateway's `meta.agentMeta` block (populated by
+    // HIVA-367) into structured RunResult fields so callers can read cost
+    // telemetry without parsing `raw`.
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "ok",
+        runId: "run_meta",
+        startedAt: 1000,
+        endedAt: 2000,
+        meta: {
+          agentMeta: {
+            usage: { inputTokens: 1200, outputTokens: 340, cachedInputTokens: 80 },
+            costUsd: 0.00789,
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_meta");
+
+    expect(result.runId).toBe("run_meta");
+    expect(result.status).toBe("completed");
+    expect(result.usage).toEqual({
+      inputTokens: 1200,
+      outputTokens: 340,
+      cachedInputTokens: 80,
+      costUsd: 0.00789,
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-sonnet-4-6");
+  });
+
+  it("omits usage/provider/model when meta.agentMeta is absent", async () => {
+    // Ensures backward-compat: older gateway versions that don't send
+    // agentMeta still produce a clean RunResult with no spurious fields.
+    const transport = new FakeTransport({
+      "agent.wait": { status: "ok", runId: "run_no_meta" },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_no_meta");
+
+    expect(result.usage).toBeUndefined();
+    expect(result.provider).toBeUndefined();
+    expect(result.model).toBeUndefined();
+  });
+
   it("maps aborted wait snapshots to cancelled even when Gateway status is timeout", async () => {
     const transport = new FakeTransport({
       "agent.wait": {

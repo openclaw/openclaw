@@ -62,6 +62,7 @@ import {
   isDeliverableMessageChannel,
   resolveMessageChannel,
 } from "../utils/message-channel.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -1561,6 +1562,35 @@ async function agentCommandInternal(
       if (stopReason && stopReason !== "end_turn") {
         console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
       }
+      // Plumb telemetry through the lifecycle `end` event so waiters that race
+      // the gateway dedupe write (and win) still see `agentMeta` on their
+      // snapshot. This is the P2 fix: without it, lifecycle-first waits
+      // returned a terminal response without the new field, leaving the
+      // telemetry surface non-deterministic. Cost is computed here because
+      // `cfg` is in `agentCommandInternal`'s scope; the gateway listener has
+      // no equivalent runtime-config handle.
+      const sourceAgentMeta = runResult.meta.agentMeta;
+      const lifecycleAgentMeta = sourceAgentMeta
+        ? {
+            usage: sourceAgentMeta.usage
+              ? {
+                  inputTokens: sourceAgentMeta.usage.input ?? 0,
+                  outputTokens: sourceAgentMeta.usage.output ?? 0,
+                  cachedInputTokens: sourceAgentMeta.usage.cacheRead ?? 0,
+                }
+              : undefined,
+            costUsd: estimateUsageCost({
+              usage: sourceAgentMeta.usage,
+              cost: resolveModelCostConfig({
+                provider: sourceAgentMeta.provider,
+                model: sourceAgentMeta.model,
+                config: cfg,
+              }),
+            }),
+            provider: sourceAgentMeta.provider,
+            model: sourceAgentMeta.model,
+          }
+        : undefined;
       emitAgentEvent({
         runId,
         stream: "lifecycle",
@@ -1570,6 +1600,7 @@ async function agentCommandInternal(
           endedAt: Date.now(),
           aborted: runResult.meta.aborted ?? false,
           stopReason,
+          ...(lifecycleAgentMeta ? { agentMeta: lifecycleAgentMeta } : {}),
         },
       });
     };

@@ -6517,6 +6517,179 @@ describe("gateway agent handler chat.abort integration", () => {
   });
 });
 
+
+describe("agent.wait telemetry surfacing (HIVA-367 / PR #86029)", () => {
+  // These unit-level tests exercise the cached-snapshot path of the
+  // `agent.wait` handler with a hand-seeded `context.dedupe`. They cover the
+  // P1 isolation invariant called out by clawsweeper:
+  //   - When no chat is active for the runId, the response surfaces
+  //     `meta.agentMeta` from the agent dedupe entry.
+  //   - When a chat is active (hasActiveChatRun=true) and only a `chat:`
+  //     entry — which has no agentMeta — is selected, the response must NOT
+  //     contain `meta.agentMeta` lifted from the ignored `agent:` entry.
+  //
+  // The lifecycle-first race for `agentMeta` (P2) is covered at the
+  // integration level in
+  // `src/gateway/server.chat.gateway-server-chat.test.ts` because
+  // `agent-events.js` is mocked in this file (the real lifecycle listener
+  // never fires here).
+  beforeEach(() => {
+    mocks.loadConfigReturn = {};
+  });
+
+  it("surfaces meta.agentMeta from the agent dedupe entry on the cached snapshot path", async () => {
+    const runId = "wait-cached-with-agentmeta";
+    const context = makeContext();
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 100,
+          endedAt: 200,
+          agentMeta: {
+            usage: { inputTokens: 1500, outputTokens: 450, cachedInputTokens: 200 },
+            costUsd: 0.012345,
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+      },
+    });
+
+    const respond = vi.fn();
+    await agentHandlers["agent.wait"]({
+      params: { runId, timeoutMs: 0 },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "wait-1", method: "agent.wait" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload] = respond.mock.calls[0] as [boolean, Record<string, unknown>];
+    expect(ok).toBe(true);
+    expect(payload.runId).toBe(runId);
+    expect(payload.status).toBe("ok");
+    expect(payload.meta).toEqual({
+      agentMeta: {
+        usage: { inputTokens: 1500, outputTokens: 450, cachedInputTokens: 200 },
+        costUsd: 0.012345,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+  });
+
+  it("does NOT leak agentMeta from the ignored agent entry when chat.send is active for the same runId (P1)", async () => {
+    const runId = "wait-cached-chat-active-no-leak";
+    const context = makeContext();
+    // Stale agent entry with rich agentMeta (the one we MUST ignore).
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 1,
+          endedAt: 2,
+          agentMeta: {
+            usage: { inputTokens: 9999, outputTokens: 9999, cachedInputTokens: 9999 },
+            costUsd: 0.99,
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+      },
+    });
+    // Fresher chat entry — the one that wins under ignoreAgentTerminalSnapshot.
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `chat:${runId}`,
+      entry: {
+        ts: 200,
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 50,
+          endedAt: 75,
+        },
+      },
+    });
+    // Simulate an active chat run on this runId so hasActiveChatRun=true.
+    context.chatAbortControllers.set(runId, {
+      kind: "chat",
+      controller: new AbortController(),
+    } as never);
+
+    const respond = vi.fn();
+    await agentHandlers["agent.wait"]({
+      params: { runId, timeoutMs: 0 },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "wait-2", method: "agent.wait" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload] = respond.mock.calls[0] as [boolean, Record<string, unknown>];
+    expect(ok).toBe(true);
+    expect(payload.runId).toBe(runId);
+    expect(payload.status).toBe("ok");
+    expect(payload.startedAt).toBe(50);
+    expect(payload.endedAt).toBe(75);
+    // The key assertion: NO meta.agentMeta — the ignored agent entry's
+    // telemetry must not bleed onto the selected chat snapshot.
+    expect(payload.meta).toBeUndefined();
+  });
+
+  it("omits meta entirely when the selected snapshot has no agentMeta", async () => {
+    const runId = "wait-cached-no-agentmeta";
+    const context = makeContext();
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: Date.now(),
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          startedAt: 100,
+          endedAt: 200,
+        },
+      },
+    });
+
+    const respond = vi.fn();
+    await agentHandlers["agent.wait"]({
+      params: { runId, timeoutMs: 0 },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "wait-3", method: "agent.wait" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload] = respond.mock.calls[0] as [boolean, Record<string, unknown>];
+    expect(ok).toBe(true);
+    expect(payload.runId).toBe(runId);
+    expect(payload.status).toBe("ok");
+    expect(payload.meta).toBeUndefined();
+  });
+});
+
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
@@ -6530,3 +6703,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+

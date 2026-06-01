@@ -716,4 +716,183 @@ describe("agent wait dedupe helper", () => {
     await expect(wait).resolves.toBeNull();
     expect(testing.getWaiterCount(runId)).toBe(0);
   });
+
+  it("extracts full agentMeta from an agent dedupe payload", () => {
+    const dedupe = new Map();
+    const runId = "run-with-agent-meta";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        agentMeta: {
+          usage: { inputTokens: 1500, outputTokens: 450, cachedInputTokens: 200 },
+          costUsd: 0.012345,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      error: undefined,
+      agentMeta: {
+        usage: { inputTokens: 1500, outputTokens: 450, cachedInputTokens: 200 },
+        costUsd: 0.012345,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+  });
+
+  it("does NOT surface agent agentMeta when ignoreAgentTerminalSnapshot selects the chat snapshot", () => {
+    // P1 regression: same-runId chat collision must not let agent telemetry
+    // leak onto the selected chat response. The agent dedupe entry has
+    // agentMeta; the chat dedupe entry does not. ignoreAgentTerminalSnapshot=true
+    // means we picked chat — so the returned snapshot must reflect the chat
+    // run's (absent) telemetry, NOT the agent run's.
+    const dedupe = new Map();
+    const runId = "run-chat-active-no-agentmeta-leak";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        agentMeta: {
+          usage: { inputTokens: 9999, outputTokens: 9999, cachedInputTokens: 9999 },
+          costUsd: 0.99,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 300,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 250,
+        endedAt: 280,
+      },
+    });
+
+    const snapshot = readTerminalSnapshotFromGatewayDedupe({
+      dedupe,
+      runId,
+      ignoreAgentTerminalSnapshot: true,
+    });
+    expect(snapshot).toEqual({
+      status: "ok",
+      startedAt: 250,
+      endedAt: 280,
+      error: undefined,
+    });
+    expect(snapshot?.agentMeta).toBeUndefined();
+  });
+
+  it("does NOT leak agent agentMeta when chat freshness wins via collision", () => {
+    // P1 regression: when both entries are terminal and `chat:` is fresher,
+    // the chat snapshot wins per the existing freshness rule. The agent's
+    // agentMeta MUST NOT bleed onto the returned chat snapshot.
+    const dedupe = new Map();
+    const runId = "run-collision-chat-fresher-no-meta-leak";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 100,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 1,
+        endedAt: 2,
+        agentMeta: {
+          usage: { inputTokens: 100, outputTokens: 50 },
+          costUsd: 0.001,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 200,
+      payload: { runId, status: "ok", startedAt: 30, endedAt: 40 },
+    });
+
+    const snapshot = readTerminalSnapshotFromGatewayDedupe({
+      dedupe,
+      runId,
+    });
+    expect(snapshot).toEqual({
+      status: "ok",
+      startedAt: 30,
+      endedAt: 40,
+      error: undefined,
+    });
+    expect(snapshot?.agentMeta).toBeUndefined();
+  });
+
+  it("returns partial agentMeta when only some fields are present", () => {
+    const dedupe = new Map();
+    const runId = "run-partial-agent-meta";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        agentMeta: {
+          provider: "deepseek",
+          model: "deepseek-chat",
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      error: undefined,
+      agentMeta: {
+        usage: undefined,
+        costUsd: undefined,
+        provider: "deepseek",
+        model: "deepseek-chat",
+      },
+    });
+  });
 });

@@ -19,6 +19,7 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommand } from "./test-helpers.runtime-state.js";
+import { testing as agentJobTesting } from "./server-methods/agent-job.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -180,6 +181,9 @@ describe("gateway server chat", () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.status).toBe("ok");
     return res;
+  };
+  const waitForLifecycleWaiter = async (runId: string) => {
+    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
   };
   const abortChatRun = async (runId: string) => {
     const res = await rpcReq(ws, "chat.abort", {
@@ -1561,6 +1565,99 @@ describe("gateway server chat", () => {
 
         releaseBlockedReply();
         await waitForAgentRunOk(runId);
+      } finally {
+        releaseBlockedReply();
+      }
+    });
+  });
+
+  test("agent.wait surfaces meta.agentMeta from lifecycle-first race (P2 deterministic telemetry)", async () => {
+    // P2 regression: when the lifecycle promise wins the race ahead of the
+    // gateway dedupe write, the wait response should STILL carry
+    // `meta.agentMeta` — sourced from the lifecycle `end` event payload.
+    // Before the fix this returned a terminal response without the field.
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-lifecycle-first-agentmeta";
+      const waitP = rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+
+      await waitForLifecycleWaiter(runId);
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 10 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 10,
+          endedAt: 42,
+          agentMeta: {
+            usage: { inputTokens: 1200, outputTokens: 340, cachedInputTokens: 80 },
+            costUsd: 0.00789,
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+      });
+
+      const res = await waitP;
+      expect(res.ok).toBe(true);
+      expect(res.payload?.status).toBe("ok");
+      expect(res.payload?.meta).toEqual({
+        agentMeta: {
+          usage: { inputTokens: 1200, outputTokens: 340, cachedInputTokens: 80 },
+          costUsd: 0.00789,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      });
+    });
+  });
+
+  test("agent.wait does NOT leak agent agentMeta to a chat-active wait (P1 isolation)", async () => {
+    // P1 regression: when a same-runId chat.send is active AND the agent
+    // dedupe entry has stored `agentMeta`, the `agent.wait` response on the
+    // chat-active wait path MUST NOT carry that `meta.agentMeta` — the chat
+    // owns the active wait window, so no cross-run telemetry leak.
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-no-agentmeta-leak-on-chat-active";
+
+      // Seed the agent dedupe entry with agentMeta (simulating a prior agent
+      // run on the same runId that completed before chat reused the key).
+      const seedAgentRes = await rpcReq(ws, "agent", {
+        sessionKey: "main",
+        message: "seed stale agent snapshot with agentMeta",
+        idempotencyKey: runId,
+      });
+      expect(seedAgentRes.ok).toBe(true);
+      expect(seedAgentRes.payload?.status).toBe("accepted");
+      const seedWaitRes = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+      expect(seedWaitRes.ok).toBe(true);
+      expect(seedWaitRes.payload?.status).toBe("ok");
+
+      const releaseBlockedReply = mockBlockedChatReply();
+      try {
+        await sendChatAndExpectStarted(runId, "hold chat run open");
+
+        const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
+          runId,
+          timeoutMs: 40,
+        });
+        // The chat-active wait should time out (no chat dedupe yet), and even
+        // if it returned a body, that body MUST NOT contain `meta.agentMeta`
+        // from the ignored agent snapshot.
+        expectAgentWaitTimeout(waitWhileChatActive);
+        expect(waitWhileChatActive.payload?.meta).toBeUndefined();
+
+        await abortChatRun(runId);
       } finally {
         releaseBlockedReply();
       }

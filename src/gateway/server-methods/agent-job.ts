@@ -174,6 +174,64 @@ function getPendingAgentRunTimeout(runId: string) {
   };
 }
 
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function extractAgentMetaFromLifecyclePayload(
+  value: unknown,
+): AgentWaitTerminalSnapshot["agentMeta"] | undefined {
+  const raw =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  if (!raw) {
+    return undefined;
+  }
+  const rawUsage =
+    typeof raw.usage === "object" && raw.usage !== null && !Array.isArray(raw.usage)
+      ? (raw.usage as Record<string, unknown>)
+      : undefined;
+  const usage = rawUsage
+    ? (() => {
+        const inputTokens =
+          typeof rawUsage.inputTokens === "number" && Number.isFinite(rawUsage.inputTokens)
+            ? rawUsage.inputTokens
+            : undefined;
+        const outputTokens =
+          typeof rawUsage.outputTokens === "number" && Number.isFinite(rawUsage.outputTokens)
+            ? rawUsage.outputTokens
+            : undefined;
+        const cachedInputTokens =
+          typeof rawUsage.cachedInputTokens === "number" &&
+          Number.isFinite(rawUsage.cachedInputTokens)
+            ? rawUsage.cachedInputTokens
+            : undefined;
+        if (
+          inputTokens === undefined &&
+          outputTokens === undefined &&
+          cachedInputTokens === undefined
+        ) {
+          return undefined;
+        }
+        return { inputTokens, outputTokens, cachedInputTokens };
+      })()
+    : undefined;
+  const costUsd =
+    typeof raw.costUsd === "number" && Number.isFinite(raw.costUsd) ? raw.costUsd : undefined;
+  const provider = asNonEmptyString(raw.provider);
+  const model = asNonEmptyString(raw.model);
+  if (
+    usage === undefined &&
+    costUsd === undefined &&
+    provider === undefined &&
+    model === undefined
+  ) {
+    return undefined;
+  }
+  return { usage, costUsd, provider, model };
+}
+
 function createPendingErrorTimeoutSnapshot(snapshot: AgentRunSnapshot): AgentRunSnapshot {
   // Keep this non-terminal: the retry grace can still be canceled by a later
   // lifecycle start, so omit terminal fields such as endedAt and stopReason.
@@ -203,6 +261,11 @@ function createSnapshotFromLifecycleEvent(params: {
   const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
   const status = phase === "error" ? "error" : data?.aborted ? "timeout" : "ok";
+  // P2 fix: carry `agentMeta` from the lifecycle event payload through to the
+  // snapshot. Previously this was always undefined here, so lifecycle-first
+  // waits returned `agent.wait` responses without the `meta.agentMeta` field
+  // even when the run had real telemetry.
+  const agentMeta = extractAgentMetaFromLifecyclePayload(data?.agentMeta);
   const terminalOutcome = buildAgentRunTerminalOutcome({
     status,
     error,
@@ -226,6 +289,7 @@ function createSnapshotFromLifecycleEvent(params: {
     ...(terminalOutcome.providerStarted !== undefined
       ? { providerStarted: terminalOutcome.providerStarted }
       : {}),
+    ...(agentMeta ? { agentMeta } : {}),
     ts: Date.now(),
   };
 }
