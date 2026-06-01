@@ -100,6 +100,7 @@ export type GatewaySessionRow = {
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;

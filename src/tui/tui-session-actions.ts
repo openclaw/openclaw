@@ -269,6 +269,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.displayName !== undefined) {
       next.displayName = entry.displayName;
     }
+    if (entry?.queueMode !== undefined) {
+      next.queueMode = entry.queueMode;
+    }
     if (entry?.updatedAt !== undefined) {
       next.updatedAt = entry.updatedAt;
     }

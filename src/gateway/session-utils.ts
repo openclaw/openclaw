@@ -2202,6 +2202,7 @@ export function buildGatewaySessionRow(params: {
     compactionCheckpointCount,
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
+    queueMode: entry?.queueMode,
   };
 }
 

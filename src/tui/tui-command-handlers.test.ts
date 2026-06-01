@@ -971,6 +971,86 @@ describe("tui command handlers", () => {
     );
   });
 
+  it("forwards messages to gateway when queueMode is followup and agent is active", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, state } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+    state.sessionInfo = { queueMode: "followup" };
+
+    await handleCommand("queued followup message");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, { message: "queued followup message" });
+    expect(addUser).toHaveBeenCalledWith("queued followup message");
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
+  it("forwards messages to gateway when queueMode is collect and agent is active", async () => {
+    const { handleCommand, sendChat, addSystem, state } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+    state.sessionInfo = { queueMode: "collect" };
+
+    await handleCommand("collected message");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, { message: "collected message" });
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
+  it("forwards messages to gateway when queueMode is interrupt and agent is active", async () => {
+    const { handleCommand, sendChat, addSystem, state } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+    state.sessionInfo = { queueMode: "interrupt" };
+
+    await handleCommand("interrupt message");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, { message: "interrupt message" });
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
+  it("still blocks on pendingOptimisticUserMessage even in followup mode", async () => {
+    const { handleCommand, sendChat, addSystem, state } = createHarness({
+      activeChatRunId: "run-active",
+      pendingOptimisticUserMessage: true,
+      activityStatus: "sending",
+    });
+    state.sessionInfo = { queueMode: "followup" };
+
+    await handleCommand("rapid second send");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — message could not be sent, please try again",
+    );
+  });
+
+  it("blocks on activeChatRunId when queueMode is steer (default)", async () => {
+    const { handleCommand, sendChat, addSystem, state } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+    state.sessionInfo = { queueMode: "steer" };
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
   it("runs /auth through the local auth flow and refreshes session info", async () => {
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
     const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });

@@ -294,6 +294,26 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.updatedAt).toBe(200);
   });
 
+  it("propagates queueMode from session entry to sessionInfo", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [{ key: "agent:main:main", updatedAt: 2, queueMode: "followup" }],
+    });
+    const state = createBaseState();
+
+    const { refreshSessionInfo } = createTestSessionActions({
+      client: { listSessions } as unknown as TuiBackend,
+      state,
+    });
+
+    await refreshSessionInfo();
+
+    expect(state.sessionInfo.queueMode).toBe("followup");
+  });
+
   it("clears the footer goal when the current session has no row yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
