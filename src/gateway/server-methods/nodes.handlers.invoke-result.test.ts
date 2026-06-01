@@ -1,12 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type Mock, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import type { GatewayRequestContext } from "./shared-types.js";
 
+type HandleInvokeResultSpy = Mock<
+  (params: Parameters<GatewayRequestContext["nodeRegistry"]["handleInvokeResult"]>[0]) => boolean
+>;
+
+type InvokeResultContext = GatewayRequestContext & {
+  handleInvokeResult: HandleInvokeResultSpy;
+};
+
 function makeContext(overrides?: { handleInvokeResultResult?: boolean }) {
+  const handleInvokeResult: HandleInvokeResultSpy = vi.fn(() => {
+    return overrides?.handleInvokeResultResult ?? true;
+  });
+
   return {
+    handleInvokeResult,
     nodeRegistry: {
-      handleInvokeResult: vi.fn(() => overrides?.handleInvokeResultResult ?? true),
+      handleInvokeResult,
     },
     logGateway: {
       debug: vi.fn(),
@@ -14,7 +27,7 @@ function makeContext(overrides?: { handleInvokeResultResult?: boolean }) {
       info: vi.fn(),
       error: vi.fn(),
     },
-  } as unknown as GatewayRequestContext;
+  } as unknown as InvokeResultContext;
 }
 
 function makeClient(instanceId: string, deviceId = "device-1") {
@@ -40,7 +53,7 @@ function makeErrorCode(payload: unknown): number | undefined {
 describe("node.invoke.result", () => {
   it("accepts a matching trimmed instanceId as node identity", async () => {
     const respond = vi.fn();
-    const context = makeContext();
+    const { handleInvokeResult, ...context } = makeContext();
     await handleNodeInvokeResult({
       params: {
         id: "1",
@@ -55,7 +68,7 @@ describe("node.invoke.result", () => {
     });
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(context.nodeRegistry.handleInvokeResult).toHaveBeenCalledWith({
+    expect(handleInvokeResult).toHaveBeenCalledWith({
       id: "1",
       nodeId: "custom-node-id",
       connId: undefined,
@@ -68,7 +81,7 @@ describe("node.invoke.result", () => {
 
   it("rejects invoke results for mismatched node identities", async () => {
     const respond = vi.fn();
-    const context = makeContext();
+    const { handleInvokeResult, ...context } = makeContext();
     await handleNodeInvokeResult({
       params: {
         id: "1",
@@ -90,7 +103,7 @@ describe("node.invoke.result", () => {
         message: "nodeId mismatch",
       }),
     );
-    expect(context.nodeRegistry.handleInvokeResult).not.toHaveBeenCalled();
+    expect(handleInvokeResult).not.toHaveBeenCalled();
     const call = respond.mock.calls[0] as [boolean, unknown?, { code?: number; message?: string }?];
     expect(makeErrorCode(call[2])).toBe(ErrorCodes.INVALID_REQUEST);
   });
