@@ -493,6 +493,16 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
   await withGlobalAgentSessionStore(dir, async (globalConfig) => {
     await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
     const broadcast = vi.fn();
+    const lifecycleUnsub = onSessionLifecycleEvent(
+      createLifecycleEventBroadcastHandler({
+        broadcastToConnIds: broadcast,
+        sessionEventSubscribers: {
+          getAll: () => new Set(["conn-work"]),
+        },
+      }),
+    );
+
+    try {
     const reset = await directSessionReq<{ ok: true; key: string }>(
       "sessions.reset",
       { key: "agent:work:main", reason: "reset" },
@@ -514,6 +524,9 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
       }),
     );
     expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
+    } finally {
+      lifecycleUnsub();
+    }
   });
 });
 

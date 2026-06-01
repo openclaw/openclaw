@@ -242,13 +242,18 @@ export function createLifecycleEventBroadcastHandler(params: {
       "sessions.changed",
       {
         sessionKey: event.sessionKey,
+        ...(event.agentId ? { agentId: event.agentId } : {}),
         reason: event.reason,
         parentSessionKey: event.parentSessionKey,
         label: event.label,
         displayName: event.displayName,
         ts: Date.now(),
         ...buildGatewaySessionSnapshot({
-          sessionRow: loadGatewaySessionRow(event.sessionKey),
+          sessionRow: loadGatewaySessionRow(
+            event.sessionKey,
+            event.sessionKey === "global" && event.agentId ? { agentId: event.agentId } : undefined,
+          ),
+          agentId: event.agentId,
           label: event.label,
           displayName: event.displayName,
           parentSessionKey: event.parentSessionKey,

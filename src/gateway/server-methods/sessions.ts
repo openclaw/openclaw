@@ -1523,7 +1523,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         );
         emitSessionsChanged(context, {
           sessionKey: resetResult.key,
-          ...(resetResult.key === "global" ? { agentId: resetResult.agentId } : {}),
+          ...(resetResult.key === "global" && parentSelectedAgentId
+            ? { agentId: parentSelectedAgentId }
+            : {}),
           reason: "new",
         });
         return;

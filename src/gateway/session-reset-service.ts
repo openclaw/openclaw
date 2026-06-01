@@ -3,6 +3,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
@@ -11,7 +13,11 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
@@ -54,7 +60,6 @@ import {
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
-import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -70,6 +75,42 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+
+function resolveRequestedResetAgentId(
+  cfg: OpenClawConfig,
+  key: string,
+  explicitAgentId?: string,
+): { ok: true; agentId?: string } | { ok: false; error: ReturnType<typeof errorShape> } {
+  const parsed = parseAgentSessionKey(key);
+  const requestedAgentId = normalizeOptionalString(explicitAgentId);
+  if (requestedAgentId) {
+    const agentId = normalizeAgentId(requestedAgentId);
+    if (!listAgentIds(cfg).includes(agentId)) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`),
+      };
+    }
+    if (parsed?.agentId && normalizeAgentId(parsed.agentId) !== agentId) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      };
+    }
+    return { ok: true, agentId };
+  }
+  if (!parsed?.agentId) {
+    return { ok: true };
+  }
+  const agentId = normalizeAgentId(parsed.agentId);
+  if (!listAgentIds(cfg).includes(agentId)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${parsed.agentId}`),
+    };
+  }
+  return { ok: true, agentId };
+}
 
 function resolveResetSessionFile(params: {
   nextSessionId: string;
@@ -748,19 +789,26 @@ const resetSessionsInFlight = new Set<string>();
 
 export async function performGatewaySessionReset(params: {
   key: string;
+  agentId?: string;
   reason: "new" | "reset";
   commandSource: string;
 }): Promise<
   | { ok: true; key: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const { cfg, target, storePath } = (() => {
-    const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
-    return { cfg, target, storePath: target.storePath };
-  })();
+  const cfg = getRuntimeConfig();
+  const requestedAgent = resolveRequestedResetAgentId(cfg, params.key, params.agentId);
+  if (!requestedAgent.ok) {
+    return requestedAgent;
+  }
+  const target = resolveGatewaySessionStoreTarget({
+    cfg,
+    key: params.key,
+    ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+  });
+  const { storePath } = target;
 
-  const lockKey = target.canonicalKey;
+  const lockKey = `${storePath}\0${target.canonicalKey}`;
   if (resetSessionsInFlight.has(lockKey)) {
     return {
       ok: false,
@@ -789,7 +837,10 @@ async function performGatewaySessionResetInner(ctx: {
 > {
   const { cfg, target, storePath, params } = ctx;
   // Use the same cfg snapshot for entry resolution to avoid config drift.
-  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key, { cfg });
+  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key, {
+    cfg,
+    ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
+  });
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -1004,6 +1055,7 @@ async function performGatewaySessionResetInner(ctx: {
   }
   emitSessionLifecycleEvent({
     sessionKey: target.canonicalKey,
+    ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
     reason: params.reason,
     parentSessionKey: next.parentSessionKey,
     label: next.label,
