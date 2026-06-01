@@ -16,7 +16,7 @@ import {
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
+import { helpText, isUnsupportedLocalSharedCommand, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -76,6 +76,10 @@ function isBtwCommand(text: string): boolean {
 function isSlashStopCommand(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
+}
+
+function formatUnsupportedLocalSharedCommand(name: string): string {
+  return `local embedded TUI mode does not support /${name}; message not sent`;
 }
 
 function goalContinuationPrompt(text: string): string | null {
@@ -698,6 +702,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         requestExit();
         break;
       default:
+        // Local embedded mode bypasses gateway command recovery, so advertised
+        // shared commands with no local handler would otherwise become model
+        // turns. Answer them explicitly instead of sending them (#71592).
+        if (opts.local === true && isUnsupportedLocalSharedCommand(name)) {
+          chatLog.addSystem(formatUnsupportedLocalSharedCommand(name));
+          break;
+        }
         await sendMessage(raw);
         break;
     }

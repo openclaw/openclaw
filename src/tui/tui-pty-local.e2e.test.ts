@@ -318,4 +318,44 @@ describe("TUI PTY local mode", () => {
     },
     LOCAL_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "answers unsupported shared slash commands without a model turn (#71592)",
+    async () => {
+      const fixture = await startLocalModeTui();
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+
+        for (const name of ["status", "compact", "commands"]) {
+          await fixture.run.write(`/${name}\r`, { delay: false });
+          await fixture.run.waitForOutput(
+            `local embedded TUI mode does not support /${name}; message not sent`,
+          );
+        }
+
+        // The blocked commands must not reach the local embedded model path:
+        // no /v1/responses request, no optimistic user turn.
+        expect(fixture.mockModel.requests()).toEqual([]);
+        expect(fixture.run.output()).not.toContain("LOCAL_PTY_RESPONSE");
+
+        // Positive control: a normal message still drives the real model path.
+        await fixture.run.write("hello from the smoke\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length > 0 ? true : null),
+          onTimeout: () =>
+            new Error(`mock model server did not receive a request\n${fixture.run.output()}`),
+        });
+        expect(fixture.mockModel.requests()[0]?.path).toBe("/v1/responses");
+        await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        const exit = await fixture.run.waitForExit();
+        expect(exit.exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
 });

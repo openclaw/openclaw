@@ -32,6 +32,80 @@ const COMMAND_ALIASES: Record<string, string> = {
   gwstatus: "gateway-status",
 };
 
+// Shared/gateway command names the local embedded TUI actually executes.
+// Local TUI bypasses gateway `chat.send` command recovery, so any advertised
+// shared command outside this set has no local handler and must not be
+// advertised or routed to the model as user text (#71592). Keep this aligned
+// with the `handleCommand` switch in `tui-command-handlers.ts`.
+const LOCAL_SUPPORTED_SHARED_COMMANDS = new Set<string>([
+  "help",
+  "agents",
+  "context",
+  "goal",
+  "crestodian",
+  "session",
+  "model",
+  "models",
+  "think",
+  "verbose",
+  "trace",
+  "fast",
+  "reasoning",
+  "usage",
+  "elevated",
+  "activation",
+  "new",
+  "reset",
+  "stop",
+  // Routed through sendMessage's btw/side detection, not the model turn path.
+  "btw",
+  "side",
+]);
+
+export function localTuiSupportsSharedCommand(name: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(name).replace(/^\//, "").trim();
+  const canonical = COMMAND_ALIASES[normalized] ?? normalized;
+  return LOCAL_SUPPORTED_SHARED_COMMANDS.has(canonical);
+}
+
+let cachedSharedCommandNames: Set<string> | null = null;
+
+function sharedCommandNames(): Set<string> {
+  // Registry is process-stable for built-in commands; cache the advertised
+  // name set so interception does not rebuild it on every keystroke.
+  if (cachedSharedCommandNames) {
+    return cachedSharedCommandNames;
+  }
+  const names = new Set<string>();
+  for (const command of listChatCommands()) {
+    names.add(command.key);
+    const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
+    for (const alias of aliases) {
+      names.add(normalizeSlashCommandName(alias));
+    }
+  }
+  cachedSharedCommandNames = names;
+  return names;
+}
+
+// True when a parsed command name is advertised through the shared command
+// registry but has no local TUI handler. Local embedded mode must answer these
+// with an explicit unsupported response instead of sending them to the model
+// as user text (#71592). Truly unknown commands stay out so they keep their
+// existing fallthrough behavior.
+export function isUnsupportedLocalSharedCommand(name: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(name).replace(/^\//, "").trim();
+  if (!normalized) {
+    return false;
+  }
+  const canonical = COMMAND_ALIASES[normalized] ?? normalized;
+  if (localTuiSupportsSharedCommand(canonical)) {
+    return false;
+  }
+  const advertised = sharedCommandNames();
+  return advertised.has(canonical) || advertised.has(normalized);
+}
+
 function createLevelCompletion(
   levels: string[],
 ): NonNullable<SlashCommand["getArgumentCompletions"]> {
@@ -162,6 +236,14 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   for (const command of gatewayCommands) {
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
+      // Local embedded TUI routes by the parsed alias name and has no handler
+      // for shared commands outside its supported set, so do not advertise them
+      // in local autocomplete (#71592). Each alias is checked independently
+      // because supported parents (e.g. /verbose) can carry aliases (/v) the
+      // local switch does not resolve.
+      if (options.local && !localTuiSupportsSharedCommand(normalizeSlashCommandName(alias))) {
+        continue;
+      }
       appendSlashCommand(commands, seen, alias, command.description);
     }
   }
@@ -181,8 +263,9 @@ export function helpText(options: SlashCommandOptions = {}): string {
   return [
     "Slash commands:",
     "/help",
-    "/commands",
-    "/status",
+    // /commands and /status are shared commands the local embedded TUI cannot
+    // execute, so they are only advertised when connected to the gateway (#71592).
+    ...(options.local ? [] : ["/commands", "/status"]),
     "/gateway-status",
     "/gwstatus",
     ...(options.local ? ["/auth [provider]"] : []),

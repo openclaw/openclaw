@@ -479,6 +479,86 @@ describe("tui command handlers", () => {
     });
   });
 
+  it.each(["status", "compact", "commands", "tools", "whoami", "id"])(
+    "keeps unsupported local /%s out of the embedded model path",
+    async (name) => {
+      const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+        opts: { local: true },
+      });
+
+      await handleCommand(`/${name}`);
+
+      expect(sendChat).not.toHaveBeenCalled();
+      expect(addUser).not.toHaveBeenCalled();
+      expect(addSystem).toHaveBeenCalledWith(
+        `local embedded TUI mode does not support /${name}; message not sent`,
+      );
+    },
+  );
+
+  it.each(["status", "compact", "commands", "tools", "whoami"])(
+    "still forwards /%s to the gateway when not in local mode",
+    async (name) => {
+      const { handleCommand, sendChat, addUser, addSystem } = createHarness();
+
+      await handleCommand(`/${name}`);
+
+      expect(addSystem).not.toHaveBeenCalled();
+      expect(addUser).toHaveBeenCalledWith(`/${name}`);
+      expectSendChatFields(sendChat, {
+        sessionKey: "agent:main:main",
+        message: `/${name}`,
+      });
+    },
+  );
+
+  it("does not intercept supported local commands routed through the model path", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/context detail");
+
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "local embedded TUI mode does not support /context; message not sent",
+    );
+    expect(addUser).toHaveBeenCalledWith("/context detail");
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/context detail",
+    });
+  });
+
+  it("does not intercept /btw in local mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/btw note this");
+
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/btw note this",
+    });
+  });
+
+  it("still forwards unknown non-advertised slash commands in local mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/unregistered-command");
+
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(addUser).toHaveBeenCalledWith("/unregistered-command");
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/unregistered-command",
+    });
+  });
+
   it("keeps gateway diagnostics on /gateway-status", async () => {
     const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
       getGatewayStatus: vi.fn().mockResolvedValue({

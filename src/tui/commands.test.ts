@@ -76,6 +76,33 @@ describe("getSlashCommands", () => {
     expect(completions?.length).toBeGreaterThan(0);
   });
 
+  it("drops unsupported shared commands from local autocomplete (#71592)", () => {
+    const localNames = new Set(getSlashCommands({ local: true }).map((command) => command.name));
+    const gatewayNames = new Set(getSlashCommands({ local: false }).map((command) => command.name));
+
+    for (const name of [
+      "status",
+      "compact",
+      "commands",
+      "tools",
+      "whoami",
+      "id",
+      "v",
+      "thinking",
+    ]) {
+      expect(localNames.has(name)).toBe(false);
+      expect(gatewayNames.has(name)).toBe(true);
+    }
+  });
+
+  it("keeps supported routed shared commands in local autocomplete (#71592)", () => {
+    const localNames = new Set(getSlashCommands({ local: true }).map((command) => command.name));
+
+    for (const name of ["context", "goal", "stop", "btw", "side", "verbose", "think"]) {
+      expect(localNames.has(name)).toBe(true);
+    }
+  });
+
   it("merges dynamic gateway commands", () => {
     const commands = getSlashCommands({
       dynamicCommands: [
@@ -104,5 +131,17 @@ describe("helpText", () => {
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/crestodian [request]");
+  });
+
+  it("lists /commands and /status only outside local mode (#71592)", () => {
+    const gatewayLines = helpText({ local: false }).split("\n");
+    expect(gatewayLines).toContain("/commands");
+    expect(gatewayLines).toContain("/status");
+
+    const localLines = helpText({ local: true }).split("\n");
+    expect(localLines).not.toContain("/commands");
+    expect(localLines).not.toContain("/status");
+    expect(localLines).toContain("/help");
+    expect(localLines).toContain("/gateway-status");
   });
 });
