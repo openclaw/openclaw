@@ -31,6 +31,7 @@ import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
+  scheduleControlUiAfterPaint,
 } from "./control-ui-performance.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
@@ -417,6 +418,7 @@ function enqueuePendingSendMessage(
   };
   host.chatQueue = [...host.chatQueue, pending];
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
+  schedulePendingSendPaintTiming(host, pending, submittedAtMs);
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
   return pending;
 }
@@ -563,6 +565,7 @@ type QueuedChatSendResult = "sent" | "pending" | "failed";
 
 type ChatSendTimingPhase =
   | "pending-visible"
+  | "pending-painted"
   | "request-start"
   | "ack"
   | "queued-busy"
@@ -597,6 +600,42 @@ function recordChatSendTiming(
       ...extra,
     },
     { console: false, maxBufferedEventsForType: 40 },
+  );
+}
+
+function shouldRecordPendingSendPaint(item: ChatQueueItem): boolean {
+  return (
+    typeof item.sendSubmittedAtMs === "number" &&
+    (item.sendState === "waiting-model" ||
+      item.sendState === "sending" ||
+      item.sendState === "waiting-reconnect")
+  );
+}
+
+function schedulePendingSendPaintTiming(
+  host: ChatHost,
+  item: ChatQueueItem,
+  startedAtMs = item.sendSubmittedAtMs,
+) {
+  const sessionKey = item.sessionKey ?? host.sessionKey;
+  const sendRunId = item.sendRunId;
+  if (!sendRunId || startedAtMs == null) {
+    return;
+  }
+  scheduleControlUiAfterPaint(
+    host as Parameters<typeof scheduleControlUiAfterPaint>[0],
+    () => {
+      if (!visibleSessionMatches(host, sessionKey, item.agentId)) {
+        return;
+      }
+      const queued = readChatQueueForSession(host, sessionKey).find(
+        (entry) => entry.id === item.id && entry.sendRunId === sendRunId,
+      );
+      if (!queued || !shouldRecordPendingSendPaint(queued)) {
+        return;
+      }
+      recordChatSendTiming(host, queued, "pending-painted", startedAtMs);
+    },
   );
 }
 

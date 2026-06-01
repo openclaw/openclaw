@@ -1057,6 +1057,7 @@ describe("handleSendChat", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -1221,6 +1222,42 @@ describe("handleSendChat", () => {
     });
     expect(ack?.durationMs).toEqual(expect.any(Number));
     expect(ack?.requestDurationMs).toEqual(expect.any(Number));
+  });
+
+  it("records pending send paint timing before a delayed chat.send ACK", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      queueMicrotask(() => callback(0));
+      return 1;
+    });
+    const chatSend = createDeferred<{ status: "started" }>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return chatSend.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "measure painted pending send",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+
+    const send = handleSendChat(host);
+
+    await vi.waitFor(() =>
+      expect(eventPayloads(host, "control-ui.chat.send").map((payload) => payload.phase)).toEqual(
+        expect.arrayContaining(["pending-visible", "request-start", "pending-painted"]),
+      ),
+    );
+
+    chatSend.resolve({ status: "started" });
+    await send;
+
+    const phasesAfterAck = eventPayloads(host, "control-ui.chat.send").map(
+      (payload) => payload.phase,
+    );
+    expect(phasesAfterAck).toEqual(expect.arrayContaining(["ack"]));
   });
 
   it("waits for an in-flight model picker update before sending chat", async () => {
