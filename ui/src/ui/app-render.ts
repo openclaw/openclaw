@@ -3100,6 +3100,16 @@ export function renderApp(state: AppViewState) {
                     : (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
                 selectSkillWorkshopProposal(state, visibleProposals[nextIndex].key);
               };
+              const selectVisibleFallback = (proposals: typeof visibleProposals) => {
+                if (
+                  proposals.length === 0 ||
+                  proposals.some((proposal) => proposal.key === state.skillWorkshopSelectedKey)
+                ) {
+                  return;
+                }
+                state.skillWorkshopFilePreviewKey = null;
+                selectSkillWorkshopProposal(state, proposals[0].key);
+              };
               return m.renderSkillWorkshop({
                 loading: state.skillWorkshopLoading,
                 error: state.skillWorkshopError,
@@ -3118,8 +3128,26 @@ export function renderApp(state: AppViewState) {
                 revisionDraft: state.skillWorkshopRevisionDraft,
                 assistantName: state.assistantName,
                 counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
-                onStatusFilterChange: (status) => (state.skillWorkshopStatusFilter = status),
-                onQueryChange: (query) => (state.skillWorkshopQuery = query),
+                onStatusFilterChange: (status) => {
+                  state.skillWorkshopStatusFilter = status;
+                  selectVisibleFallback(
+                    m.filterSkillWorkshopProposals(
+                      state.skillWorkshopProposals,
+                      status,
+                      state.skillWorkshopQuery,
+                    ),
+                  );
+                },
+                onQueryChange: (query) => {
+                  state.skillWorkshopQuery = query;
+                  selectVisibleFallback(
+                    m.filterSkillWorkshopProposals(
+                      state.skillWorkshopProposals,
+                      state.skillWorkshopStatusFilter,
+                      query,
+                    ),
+                  );
+                },
                 onFilePreviewQueryChange: (query) => (state.skillWorkshopFilePreviewQuery = query),
                 onQueueWidthChange: (width) => (state.skillWorkshopQueueWidth = width),
                 onModeChange: (mode) => (state.skillWorkshopMode = mode),
