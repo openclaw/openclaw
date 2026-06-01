@@ -7,12 +7,7 @@ import type {
   EmbeddedAgentExecutionContract,
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
-import type {
-  AgentEmbeddedHarnessConfig,
-  AgentModelConfig,
-  AgentRuntimePolicyConfig,
-  AgentSandboxConfig,
-} from "./types.agents-shared.js";
+import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 
 export type AgentProviderConfig = {
