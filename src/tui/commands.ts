@@ -63,11 +63,16 @@ function appendSlashCommand(
 }
 
 export function parseCommand(input: string): ParsedCommand {
-  const trimmed = input.replace(/^\//, "").trim();
+  const inputTrimmed = input.trim();
+  const isSlashInput = inputTrimmed.startsWith("/");
+  const trimmed = isSlashInput ? inputTrimmed.slice(1).trim() : inputTrimmed;
   if (!trimmed) {
     return { name: "", args: "" };
   }
-  const [name, ...rest] = trimmed.split(/\s+/);
+  const commandParts = isSlashInput ? trimmed.match(/^([^\s:]+)(?:(?::\s*|\s+)([\s\S]*))?$/) : null;
+  const [name, ...rest] = commandParts
+    ? [commandParts[1], commandParts[2] ?? ""]
+    : trimmed.split(/\s+/);
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return {
     name: COMMAND_ALIASES[normalized] ?? normalized,

@@ -6,6 +6,18 @@ describe("parseCommand", () => {
     expect(parseCommand("/elev full")).toEqual({ name: "elevated", args: "full" });
   });
 
+  it("treats colon-form slash command args as command args", () => {
+    expect(parseCommand("/model: openai/gpt-5.5")).toEqual({
+      name: "model",
+      args: "openai/gpt-5.5",
+    });
+    expect(parseCommand("/think: high")).toEqual({ name: "think", args: "high" });
+    expect(parseCommand("/compact: focus on decisions")).toEqual({
+      name: "compact",
+      args: "focus on decisions",
+    });
+  });
+
   it("normalizes gateway-status aliases", () => {
     expect(parseCommand("/gwstatus")).toEqual({ name: "gateway-status", args: "" });
   });

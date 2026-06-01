@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
+import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
   baseUrl: string;
@@ -24,6 +24,7 @@ const LOCAL_STARTUP_TIMEOUT_MS = 20_000;
 const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
 const LOCAL_TEST_TIMEOUT_MS = 150_000;
+const LOCAL_NO_MODEL_SETTLE_MS = 500;
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -308,6 +309,55 @@ describe("TUI PTY local mode", () => {
         expect(request?.path).toBe("/v1/responses");
         expect(request?.body.model).toBe("gpt-5.5");
         await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        const exit = await fixture.run.waitForExit();
+        expect(exit.exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "handles local slash commands without sending supported control commands to the model",
+    async () => {
+      const fixture = await startLocalModeTui();
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+
+        await fixture.run.write("/status\r", { delay: false });
+        await fixture.run.waitForOutput("Local status", LOCAL_OUTPUT_TIMEOUT_MS);
+        await sleep(LOCAL_NO_MODEL_SETTLE_MS);
+        expect(fixture.mockModel.requests()).toHaveLength(0);
+
+        await fixture.run.write("/compact: focus on decisions\r", { delay: false });
+        await fixture.run.waitForOutput(
+          "/compact is not supported in local embedded mode",
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
+        await sleep(LOCAL_NO_MODEL_SETTLE_MS);
+        expect(fixture.mockModel.requests()).toHaveLength(0);
+
+        await fixture.run.write("/commands all\r", { delay: false });
+        await fixture.run.waitForOutput(
+          "/commands is not supported in local embedded mode",
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
+        await sleep(LOCAL_NO_MODEL_SETTLE_MS);
+        expect(fixture.mockModel.requests()).toHaveLength(0);
+
+        await fixture.run.write("/not-a-real-command\r", { delay: false });
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `mock model server did not receive unknown slash input\n${fixture.run.output()}`,
+            ),
+        });
+        await fixture.run.waitForOutput("LOCAL_PTY_RESPONSE", LOCAL_OUTPUT_TIMEOUT_MS);
 
         await fixture.run.write("/exit\r", { delay: false });
         const exit = await fixture.run.waitForExit();

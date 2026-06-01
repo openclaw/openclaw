@@ -161,7 +161,7 @@ function createHarness(params?: {
     refreshAgents: vi.fn(),
     abortActive,
     setActivityStatus,
-    formatSessionKey: vi.fn(),
+    formatSessionKey: (key) => key,
     applySessionInfoFromPatch: applySessionInfoFromPatch as never,
     applySessionMutationResult: applySessionMutationResult as never,
     noteLocalRunId,
@@ -479,6 +479,164 @@ describe("tui command handlers", () => {
     });
   });
 
+  it("renders local /status from local session state", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+      currentSessionId: "local-session",
+      currentAgentId: "work",
+      currentSessionKey: "agent:work:work",
+    });
+
+    await handleCommand("/status");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("Local status");
+    expect(addSystem).toHaveBeenCalledWith("Session: agent:work:work (agent work)");
+    expect(addSystem).toHaveBeenCalledWith("Model: unknown");
+    expect(addSystem).toHaveBeenCalledWith("Goal: no active goal");
+    expect(addSystem).toHaveBeenCalledWith("tokens ?");
+  });
+
+  it("reports /compact as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/compact");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/compact is not supported in local embedded mode");
+  });
+
+  it("reports other shared slash commands as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/commands");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/commands is not supported in local embedded mode");
+  });
+
+  it("reports known shared commands with invalid args as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/commands all");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/commands is not supported in local embedded mode");
+  });
+
+  it("reports shared slash commands with colon args as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/compact: focus on decisions");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/compact is not supported in local embedded mode");
+  });
+
+  it("routes colon-form local slash commands through the local handler", async () => {
+    const patchSession = vi.fn().mockResolvedValue({ thinkingLevel: "medium" });
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const applySessionInfoFromPatch = vi.fn();
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+      patchSession,
+      refreshSessionInfo,
+      applySessionInfoFromPatch,
+    });
+
+    await handleCommand("/think: medium");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      thinkingLevel: "medium",
+    });
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ thinkingLevel: "medium" });
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledWith("thinking set to medium");
+  });
+
+  it("preserves directive-only slash aliases in local embedded mode", async () => {
+    for (const message of [
+      "/t high explain the diff",
+      "/reason stream summarize",
+      "/v on include logs",
+    ]) {
+      const patchSession = vi.fn().mockResolvedValue({});
+      const { handleCommand, sendChat, addSystem } = createHarness({
+        opts: { local: true },
+        patchSession,
+      });
+
+      await handleCommand(message);
+
+      expect(patchSession).not.toHaveBeenCalled();
+      expect(sendChat).toHaveBeenCalledTimes(1);
+      expectSendChatFields(sendChat, {
+        sessionKey: "agent:main:main",
+        message,
+      });
+      expect(addSystem).not.toHaveBeenCalled();
+    }
+  });
+
+  it("continues to forward unknown slash commands in local mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, requestRender } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/not-a-real-command");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/not-a-real-command",
+    });
+    expect(addUser).toHaveBeenCalledWith("/not-a-real-command");
+    expect(requestRender).toHaveBeenCalled();
+    expect(addSystem).not.toHaveBeenCalled();
+  });
+
+  it("reports /context as unsupported in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, openOverlay } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/context list");
+
+    expect(openOverlay).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/context is not supported in local embedded mode");
+  });
+
+  it("does not open the /context selector in local embedded mode", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, openOverlay } = createHarness({
+      opts: { local: true },
+    });
+
+    await handleCommand("/context");
+
+    expect(openOverlay).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("/context is not supported in local embedded mode");
+  });
+
   it("keeps gateway diagnostics on /gateway-status", async () => {
     const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
       getGatewayStatus: vi.fn().mockResolvedValue({
@@ -619,6 +777,7 @@ describe("tui command handlers", () => {
     const setActivityStatus = vi.fn();
     const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
       createHarness({
+        opts: { local: true },
         activeChatRunId: "run-main",
         setActivityStatus,
       });
@@ -637,6 +796,7 @@ describe("tui command handlers", () => {
   it("sends /side without hijacking the active main run", async () => {
     const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
       createHarness({
+        opts: { local: true },
         activeChatRunId: "run-main",
       });
 
@@ -647,6 +807,20 @@ describe("tui command handlers", () => {
     expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
     expect(state.activeChatRunId).toBe("run-main");
     expectSendChatFields(sendChat, { message: "/side what changed?" });
+  });
+
+  it("keeps colon-form local side questions on the side-question path", async () => {
+    const { handleCommand, sendChat, addUser, noteLocalBtwRunId } = createHarness({
+      opts: { local: true },
+      activeChatRunId: "run-main",
+    });
+
+    await handleCommand("/btw: what changed?");
+    await handleCommand("/side: what changed?");
+
+    expect(addUser).not.toHaveBeenCalled();
+    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(2);
+    expectSendChatFields(sendChat, { message: "/side: what changed?" });
   });
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
@@ -847,18 +1021,18 @@ describe("tui command handlers", () => {
       activityStatus: "streaming",
     });
 
-    await handleCommand("/context detail");
+    await handleCommand("/not-a-real-command");
 
     expect(sendChat).toHaveBeenCalledTimes(1);
     expectSendChatFields(sendChat, {
-      message: "/context detail",
+      message: "/not-a-real-command",
       sessionKey: "agent:main:main",
     });
     expect(reserveAssistantSlot).toHaveBeenCalledWith("run-active");
     const reserveCallOrder = reserveAssistantSlot.mock.invocationCallOrder[0];
     const addUserCallOrder = addUser.mock.invocationCallOrder[0];
     expect(reserveCallOrder).toBeLessThan(addUserCallOrder);
-    expect(addUser).toHaveBeenCalledWith("/context detail");
+    expect(addUser).toHaveBeenCalledWith("/not-a-real-command");
     expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
@@ -912,6 +1086,21 @@ describe("tui command handlers", () => {
     expect(addUser).toHaveBeenCalledWith("/stop");
   });
 
+  it("reports idle local slash stop without sending to the embedded model", async () => {
+    const abortActive = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+      abortActive,
+    });
+
+    await handleCommand("/stop");
+
+    expect(abortActive).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("no active run to stop");
+  });
+
   it("sends broad stop-like text as a normal prompt when idle", async () => {
     const abortActive = vi.fn().mockResolvedValue(undefined);
     const { handleCommand, sendChat, addUser } = createHarness({ abortActive });
@@ -946,10 +1135,10 @@ describe("tui command handlers", () => {
       activityStatus: "finishing context",
     });
 
-    await handleCommand("/context detail");
+    await handleCommand("/not-a-real-command");
 
     expect(sendChat).toHaveBeenCalledTimes(1);
-    expect(addUser).toHaveBeenCalledWith("/context detail");
+    expect(addUser).toHaveBeenCalledWith("/not-a-real-command");
     expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );

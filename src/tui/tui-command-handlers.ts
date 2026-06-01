@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
+import { listChatCommands, resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatGoalContinuationPrompt,
@@ -24,7 +25,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
-import { sanitizeRenderableText } from "./tui-formatters.js";
+import { formatGoalFooter, formatTokens, sanitizeRenderableText } from "./tui-formatters.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
   TUI_SESSION_PICKER_LIMIT,
@@ -76,6 +77,43 @@ function isBtwCommand(text: string): boolean {
 function isSlashStopCommand(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
+}
+
+const LOCAL_DIRECTIVE_ALIAS_COMMAND_KEYS = new Map([
+  ["reason", "reasoning"],
+  ["t", "think"],
+  ["thinking", "think"],
+  ["v", "verbose"],
+]);
+
+function getSharedTextCommandKeysByAlias(): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const command of listChatCommands()) {
+    const textAliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
+    for (const alias of textAliases) {
+      const normalized = alias.replace(/^\//, "").trim().toLowerCase();
+      if (normalized && !aliases.has(normalized)) {
+        aliases.set(normalized, command.key);
+      }
+    }
+  }
+  return aliases;
+}
+
+function resolveKnownSharedTextCommandKey(raw: string): string | null {
+  const tokenMatch = raw.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
+  if (!tokenMatch) {
+    return null;
+  }
+  return getSharedTextCommandKeysByAlias().get(tokenMatch[1].toLowerCase()) ?? null;
+}
+
+function isLocalDirectiveAliasCommand(raw: string, sharedCommandKey: string): boolean {
+  const tokenMatch = raw.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
+  if (!tokenMatch) {
+    return false;
+  }
+  return LOCAL_DIRECTIVE_ALIAS_COMMAND_KEYS.get(tokenMatch[1].toLowerCase()) === sharedCommandKey;
 }
 
 function goalContinuationPrompt(text: string): string | null {
@@ -329,6 +367,36 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     if (!name) {
       return;
     }
+    const sharedCommandKey =
+      opts.local === true
+        ? (resolveTextCommand(raw)?.command.key ?? resolveKnownSharedTextCommandKey(raw))
+        : null;
+
+    const renderLocalStatusSummary = () => {
+      const model = state.sessionInfo.model
+        ? state.sessionInfo.modelProvider
+          ? `${state.sessionInfo.modelProvider}/${state.sessionInfo.model}`
+          : state.sessionInfo.model
+        : "unknown";
+      const goalLine = formatGoalFooter(state.sessionInfo.goal);
+      chatLog.addSystem("Local status");
+      chatLog.addSystem(
+        `Session: ${formatSessionKey(state.currentSessionKey)} (agent ${state.currentAgentId})`,
+      );
+      chatLog.addSystem(`Model: ${model}`);
+      chatLog.addSystem(`Goal: ${goalLine ?? "no active goal"}`);
+      chatLog.addSystem(
+        formatTokens(
+          state.sessionInfo.totalTokens ?? null,
+          state.sessionInfo.contextTokens ?? null,
+        ),
+      );
+    };
+
+    const renderUnsupportedLocalCommand = (commandName: string) => {
+      chatLog.addSystem(`/${commandName} is not supported in local embedded mode`);
+    };
+
     switch (name) {
       case "help":
         chatLog.addSystem(
@@ -338,6 +406,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             model: state.sessionInfo.model,
           }),
         );
+        break;
+      case "status":
+        if (opts.local === true) {
+          renderLocalStatusSummary();
+          break;
+        }
+        await sendMessage(raw);
         break;
       case "auth": {
         if (!runAuthFlow) {
@@ -409,6 +484,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openAgentSelector();
         break;
       case "context":
+        if (opts.local === true) {
+          renderUnsupportedLocalCommand(name);
+          break;
+        }
         if (!args) {
           openContextModeSelector();
         } else {
@@ -688,16 +767,39 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await abortActive({ preferActive: true });
           break;
         }
+        if (opts.local === true) {
+          chatLog.addSystem("no active run to stop");
+          break;
+        }
+        await sendMessage(raw);
+        break;
+      case "btw":
+      case "side":
         await sendMessage(raw);
         break;
       case "settings":
         openSettings();
+        break;
+      case "compact":
+        if (opts.local === true) {
+          renderUnsupportedLocalCommand(name);
+          break;
+        }
+        await sendMessage(raw);
         break;
       case "exit":
       case "quit":
         requestExit();
         break;
       default:
+        if (opts.local === true && sharedCommandKey) {
+          if (sharedCommandKey === "btw" || isLocalDirectiveAliasCommand(raw, sharedCommandKey)) {
+            await sendMessage(raw);
+            break;
+          }
+          renderUnsupportedLocalCommand(sharedCommandKey);
+          break;
+        }
         await sendMessage(raw);
         break;
     }
