@@ -1459,11 +1459,13 @@ export function persistAllowAlwaysPatterns(params: {
   return patterns;
 }
 
+/** Returns the stricter of two exec security boundaries. */
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
   const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
   return order[a] <= order[b] ? a : b;
 }
 
+/** Returns the more aggressive approval prompt policy. */
 export function maxAsk(a: ExecAsk, b: ExecAsk): ExecAsk {
   const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
   return order[a] >= order[b] ? a : b;
