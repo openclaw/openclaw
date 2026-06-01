@@ -27,7 +27,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureCerts } from "./cert-manager.js";
 import { startMitmProxy } from "./mitm-server.js";
@@ -72,7 +72,7 @@ function simpleHash36(input: string): string {
 // Kill never saw the mtime bump and burned the full 15s timeout (risking a
 // kill before claude flushed the turn-end record).
 function canonicalizeWorkspaceDir(workspaceDir: string): string {
-  const resolved = resolve(workspaceDir).normalize("NFC");
+  const resolved = resolvePath(workspaceDir).normalize("NFC");
   try {
     return realpathSync.native(resolved).normalize("NFC");
   } catch {
@@ -507,11 +507,18 @@ async function main(): Promise<void> {
       heartbeatTimer = null;
     }
   };
+  // The spawned claude child (assigned further below). Tracked in a shared
+  // variable so the signal handlers can terminate it on a supervisor cancel /
+  // watchdog kill — the proxy stop + wrapper exit alone would otherwise orphan
+  // an interactive claude process. Best-effort: child may not be spawned yet.
+  let claudeChild: ReturnType<typeof spawn> | null = null;
   process.on("SIGTERM", () => {
+    claudeChild?.kill();
     stopProxy();
     process.exit(0);
   });
   process.on("SIGINT", () => {
+    claudeChild?.kill();
     stopProxy();
     process.exit(0);
   });
@@ -587,6 +594,11 @@ async function main(): Promise<void> {
     HTTPS_PROXY: `http://127.0.0.1:${proxy.connectPort}`,
     NODE_EXTRA_CA_CERTS: certs.caPath,
     NODE_OPTIONS: `--require "${TTY_SPOOF_PATH}"`,
+    // The tty-spoof makes claude-code believe it has a TTY (subscription mode),
+    // which re-enables the background-task feature that headless `-p` disables.
+    // Background tasks fire follow-up polls the wrapper would surface as
+    // spurious extra turns — force the feature off to match `-p` behaviour.
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
   };
 
   const claudeBinary = process.env["OPENCLAW_INTERACTIVE_CLAUDE_BINARY"] || "claude";
@@ -595,6 +607,9 @@ async function main(): Promise<void> {
     env: claudeEnv,
     stdio: ["pipe", "ignore", "inherit"],
   });
+  // Publish the child to the shared handle so the SIGTERM/SIGINT handlers
+  // (registered before the spawn) can terminate it on cancellation.
+  claudeChild = claude;
 
   // Framework sends prompt via args (input:"arg"), stdin is just empty+close.
   // Forward data but do NOT forward the close — we need stdin open to send
@@ -677,11 +692,30 @@ async function main(): Promise<void> {
   proxy.onEvent((evt) => {
     const eventType = evt.type as string;
     // Synthetic event emitted by mitm-server when /v1/messages returns a
-    // non-SSE 4xx/5xx (rate limit, billing, auth, overloaded, etc.). It
-    // carries no _reqId / _requestType tags — short-circuit
-    // before the tag-extraction shape below.
+    // non-SSE 4xx/5xx (rate limit, billing, auth, overloaded, etc.). It carries
+    // _reqId / _requestType so termination can be scoped to the user-facing
+    // turn. Handle it before the tag-extraction shape below.
     if (eventType === "api_error") {
       if (resultEmitted || intentionalKill) {
+        return;
+      }
+      // A transient 4xx/5xx on a concurrent auxiliary side-call (title-gen /
+      // classifier), a sub-agent, or a compaction request must NOT abort an
+      // otherwise-valid main turn — drop it and let the primary continue. Only
+      // normal / tool_followup (the user-facing turn) terminalizes the run.
+      const errRequestType = typeof evt._requestType === "string" ? evt._requestType : "normal";
+      if (
+        errRequestType === "auxiliary" ||
+        errRequestType === "subagent" ||
+        errRequestType === "compaction"
+      ) {
+        dbg(
+          "api_error on non-user-facing request type=",
+          errRequestType,
+          "status:",
+          evt.status,
+          "— ignoring",
+        );
         return;
       }
       resultEmitted = true;
@@ -724,7 +758,8 @@ async function main(): Promise<void> {
       | "normal"
       | "compaction"
       | "tool_followup"
-      | "auxiliary";
+      | "auxiliary"
+      | "subagent";
     delete evt._reqId;
     delete evt._requestType;
     const line = JSON.stringify({ type: "stream_event", event: evt });
@@ -748,9 +783,10 @@ async function main(): Promise<void> {
       currentStopReason = "";
       lastUsage = {};
       dbg("turn start reqId=", reqId, "type=", requestType);
-      // Compaction streams: suppress message_start — downstream sees only
-      // the rewritten thinking_delta content for this stream.
-      if (requestType === "compaction") {
+      // Compaction + sub-agent streams: suppress message_start — downstream
+      // sees only the rewritten thinking_delta (and, for sub-agents, the
+      // forwarded tool_use rows) for this stream, never a new reply.
+      if (requestType === "compaction" || requestType === "subagent") {
         return;
       }
       emit(line);
@@ -785,6 +821,45 @@ async function main(): Promise<void> {
       if (eventType === "message_stop") {
         turnActive = false;
         dbg("compaction stream message_stop reqId=", reqId, "— awaiting real turn");
+      }
+      return;
+    }
+
+    // Sub-agent (websearch / research/Explore Task): same reasoning-lane
+    // treatment as compaction — text_delta → thinking_delta so the sub-agent's
+    // output surfaces as the primary turn's reasoning instead of ending it —
+    // BUT also forward its tool_use blocks (content_block_start / input_json_delta
+    // / content_block_stop) untouched so the 🛠️ tool rows render interleaved
+    // with the thinking. The sub-agent's message_stop is suppressed (turnActive
+    // stays false); the primary's continuation (a later tool_followup carrying
+    // the Agent tool) is the user-facing reply.
+    if (requestType === "subagent") {
+      if (eventType === "content_block_delta") {
+        const d = evt.delta as Record<string, unknown> | undefined;
+        if (d?.type === "text_delta" && typeof d.text === "string") {
+          const thinkingEvt = {
+            type: "stream_event",
+            event: {
+              type: "content_block_delta",
+              index: (evt as Record<string, unknown>).index ?? 0,
+              delta: { type: "thinking_delta", thinking: d.text },
+            },
+          };
+          emit(JSON.stringify(thinkingEvt));
+          return;
+        }
+        // tool_use args (input_json_delta) / native thinking_delta — forward as-is.
+        emit(line);
+        return;
+      }
+      if (eventType === "content_block_start" || eventType === "content_block_stop") {
+        // tool_use block boundaries — forward so the 🛠️ rows render.
+        emit(line);
+        return;
+      }
+      if (eventType === "message_stop") {
+        turnActive = false;
+        dbg("subagent stream message_stop reqId=", reqId, "— awaiting primary continuation");
       }
       return;
     }
