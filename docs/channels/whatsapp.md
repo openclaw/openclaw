@@ -165,6 +165,19 @@ handoff path over manual terminal capture.
 - Gateway owns the WhatsApp socket and reconnect loop.
 - The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
 - Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
+- Reconnect watchdog tuning is explicit under `channels.whatsapp.watchdog.*` (or per-account at `channels.whatsapp.accounts.<id>.watchdog.*`): `messageTimeoutMs` is the app-silence cap (default 1_800_000), `transportTimeoutMs` is the WebSocket-silence cap (default 300_000), `watchdogCheckMs` is the evaluation interval (default 60_000). Raise `messageTimeoutMs` for use patterns with hour-long idle gaps between user-initiated turns; the WebSocket-level `transportTimeoutMs` still catches actually dead connections fast.
+
+  ```json5
+  {
+    channels: {
+      whatsapp: {
+        watchdog: {
+          messageTimeoutMs: 28800000, // 8 hours
+        },
+      },
+    },
+  }
+  ```
 - Outbound sends require an active WhatsApp listener for the target account.
 - Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens in text and media captions when the token matches current WhatsApp participant metadata, including LID-backed groups.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).

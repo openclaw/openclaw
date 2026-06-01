@@ -56,6 +56,48 @@ const WhatsAppPluginHooksSchema = z
   .strict()
   .optional();
 
+/**
+ * Connection watchdog tuning for WhatsApp Web.
+ *
+ * The plugin's connection watchdog (`extensions/whatsapp/src/connection-controller.ts`)
+ * fires when EITHER:
+ *   - `transportSilentMs > transportTimeoutMs` (WebSocket idle — no ping/pong), OR
+ *   - `appSilentMs > messageTimeoutMs * <1|4>` (no app messages in/out)
+ *
+ * On fire it kills the WhatsApp Web socket with status 499 and reconnects. The
+ * `messageTimeoutMs` default (1_800_000 = 30 min) is too aggressive for use
+ * patterns with hours-long idle gaps between user-initiated turns (personal
+ * assistants, on-call bots) — every 30 min of silence triggers a recycle, and
+ * any in-flight dispatch races the abort (leaving `pendingFinalDelivery` stuck).
+ *
+ * Operators should be able to raise the threshold to fit their workload. All
+ * three knobs are optional — when unset, the existing internal defaults apply.
+ */
+const WhatsAppWatchdogSchema = z
+  .object({
+    /**
+     * App-level silence before forcing a reconnect, in ms.
+     * Internal default: 1_800_000 (30 min). Set higher for idle-prone use
+     * patterns; the WebSocket-level `transportTimeoutMs` still catches actually
+     * dead connections fast.
+     */
+    messageTimeoutMs: z.number().int().positive().optional(),
+    /**
+     * Transport-layer silence before forcing a reconnect, in ms.
+     * Internal default: 300_000 (5 min). Lower this on flaky networks; raise
+     * it on slow links where ping/pong takes longer than typical.
+     */
+    transportTimeoutMs: z.number().int().positive().optional(),
+    /**
+     * How often the watchdog evaluates the thresholds, in ms.
+     * Internal default: 60_000 (1 min). Lower values detect dead connections
+     * faster at the cost of more frequent timer wake-ups.
+     */
+    watchdogCheckMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
@@ -107,6 +149,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     pluginHooks: WhatsAppPluginHooksSchema,
+    watchdog: WhatsAppWatchdogSchema,
   };
 }
 

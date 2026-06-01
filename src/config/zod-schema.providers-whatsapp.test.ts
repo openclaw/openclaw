@@ -212,4 +212,61 @@ describe("WhatsApp prompt config Zod validation", () => {
       expect(result.data.accounts?.work?.pluginHooks?.messageReceived).toBe(false);
     }
   });
+
+  it("accepts channel-level watchdog tuning", () => {
+    const config = {
+      watchdog: {
+        messageTimeoutMs: 28800000,
+        transportTimeoutMs: 300000,
+        watchdogCheckMs: 60000,
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.watchdog?.messageTimeoutMs).toBe(28800000);
+      expect(result.data.watchdog?.transportTimeoutMs).toBe(300000);
+      expect(result.data.watchdog?.watchdogCheckMs).toBe(60000);
+    }
+  });
+
+  it("accepts account-level watchdog override of messageTimeoutMs", () => {
+    const config = {
+      accounts: {
+        work: {
+          watchdog: {
+            messageTimeoutMs: 14400000,
+          },
+        },
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.watchdog?.messageTimeoutMs).toBe(14400000);
+    }
+  });
+
+  it("rejects extra properties in watchdog", () => {
+    const config = {
+      watchdog: {
+        messageTimeoutMs: 28800000,
+        unknownKey: true,
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-positive watchdog values", () => {
+    expect(
+      WhatsAppConfigSchema.safeParse({ watchdog: { messageTimeoutMs: 0 } }).success,
+    ).toBe(false);
+    expect(
+      WhatsAppConfigSchema.safeParse({ watchdog: { transportTimeoutMs: -1 } }).success,
+    ).toBe(false);
+  });
 });

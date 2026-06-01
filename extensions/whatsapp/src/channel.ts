@@ -313,6 +313,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           const { e164, jid } = (await loadWhatsAppChannelRuntime()).readWebSelfId(account.authDir);
           const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
           ctx.log?.info(`[${account.accountId}] starting provider (${identity})`);
+          // Pass through optional watchdog tuning from openclaw.json. When the
+          // operator hasn't configured `channels.whatsapp.watchdog.*` (or the
+          // per-account override), the receiver applies its internal defaults
+          // (monitor.ts: messageTimeoutMs=30min, transportTimeoutMs=5min,
+          // watchdogCheckMs=1min). See `WhatsAppWatchdogSchema` for guidance
+          // on when to override.
+          const watchdog = account.watchdog;
           return (await loadWhatsAppChannelRuntime()).monitorWebChannel(
             getWhatsAppRuntime().logging.shouldLogVerbose(),
             undefined,
@@ -325,6 +332,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
                 ctx.setStatus({ accountId: ctx.accountId, ...next }),
               accountId: account.accountId,
               channelRuntime: ctx.channelRuntime,
+              ...(watchdog?.messageTimeoutMs !== undefined && {
+                messageTimeoutMs: watchdog.messageTimeoutMs,
+              }),
+              ...(watchdog?.transportTimeoutMs !== undefined && {
+                transportTimeoutMs: watchdog.transportTimeoutMs,
+              }),
+              ...(watchdog?.watchdogCheckMs !== undefined && {
+                watchdogCheckMs: watchdog.watchdogCheckMs,
+              }),
             },
           );
         },
