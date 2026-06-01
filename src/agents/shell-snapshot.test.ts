@@ -134,6 +134,8 @@ describe("exec shell snapshots", () => {
         HOME: untrustedHome,
         [EXEC_SHELL_SNAPSHOT_ENV]: "0",
         OPENCLAW_STATE_DIR: untrustedStateDir,
+        SSH_CLIENT: "127.0.0.1 1000 22",
+        SSH_CONNECTION: "127.0.0.1 1000 127.0.0.1 22",
       },
     });
 

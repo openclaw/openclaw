@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   applyJobPatch,
   createJob,
+  nextWakeAtMs,
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
-  resolveJobPayloadTextForMain,
 } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
@@ -647,6 +647,32 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
   });
 });
 
+describe("nextWakeAtMs", () => {
+  it("treats missing enabled like enabled so older persisted jobs still wake", () => {
+    const nextRunAtMs = Date.parse("2026-02-28T12:01:00.000Z");
+    const state = createMockState(Date.parse("2026-02-28T12:00:00.000Z"));
+    state.store = {
+      version: 1,
+      jobs: [
+        {
+          id: "legacy-missing-enabled",
+          name: "legacy missing enabled",
+          enabled: undefined as unknown as boolean,
+          createdAtMs: nextRunAtMs - 60_000,
+          updatedAtMs: nextRunAtMs - 60_000,
+          schedule: { kind: "at", at: new Date(nextRunAtMs).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "wake" },
+          state: { nextRunAtMs },
+        },
+      ],
+    };
+
+    expect(nextWakeAtMs(state)).toBe(nextRunAtMs);
+  });
+});
+
 describe("applyJobPatch rejects sessionTarget main for non-default agents", () => {
   const now = Date.now();
 
@@ -864,7 +890,7 @@ describe("recomputeNextRuns", () => {
     if (job.schedule.kind === "every") {
       expect(job.schedule.anchorMs).toBe(createdAtMs);
     }
-    expect(job.state.nextRunAtMs).toBe(now);
+    expect(job.state.nextRunAtMs).toBe(now + 60_000);
   });
 
   it("keeps recovered recurring error retries behind run-end backoff", () => {

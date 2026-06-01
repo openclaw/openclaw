@@ -1,6 +1,7 @@
 import { resetToolStream, type CompactionStatus, type FallbackStatus } from "../app-tool-stream.ts";
+import { uiSessionRowMatchesSelectedChat } from "../session-key.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
-import type { SessionRunStatus, SessionsListResult } from "../types.ts";
+import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../types.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -29,6 +30,8 @@ type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
 type RunLifecycleHost = Omit<Partial<Parameters<typeof resetToolStream>[0]>, "hello"> & {
   sessionKey: string;
+  agentsList?: { mainKey?: string | null } | null;
+  hello?: { snapshot?: unknown } | null;
   chatRunId?: string | null;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
@@ -270,6 +273,28 @@ export function reconcileChatRunFromCurrentSessionRow(
   if (!row) {
     return false;
   }
+  return reconcileChatRunFromSessionRow(host, row, options);
+}
+
+function isSessionRowForSelectedChat(
+  host: RunLifecycleHost,
+  rowKey: string,
+  sessionKey: string,
+): boolean {
+  return uiSessionRowMatchesSelectedChat(host, rowKey, sessionKey);
+}
+
+export function reconcileChatRunFromSessionRow(
+  host: RunLifecycleHost,
+  row: GatewaySessionRow,
+  options: { publishRunStatus?: boolean } = {},
+): boolean {
+  if (!isSessionRowForSelectedChat(host, row.key, host.sessionKey)) {
+    return false;
+  }
+  if (!host.chatRunId && host.chatStream == null) {
+    return false;
+  }
   if (isSessionRunActive(row)) {
     return false;
   }
@@ -282,6 +307,7 @@ export function reconcileChatRunFromCurrentSessionRow(
     sessionStatus: row.status === "done" ? "done" : (row.status ?? "killed"),
     runId: host.chatRunId,
     sessionKey: host.sessionKey,
+    sessionKeys: [row.key],
     clearLocalRun: true,
     clearChatStream: true,
     publishRunStatus: options.publishRunStatus,

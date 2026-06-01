@@ -47,6 +47,10 @@ function respondProviderUnsupported(respond: RespondFn, providerId: string) {
   );
 }
 
+function respondWebLoginUnavailable(respond: RespondFn, err: unknown) {
+  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+}
+
 /** Resolves a concrete provider gateway login method or sends the public error. */
 function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   rawParams: unknown;
@@ -129,7 +133,7 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respondWebLoginUnavailable(respond, err);
     }
   },
   "web.login.wait": async ({ params, respond, context }) => {
@@ -157,7 +161,7 @@ export const webHandlers: GatewayRequestHandlers = {
       }
       respond(true, result, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respondWebLoginUnavailable(respond, err);
     }
   },
 };

@@ -670,7 +670,9 @@ describe("createFollowupRunner reply-lane admission", () => {
         },
       }),
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     active.updateSessionId("post-compact-session");
     sessionStore.main = {
       sessionId: "post-compact-session",
@@ -733,7 +735,9 @@ describe("createFollowupRunner reply-lane admission", () => {
         },
       }),
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     active.updateSessionId("post-compact-session");
     active.complete();
     await pending;
@@ -743,6 +747,77 @@ describe("createFollowupRunner reply-lane admission", () => {
       "post-compact-session",
     );
     realAgentEvents.resetAgentRunContextForTest();
+  });
+
+  it("routes preflight compaction failures before starting queued followup runs", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "acct-1",
+        originatingThreadId: "thread-1",
+        originatingChatType: "group",
+        run: {
+          messageProvider: "discord",
+          provider: "anthropic",
+          model: "claude",
+          verboseLevel: "off",
+          sessionKey: "main",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledOnce();
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+        payload: expect.objectContaining({
+          text: expect.stringContaining("auto-compaction could not recover"),
+        }),
+      }),
+    );
+  });
+
+  it("preserves non-compaction preflight failures for queued followup runs", async () => {
+    runPreflightCompactionIfNeededMock.mockRejectedValueOnce(new Error("session load failed"));
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          run: {
+            messageProvider: "discord",
+            provider: "anthropic",
+            model: "claude",
+            sessionKey: "main",
+          },
+        }),
+      ),
+    ).rejects.toThrow("session load failed");
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1501,6 +1576,7 @@ describe("createFollowupRunner runtime config", () => {
     const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     expect(fallbackCall.abortSignal).toBeInstanceOf(AbortSignal);
     expect(fallbackCall.abortSignal).not.toBe(abortController.signal);
+    expect(fallbackCall.sessionId).toBe("session");
     expect(call.abortSignal).toBe(fallbackCall.abortSignal);
   });
 

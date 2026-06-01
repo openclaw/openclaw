@@ -64,6 +64,7 @@ const PLUGIN_UPDATE_CORRUPT_SCENARIO_PATH =
   "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH = "scripts/e2e/plugin-lifecycle-matrix-docker.sh";
+const PLUGIN_LIFECYCLE_MATRIX_SWEEP_PATH = "scripts/e2e/lib/plugin-lifecycle-matrix/sweep.sh";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
@@ -96,7 +97,7 @@ function packageBackedDockerRunnerPaths(): string[] {
     .filter((entry) => entry.endsWith("-docker.sh"))
     .map((entry) => join("scripts/e2e", entry))
     .filter((path) => readFileSync(path, "utf8").includes("docker_e2e_prepare_package_tgz"))
-    .sort();
+    .toSorted();
 }
 
 function shellQuote(value: string): string {
@@ -1077,6 +1078,17 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     expect(runner).toContain('docker_e2e_run_with_harness \\\n  "${DOCKER_ENV_ARGS[@]}"');
   });
 
+  it("cleans plugin lifecycle matrix temp roots on exit", () => {
+    const sweep = readFileSync(PLUGIN_LIFECYCLE_MATRIX_SWEEP_PATH, "utf8");
+
+    expect(sweep).toContain("cleanup() {");
+    expect(sweep).toContain("openclaw_plugins_cleanup_fixture_servers");
+    expect(sweep).toContain('rm -rf "$resource_dir"');
+    expect(sweep).toContain('rm -rf "$pack_root"');
+    expect(sweep).toContain('rm -rf "$registry_root"');
+    expect(sweep.match(/trap cleanup EXIT/g)).toHaveLength(2);
+  });
+
   it("wraps direct Docker E2E npm installs with the shared timeout helper", () => {
     const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
     const updateChannel = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
@@ -1552,7 +1564,9 @@ test -f "$TMPDIR/docker-cmd-seen"
 
     expect(runner).toContain("scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
     expect(probe).toContain("plugin install record changed unexpectedly");
-    expect(probe).toContain("index.installRecords ?? index.records ?? config.plugins?.installs");
+    expect(probe).toContain(
+      "readPluginInstallRecords({ fallbackRecords: config.plugins?.installs ?? {} })",
+    );
     expect(scenario).toContain("Config changed unexpectedly for modern package");
     expect(scenario).not.toContain("before_hash");
   });
@@ -1694,6 +1708,7 @@ test -f "$TMPDIR/docker-cmd-seen"
 
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
+    expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_COMMAND_TIMEOUT");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
     expect(runner).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TRACE");
     expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");

@@ -408,10 +408,10 @@ async function readChunkWithIdleTimeout(
           resolve(result);
         }
       },
-      (err) => {
+      (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(err);
+          reject(toLintErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -635,10 +635,10 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
     let buffer: Buffer;
     try {
       buffer = await readResponseWithLimit(res, effectiveMaxBytes, {
-        onOverflow: ({ maxBytes, res }) =>
+        onOverflow: ({ maxBytes, res: resLocal }) =>
           new MediaFetchError(
             "max_bytes",
-            `Failed to fetch media from ${redactMediaUrl(res.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
+            `Failed to fetch media from ${redactMediaUrl(resLocal.url || options.url)}: payload exceeds maxBytes ${maxBytes}`,
           ),
         chunkTimeoutMs: options.readIdleTimeoutMs,
       });
@@ -682,4 +682,18 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       await release();
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

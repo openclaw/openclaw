@@ -167,7 +167,6 @@ function resolveSidebarUnavailableReason(
       return "Full content is unavailable because the stored transcript entry is too large to return safely.";
     case "not_visible":
       return "Full content is unavailable because this transcript entry does not have a visible WebChat projection.";
-    case "not_found":
     default:
       return "Full content is no longer available for this transcript entry.";
   }
@@ -279,7 +278,7 @@ export class OpenClawApp extends LitElement {
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
   @state() chatSessionPickerOpen = false;
-  @state() chatSessionPickerSurface: "desktop" | "mobile" | null = null;
+  @state() chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null = null;
   @state() chatSessionPickerQuery = "";
   @state() chatSessionPickerAppliedQuery = "";
   @state() chatSessionPickerLoading = false;
@@ -288,6 +287,12 @@ export class OpenClawApp extends LitElement {
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;
+  chatComposerPersistTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
+  chatComposerPersistSnapshot: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatAttachments: ChatAttachment[] = [];
@@ -705,6 +710,21 @@ export class OpenClawApp extends LitElement {
       this.chatSessionPickerSurface = null;
       return;
     }
+    const openComposerDetails = this.querySelectorAll<HTMLDetailsElement>(
+      ".chat-controls__inline-select[open], .agent-chat__talk-select[open], .agent-chat__talk-options-advanced[open]",
+    );
+    if (openComposerDetails.length > 0) {
+      e.preventDefault();
+      openComposerDetails.forEach((details) => {
+        details.open = false;
+      });
+      return;
+    }
+    if (this.realtimeTalkOptionsOpen) {
+      e.preventDefault();
+      this.realtimeTalkOptionsOpen = false;
+      return;
+    }
     if (!this.chatMobileControlsOpen) {
       return;
     }
@@ -713,6 +733,21 @@ export class OpenClawApp extends LitElement {
   };
   private chatMobileControlsPointerdownHandler = (e: Event) => {
     const path = e.composedPath();
+    this.querySelectorAll<HTMLDetailsElement>(
+      ".chat-controls__inline-select[open], .agent-chat__talk-select[open], .agent-chat__talk-options-advanced[open]",
+    ).forEach((details) => {
+      if (!path.includes(details)) {
+        details.open = false;
+      }
+    });
+    if (this.realtimeTalkOptionsOpen) {
+      const insideTalkOptions = Array.from(
+        this.querySelectorAll(".agent-chat__talk-options, [aria-label='Talk settings']"),
+      ).some((node) => path.includes(node));
+      if (!insideTalkOptions) {
+        this.realtimeTalkOptionsOpen = false;
+      }
+    }
     if (this.chatSessionPickerOpen) {
       const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
         (node) => path.includes(node),
@@ -725,7 +760,9 @@ export class OpenClawApp extends LitElement {
     if (!this.chatMobileControlsOpen) {
       return;
     }
-    const wrapper = this.querySelector(".chat-mobile-controls-wrapper");
+    const wrapper =
+      this.querySelector(".chat-settings-popover-wrapper") ??
+      this.querySelector(".chat-mobile-controls-wrapper");
     if (wrapper && path.includes(wrapper)) {
       return;
     }
@@ -742,12 +779,6 @@ export class OpenClawApp extends LitElement {
       switch (action) {
         case "new-session":
           await createChatSessionInternal(this as unknown as AppViewState);
-          break;
-        case "toggle-focus":
-          this.applySettings({
-            ...this.settings,
-            chatFocusMode: !this.settings.chatFocusMode,
-          });
           break;
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);

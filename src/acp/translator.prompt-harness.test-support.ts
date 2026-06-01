@@ -56,7 +56,7 @@ export function observeSettlement(promise: ReturnType<AcpGatewayAgent["prompt"]>
   const settleSpy = vi.fn();
   void promise.then(
     (value) => settleSpy({ kind: "resolve", value }),
-    (error) => settleSpy({ kind: "reject", error }),
+    (error: unknown) => settleSpy({ kind: "reject", error }),
   );
   return settleSpy;
 }

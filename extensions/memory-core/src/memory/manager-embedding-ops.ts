@@ -143,7 +143,6 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
       reject(error);
       controller.abort(error);
     }, timeoutMs);
-    timer.unref?.();
   });
   try {
     const operation = params.run(controller.signal);
@@ -439,7 +438,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       EMBEDDING_RETRY_MAX_DELAY_MS,
     );
     log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, waitMs);
+    });
   }
 
   private resolveEmbeddingTimeout(kind: "query" | "batch"): number {

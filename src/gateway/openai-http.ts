@@ -981,7 +981,7 @@ export async function handleOpenAiHttpRequest(
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
-  let resolvedClientTools: ClientToolDefinition[] = [];
+  let resolvedClientTools: ClientToolDefinition[];
   let toolChoicePrompt: string | undefined;
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
   try {
@@ -1002,7 +1002,7 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
-  let images: ImageContent[] = [];
+  let images: ImageContent[];
   try {
     images = await resolveImagesForRequest(activeTurnContext, limits);
   } catch (err) {

@@ -240,7 +240,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       meta: sentinelMeta,
     });
 
-    let sentinelPath: string | null = null;
+    let sentinelPath: string | null;
     try {
       sentinelPath = await writeRestartSentinel(payload);
       recordLatestUpdateRestartSentinel(payload);

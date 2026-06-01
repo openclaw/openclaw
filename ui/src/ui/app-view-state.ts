@@ -128,7 +128,7 @@ export type AppViewState = {
   sessionSwitchNotice: { id: number; text: string } | null;
   sessionSwitchFlashKey: string | null;
   chatSessionPickerOpen: boolean;
-  chatSessionPickerSurface: "desktop" | "mobile" | null;
+  chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null;
   chatSessionPickerQuery: string;
   chatSessionPickerAppliedQuery: string;
   chatSessionPickerLoading: boolean;

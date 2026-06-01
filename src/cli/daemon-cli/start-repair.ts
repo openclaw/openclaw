@@ -78,7 +78,7 @@ export async function repairLoadedGatewayServiceForStart(params: {
     environment,
   });
 
-  let loaded = true;
+  let loaded;
   try {
     loaded = await params.service.isLoaded({ env: installEnv });
   } catch {

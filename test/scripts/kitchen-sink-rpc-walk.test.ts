@@ -124,6 +124,43 @@ describe("kitchen-sink RPC gateway teardown", () => {
     expect(child.unref).toHaveBeenCalledOnce();
   });
 
+  it("treats ESRCH during gateway teardown as already exited", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      const error = Object.assign(new Error("process already exited"), { code: "ESRCH" });
+      throw error;
+    });
+
+    await expect(
+      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+    ).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("treats failed gateway kill signals as already exited", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => false);
+
+    await expect(
+      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+    ).resolves.toBeUndefined();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
+
   it("fails readiness waits before polling after signaled gateway exits", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-signal-ready-"));
     try {
@@ -364,10 +401,16 @@ setInterval(() => {}, 1000);
     expect(samples[0]).toMatchObject({
       aggregateRssMiB: 640,
       label: "plugins install",
-      processId: seenPids[0]! + 1,
+      processId: seenPids[0] + 1,
       rssMiB: 512,
     });
     expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("rejects command spawn failures as Error objects", async () => {
+    await expect(runCommand("openclaw-definitely-missing-command", [])).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 
@@ -582,7 +625,7 @@ describe("kitchen-sink RPC process sampling", () => {
       platform: "linux",
       runCommand: async (command: string, args: string[]) => {
         expect(command).toBe("ps");
-        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
         return {
           stdout: [
             " 4321     1  262144  12.5 node dist/index.js gateway --port 19080",
@@ -607,7 +650,7 @@ describe("kitchen-sink RPC process sampling", () => {
       posixCommandLineNeedles: ["gateway", "--port", "19080"],
       runCommand: async (command: string, args: string[]) => {
         expect(command).toBe("ps");
-        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
         return {
           stdout: [
             " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
@@ -779,7 +822,7 @@ describe("kitchen-sink RPC process sampling", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: () => new Promise(() => undefined),
+      text: () => new Promise(() => {}),
     });
 
     const result = fetchJson("http://127.0.0.1:19680/readyz", {

@@ -604,9 +604,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       chatLog.updateAssistant(displayText, evt.runId);
     }
     if (evt.state === "final") {
-      const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
+      const isLocalBtwRunLocal = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      if (!evt.message && isLocalBtwRun) {
+      if (!evt.message && isLocalBtwRunLocal) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();

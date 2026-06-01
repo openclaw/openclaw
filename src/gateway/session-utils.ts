@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -487,9 +488,12 @@ function rememberSingleRowChildSessionCandidateCacheEntry(
 }
 
 function buildStoreChildSessionCandidateIndex(
-  store: Record<string, SessionEntry>,
+  store: Record<string, SessionEntry> | null | undefined,
 ): Map<string, string[]> {
   const childSessionsByKey = new Map<string, string[]>();
+  if (!store) {
+    return childSessionsByKey;
+  }
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
       continue;
@@ -507,8 +511,11 @@ function buildStoreChildSessionCandidateIndex(
 
 function getSingleRowChildSessionCandidates(params: {
   storePath: string;
-  store: Record<string, SessionEntry>;
+  store: Record<string, SessionEntry> | null | undefined;
 }): Map<string, string[]> {
+  if (!params.store) {
+    return new Map();
+  }
   const storeVersion = getSessionStoreCacheVersion(params.storePath);
   const cached = singleRowChildSessionCandidateCache.get(params.storePath);
   if (cached && cached.store === params.store && cached.storeVersion === storeVersion) {
@@ -1109,6 +1116,18 @@ export function parseGroupKey(
     }
   }
   return null;
+}
+
+function isGroupOrChannelDisplaySession(
+  entry: SessionEntry | undefined,
+  parsed: { kind?: "group" | "channel" } | null,
+): boolean {
+  return (
+    entry?.chatType === "group" ||
+    entry?.chatType === "channel" ||
+    parsed?.kind === "group" ||
+    parsed?.kind === "channel"
+  );
 }
 
 function isStorePathTemplate(store?: string): boolean {
@@ -1860,9 +1879,10 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   const displayName =
     entry?.displayName ??
-    (channel
+    (isGroupSession && channel
       ? buildGroupDisplayName({
           provider: channel,
           subject,
@@ -2037,14 +2057,20 @@ export function buildGatewaySessionRow(params: {
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
+  const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+    cfg,
+    agentId: sessionAgentId,
+    sessionKey: key,
+  });
+  const acpMeta = readAcpSessionMeta({ sessionKey: acpSessionKey });
   const agentRuntime = resolveModelAgentRuntimeMetadata({
     cfg,
     agentId: sessionAgentId,
     provider: rowModelProvider,
     model: rowModel,
-    sessionKey: key,
-    acpRuntime: entry?.acp != null,
-    acpBackend: entry?.acp?.backend,
+    sessionKey: acpSessionKey,
+    acpRuntime: acpMeta != null,
+    acpBackend: acpMeta?.backend,
   });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
@@ -2056,7 +2082,15 @@ export function buildGatewaySessionRow(params: {
         rowContext: params.rowContext,
       }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
-    ? resolvePositiveNumber(entry?.contextTokens)
+    ? (resolvePositiveNumber(entry?.contextTokens) ??
+      resolvePositiveNumber(
+        resolveContextTokensForModel({
+          cfg,
+          provider: rowModelProvider,
+          model: rowModel,
+          allowAsyncLoad: false,
+        }),
+      ))
     : (resolvePositiveNumber(entry?.contextTokens) ??
       resolvePositiveNumber(transcriptUsage?.contextTokens) ??
       resolvePositiveNumber(
@@ -2174,17 +2208,17 @@ function resolveSessionListSearchDisplayName(
   }
   const parsed = parseGroupKey(key);
   const channel = entry?.channel ?? parsed?.channel;
-  if (!channel) {
-    return undefined;
+  if (isGroupOrChannelDisplaySession(entry, parsed) && channel) {
+    return buildGroupDisplayName({
+      provider: channel,
+      subject: entry?.subject,
+      groupChannel: entry?.groupChannel,
+      space: entry?.space,
+      id: parsed?.id,
+      key,
+    });
   }
-  return buildGroupDisplayName({
-    provider: channel,
-    subject: entry?.subject,
-    groupChannel: entry?.groupChannel,
-    space: entry?.space,
-    id: parsed?.id,
-    key,
-  });
+  return entry?.label ?? entry?.origin?.label;
 }
 
 function addSessionListSearchModelFields(
@@ -2320,6 +2354,38 @@ export function loadGatewaySessionRow(
   });
 }
 
+export function buildGatewaySessionInfo(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  key: string;
+  entry?: SessionEntry;
+  agentId?: string;
+  now?: number;
+  modelCatalog?: ModelCatalogEntry[];
+}): GatewaySessionRow {
+  const now = params.now ?? Date.now();
+  const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
+    storePath: params.storePath,
+    store: params.store,
+    key: params.key,
+    now,
+  });
+  return buildGatewaySessionRow({
+    cfg: params.cfg,
+    storePath: params.storePath,
+    store: params.store,
+    key: params.key,
+    entry: params.entry,
+    agentId: params.agentId,
+    modelCatalog: params.modelCatalog,
+    now,
+    storeChildSessionsByKey,
+    skipTranscriptUsageFallback: true,
+    lightweightListRow: true,
+  });
+}
+
 /**
  * Number of session rows to build per batch before yielding to the event loop.
  * Keeps the main thread responsive during large session list operations while
@@ -2447,6 +2513,9 @@ function filterSessionEntries(params: {
       return true;
     })
     .filter(([key, entry]) => {
+      if (isPhantomAgentStoreListEntry(key, entry)) {
+        return false;
+      }
       if (!spawnedBy) {
         return true;
       }
@@ -2518,6 +2587,15 @@ function filterSessionEntries(params: {
   }
 
   return entries;
+}
+
+function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefined): boolean {
+  const parsed = parseAgentSessionKey(key);
+  return (
+    parsed?.rest === "sessions" &&
+    !normalizeOptionalString(entry?.sessionId) &&
+    entry?.updatedAt == null
+  );
 }
 
 function selectSessionEntries(params: {
@@ -2743,7 +2821,9 @@ export async function listSessionsFromStoreAsync(params: {
     // Yield to the event loop between batches so WebSocket heartbeats,
     // channel I/O, and concurrent RPC calls are not starved.
     if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
   }
 

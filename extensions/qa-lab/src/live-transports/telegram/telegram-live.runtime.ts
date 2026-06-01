@@ -29,6 +29,7 @@ import {
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+  redactQaLiveLaneIssues,
 } from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
@@ -898,7 +899,9 @@ async function sendGroupMessage(
 }
 
 async function waitForTelegramPollRetryDelay(remainingMs: number) {
-  await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(100, remainingMs))));
+  await new Promise((resolve) => {
+    setTimeout(resolve, Math.min(250, Math.max(100, remainingMs)));
+  });
 }
 
 async function waitForObservedMessage(params: {
@@ -1120,7 +1123,9 @@ async function waitForTelegramChannelRunning(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`telegram account "${accountId}" did not become ready`);
 }
@@ -1989,7 +1994,7 @@ export async function runTelegramQaLive(params: {
 
   const finishedAt = new Date().toISOString();
   const publishedCleanupIssues = redactPublicMetadata
-    ? cleanupIssues.map(() => "details redacted (OPENCLAW_QA_REDACT_PUBLIC_METADATA=1)")
+    ? redactQaLiveLaneIssues(cleanupIssues)
     : cleanupIssues;
   const passedCount = scenarioResults.filter((entry) => entry.status === "pass").length;
   const failedCount = scenarioResults.filter((entry) => entry.status === "fail").length;

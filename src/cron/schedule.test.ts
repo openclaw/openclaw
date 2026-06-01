@@ -99,6 +99,13 @@ describe("cron schedule", () => {
     expect(next).toBe(anchor + 30_000);
   });
 
+  it("advances when now matches a later every interval boundary", () => {
+    const anchor = Date.parse("2025-12-13T00:00:00.000Z");
+    const now = anchor + 30_000;
+    const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, now);
+    expect(next).toBe(anchor + 60_000);
+  });
+
   it("never returns a past timestamp for Asia/Shanghai daily schedule (#30351)", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
     const next = computeNextRunAtMs(

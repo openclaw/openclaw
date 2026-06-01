@@ -71,15 +71,19 @@ function assertSafeCronRunLogJobId(jobId: string): string {
   return trimmed;
 }
 
+/** Returns whether an error came from cron run-log job id validation. */
 export function isInvalidCronRunLogJobIdError(err: unknown): boolean {
   return err instanceof Error && err.message === INVALID_CRON_RUN_LOG_JOB_ID_MESSAGE;
 }
 
 const writesByTarget = new Map<string, Promise<void>>();
 
+/** Legacy byte cap kept for config parsing compatibility with older file-backed run logs. */
 export const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
+/** Default SQLite row retention per cron job when no explicit keepLines value is configured. */
 export const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
 
+/** Resolves configured run-log pruning limits while preserving legacy maxBytes parsing. */
 export function resolveCronRunLogPruneOptions(cfg?: CronConfig["runLog"]): {
   maxBytes: number;
   keepLines: number;
@@ -106,6 +110,7 @@ export function resolveCronRunLogPruneOptions(cfg?: CronConfig["runLog"]): {
   return { maxBytes, keepLines };
 }
 
+/** Exposes the in-process async write queue size for run-log concurrency tests. */
 export function getPendingCronRunLogWriteCountForTests() {
   return writesByTarget.size;
 }
@@ -126,6 +131,7 @@ async function drainPendingWrite(storePath: string, jobId?: string): Promise<voi
   await Promise.all(pending);
 }
 
+/** Appends a cron run-log row and serializes writes per store/job before pruning old rows. */
 export async function appendCronRunLog(params: {
   storePath: string;
   entry: CronRunLogEntry;
@@ -134,6 +140,7 @@ export async function appendCronRunLog(params: {
   const storeKey = cronStoreKey(params.storePath);
   const writeKey = cronRunLogWriteKey(params.storePath, params.entry.jobId);
   const prev = writesByTarget.get(writeKey) ?? Promise.resolve();
+  // Keep writes for the same store/job ordered so prune-by-count cannot race a later insert.
   const next = prev
     .catch(() => undefined)
     .then(async () => {
@@ -159,6 +166,7 @@ export async function appendCronRunLog(params: {
   }
 }
 
+/** Reads recent run-log entries in chronological order after draining pending async writes. */
 export async function readCronRunLogEntries(params: {
   storePath: string;
   jobId?: string;
@@ -177,6 +185,7 @@ export async function readCronRunLogEntries(params: {
   return page.entries.toReversed();
 }
 
+/** Reads recent run-log entries synchronously for startup/task reconciliation paths. */
 export function readCronRunLogEntriesSync(params: {
   storePath: string;
   jobId?: string;
@@ -281,6 +290,7 @@ function filterRunLogEntries(
   });
 }
 
+/** Reads a bounded, filterable run-log page for CLI and UI list views. */
 export async function readCronRunLogEntriesPage(
   opts: ReadCronRunLogPageOptions & { storePath: string; jobNameById?: Record<string, string> },
 ): Promise<CronRunLogPageResult> {
@@ -395,6 +405,7 @@ export async function readCronRunLogEntriesPage(
   };
 }
 
+/** Reads a run-log page across all jobs for a specific cron store. */
 export async function readCronRunLogEntriesPageAll(
   opts: ReadCronRunLogAllPageOptions,
 ): Promise<CronRunLogPageResult> {

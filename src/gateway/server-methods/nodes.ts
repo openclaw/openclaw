@@ -235,7 +235,9 @@ async function clearStaleApnsRegistrationIfNeeded(
 }
 
 async function delayMs(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function isForegroundRestrictedIosCommand(command: string): boolean {
@@ -337,7 +339,7 @@ function refreshConnectedNodeSurfaceCaches(params: {
     deviceFamily: nodeSession.deviceFamily,
     commands: nodeSession.commands,
     cfg,
-  }).catch((err) =>
+  }).catch((err: unknown) =>
     params.context.logGateway.warn(
       `remote bin probe failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
     ),

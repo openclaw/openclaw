@@ -433,7 +433,7 @@ export async function applyAuthItem(
     typeof item.details?.sourceCredentialIndex === "number"
       ? item.details.sourceCredentialIndex
       : undefined;
-  const sourceCredentialFingerprint =
+  const sourceCredentialFingerprintLocal =
     typeof item.details?.sourceCredentialFingerprint === "string"
       ? item.details.sourceCredentialFingerprint
       : undefined;
@@ -448,7 +448,9 @@ export async function applyAuthItem(
     profiles,
     sourceProfileId,
     ...(sourceCredentialIndex === undefined ? {} : { sourceCredentialIndex }),
-    ...(sourceCredentialFingerprint ? { sourceCredentialFingerprint } : {}),
+    ...(sourceCredentialFingerprintLocal
+      ? { sourceCredentialFingerprint: sourceCredentialFingerprintLocal }
+      : {}),
   });
   if (!profile) {
     return markMigrationItemSkipped(item, HERMES_REASON_SECRET_NO_LONGER_PRESENT);

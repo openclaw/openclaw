@@ -1495,6 +1495,60 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     ]);
   });
 
+  it("restores hydrated node_modules before AWS native Windows shell commands", () => {
+    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "normal",
+      "--id",
+      "cbx_test",
+      "--shell",
+      "--",
+      "corepack pnpm check:changed",
+    ]);
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+    expect(remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
+    expect(remoteCommand).toContain(
+      'mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"',
+    );
+    expect(remoteCommand).toContain("corepack pnpm check:changed");
+  });
+
+  it("restores hydrated node_modules before AWS native Windows direct commands", () => {
+    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "normal",
+      "--id",
+      "cbx_test",
+      "--",
+      "pnpm",
+      "--filter",
+      "@openclaw/discord",
+      "test",
+    ]);
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+    expect(remoteCommand).toContain("pnpm --filter '@openclaw/discord' test");
+  });
+
   const itWithPosixLinkedWorktreeFixture = process.platform === "win32" ? it.skip : it;
 
   itWithPosixLinkedWorktreeFixture(
@@ -1757,6 +1811,34 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("git add -A");
     expect(remoteCommand).toContain("git diff --cached --quiet");
     expect(remoteCommand).toContain("commit -q --no-gpg-sign -m remote-changed-gate-tree");
+    expect(remoteCommand).toMatch(
+      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+    );
+  });
+
+  it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );

@@ -109,14 +109,14 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             }
             resolve({ exitCode: code });
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
             if (signal) {
               signal.removeEventListener("abort", onAbort);
             }
-            reject(err);
+            reject(toLintErrorObject(err, "Non-Error rejection"));
           });
       });
     },
@@ -421,8 +421,8 @@ export function createBashToolDefinition(
         clearUpdateTimer();
       }
     },
-    renderCall(args, theme, context) {
-      void theme;
+    renderCall(args, themeValue, context) {
+      void themeValue;
       const state = context.state;
       if (context.executionStarted && state.startedAt === undefined) {
         state.startedAt = Date.now();
@@ -432,13 +432,13 @@ export function createBashToolDefinition(
       text.setText(formatBashCall(args));
       return text;
     },
-    renderResult(result, options, theme, context) {
-      void theme;
+    renderResult(result, optionsLocal, themeLocal, context) {
+      void themeLocal;
       const state = context.state;
-      if (state.startedAt !== undefined && options.isPartial && !state.interval) {
+      if (state.startedAt !== undefined && optionsLocal.isPartial && !state.interval) {
         state.interval = setInterval(() => context.invalidate(), 1000);
       }
-      if (!options.isPartial || context.isError) {
+      if (!optionsLocal.isPartial || context.isError) {
         state.endedAt ??= Date.now();
         if (state.interval) {
           clearInterval(state.interval);
@@ -451,7 +451,7 @@ export function createBashToolDefinition(
       rebuildBashResultRenderComponent(
         component,
         result,
-        options,
+        optionsLocal,
         context.showImages,
         state.startedAt,
         state.endedAt,
@@ -467,4 +467,18 @@ export function createBashTool(
   options?: BashToolOptions,
 ): AgentTool<typeof bashSchema> {
   return wrapToolDefinition(createBashToolDefinition(cwd, options));
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

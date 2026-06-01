@@ -320,7 +320,7 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
-  let insertedToolResults = 0;
+  let insertedToolResults;
 
   for (const line of lines) {
     if (!line.trim()) {

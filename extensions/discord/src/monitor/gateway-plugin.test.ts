@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 
 const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
-  const GatewayIntents = {
+  const GatewayIntentsLocal = {
     Guilds: 1 << 0,
     GuildMessages: 1 << 1,
     MessageContent: 1 << 2,
@@ -31,7 +31,7 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
     }
   }
 
-  class GatewayPlugin {
+  class GatewayPluginLocal {
     options: unknown;
     gatewayInfo: unknown;
     emitter = new TestEmitter();
@@ -44,12 +44,12 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
       this.options = options;
     }
 
-    async registerClient(clientForTest: unknown): Promise<void> {}
+    async registerClient(_clientForTest: unknown): Promise<void> {}
 
     connect(_resume = false): void {}
   }
 
-  return { GatewayIntents, GatewayPlugin };
+  return { GatewayIntents: GatewayIntentsLocal, GatewayPlugin: GatewayPluginLocal };
 });
 
 vi.mock("../internal/gateway.js", () => ({

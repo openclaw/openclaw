@@ -281,7 +281,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
   if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
     const lines = [
-      ...unknownStep.removed.map((path) => `- ${path}`),
+      ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
       ...unknownStep.repairs.map((change) => `- ${change}`),
     ].join("\n");
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");

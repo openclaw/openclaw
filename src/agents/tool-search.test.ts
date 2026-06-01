@@ -666,7 +666,9 @@ describe("Tool Search", () => {
       });
 
     await vi.waitFor(() => expect(target.execute).toHaveBeenCalledTimes(1));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(settled).toBe(false);
     resolveTool?.();
     const result = await resultPromise;
@@ -825,7 +827,6 @@ describe("Tool Search", () => {
   }, 5_000);
 
   it("aborts already-started bridged calls when code mode times out", async () => {
-    testing.setToolSearchMinCodeTimeoutMsForTest(100);
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_abort_on_timeout", "Long-running target tool");
     let observedSignal: AbortSignal | undefined;
@@ -858,7 +859,7 @@ describe("Tool Search", () => {
 
     const config = {
       tools: {
-        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 100 },
+        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1_000 },
       },
     } as never;
     applyToolSearchCatalog({

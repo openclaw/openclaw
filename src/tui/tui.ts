@@ -1310,7 +1310,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         clearTimeout(hardExitTimer);
         stopStatusTimeout();
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (!isTuiTerminalLossError(err)) {
           try {
             process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
@@ -1506,7 +1506,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       }
       updateFooter();
       tui.requestRender();
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       chatLog.addSystem(`startup failed: ${String(err)}`);
       setConnectionStatus("startup failed", 5000);
       tui.requestRender();

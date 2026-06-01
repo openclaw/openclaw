@@ -444,7 +444,7 @@ describe("gateway server cron", () => {
     });
 
     const cronEvents = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: cronEvents.broadcast });
+    const cronState = await createDirectCronState({ broadcast: cronEvents["broadcast"] });
 
     try {
       const addRes = await directCronReq(cronState, "cron.add", {
@@ -508,7 +508,7 @@ describe("gateway server cron", () => {
     });
 
     const cronEvents = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: cronEvents.broadcast });
+    const cronState = await createDirectCronState({ broadcast: cronEvents["broadcast"] });
 
     try {
       const routeRes = await directCronReq(cronState, "cron.add", {
@@ -1053,7 +1053,7 @@ describe("gateway server cron", () => {
       cronEnabled: true,
     });
     const events = createCronEventCollector();
-    const cronState = await createDirectCronState({ broadcast: events.broadcast });
+    const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
 
     try {
       const addRes = await directCronReq(cronState, "cron.add", {
@@ -1091,6 +1091,7 @@ describe("gateway server cron", () => {
       const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
       expect(Array.isArray(entries)).toBe(true);
       expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
+      expect((entries as Array<{ jobName?: unknown }>).at(-1)?.jobName).toBe("log test");
       expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
       expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
         "not-requested",

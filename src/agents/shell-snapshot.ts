@@ -240,7 +240,7 @@ async function validateSnapshot(
     shell: opts.shell,
     shellArgs: opts.shellArgs,
     cwd: opts.cwd,
-    env: opts.env,
+    env: buildTrustedSnapshotCaptureEnv(opts.env),
     command: `. ${shQuote(snapshotPath)} >/dev/null 2>&1; :`,
     timeoutMs: 2_000,
   });
@@ -249,9 +249,7 @@ async function validateSnapshot(
 
 async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
   const shellName = path.basename(opts.shell);
-  const captureOutputDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), `openclaw-shell-snapshot-${process.pid}-`),
-  );
+  const captureOutputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-shell-snapshot-"));
   await fs.chmod(captureOutputDir, 0o700);
   const captureOutputPath = path.join(captureOutputDir, "snapshot.out");
   const captureOutputFile = await fs.open(captureOutputPath, "wx", 0o600);

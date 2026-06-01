@@ -215,10 +215,10 @@ vi.mock("../model-auth.js", () => ({
 }));
 
 vi.mock("../openclaw-tools.js", async () => {
-  const { createImageTool } = await import("./image-tool.js");
+  const { createImageTool: createImageToolLocal } = await import("./image-tool.js");
   return {
     createOpenClawTools: vi.fn((options?: MockOpenClawToolsOptions) => {
-      const imageTool = createImageTool({
+      const imageTool = createImageToolLocal({
         config: options?.config,
         agentDir: options?.agentDir,
         workspaceDir: options?.workspaceDir,
@@ -800,17 +800,17 @@ async function withMinimaxImageToolFromTempAgentDir(
   });
 }
 
-function findSchemaUnionKeywords(schema: unknown, path = "root"): string[] {
+function findSchemaUnionKeywords(schema: unknown, pathLocal = "root"): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
   if (Array.isArray(schema)) {
-    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${path}[${index}]`));
+    return schema.flatMap((item, index) => findSchemaUnionKeywords(item, `${pathLocal}[${index}]`));
   }
   const record = schema as Record<string, unknown>;
   const out: string[] = [];
   for (const [key, value] of Object.entries(record)) {
-    const nextPath = `${path}.${key}`;
+    const nextPath = `${pathLocal}.${key}`;
     if (key === "anyOf" || key === "oneOf" || key === "allOf") {
       out.push(nextPath);
     }
@@ -1978,6 +1978,46 @@ describe("image tool implicit imageModel config", () => {
       const [input, init] = fetchCallAt(fetch, 0);
       expect(input).toBe("http://198.18.0.153/reference.png");
       expect(typeof init).toBe("object");
+    });
+  });
+
+  it("passes the shared remote read idle timeout when loading remote image references", async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ content: "ok", base_resp: { status_code: 0, status_msg: "" } }),
+        ),
+    );
+    global.fetch = withFetchPreconnect(fetch);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    installImageUnderstandingProviderDeps([minimaxProvider, moonshotProvider], {
+      loadImageWebMediaRuntime: async () => ({
+        loadWebMedia,
+        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        }),
+      }),
+    });
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+      });
+
+      await expectImageToolExecOk(tool, "https://example.test/reference.png");
+
+      expect(loadWebMedia).toHaveBeenCalledTimes(1);
+      const [, options] = fetchCallAt(loadWebMedia, 0);
+      expect((options as { readIdleTimeoutMs?: number }).readIdleTimeoutMs).toBe(120_000);
     });
   });
 

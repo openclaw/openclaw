@@ -108,10 +108,12 @@ export function normalizeCsvOrLooseStringList(value: unknown): string[] {
 }
 
 function normalizeSlugInput(raw?: string | null) {
+  // NFC keeps visually identical composed/decomposed Unicode labels matching the
+  // same slug while preserving non-Latin channel and room names.
   return (normalizeOptionalLowercaseString(raw) ?? "").normalize("NFC");
 }
 
-/** Normalizes user-facing names into permissive lowercase hyphen slugs. */
+/** Normalizes user-facing names into permissive lowercase slugs that may keep #/@/._+. */
 export function normalizeHyphenSlug(raw?: string | null) {
   const trimmed = normalizeSlugInput(raw);
   if (!trimmed) {
@@ -122,7 +124,7 @@ export function normalizeHyphenSlug(raw?: string | null) {
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
-/** Normalizes @/#-prefixed names into lowercase hyphen slugs without the prefix. */
+/** Normalizes @/#-prefixed channel names into strict lowercase hyphen slugs without the prefix. */
 export function normalizeAtHashSlug(raw?: string | null) {
   const trimmed = normalizeSlugInput(raw);
   if (!trimmed) {

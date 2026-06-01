@@ -781,6 +781,76 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(duplicateResult).duplicateGuard).toBe(true);
   });
 
+  it("starts run-scoped cron image generation as a tracked async task", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cron.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated-cron.png",
+      id: "generated-cron.png",
+      size: 7,
+      contentType: "image/png",
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-cron-image",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const onAsyncTaskStarted = vi.fn();
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C123",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+        onAsyncTaskStarted,
+      }),
+    );
+
+    const result = await tool.execute("call-cron-inline", {
+      prompt: "Daily proof image",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(1);
+    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
+    expect(resultText(result)).toContain("Background task started for image generation");
+    expect(resultDetails(result).async).toBe(true);
+    expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/^tool:image_generate:/),
+        requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
+  });
+
   it("starts a distinct image request while another image task is active", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
@@ -1688,6 +1758,9 @@ describe("createImageGenerateTool", () => {
     const defaultLoadOptions = mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1);
     expect(defaultLoadUrl).toBe("http://198.18.0.153/reference.png");
     expect(requireRecord(defaultLoadOptions, "loadWebMedia options").ssrfPolicy).toBeUndefined();
+    expect(requireRecord(defaultLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
 
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -1712,6 +1785,9 @@ describe("createImageGenerateTool", () => {
     expect(requireRecord(configuredLoadOptions, "loadWebMedia options").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });
+    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
     expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });

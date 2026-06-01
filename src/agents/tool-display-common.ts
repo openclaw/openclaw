@@ -3,7 +3,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
-import { redactToolDetail } from "../logging/redact.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
@@ -121,7 +121,7 @@ function coerceDisplayValue(
     if (!rawLine) {
       return undefined;
     }
-    const firstLine = redactToolDetail(rawLine);
+    const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > maxStringChars) {
       const half = Math.floor((maxStringChars - 1) / 2);
       return `${firstLine.slice(0, half)}…${firstLine.slice(-(maxStringChars - 1 - half))}`;

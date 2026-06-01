@@ -760,6 +760,70 @@ describe("legacy diagnostics memory pressure snapshot migrate", () => {
   });
 });
 
+describe("legacy WebChat channel config migrate", () => {
+  it("removes retired WebChat channel config", () => {
+    const raw = {
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+          chunkMode: "newline",
+        },
+        discord: {
+          textChunkLimit: 2000,
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["channels.webchat"]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.config?.channels).toEqual({
+      discord: {
+        textChunkLimit: 2000,
+      },
+    });
+    expect(res.changes).toStrictEqual(["Removed retired channels.webchat config."]);
+  });
+
+  it("removes retired WebChat gateway config", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 8000,
+        },
+      },
+    });
+
+    expect(res.config).not.toHaveProperty("gateway");
+    expect(res.changes).toStrictEqual(["Removed retired gateway.webchat config."]);
+  });
+
+  it("removes both retired WebChat config sections when present together", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        webchat: {
+          chatHistoryMaxChars: 8000,
+        },
+        bind: "loopback",
+      },
+      channels: {
+        webchat: {
+          textChunkLimit: 16000,
+        },
+      },
+    });
+
+    expect(res.config?.gateway).toEqual({ bind: "loopback" });
+    expect(res.config).not.toHaveProperty("channels");
+    expect(res.changes).toStrictEqual([
+      "Removed retired channels.webchat config.",
+      "Removed retired gateway.webchat config.",
+    ]);
+  });
+});
+
 describe("legacy thread binding spawn migrate", () => {
   it("moves matching split spawn flags to unified spawnSessions", () => {
     const res = migrateLegacyConfigForTest({

@@ -133,7 +133,7 @@ describe("memory_search unavailable payloads", () => {
   it("returns unavailable metadata when manager setup does not settle", async () => {
     vi.useFakeTimers();
     try {
-      setMemorySearchManagerImpl(async () => await new Promise(() => undefined));
+      setMemorySearchManagerImpl(async () => await new Promise(() => {}));
       const tool = createMemorySearchToolOrThrow();
 
       const resultPromise = tool.execute("manager-timeout", { query: "hello" });
@@ -156,7 +156,7 @@ describe("memory_search unavailable payloads", () => {
       let searchCalls = 0;
       setMemorySearchImpl(async () => {
         searchCalls += 1;
-        return await new Promise(() => undefined);
+        return await new Promise(() => {});
       });
       const tool = createMemorySearchToolOrThrow();
 

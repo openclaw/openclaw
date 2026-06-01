@@ -137,9 +137,22 @@ function runStep(name, command, args, options = {}, params = {}) {
     stdio: "inherit",
     ...options,
   });
-  const status = result.status ?? (result.signal ? 1 : 0);
-  console.error(`[gateway-cpu] ${status === 0 ? "pass" : "fail"} ${name}`);
-  return { name, status, signal: result.signal ?? null };
+  const error =
+    result.error instanceof Error
+      ? result.error.message
+      : result.error
+        ? String(result.error)
+        : null;
+  const status = result.error ? 1 : (result.status ?? (result.signal ? 1 : 0));
+  console.error(
+    `[gateway-cpu] ${status === 0 ? "pass" : "fail"} ${name}${error ? `: ${error}` : ""}`,
+  );
+  return {
+    name,
+    status,
+    signal: result.signal ?? null,
+    ...(error ? { error } : {}),
+  };
 }
 
 function pnpmCommand(args, params = {}) {
@@ -316,8 +329,10 @@ export const testing = {
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.stack : String(error));
-    process.exitCode = 1;
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.stack : String(error));
+      process.exitCode = 1;
+    },
+  );
 }

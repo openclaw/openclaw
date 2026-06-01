@@ -72,12 +72,11 @@ import {
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
+  resolveConfiguredChannelPluginIds,
   resolveConfiguredChannelPresencePolicy,
   resolveConfiguredDeferredChannelPluginIdsFromRegistry,
-  resolveConfiguredChannelPluginIds,
   resolveConfigValidationMetadataPluginIds,
   resolveGatewayStartupMetadataPluginIds,
-  resolveGatewayStartupPluginIds,
   resolveGatewayStartupPluginIdsFromRegistry,
   resolveGatewayStartupPluginPlanFromRegistry,
 } from "./channel-plugin-ids.js";
@@ -1995,6 +1994,32 @@ describe("resolveGatewayStartupPluginIds", () => {
     expect(plan.channelPluginIds).toContain("demo-channel");
     expect(plan.pluginIds).toContain("demo-channel");
     expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
+  });
+
+  it("carries deferred configured channel ids through the startup plan", () => {
+    const registry = createManifestRegistryFixtureWithWorkspaceDemoChannel();
+    const index = createInstalledPluginIndexFixture(registry);
+
+    const plan = resolveGatewayStartupPluginPlanFromRegistry({
+      config: {
+        channels: {
+          "demo-channel": {
+            token: "configured",
+          },
+        },
+        plugins: {
+          allow: ["workspace-demo-channel-plugin"],
+        },
+      } as OpenClawConfig,
+      env: createPluginPlanningTestEnv(),
+      index,
+      manifestRegistry: registry,
+    });
+
+    expect(plan.pluginIds).toContain("workspace-demo-channel-plugin");
+    expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([
+      "workspace-demo-channel-plugin",
+    ]);
   });
 
   it("does not treat explicitly disabled stale channel config as deferred startup intent", () => {

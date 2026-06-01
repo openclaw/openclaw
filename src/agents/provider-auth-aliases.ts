@@ -17,7 +17,7 @@ export type ProviderAuthAliasLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 };
 
 type ProviderAuthAliasCandidate = {

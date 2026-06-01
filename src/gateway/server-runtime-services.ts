@@ -37,7 +37,9 @@ export function startGatewayCronWithLogging(params: {
   cron: { start: () => Promise<void> };
   logCron: { error: (message: string) => void };
 }): void {
-  void params.cron.start().catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
+  void params.cron
+    .start()
+    .catch((err: unknown) => params.logCron.error(`failed to start: ${String(err)}`));
 }
 
 function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles | null): void {
@@ -152,7 +154,7 @@ function recoverPendingOutboundDeliveries(params: {
       log: logRecovery,
       cfg: params.cfg,
     });
-  })().catch((err) => params.log.error(`Delivery recovery failed: ${String(err)}`));
+  })().catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
 }
 
 function recoverPendingSessionDeliveries(params: {
@@ -172,7 +174,9 @@ function recoverPendingSessionDeliveries(params: {
         log: logRecovery,
         maxEnqueuedAt: params.maxEnqueuedAt,
       });
-    })().catch((err) => params.log.error(`Session delivery recovery failed: ${String(err)}`));
+    })().catch((err: unknown) =>
+      params.log.error(`Session delivery recovery failed: ${String(err)}`),
+    );
   }, 1_250);
   timer.unref?.();
 }
@@ -202,7 +206,9 @@ function startGatewayModelPricingRefreshOnDemand(params: {
       stopRefresh();
       stopRefresh = undefined;
     }
-  })().catch((err) => params.log.error(`Model pricing refresh failed to start: ${String(err)}`));
+  })().catch((err: unknown) =>
+    params.log.error(`Model pricing refresh failed to start: ${String(err)}`),
+  );
   return () => {
     stopped = true;
     stopRefresh?.();

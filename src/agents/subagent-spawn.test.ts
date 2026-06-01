@@ -73,7 +73,6 @@ describe("spawnSubagentDirect seam flow", () => {
       resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
-      resetModules: false,
     }));
   });
 

@@ -991,7 +991,7 @@ export async function runExecProcess(opts: {
       });
       return outcome;
     })
-    .catch((err): ExecProcessOutcome => {
+    .catch((err: unknown): ExecProcessOutcome => {
       updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");

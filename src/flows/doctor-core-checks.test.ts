@@ -221,7 +221,7 @@ describe("registerCoreHealthChecks", () => {
       "core/doctor/skills-readiness",
     );
 
-    expect(check.repair).toBeTypeOf("function");
+    expect(check["repair"]).toBeTypeOf("function");
 
     const findings = await check.detect({
       mode: "lint",
@@ -325,6 +325,45 @@ describe("registerCoreHealthChecks", () => {
         message: expect.stringContaining("Gateway bound"),
       }),
     );
+  });
+
+  it("reports disabled Codex plugin routes as core health findings", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/codex-session-routes",
+    );
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: false },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "gpt-5.5",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(findings).toStrictEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/codex-session-routes",
+        severity: "warning",
+        path: "agents.defaults.model.primary",
+        target: "openai/gpt-5.5",
+        requirement: "Codex plugin enabled for routes that use the Codex runtime.",
+        fixHint:
+          "Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
+      }),
+    ]);
+    expect(findings[0]?.message).toContain("Codex plugin is disabled by config");
   });
 
   it("uses the read-only model catalog for hooks.gmail.model checks", async () => {
@@ -641,10 +680,10 @@ describe("registerCoreHealthChecks", () => {
                 checkId: "core/doctor/runtime-tool-schemas",
                 severity: "error",
                 message:
-                  "Tool dofbot_move_angles from plugin dofbot has an unsupported input schema for runtime projection.",
-                path: "plugins.entries.dofbot",
-                target: "dofbot_move_angles",
-                requirement: 'dofbot_move_angles.parameters.type must be "object"',
+                  "Tool fuzzplugin_move_angles from plugin fuzzplugin has an unsupported input schema for runtime projection.",
+                path: "plugins.entries.fuzzplugin",
+                target: "fuzzplugin_move_angles",
+                requirement: 'fuzzplugin_move_angles.parameters.type must be "object"',
               },
             ];
           },
@@ -663,7 +702,7 @@ describe("registerCoreHealthChecks", () => {
       expect.objectContaining({
         checkId: "core/doctor/runtime-tool-schemas",
         severity: "error",
-        target: "dofbot_move_angles",
+        target: "fuzzplugin_move_angles",
       }),
     );
   });

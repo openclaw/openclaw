@@ -76,7 +76,7 @@ async function prepareCodexHomeForLiveSpawnDefaultsTest(tempRoot: string): Promi
   if (sourceCodexHome) {
     await fs
       .copyFile(path.join(sourceCodexHome, "auth.json"), path.join(codexHome, "auth.json"))
-      .catch((error) => {
+      .catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
           throw error;
         }
@@ -180,6 +180,17 @@ function createConfig(params: {
   thinking?: string;
   includePrimaryOnlyAcpAgent?: boolean;
 }): OpenClawConfig {
+  const subagents = params.subagentModel
+    ? {
+        allowAgents: ["*"],
+        maxSpawnDepth: 2,
+        model: params.subagentModel,
+      }
+    : {
+        allowAgents: ["*"],
+        maxSpawnDepth: 2,
+      };
+
   return {
     agents: {
       list: params.includePrimaryOnlyAcpAgent
@@ -198,13 +209,9 @@ function createConfig(params: {
         model: {
           primary: "openai/gpt-5.5",
         },
-        subagents: {
-          allowAgents: ["*"],
-          maxSpawnDepth: 2,
-          ...(params.subagentModel ? { model: params.subagentModel } : {}),
-        },
-        models: {
-          ...(params.subagentModel && params.thinking
+        subagents,
+        models:
+          params.subagentModel && params.thinking
             ? {
                 [params.subagentModel]: {
                   params: {
@@ -212,8 +219,7 @@ function createConfig(params: {
                   },
                 },
               }
-            : {}),
-        },
+            : {},
       },
     },
     gateway: {

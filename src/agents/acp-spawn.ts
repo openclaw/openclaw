@@ -16,6 +16,7 @@ import {
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import {
@@ -43,7 +44,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -922,10 +923,10 @@ function resolveAcpSpawnStreamPlan(params: {
 }
 
 function sessionEntryMatchesAcpResumeSessionId(
-  entry: SessionEntry | undefined,
+  acp: SessionAcpMeta | undefined,
   resumeSessionId: string,
 ): boolean {
-  const identity = entry?.acp?.identity;
+  const identity = acp?.identity;
   return (
     normalizeOptionalString(identity?.agentSessionId) === resumeSessionId ||
     normalizeOptionalString(identity?.acpxSessionId) === resumeSessionId
@@ -965,7 +966,8 @@ function validateAcpResumeSessionOwnership(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
   const sessionStore = loadSessionStore(storePath);
   for (const [sessionKey, entry] of Object.entries(sessionStore)) {
-    if (!sessionEntryMatchesAcpResumeSessionId(entry, resumeSessionId)) {
+    const acp = readAcpSessionMeta({ sessionKey });
+    if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {
       continue;
     }
     if (
@@ -1607,7 +1609,7 @@ export async function spawnAcpDirect(
     }
     parentRelay?.notifyStarted();
     try {
-      createRunningTaskRun({
+      const task = createRunningTaskRun({
         runtime: "acp",
         sourceId: childRunId,
         ownerKey: requesterInternalKey,
@@ -1621,6 +1623,12 @@ export async function spawnAcpDirect(
         deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
         startedAt: Date.now(),
       });
+      if (!task) {
+        log.warn("Failed to persist background task for ACP spawn", {
+          sessionKey,
+          runId: childRunId,
+        });
+      }
     } catch (error) {
       log.warn("Failed to create background task for ACP spawn", {
         sessionKey,
@@ -1639,7 +1647,7 @@ export async function spawnAcpDirect(
   }
 
   try {
-    createRunningTaskRun({
+    const task = createRunningTaskRun({
       runtime: "acp",
       sourceId: childRunId,
       ownerKey: requesterInternalKey,
@@ -1653,6 +1661,12 @@ export async function spawnAcpDirect(
       deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
       startedAt: Date.now(),
     });
+    if (!task) {
+      log.warn("Failed to persist background task for ACP spawn", {
+        sessionKey,
+        runId: childRunId,
+      });
+    }
   } catch (error) {
     log.warn("Failed to create background task for ACP spawn", {
       sessionKey,

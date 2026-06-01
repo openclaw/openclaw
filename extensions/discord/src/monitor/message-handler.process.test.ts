@@ -1154,9 +1154,13 @@ describe("processDiscordMessage ack reactions", () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onCompactionStart?.();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       await params?.replyOptions?.onCompactionEnd?.();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       return createNoQueuedDispatchResult();
     });
 
@@ -1545,7 +1549,9 @@ describe("processDiscordMessage session routing", () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       return createNoQueuedDispatchResult();
     });
     const ctx = await createBaseContext({
@@ -1583,7 +1589,9 @@ describe("processDiscordMessage session routing", () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       return createNoQueuedDispatchResult();
     });
     const ctx = await createBaseContext({
@@ -1863,6 +1871,7 @@ describe("processDiscordMessage session routing", () => {
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: "agent:main:discord:channel:thread-1",
       MessageThreadId: "thread-1",
+      ThreadParentId: "parent-1",
       ModelParentSessionKey: "agent:main:discord:channel:parent-1",
     });
     expect(getLastDispatchCtx()?.ParentSessionKey).toBeUndefined();

@@ -47,6 +47,11 @@ type LocalAudioContentBlock = {
   block: Record<string, unknown>;
 };
 
+type ReplyMediaAudioEmbedding = {
+  url: string;
+  audioBlock?: Record<string, unknown>;
+};
+
 /** Map `mediaUrl` strings to an absolute filesystem path for local embedding (plain paths or `file:` URLs). */
 function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   const trimmed = raw.trim();
@@ -126,6 +131,24 @@ async function readLocalAudioContentBlockForEmbedding(
   } finally {
     await opened?.handle.close().catch(() => {});
   }
+}
+
+async function resolveReplyMediaAudioEmbedding(
+  payload: ReplyPayload,
+  raw: string,
+  seenAudio: Set<string>,
+  options: WebchatAudioEmbeddingOptions | undefined,
+): Promise<ReplyMediaAudioEmbedding | null> {
+  const url = raw.trim();
+  if (!url) {
+    return null;
+  }
+  const audio = await readLocalAudioContentBlockForEmbedding(payload, url, options);
+  if (!audio || seenAudio.has(audio.path)) {
+    return { url };
+  }
+  seenAudio.add(audio.path);
+  return { url, audioBlock: audio.block };
 }
 
 function mimeTypeForPath(filePath: string): string {
@@ -216,16 +239,11 @@ export async function buildWebchatAudioContentBlocksFromReplyPayloads(
     }
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
-      const url = raw.trim();
-      if (!url) {
+      const media = await resolveReplyMediaAudioEmbedding(payload, raw, seen, options);
+      if (!media?.audioBlock) {
         continue;
       }
-      const audio = await readLocalAudioContentBlockForEmbedding(payload, url, options);
-      if (!audio || seen.has(audio.path)) {
-        continue;
-      }
-      seen.add(audio.path);
-      blocks.push(audio.block);
+      blocks.push(media.audioBlock);
     }
   }
   return blocks;
@@ -255,22 +273,17 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     const payloadMediaBlocks: Array<Record<string, unknown>> = [];
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
-      const url = raw.trim();
-      if (!url) {
+      const media = await resolveReplyMediaAudioEmbedding(payload, raw, seenAudio, options);
+      if (!media) {
         continue;
       }
-      const audio = await readLocalAudioContentBlockForEmbedding(payload, url, options);
-      if (audio) {
-        if (seenAudio.has(audio.path)) {
-          continue;
-        }
-        seenAudio.add(audio.path);
-        payloadMediaBlocks.push(audio.block);
+      if (media.audioBlock) {
+        payloadMediaBlocks.push(media.audioBlock);
         hasAudio = true;
         payloadHasAudio = true;
         continue;
       }
-      const imageUrl = resolveEmbeddableImageUrl(url);
+      const imageUrl = resolveEmbeddableImageUrl(media.url);
       if (!imageUrl || seenImages.has(imageUrl)) {
         continue;
       }

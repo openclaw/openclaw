@@ -7,7 +7,6 @@ import {
   validateToolsCatalogParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -26,7 +25,8 @@ import {
   getPluginToolMeta,
   resolvePluginTools,
 } from "../../plugins/tools.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 type ToolCatalogEntry = {
   id: string;
@@ -47,25 +47,6 @@ type ToolCatalogGroup = {
   pluginId?: string;
   tools: ToolCatalogEntry[];
 };
-
-function resolveAgentIdOrRespondError(
-  rawAgentId: unknown,
-  respond: RespondFn,
-  cfg: OpenClawConfig,
-) {
-  const knownAgents = listAgentIds(cfg);
-  const requestedAgentId = normalizeOptionalString(rawAgentId) ?? "";
-  const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
-  if (requestedAgentId && !knownAgents.includes(agentId)) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
-    );
-    return null;
-  }
-  return { cfg, agentId };
-}
 
 function buildCoreGroups(): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
@@ -248,11 +229,12 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = resolveAgentIdOrRespondError(
-      params.agentId,
+    const resolved = resolveAgentIdOrRespondError({
+      rawAgentId: params.agentId,
       respond,
-      context.getRuntimeConfig(),
-    );
+      cfg: context.getRuntimeConfig(),
+      normalize: normalizeOptionalString,
+    });
     if (!resolved) {
       return;
     }

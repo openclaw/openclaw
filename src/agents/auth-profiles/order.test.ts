@@ -28,7 +28,7 @@ vi.mock("./external-auth.js", () => ({
   shouldPersistExternalAuthProfile: () => true,
 }));
 
-import { resolveAuthProfileOrder } from "./order.js";
+import { isStoredCredentialCompatibleWithAuthProvider, resolveAuthProfileOrder } from "./order.js";
 import { markAuthProfileSuccess } from "./profiles.js";
 
 describe("resolveAuthProfileOrder", () => {
@@ -542,5 +542,41 @@ describe("resolveAuthProfileOrder", () => {
     } finally {
       await rm(agentDir, { force: true, recursive: true });
     }
+  });
+
+  it("uses caller-provided auth alias metadata for stored credential compatibility", () => {
+    expect(
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: {},
+        authAliasLookupParams: {
+          config: {},
+          metadataSnapshot: {
+            plugins: [
+              {
+                id: "alias-owner",
+                origin: "global",
+                providerAuthAliases: { fixture: "provider-two" },
+              },
+            ],
+          } as never,
+        },
+        provider: "fixture",
+        credential: { type: "api_key", provider: "provider-two", key: "test" },
+      }),
+    ).toBe(true);
+  });
+
+  it("bypasses plugin auth aliases for stored credential compatibility when metadata is empty", () => {
+    expect(
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: {},
+        authAliasLookupParams: {
+          config: {},
+          metadataSnapshot: { plugins: [] },
+        },
+        provider: "fixture",
+        credential: { type: "api_key", provider: "provider-two", key: "test" },
+      }),
+    ).toBe(false);
   });
 });

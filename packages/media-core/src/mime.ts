@@ -38,6 +38,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "video/quicktime": ".mov",
   "application/pdf": ".pdf",
   "application/json": ".json",
+  "application/yaml": ".yaml",
   "application/zip": ".zip",
   "application/gzip": ".gz",
   "application/x-tar": ".tar",
@@ -79,6 +80,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".log": "text/plain",
   ".htm": "text/html",
   ".xml": "text/xml",
+  ".yml": "application/yaml",
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([

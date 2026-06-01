@@ -353,8 +353,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
-    void Promise.resolve(degradedProvider.close?.()).catch((err: unknown) => {
-      log.debug(`memory embeddings: failed to close degraded local provider: ${String(err)}`);
+    void Promise.resolve(degradedProvider.close?.()).catch((errLocal: unknown) => {
+      log.debug(`memory embeddings: failed to close degraded local provider: ${String(errLocal)}`);
     });
     log.warn("memory embeddings: local provider degraded after worker failure", {
       error: message,
@@ -369,7 +369,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (key && this.sessionWarm.has(key)) {
       return;
     }
-    void this.sync({ reason: "session-start" }).catch((err) => {
+    void this.sync({ reason: "session-start" }).catch((err: unknown) => {
       log.warn(`memory sync failed (session-start): ${String(err)}`);
     });
     if (key) {
@@ -471,7 +471,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           boostFallbackRanking: true,
         },
         sourceFilterList,
-      ).catch((err) => {
+      ).catch((err: unknown) => {
         log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
         return [];
       });
@@ -492,7 +492,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                     candidates,
                     { boostFallbackRanking: true },
                     sourceFilterList,
-                  ).catch((err) => {
+                  ).catch((err: unknown) => {
                     log.warn(
                       `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
                     );
@@ -531,7 +531,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             candidates,
             { boostFallbackRanking: true },
             sourceFilterList,
-          ).catch((err) => {
+          ).catch((err: unknown) => {
             log.warn(`memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`);
             return [];
           })
@@ -564,7 +564,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
+      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err: unknown) => {
           log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
           return [];
         })
@@ -1108,7 +1108,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     const closeError = closeErrors.values().next().value;
     if (closeError) {
-      throw closeError;
+      throw toLintErrorObject(closeError, "Non-Error thrown");
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -839,8 +839,41 @@ describe("generateAndAppendDreamNarrative", () => {
     // Should not throw, should warn.
     expect(logger.warn).toHaveBeenCalled();
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("some memory");
+    // Raw staging snippets must never leak into the diary; only the generic
+    // placeholder is written on fallback.
+    expect(content).not.toContain("some memory");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("status=timeout"));
+  });
+
+  it("does not leak sensitive raw staging fragments into the diary on fallback", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.waitForRun.mockResolvedValue({ status: "timeout" });
+    const logger = createMockLogger();
+
+    // Realistic staging fragments as described in issue #88391: session
+    // metadata, conversation summaries, and operational logs that must never
+    // be persisted to the human-readable dream diary.
+    const sensitiveSnippets = [
+      "Conversation Summary: 343 files copied, 30 MB on B2 so far",
+      "Session: 2026-05-22 00:02:16 GMT+1: Session Key: agent:main:dashboard:secret",
+    ];
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "deep", snippets: sensitiveSnippets },
+      logger,
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    for (const fragment of sensitiveSnippets) {
+      expect(content).not.toContain(fragment);
+    }
+    expect(content).not.toContain("Session Key:");
+    expect(content).not.toContain("agent:main:dashboard");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
   });
 
   it("skips extra settle waits after timeout and still attempts cleanup", async () => {
@@ -901,7 +934,9 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("API endpoints need authentication");
+    // Raw staging snippets must never leak into the diary on fallback.
+    expect(content).not.toContain("API endpoints need authentication");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expectLogIncludes(logger.info, "request-scoped");
     expectLogExcludes(logger.warn, "request-scoped");
     expectLogExcludes(logger.warn, workspaceDir);
@@ -931,7 +966,9 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("A durable candidate surfaced.");
+    // Raw staging promotions must never leak into the diary on fallback.
+    expect(content).not.toContain("A durable candidate surfaced.");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expectLogIncludes(logger.info, "request-scoped");
     expectLogExcludes(logger.warn, "request-scoped");
     expect(subagent.deleteSession).toHaveBeenCalledOnce();

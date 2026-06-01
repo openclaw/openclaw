@@ -239,7 +239,9 @@ function createGatewayPlugin(params: {
             info,
             usedFallback: false,
           }))
-          .catch((error) => resolveGatewayInfoWithFallback({ runtime: params.runtime, error }));
+          .catch((error: unknown) =>
+            resolveGatewayInfoWithFallback({ runtime: params.runtime, error }),
+          );
         this.gatewayInfo = resolved.info;
         this.gatewayInfoUsedFallback = resolved.usedFallback;
       }

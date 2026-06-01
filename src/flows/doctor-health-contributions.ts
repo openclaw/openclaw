@@ -446,6 +446,11 @@ async function runReleaseConfiguredPluginInstallsHealth(
   };
 }
 
+async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
+  noteDiskSpace(ctx.cfg);
+}
+
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await loadDoctorStateIntegrityModule();
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
@@ -484,7 +489,11 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
-  await noteSessionSnapshotHealth({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+  await noteSessionSnapshotHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -692,7 +701,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
   const { note } = await loadNoteModule();
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch {
@@ -1059,6 +1068,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:plugin-registry",
       label: "Plugin registry",
       run: runPluginRegistryHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:disk-space",
+      label: "Disk space",
+      run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",

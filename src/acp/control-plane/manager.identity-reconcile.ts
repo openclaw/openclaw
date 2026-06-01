@@ -148,7 +148,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
       if (!entry) {
         return null;
       }
-      const base = current ?? entry.acp;
+      const base = current;
       if (!base) {
         return null;
       }

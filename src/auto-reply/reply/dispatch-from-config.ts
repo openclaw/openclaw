@@ -9,6 +9,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -82,6 +83,7 @@ import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
@@ -1033,12 +1035,26 @@ export async function dispatchReplyFromConfig(
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+  const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
+  // resolveSessionStoreLookup is command-target-aware (it prefers
+  // resolveCommandTurnTargetSessionKey), whereas the lifecycle's sessionKey is
+  // source-first (ctx.SessionKey). On a native command turn that targets a
+  // different session, the resolved entry can belong to the *target* while the
+  // lifecycle reports the *source* key — so only carry the UUID when the entry
+  // is for the same session the lifecycle reports, to avoid mis-associating a
+  // session id with the wrong session key. When they diverge, emit sessionKey
+  // only (prior behavior).
+  const lifecycleSessionId =
+    initialSessionStoreEntry.sessionKey === sessionKey
+      ? initialSessionStoreEntry.entry?.sessionId
+      : undefined;
   const messageLifecycle = createDiagnosticMessageLifecycle({
     enabled: diagnosticsEnabled,
     channel,
     chatId,
     messageId,
     sessionKey,
+    sessionId: lifecycleSessionId,
     source: "dispatch",
     processingReason: "message_start",
     startedAtMs: startTime,
@@ -1127,7 +1143,6 @@ export async function dispatchReplyFromConfig(
     inboundDedupeReplayUnsafe = true;
   };
 
-  const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
@@ -1187,6 +1202,9 @@ export async function dispatchReplyFromConfig(
     ctx,
     sessionKey: acpDispatchSessionKey,
   });
+  // Inherited sessions_send routes carry thread ids only when the stored route
+  // proves the thread came from an explicit target, not session normalization.
+  const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
@@ -1373,15 +1391,24 @@ export async function dispatchReplyFromConfig(
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
+  const sessionAcpMeta = sessionStoreEntry.sessionKey
+    ? readAcpSessionMeta({ sessionKey: sessionStoreEntry.sessionKey })
+    : undefined;
+  const sessionEntryWithAcp =
+    sessionAcpMeta && sessionStoreEntry.entry
+      ? { ...sessionStoreEntry.entry, acp: sessionAcpMeta }
+      : sessionStoreEntry.entry;
+  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
   const normalizedRouteReplyChannel = normalizeMessageChannel(replyRoute.channel);
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
   const normalizedSurfaceChannel = normalizeMessageChannel(ctx.Surface);
   const normalizedCurrentSurface = normalizedProviderChannel ?? normalizedSurfaceChannel;
+  const effectiveExplicitDeliverRoute =
+    ctx.ExplicitDeliverRoute === true || replyRoute.inheritedExternalRoute === true;
   const isInternalWebchatTurn =
     normalizedCurrentSurface === INTERNAL_MESSAGE_CHANNEL &&
     (normalizedSurfaceChannel === INTERNAL_MESSAGE_CHANNEL || !normalizedSurfaceChannel) &&
-    ctx.ExplicitDeliverRoute !== true;
+    !effectiveExplicitDeliverRoute;
   const hasRouteReplyCandidate = Boolean(
     !suppressAcpChildUserDelivery &&
     !isInternalWebchatTurn &&
@@ -1398,7 +1425,7 @@ export async function dispatchReplyFromConfig(
   } = resolveReplyRoutingDecision({
     provider: ctx.Provider,
     surface: ctx.Surface,
-    explicitDeliverRoute: ctx.ExplicitDeliverRoute,
+    explicitDeliverRoute: effectiveExplicitDeliverRoute,
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,
     suppressDirectUserDelivery: suppressAcpChildUserDelivery,
@@ -1467,7 +1494,7 @@ export async function dispatchReplyFromConfig(
       requesterSenderName: ctx.SenderName,
       requesterSenderUsername: ctx.SenderUsername,
       requesterSenderE164: ctx.SenderE164,
-      threadId: routeThreadId,
+      threadId: routeReplyThreadId,
       cfg,
       abortSignal: options?.abortSignal,
       mirror: options?.mirror,
@@ -1592,6 +1619,17 @@ export async function dispatchReplyFromConfig(
     agentId: sessionAgentId,
   });
   const chatType = normalizeChatType(ctx.ChatType);
+  const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
+  const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+  const emptyFinalAllowedAsSilent =
+    silentReplyConversationType !== undefined &&
+    resolveSilentReplyPolicyFromPolicies({
+      conversationType: silentReplyConversationType,
+      defaultPolicy: cfg.agents?.defaults?.silentReply,
+      surfacePolicy: silentReplySurface
+        ? cfg.surfaces?.[silentReplySurface]?.silentReply
+        : undefined,
+    }) === "allow";
   const configuredVisibleReplies =
     chatType === "group" || chatType === "channel"
       ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
@@ -1693,8 +1731,12 @@ export async function dispatchReplyFromConfig(
   const attachSourceReplyDeliveryMode = (
     result: DispatchFromConfigResult,
   ): DispatchFromConfigResult =>
-    sourceReplyDeliveryMode === "message_tool_only"
-      ? { ...result, sourceReplyDeliveryMode }
+    sourceReplyDeliveryMode === "message_tool_only" || sendPolicyDenied
+      ? {
+          ...result,
+          ...(sourceReplyDeliveryMode === "message_tool_only" ? { sourceReplyDeliveryMode } : {}),
+          ...(sendPolicyDenied ? { sendPolicyDenied: true } : {}),
+        }
       : result;
   const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
   const unauthorizedTextSlashSourceReplyCtx =
@@ -2065,6 +2107,9 @@ export async function dispatchReplyFromConfig(
               channel: hookContext.channelId,
               sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
               senderId: hookContext.senderId,
+              replyToId: hookContext.replyToId,
+              replyToBody: hookContext.replyToBody,
+              replyToSender: hookContext.replyToSender,
               isGroup: hookContext.isGroup,
               timestamp: hookContext.timestamp,
             },
@@ -2074,6 +2119,9 @@ export async function dispatchReplyFromConfig(
               conversationId: inboundClaimContext.conversationId,
               sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
               senderId: hookContext.senderId,
+              replyToId: hookContext.replyToId,
+              replyToBody: hookContext.replyToBody,
+              replyToSender: hookContext.replyToSender,
             },
           ),
         ),
@@ -2118,6 +2166,8 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
+              originatingAccountId: replyRoute.accountId,
+              originatingThreadId: routeReplyThreadId,
               shouldSendToolSummaries,
               sendPolicy,
             }),
@@ -2754,6 +2804,8 @@ export async function dispatchReplyFromConfig(
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
               originatingTo: routeReplyTo,
+              originatingAccountId: replyRoute.accountId,
+              originatingThreadId: routeReplyThreadId,
               shouldSendToolSummaries,
               sendPolicy,
               isTailDispatch: true,
@@ -2931,6 +2983,9 @@ export async function dispatchReplyFromConfig(
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
+      ...(!queuedFinal && !emptyFinalAllowedAsSilent
+        ? { noVisibleReplyFallbackEligible: true }
+        : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
     });
   } catch (err) {

@@ -833,7 +833,7 @@ export default definePluginEntry({
           );
           return;
         }
-        void ensureRuntime().catch((err) => {
+        void ensureRuntime().catch((err: unknown) => {
           api.logger.error(`[voice-call] Failed to start runtime: ${formatErrorMessage(err)}`);
         });
       },

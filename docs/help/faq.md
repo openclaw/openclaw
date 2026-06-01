@@ -631,6 +631,48 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
   </Accordion>
 
+  <Accordion title="Can I make SOUL.md bigger?">
+    Yes. `SOUL.md` is one of the workspace bootstrap files injected into the
+    agent context. The default per-file injection limit is `20000` characters,
+    and the total bootstrap budget across files is `60000` characters.
+
+    Change the shared defaults in your OpenClaw config:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 50000,
+          bootstrapTotalMaxChars: 300000,
+        },
+      },
+    }
+    ```
+
+    Or override one agent:
+
+    ```json5
+    {
+      agents: {
+        list: [
+          {
+            id: "main",
+            bootstrapMaxChars: 50000,
+            bootstrapTotalMaxChars: 300000,
+          },
+        ],
+      },
+    }
+    ```
+
+    Use `/context` to check raw vs injected sizes and whether truncation happened.
+    Keep `SOUL.md` focused on voice, stance, and personality; put operating rules
+    in `AGENTS.md` and durable facts in memory.
+
+    See [Context](/concepts/context) and [Agent config](/gateway/config-agents).
+
+  </Accordion>
+
   <Accordion title="Recommended backup strategy">
     Put your **agent workspace** in a **private** git repo and back it up somewhere
     private (for example GitHub private). This captures memory + AGENTS/SOUL/USER
@@ -1775,7 +1817,7 @@ lives on the [Models FAQ](/help/faq-models).
     - The target channel supports outbound media and isn't blocked by allowlists.
     - The file is within the provider's size limits (images are resized to max 2048px).
     - `tools.fs.workspaceOnly=true` keeps local-path sends limited to workspace, temp/media-store, and sandbox-validated files.
-    - `tools.fs.workspaceOnly=false` lets structured local media sends use host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, and Office docs). Plain text and secret-like files are still blocked.
+    - `tools.fs.workspaceOnly=false` lets structured local media sends use host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, Office docs, and validated text documents such as Markdown/MD, TXT, JSON, YAML, and YML). This is not a secret scanner: an agent-readable `secret.txt` or `config.json` can be attached when the extension and content validation match. Keep sensitive files outside agent-readable paths, or keep `tools.fs.workspaceOnly=true` for stricter local-path sends.
 
     See [Images](/nodes/images).
 

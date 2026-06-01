@@ -728,18 +728,18 @@ async function agentViaGatewayCommand(
         }),
     );
 
-  let retriedWithShellEnvFallback = false;
+  let shellEnvFallbackRetriesRemaining = 1;
+  const consumeShellEnvFallbackRetry = () => shellEnvFallbackRetriesRemaining-- > 0;
   for (;;) {
     try {
       response = await dispatchGatewayAgentCall(cfg);
       break;
     } catch (err) {
       if (
-        !retriedWithShellEnvFallback &&
         !acceptedGatewayRun &&
-        shouldRetryGatewayDispatchWithShellEnvFallback(err)
+        shouldRetryGatewayDispatchWithShellEnvFallback(err) &&
+        consumeShellEnvFallbackRetry()
       ) {
-        retriedWithShellEnvFallback = true;
         cfg = await getGatewayDispatchConfig({ skipShellEnvFallback: false });
         continue;
       }

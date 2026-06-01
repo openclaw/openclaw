@@ -13,6 +13,7 @@ import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
 export type SessionScope = "per-sender" | "global";
 
@@ -376,6 +377,12 @@ export type SessionEntry = {
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
+  /** Consecutive memory flush failures since the last successful flush. */
+  memoryFlushFailureCount?: number;
+  /** Timestamp (ms) of the last failed memory flush attempt. */
+  memoryFlushLastFailedAt?: number;
+  /** Last memory flush failure error message, truncated for durable metadata. */
+  memoryFlushLastFailureError?: string;
   cliSessionIds?: Record<string, string>;
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
@@ -548,6 +555,19 @@ export function mergeSessionEntryWithPolicy(
       patch.sessionStartedAt ??
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
+
+  if (existing.sessionId !== sessionId) {
+    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
+    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
+    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
+      sessionFile: candidateSessionFile,
+      previousSessionId: existing.sessionId,
+      nextSessionId: sessionId,
+    });
+    if (rewrittenSessionFile) {
+      next.sessionFile = rewrittenSessionFile;
+    }
+  }
 
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.

@@ -72,54 +72,46 @@ function singleRecordKey(record: Record<string, unknown> | undefined): string | 
   return keys.length === 1 ? keys[0] : undefined;
 }
 
-function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
+function getVoiceCallProviderConfig<TConfig extends Record<string, unknown>>(
+  config: OpenClawConfig,
+  sectionName: "realtime" | "streaming",
+): {
   provider?: string;
-  providers?: Record<string, RealtimeVoiceProviderConfig>;
+  providers?: Record<string, TConfig>;
 } {
   const plugins = getRecord(config.plugins);
   const entries = getRecord(plugins?.entries);
   const voiceCall = getRecord(entries?.["voice-call"]);
   const pluginConfig = getRecord(voiceCall?.config);
-  const realtime = getRecord(pluginConfig?.realtime);
-  const providersRaw = getRecord(realtime?.providers);
-  const providers: Record<string, RealtimeVoiceProviderConfig> = {};
+  const section = getRecord(pluginConfig?.[sectionName]);
+  const providersRaw = getRecord(section?.providers);
+  const providers: Record<string, TConfig> = {};
   if (providersRaw) {
     for (const [providerId, providerConfig] of Object.entries(providersRaw)) {
       const record = getRecord(providerConfig);
       if (record) {
-        providers[providerId] = record;
+        providers[providerId] = record as TConfig;
       }
     }
   }
   return {
-    provider: normalizeOptionalString(realtime?.provider),
+    provider: normalizeOptionalString(section?.provider),
     providers: Object.keys(providers).length > 0 ? providers : undefined,
   };
+}
+
+function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
+  provider?: string;
+  providers?: Record<string, RealtimeVoiceProviderConfig>;
+} {
+  return getVoiceCallProviderConfig(config, "realtime");
 }
 
 export function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   provider?: string;
   providers?: Record<string, RealtimeTranscriptionProviderConfig>;
 } {
-  const plugins = getRecord(config.plugins);
-  const entries = getRecord(plugins?.entries);
-  const voiceCall = getRecord(entries?.["voice-call"]);
-  const pluginConfig = getRecord(voiceCall?.config);
-  const streaming = getRecord(pluginConfig?.streaming);
-  const providersRaw = getRecord(streaming?.providers);
-  const providers: Record<string, RealtimeTranscriptionProviderConfig> = {};
-  if (providersRaw) {
-    for (const [providerId, providerConfig] of Object.entries(providersRaw)) {
-      const record = getRecord(providerConfig);
-      if (record) {
-        providers[providerId] = record;
-      }
-    }
-  }
-  return {
-    provider: normalizeOptionalString(streaming?.provider),
-    providers: Object.keys(providers).length > 0 ? providers : undefined,
-  };
+  return getVoiceCallProviderConfig(config, "streaming");
 }
 
 type RealtimeProviderWithConfig<TConfig extends Record<string, unknown>> = VoiceModelProvider & {

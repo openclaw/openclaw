@@ -692,10 +692,10 @@ function createCachedDescriptorPluginTool(params: {
         for (const toolRaw of listRaw) {
           const malformedReason = describeMalformedPluginTool(toolRaw);
           if (malformedReason) {
-            throw new Error(`plugin tool is malformed (${pluginId}): ${malformedReason}`);
+            continue;
           }
           const runtimeTool = toolRaw as AnyAgentTool;
-          if (normalizeToolName(runtimeTool.name) === requestedToolName) {
+          if (normalizeToolName(readPluginToolName(runtimeTool)) === requestedToolName) {
             return runtimeTool;
           }
         }

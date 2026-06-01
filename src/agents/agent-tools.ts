@@ -508,6 +508,8 @@ export function createOpenClawCodingTools(options?: {
   onYield?: (message: string) => Promise<void> | void;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
+  /** Lower routine policy-removal audits for diagnostic-only tool probes. */
+  toolPolicyAuditLogLevel?: "info" | "debug";
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
@@ -1108,6 +1110,7 @@ export function createOpenClawCodingTools(options?: {
       },
       { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
     ],
+    auditLogLevel: options?.toolPolicyAuditLogLevel,
   });
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
