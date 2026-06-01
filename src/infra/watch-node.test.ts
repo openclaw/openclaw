@@ -34,19 +34,6 @@ const createFakeProcess = () =>
     execPath: "/usr/local/bin/node",
   }) as unknown as NodeJS.Process;
 
-const createWatchHarness = () => {
-  const child = Object.assign(new EventEmitter(), {
-    kill: vi.fn(() => {}),
-  });
-  const spawn = vi.fn(() => child);
-  const watcher = Object.assign(new EventEmitter(), {
-    close: vi.fn(async () => {}),
-  });
-  const createWatcher = vi.fn(() => watcher);
-  const fakeProcess = createFakeProcess();
-  return { child, spawn, watcher, createWatcher, fakeProcess };
-};
-
 const createAutoExitChild = () => {
   const child = Object.assign(new EventEmitter(), {
     kill: vi.fn(),
@@ -55,6 +42,17 @@ const createAutoExitChild = () => {
     queueMicrotask(() => child.emit("exit", 0, null));
   });
   return child;
+};
+
+const createWatchHarness = () => {
+  const child = createAutoExitChild();
+  const spawn = vi.fn(() => child);
+  const watcher = Object.assign(new EventEmitter(), {
+    close: vi.fn(async () => {}),
+  });
+  const createWatcher = vi.fn(() => watcher);
+  const fakeProcess = createFakeProcess();
+  return { child, spawn, watcher, createWatcher, fakeProcess };
 };
 
 const startWatchRun = ({
@@ -220,9 +218,7 @@ describe("watch-node script", () => {
   });
 
   it("starts the runner before loading chokidar", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const child = createAutoExitChild();
     const spawn = vi.fn(() => child);
     const watcher = Object.assign(new EventEmitter(), {
       close: vi.fn(async () => {}),
@@ -329,7 +325,7 @@ describe("watch-node script", () => {
   it("runs doctor once and restarts when gateway exits nonzero", async () => {
     const gatewayA = Object.assign(new EventEmitter(), { kill: vi.fn() });
     const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
-    const gatewayB = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const gatewayB = createAutoExitChild();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(gatewayA)
@@ -395,9 +391,7 @@ describe("watch-node script", () => {
     const childA = Object.assign(new EventEmitter(), {
       kill: vi.fn(),
     });
-    const childB = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const childB = createAutoExitChild();
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
     const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
@@ -447,9 +441,7 @@ describe("watch-node script", () => {
     const childA = createAutoExitChild();
     const childB = createAutoExitChild();
     const childC = createAutoExitChild();
-    const childD = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {}),
-    });
+    const childD = createAutoExitChild();
     const spawn = vi
       .fn()
       .mockReturnValueOnce(childA)
