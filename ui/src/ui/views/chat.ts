@@ -127,7 +127,7 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
-  focusMode: boolean;
+  focusMode?: boolean;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
@@ -147,7 +147,7 @@ export type ChatProps = {
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
   onRefresh: () => void;
-  onToggleFocusMode: () => void;
+  onToggleFocusMode?: () => void;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
@@ -236,6 +236,15 @@ function renderRealtimeTalkOptions(props: ChatProps) {
     : isPresetSensitivity
       ? options.vadThreshold
       : "__custom";
+  const sensitivityLabel = isDefaultSensitivity
+    ? "Default"
+    : isCustomSensitivity
+      ? "Custom"
+      : sensitivityValue === "0.65"
+        ? "Low"
+        : sensitivityValue === "0.5"
+          ? "Medium"
+          : "High";
   const updateSensitivity = (event: Event) => {
     const value = (event.currentTarget as HTMLSelectElement).value;
     if (value !== "__custom") {
@@ -245,10 +254,10 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   return html`
     <div class="agent-chat__talk-options" aria-label="Talk options">
       <div class="agent-chat__talk-options-primary">
-        <label>
+        <label class="agent-chat__talk-field" data-talk-select="voice">
           <span>Voice</span>
           <select .value=${options.voice} @change=${update("voice")}>
-            <option value="">Default</option>
+            <option value="" data-talk-select-option="">Default</option>
             ${[
               "alloy",
               "ash",
@@ -260,10 +269,14 @@ function renderRealtimeTalkOptions(props: ChatProps) {
               "verse",
               "marin",
               "cedar",
-            ].map((voice) => html`<option value=${voice}>${voice}</option>`)}
+            ].map(
+              (voice) => html`
+                <option value=${voice} data-talk-select-option=${voice}>${voice}</option>
+              `,
+            )}
           </select>
         </label>
-        <label>
+        <label class="agent-chat__talk-field">
           <span>Model</span>
           <input
             .value=${options.model}
@@ -272,15 +285,42 @@ function renderRealtimeTalkOptions(props: ChatProps) {
             spellcheck="false"
           />
         </label>
-        <label>
+        <label class="agent-chat__talk-field" data-talk-select="sensitivity">
           <span>Sensitivity</span>
+          <span class="agent-chat__talk-select-label">${sensitivityLabel}</span>
           <select @change=${updateSensitivity}>
-            <option value="" ?selected=${sensitivityValue === ""}>Default</option>
-            <option value="0.65" ?selected=${sensitivityValue === "0.65"}>Low</option>
-            <option value="0.5" ?selected=${sensitivityValue === "0.5"}>Medium</option>
-            <option value="0.35" ?selected=${sensitivityValue === "0.35"}>High</option>
+            <option
+              value=""
+              data-talk-select-option=""
+              ?selected=${sensitivityValue === ""}
+              @click=${() => onChange({ vadThreshold: "" })}
+              >Default</option
+            >
+            <option
+              value="0.65"
+              data-talk-select-option="0.65"
+              ?selected=${sensitivityValue === "0.65"}
+              @click=${() => onChange({ vadThreshold: "0.65" })}
+              >Low</option
+            >
+            <option
+              value="0.5"
+              data-talk-select-option="0.5"
+              ?selected=${sensitivityValue === "0.5"}
+              @click=${() => onChange({ vadThreshold: "0.5" })}
+              >Medium</option
+            >
+            <option
+              value="0.35"
+              data-talk-select-option="0.35"
+              ?selected=${sensitivityValue === "0.35"}
+              @click=${() => onChange({ vadThreshold: "0.35" })}
+              >High</option
+            >
             ${isCustomSensitivity
-              ? html`<option value="__custom" selected>Custom</option>`
+              ? html`<option value="__custom" data-talk-select-option="__custom" selected>
+                  Custom
+                </option>`
               : nothing}
           </select>
         </label>
@@ -288,7 +328,7 @@ function renderRealtimeTalkOptions(props: ChatProps) {
       <details class="agent-chat__talk-options-advanced">
         <summary>Advanced</summary>
         <div class="agent-chat__talk-options-grid">
-          <label>
+          <label class="agent-chat__talk-field">
             <span>Provider</span>
             <select .value=${options.provider} @change=${update("provider")}>
               <option value="">Auto</option>
@@ -296,7 +336,7 @@ function renderRealtimeTalkOptions(props: ChatProps) {
               <option value="google">Google</option>
             </select>
           </label>
-          <label>
+          <label class="agent-chat__talk-field">
             <span>Transport</span>
             <select .value=${options.transport} @change=${update("transport")}>
               <option value="">Auto</option>
@@ -305,17 +345,17 @@ function renderRealtimeTalkOptions(props: ChatProps) {
               <option value="provider-websocket">Provider WebSocket</option>
             </select>
           </label>
-          <label>
+          <label class="agent-chat__talk-field" data-talk-select="reasoning">
             <span>Reasoning</span>
             <select .value=${options.reasoningEffort} @change=${update("reasoningEffort")}>
-              <option value="">Default</option>
-              <option value="minimal">Minimal</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
+              <option value="" data-talk-select-option="">Default</option>
+              <option value="minimal" data-talk-select-option="minimal">Minimal</option>
+              <option value="low" data-talk-select-option="low">Low</option>
+              <option value="medium" data-talk-select-option="medium">Medium</option>
+              <option value="high" data-talk-select-option="high">High</option>
             </select>
           </label>
-          <label>
+          <label class="agent-chat__talk-field">
             <span>Exact VAD</span>
             <input
               type="number"
@@ -327,7 +367,7 @@ function renderRealtimeTalkOptions(props: ChatProps) {
               placeholder="0.5"
             />
           </label>
-          <label>
+          <label class="agent-chat__talk-field">
             <span>Pause before send</span>
             <input
               type="number"
@@ -338,7 +378,7 @@ function renderRealtimeTalkOptions(props: ChatProps) {
               placeholder="500"
             />
           </label>
-          <label>
+          <label class="agent-chat__talk-field">
             <span>Lead-in</span>
             <input
               type="number"
@@ -492,7 +532,8 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
     previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery
+    previous.searchQuery === next.searchQuery &&
+    previous.historyRenderLimit === next.historyRenderLimit
   );
 }
 
@@ -1489,6 +1530,7 @@ export function renderChat(props: ChatProps) {
   const deleted = getDeletedMessages(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(visibleDraft);
+  const composerControls = props.composerControls;
 
   const placeholder = props.connected
     ? hasAttachments
@@ -1924,7 +1966,7 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
-      ${props.focusMode
+      ${props.focusMode && props.onToggleFocusMode
         ? html`
             <button
               class="chat-focus-exit"
@@ -2122,6 +2164,10 @@ export function renderChat(props: ChatProps) {
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
             ${renderChatRunStatusIndicator(composerRunStatus)}
           </div>
+
+          ${composerControls && composerControls !== nothing
+            ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
+            : nothing}
 
           ${renderChatRunControls({
             canAbort: showAbortableUi,
