@@ -1054,7 +1054,9 @@ function findFirstInboundEnvelopeLineIndex(text: string): number {
 
 function stripLeadingChronologicalContextBlocks(text: string): string {
   let cleaned = text;
-  for (let pass = 0; pass < INBOUND_META_SENTINELS.length; pass += 1) {
+  let remainingPasses = INBOUND_META_SENTINELS.length;
+  while (remainingPasses > 0) {
+    remainingPasses -= 1;
     const match = cleaned.match(LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE);
     if (!match) {
       return cleaned;
