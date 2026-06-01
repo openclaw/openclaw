@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatMessageContent
 import androidx.compose.ui.text.LinkAnnotation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -54,6 +55,20 @@ class ChatMarkdownTest {
     val annotated = buildChatInlineMarkdown("No link here")
 
     assertEquals("No link here", annotated.text)
+    assertTrue(annotated.getLinkAnnotations(0, annotated.length).isEmpty())
+  }
+
+  @Test
+  fun plainTextChatMessageContentRendersLiterallyWithoutFormattingOrAutolinks() {
+    val message =
+      ChatMessageContent(
+        text = "Plain status: branch fix-chat, device Pixel 8a, and token openclaw_local remain text.",
+      ).text.orEmpty()
+
+    val annotated = buildChatInlineMarkdown(message)
+
+    assertEquals(message, annotated.text)
+    assertTrue(annotated.spanStyles.isEmpty())
     assertTrue(annotated.getLinkAnnotations(0, annotated.length).isEmpty())
   }
 
