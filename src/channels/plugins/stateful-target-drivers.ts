@@ -18,18 +18,22 @@ export type StatefulBindingTargetResetResult =
 /** Driver contract for stateful binding targets such as ACP-backed sessions. */
 export type StatefulBindingTargetDriver = {
   id: string;
+  /** Validates external state before route rewrite sends traffic to the target. */
   ensureReady: (params: {
     cfg: OpenClawConfig;
     bindingResolution: ConfiguredBindingResolution;
   }) => Promise<StatefulBindingTargetReadyResult>;
+  /** Creates or confirms the live session represented by the configured binding. */
   ensureSession: (params: {
     cfg: OpenClawConfig;
     bindingResolution: ConfiguredBindingResolution;
   }) => Promise<StatefulBindingTargetSessionResult>;
+  /** Reverse-resolves a session key for reset/status paths that start from session identity. */
   resolveTargetBySessionKey?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
   }) => StatefulBindingTargetDescriptor | null;
+  /** Resets a live target without changing the configured binding record. */
   resetInPlace?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
