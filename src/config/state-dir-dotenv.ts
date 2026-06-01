@@ -26,7 +26,7 @@ function unwrapMatchingLiteralQuotes(value: string): string {
   return value;
 }
 
-function isUnresolvedShellReference(value: string): boolean {
+export function isUnresolvedShellReference(value: string): boolean {
   const candidate = unwrapMatchingLiteralQuotes(value.trim());
   // Match only values whose entire content is a shell variable reference:
   //   $VAR_NAME          (simple reference, OpenClaw env-var style)
@@ -35,7 +35,7 @@ function isUnresolvedShellReference(value: string): boolean {
   // A real credential that merely contains a $ (e.g. "abc$2!", "$100") is NOT matched.
   return (
     /^\$[A-Z_][A-Z0-9_]*$/.test(candidate) ||
-    /^\$\{[A-Z_][A-Z0-9_]*(?:(?::[-=?+]?|[-=?+])[^}]*)?\}$/.test(candidate) ||
+    /^\$\{[A-Z_][A-Z0-9_]*[^}]*\}$/.test(candidate) ||
     /^\$\([^)]*\)$/.test(candidate)
   );
 }

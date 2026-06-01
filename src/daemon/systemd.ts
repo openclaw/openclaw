@@ -5,7 +5,10 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveStateDir } from "../config/paths.js";
-import { readStateDirDotEnvFromStateDir } from "../config/state-dir-dotenv.js";
+import {
+  isUnresolvedShellReference,
+  readStateDirDotEnvFromStateDir,
+} from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import {
@@ -940,15 +943,15 @@ async function writeSystemdGatewayEnvironmentFile(params: {
       return normalized ? [normalized] : [];
     }),
   ]);
-  const operatorOnly =
-    managedKeysToDrop.size > 0
-      ? Object.fromEntries(
-          Object.entries(existing).filter(([key]) => {
-            const normalized = normalizeSystemdEnvironmentKey(key);
-            return !normalized || !managedKeysToDrop.has(normalized);
-          }),
-        )
-      : existing;
+  const operatorOnly = Object.fromEntries(
+    Object.entries(existing).filter(([key, value]) => {
+      const normalized = normalizeSystemdEnvironmentKey(key);
+      if (normalized && managedKeysToDrop.has(normalized)) {
+        return false;
+      }
+      return !isUnresolvedShellReference(value);
+    }),
+  );
   const merged = { ...operatorOnly, ...incoming };
   const environmentKeys = new Set(
     Object.keys(merged).flatMap((key) => {

@@ -1526,14 +1526,41 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("removes a stale literal reference after the state-dir .env line is removed (#88274)", async () => {
+    await withStageFixture(async ({ env, envFilePath }) => {
+      await fs.writeFile(
+        envFilePath,
+        ["LLM_API_KEY=$SECRET_FROM_SHELL", "OPENROUTER_API_KEY=or-operator-key"].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      expect(envFile).not.toContain("LLM_API_KEY");
+      expect(envFile).not.toContain("$SECRET_FROM_SHELL");
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+    });
+  });
+
   it("keeps an operator secret that merely shares a name absent from state-dir .env (#88274)", async () => {
     await withStageFixture(async ({ env, stateDir, envFilePath }) => {
       // Operator-managed env file holds two secrets; neither is in state-dir .env.
       await fs.writeFile(
         envFilePath,
-        ["ANTHROPIC_API_KEY=sk-ant-operator-secret", "OPENROUTER_API_KEY=or-operator-key"].join(
-          "\n",
-        ) + "\n",
+        [
+          "ANTHROPIC_API_KEY=sk-ant-operator-secret",
+          "OPENROUTER_API_KEY=or-operator-key",
+          "LOWERCASE_LITERAL_API_KEY=$ecret123",
+        ].join("\n") + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
 
@@ -1554,6 +1581,7 @@ describe("stageSystemdService", () => {
       const envFile = await fs.readFile(envFilePath, "utf8");
       expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+      expect(envFile).toContain("LOWERCASE_LITERAL_API_KEY=$ecret123");
       expect(envFile).not.toContain("LLM_API_KEY");
     });
   });

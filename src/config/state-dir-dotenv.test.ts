@@ -29,6 +29,9 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       "QUOTED_CURLY_KEY=\"'${ANOTHER_VAR}'\"",
       "BRACE_DEFAULT_KEY=${ANOTHER_VAR:-fallback}",
       "QUOTED_BRACE_DEFAULT_KEY='\"${ANOTHER_VAR:-fallback}\"'",
+      'BRACE_TRIM_KEY="${ANOTHER_VAR#prefix}"',
+      "BRACE_REPLACE_KEY=${ANOTHER_VAR/pattern/replacement}",
+      "BRACE_CASE_KEY=${ANOTHER_VAR^^}",
       'COMMAND_KEY="$(hostname)"',
       "OTHER_KEY=$SOME_SHELL_VAR",
       "CURLY_KEY=${ANOTHER_VAR}",
@@ -42,6 +45,9 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       expect(Object.keys(result)).not.toContain("QUOTED_CURLY_KEY");
       expect(Object.keys(result)).not.toContain("BRACE_DEFAULT_KEY");
       expect(Object.keys(result)).not.toContain("QUOTED_BRACE_DEFAULT_KEY");
+      expect(Object.keys(result)).not.toContain("BRACE_TRIM_KEY");
+      expect(Object.keys(result)).not.toContain("BRACE_REPLACE_KEY");
+      expect(Object.keys(result)).not.toContain("BRACE_CASE_KEY");
       expect(Object.keys(result)).not.toContain("COMMAND_KEY");
       expect(Object.keys(result)).not.toContain("OTHER_KEY");
       expect(Object.keys(result)).not.toContain("CURLY_KEY");
