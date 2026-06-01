@@ -603,6 +603,67 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
+  it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: (ctx) =>
+        ctx.provider === "openai"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "openai only" },
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:user@example.test");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai-codex:user@example.test"],
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    expect(
+      (mockArg(codexSideQuestionMock, 0, 0) as { provider?: string; authProfileId?: string })
+        .provider,
+    ).toBe("openai");
+    expect(
+      (mockArg(codexSideQuestionMock, 0, 0) as { provider?: string; authProfileId?: string })
+        .authProfileId,
+    ).toBe("openai-codex:user@example.test");
+    const authArgs = mockArg(resolveSessionAuthProfileOverrideMock, 0, 0) as {
+      provider?: string;
+      acceptedProviderIds?: string[];
+    };
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.acceptedProviderIds).toEqual(["openai"]);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
   it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
     registerAgentHarness({
       id: "codex",

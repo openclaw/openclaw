@@ -24,6 +24,7 @@ import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
 import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
+import type { AgentHarness } from "./harness/types.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
@@ -262,15 +263,17 @@ async function resolveRuntimeModel(params: {
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
+  const runtimeProvider = model.provider;
+  const runtimeModelId = model.id;
 
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: params.cfg,
-    provider: params.provider,
+    provider: runtimeProvider,
     acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: params.provider,
+      provider: runtimeProvider,
       harnessRuntime: resolveAvailableAgentHarnessPolicy({
-        provider: params.provider,
-        modelId: params.model,
+        provider: runtimeProvider,
+        modelId: runtimeModelId,
         config: params.cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -342,33 +345,50 @@ export async function runBtwSideQuestion(
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
   });
-  if (harness.runSideQuestion) {
-    const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      agentId: sessionAgentId,
-      agentDir: params.agentDir,
-      workspaceDir,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      isNewSession: params.isNewSession,
-    });
-    const result = await harness.runSideQuestion({
+  let runtimeSelection: Awaited<ReturnType<typeof resolveRuntimeModel>> | undefined;
+  const resolveRuntimeSelection = async () => {
+    if (!runtimeSelection) {
+      runtimeSelection = await resolveRuntimeModel({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        agentId: sessionAgentId,
+        agentDir: params.agentDir,
+        workspaceDir,
+        sessionEntry: params.sessionEntry,
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        isNewSession: params.isNewSession,
+      });
+    }
+    return runtimeSelection;
+  };
+  const runHarnessSideQuestion = async (
+    selectedHarness: AgentHarness,
+    runtime: Awaited<ReturnType<typeof resolveRuntimeModel>>,
+  ): Promise<ReplyPayload | undefined> => {
+    if (!selectedHarness.runSideQuestion) {
+      throw new Error(
+        `Selected agent harness "${selectedHarness.id}" does not support /btw side questions.`,
+      );
+    }
+    const result = await selectedHarness.runSideQuestion({
       ...params,
-      provider: model.provider,
-      model: model.id,
-      runtimeModel: model,
+      provider: runtime.model.provider,
+      model: runtime.model.id,
+      runtimeModel: runtime.model,
       sessionId,
       sessionFile,
       agentId: sessionAgentId,
       workspaceDir,
-      authProfileId,
-      authProfileIdSource,
+      authProfileId: runtime.authProfileId,
+      authProfileIdSource: runtime.authProfileIdSource,
     });
     return { text: result.text };
+  };
+  if (harness.runSideQuestion) {
+    return runHarnessSideQuestion(harness, await resolveRuntimeSelection());
   }
   if (harness.id === "codex") {
     throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
@@ -401,19 +421,26 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
+  const { model, authProfileId, authProfileIdSource } = await resolveRuntimeSelection();
+  const runtimeHarness = selectAgentHarness({
+    provider: model.provider,
+    modelId: model.id,
+    config: params.cfg,
     agentId: sessionAgentId,
-    agentDir: params.agentDir,
-    workspaceDir,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    isNewSession: params.isNewSession,
   });
+  if (runtimeHarness.runSideQuestion) {
+    return runHarnessSideQuestion(runtimeHarness, {
+      model,
+      authProfileId,
+      authProfileIdSource,
+    });
+  }
+  if (runtimeHarness.id === "codex") {
+    throw new Error(
+      `Selected agent harness "${runtimeHarness.id}" does not support /btw side questions.`,
+    );
+  }
   let externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
     provider: model.provider,
     cfg: params.cfg,
