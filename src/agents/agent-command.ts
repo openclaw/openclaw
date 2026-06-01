@@ -66,6 +66,7 @@ import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
+  hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
   listAgentIds,
   markAutoFallbackPrimaryProbe,
@@ -98,9 +99,9 @@ import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
 import { prepareInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
-import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
@@ -1197,6 +1198,8 @@ async function agentCommandInternal(
       : undefined;
     const hasStoredAutoFallbackProvenance =
       hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
+    const hasLegacyAutoFallbackOverrideWithoutOrigin =
+      hasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
     const explicitProviderOverride =
       typeof opts.provider === "string"
         ? normalizeExplicitOverrideInput(opts.provider, "provider")
@@ -1245,6 +1248,21 @@ async function agentCommandInternal(
       !suppressVisibleSessionEffects
     ) {
       const entry = sessionEntry;
+      if (hasLegacyAutoFallbackOverrideWithoutOrigin) {
+        const { updated } = applyModelOverrideToSessionEntry({
+          entry,
+          selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        });
+        if (updated) {
+          storedModelOverrideSource = undefined;
+          await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry,
+          });
+        }
+      }
       const repaired = repairProviderWrappedModelOverride({
         entry,
         defaultProvider,
@@ -1285,8 +1303,12 @@ async function agentCommandInternal(
       }
     }
 
-    const storedProviderOverride = sessionEntry?.providerOverride?.trim();
-    let storedModelOverride = sessionEntry?.modelOverride?.trim();
+    const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+      ? undefined
+      : sessionEntry?.providerOverride?.trim();
+    let storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+      ? undefined
+      : sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
       const normalizedStored = normalizeAgentCommandModelRef(
@@ -1328,7 +1350,12 @@ async function agentCommandInternal(
             )
           : parseAgentCommandModelRef(cfg, explicitModelOverride, provider, modelManifestContext)
         : explicitProviderOverride
-          ? normalizeAgentCommandModelRef(cfg, explicitProviderOverride, model, modelManifestContext)
+          ? normalizeAgentCommandModelRef(
+              cfg,
+              explicitProviderOverride,
+              model,
+              modelManifestContext,
+            )
           : null;
       if (!explicitRef) {
         throw new Error("Invalid model override.");

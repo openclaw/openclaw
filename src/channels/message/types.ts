@@ -404,7 +404,7 @@ export type ChannelMessageAdapter<
   TAdapter extends ChannelMessageAdapterShape = ChannelMessageAdapterShape,
 > = TAdapter;
 
-/** Back-compat alias for callers that derive extra durable final requirements. */
+/** Extra durable-final requirement map for caller-derived capability checks. */
 export type DurableFinalRequirementExtras = DurableFinalDeliveryRequirementMap;
 
 /** Inputs used to derive durable final-delivery requirements for a planned send. */

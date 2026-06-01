@@ -166,6 +166,7 @@ export function resolveFailureDestination(
     const hasJobChannelField = "channel" in jobFailureDest;
     const hasJobToField = "to" in jobFailureDest;
     const hasJobAccountIdField = "accountId" in jobFailureDest;
+    const hasJobModeField = "mode" in jobFailureDest;
 
     const jobToExplicitValue = hasJobToField && jobTo !== undefined;
 
@@ -178,9 +179,10 @@ export function resolveFailureDestination(
     if (hasJobAccountIdField) {
       accountId = jobAccountId;
     }
-    if (jobMode !== undefined) {
+    if (hasJobModeField) {
       const globalMode = globalConfig?.mode ?? "announce";
-      if (!jobToExplicitValue && globalMode !== jobMode) {
+      const resolvedJobMode = jobMode ?? "announce";
+      if (!jobToExplicitValue && globalMode !== resolvedJobMode) {
         // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
         to = undefined;
       }

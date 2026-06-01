@@ -40,6 +40,19 @@ function invokeExecFileCallback(args: unknown[], error: Error | null) {
   callback(error);
 }
 
+function mockExecFileError(error: Error) {
+  execFileMock.mockImplementation((...args: unknown[]) => {
+    invokeExecFileCallback(args, error);
+    return {} as never;
+  });
+}
+
+async function invokeConfigOpenFile() {
+  const harness = createConfigHandlerHarness({ method: "config.openFile" });
+  await configHandlers["config.openFile"](harness.options);
+  return harness;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   clearConfigSchemaResponseCacheForTests();
@@ -88,8 +101,7 @@ describe("config.openFile", () => {
       return {} as never;
     });
 
-    const { options, respond } = createConfigHandlerHarness({ method: "config.openFile" });
-    await configHandlers["config.openFile"](options);
+    const { respond } = await invokeConfigOpenFile();
 
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -103,18 +115,9 @@ describe("config.openFile", () => {
 
   it("returns a detailed error and logs details when the opener fails", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
-    execFileMock.mockImplementation((...args: unknown[]) => {
-      invokeExecFileCallback(
-        args,
-        Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }),
-      );
-      return {} as never;
-    });
+    mockExecFileError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
 
-    const { options, respond, logGateway } = createConfigHandlerHarness({
-      method: "config.openFile",
-    });
-    await configHandlers["config.openFile"](options);
+    const { respond, logGateway } = await invokeConfigOpenFile();
 
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -132,18 +135,9 @@ describe("config.openFile", () => {
 
   it("returns actionable headless environment error when xdg-open reports no method available", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
-    execFileMock.mockImplementation((...args: unknown[]) => {
-      invokeExecFileCallback(
-        args,
-        new Error("xdg-open: no method available for opening '/tmp/config.json'"),
-      );
-      return {} as never;
-    });
+    mockExecFileError(new Error("xdg-open: no method available for opening '/tmp/config.json'"));
 
-    const { options, respond, logGateway } = createConfigHandlerHarness({
-      method: "config.openFile",
-    });
-    await configHandlers["config.openFile"](options);
+    const { respond, logGateway } = await invokeConfigOpenFile();
 
     expect(respond).toHaveBeenCalledWith(
       true,

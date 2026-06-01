@@ -20,6 +20,8 @@ import {
 
 const DEFAULT_OUTPUT = ".artifacts/test-perf/group-report.json";
 const DEFAULT_COMPARE_OUTPUT = ".artifacts/test-perf/group-report-compare.json";
+const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_TIMEOUT_KILL_GRACE_MS = 10_000;
 
 function usage() {
   return [
@@ -38,6 +40,8 @@ function usage() {
     "  --limit <count>       Number of groups/configs to print (default: 25)",
     "  --top-files <count>   Number of files to print (default: 25)",
     "  --max-test-ms <ms>    Fail when any individual test exceeds this duration",
+    "  --timeout-ms <ms>     Per-config wall-clock timeout (default: 1800000)",
+    "  --kill-grace-ms <ms>  Grace after timeout before SIGKILL (default: 10000)",
     "  --concurrency <count> Run this many config reports at once (default: 2 for",
     "                        repeated explicit configs, 1 for full-suite)",
     "  --allow-failures      Write a report even when a Vitest run exits non-zero",
@@ -65,10 +69,12 @@ export function parseTestGroupReportArgs(argv) {
     fullSuite: false,
     groupBy: "area",
     limit: 25,
+    killGraceMs: DEFAULT_TIMEOUT_KILL_GRACE_MS,
     maxTestMs: null,
     output: null,
     reports: [],
     rss: process.platform !== "win32",
+    timeoutMs: DEFAULT_RUN_TIMEOUT_MS,
     topFiles: 25,
     vitestArgs: [],
   };
@@ -130,6 +136,16 @@ export function parseTestGroupReportArgs(argv) {
     }
     if (arg === "--max-test-ms") {
       args.maxTestMs = parsePositiveInt(argv[index + 1], args.maxTestMs);
+      index += 1;
+      continue;
+    }
+    if (arg === "--timeout-ms") {
+      args.timeoutMs = parsePositiveInt(argv[index + 1], args.timeoutMs);
+      index += 1;
+      continue;
+    }
+    if (arg === "--kill-grace-ms") {
+      args.killGraceMs = parsePositiveInt(argv[index + 1], args.killGraceMs);
       index += 1;
       continue;
     }
@@ -196,16 +212,111 @@ function parseMaxRssBytes(output) {
   return null;
 }
 
-function spawnText(command, args, options) {
+function formatSpawnError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function spawnText(command, args, options) {
   const maxBuffer = 1024 * 1024 * 64;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+  const killGraceMs = options.killGraceMs ?? DEFAULT_TIMEOUT_KILL_GRACE_MS;
+  const useProcessGroup = process.platform !== "win32";
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
+      detached: useProcessGroup,
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
     let outputExceeded = false;
+    let timedOut = false;
+    let settled = false;
+    let killTimer = null;
+    let childClosedResult = null;
+    let waitingForKillGrace = false;
+    const signalChild = (signal) => {
+      if (useProcessGroup && typeof child.pid === "number") {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch (error) {
+          if (error && error.code !== "ESRCH") {
+            output += `[test-group-report] failed to send ${signal} to process group: ${formatSpawnError(error)}\n`;
+          }
+        }
+      }
+      child.kill(signal);
+    };
+    const parentSignalHandlers = [];
+    const cleanupParentSignalHandlers = () => {
+      for (const { signal, handler } of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.length = 0;
+    };
+    const relayParentSignal = (signal) => {
+      const handler = () => {
+        signalChild(signal);
+        cleanupParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.push({ signal, handler });
+      process.once(signal, handler);
+    };
+    if (useProcessGroup) {
+      relayParentSignal("SIGINT");
+      relayParentSignal("SIGTERM");
+      relayParentSignal("SIGHUP");
+    }
+    const processGroupIsAlive = () => {
+      if (!useProcessGroup || typeof child.pid !== "number") {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return Boolean(error && error.code === "EPERM");
+      }
+    };
+    const scheduleKill = (message) => {
+      if (waitingForKillGrace) {
+        return;
+      }
+      waitingForKillGrace = true;
+      killTimer = setTimeout(() => {
+        waitingForKillGrace = false;
+        killTimer = null;
+        output += message;
+        signalChild("SIGKILL");
+        if (childClosedResult) {
+          finish(childClosedResult);
+        }
+      }, killGraceMs);
+      killTimer.unref?.();
+    };
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      output += `\n[test-group-report] command timed out after ${String(timeoutMs)}ms\n`;
+      signalChild("SIGTERM");
+      scheduleKill(
+        `[test-group-report] command did not exit after ${String(killGraceMs)}ms grace; sending SIGKILL\n`,
+      );
+    }, timeoutMs);
+    timeoutTimer.unref?.();
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutTimer);
+      cleanupParentSignalHandlers();
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      resolve(result);
+    };
     const appendOutput = (chunk) => {
       if (outputExceeded) {
         return;
@@ -213,7 +324,11 @@ function spawnText(command, args, options) {
       output += chunk.toString("utf8");
       if (Buffer.byteLength(output) > maxBuffer) {
         outputExceeded = true;
-        child.kill("SIGTERM");
+        output += `\n[test-group-report] output exceeded ${String(maxBuffer)} bytes\n`;
+        signalChild("SIGTERM");
+        scheduleKill(
+          "[test-group-report] command did not exit after output limit; sending SIGKILL\n",
+        );
       }
     };
     child.stdout?.on("data", appendOutput);
@@ -222,14 +337,17 @@ function spawnText(command, args, options) {
       output += `${String(error)}\n`;
     });
     child.on("close", (code, signal) => {
-      if (outputExceeded) {
-        output += `\n[test-group-report] output exceeded ${String(maxBuffer)} bytes\n`;
-      }
-      resolve({
-        status: outputExceeded ? 1 : (code ?? 1),
+      const result = {
+        status: outputExceeded || timedOut ? 1 : (code ?? 1),
         signal,
         output,
-      });
+        timedOut,
+      };
+      if (waitingForKillGrace && processGroupIsAlive()) {
+        childClosedResult = result;
+        return;
+      }
+      finish(result);
     });
   });
 }
@@ -267,6 +385,8 @@ async function runVitestJsonReport(params) {
         .filter(Boolean)
         .join(" "),
     },
+    killGraceMs: params.killGraceMs,
+    timeoutMs: params.timeoutMs,
   });
   const elapsedMs = Number.parseFloat(String(process.hrtime.bigint() - startedAt)) / 1_000_000;
   const output = result.output;
@@ -433,6 +553,8 @@ async function runReportPlans(params) {
         logPath: path.join(params.logDir, `${slug}.log`),
         reportPath: path.join(params.reportDir, `${slug}.json`),
         rss: params.args.rss,
+        timeoutMs: params.args.timeoutMs,
+        killGraceMs: params.args.killGraceMs,
         vitestArgs: params.args.vitestArgs,
       });
       printRunLine(run);

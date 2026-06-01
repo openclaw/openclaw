@@ -107,6 +107,21 @@ function findRequestPayload(source: MockCallSource, method: string, label: strin
   return requireRecord(call[1], label);
 }
 
+function eventPayloads(host: ChatHost, event: string): Array<Record<string, unknown>> {
+  return (host.eventLogBuffer ?? [])
+    .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      const candidate = entry as { event?: unknown; payload?: unknown };
+      return (
+        candidate.event === event &&
+        Boolean(candidate.payload && typeof candidate.payload === "object")
+      );
+    })
+    .map((entry) => entry.payload);
+}
+
 function fetchInit(source: MockCallSource, callIndex: number) {
   return requireRecord(mockArg(source, callIndex, 1, `fetch init ${callIndex}`), "fetch init");
 }
@@ -1178,6 +1193,36 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("records visible send timing phases for a normal chat send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "measure first send",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+
+    await handleSendChat(host);
+
+    const sendEvents = eventPayloads(host, "control-ui.chat.send");
+    expect(sendEvents.map((payload) => payload.phase)).toEqual(
+      expect.arrayContaining(["pending-visible", "request-start", "ack"]),
+    );
+    const ack = sendEvents.find((payload) => payload.phase === "ack");
+    expect(ack).toMatchObject({
+      ackStatus: "started",
+      sessionKey: "agent:main",
+      sendState: "sending",
+    });
+    expect(ack?.durationMs).toEqual(expect.any(Number));
+    expect(ack?.requestDurationMs).toEqual(expect.any(Number));
+  });
+
   it("waits for an in-flight model picker update before sending chat", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
@@ -1196,7 +1241,11 @@ describe("handleSendChat", () => {
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("use the newly selected model");
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "waiting-model",
+      text: "use the newly selected model",
+    });
 
     switchUpdate.resolve(true);
     await send;
@@ -1288,11 +1337,11 @@ describe("handleSendChat", () => {
     expect(attachments[0]?.mimeType).toBe("application/pdf");
     expect(attachments[0]?.type).toBe("file");
     expect(host.chatMessage).toBe("keep typing with the attachment");
-    expect(host.chatAttachments).toEqual([attachment]);
-    expect(getChatAttachmentDataUrl(attachment)).toBe("data:application/pdf;base64,JVBERi0xLjQK");
+    expect(host.chatAttachments).toStrictEqual([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
-  it("preserves draft text when only attachments change during a delayed send", async () => {
+  it("preserves edited attachments when attachments change during a delayed send", async () => {
     const switchUpdate = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -1348,7 +1397,7 @@ describe("handleSendChat", () => {
     expect(attachments[0]?.fileName).toBe("original.pdf");
     expect(attachments[0]?.mimeType).toBe("application/pdf");
     expect(attachments[0]?.type).toBe("file");
-    expect(host.chatMessage).toBe("send this");
+    expect(host.chatMessage).toBe("");
     expect(host.chatAttachments).toEqual([editedAttachment]);
     expect(getChatAttachmentDataUrl(originalAttachment)).toBeNull();
     expect(getChatAttachmentDataUrl(editedAttachment)).toBe("data:application/pdf;base64,ZWRpdGVk");
@@ -1400,7 +1449,7 @@ describe("handleSendChat", () => {
     expect(attachments[0]?.fileName).toBe("original.pdf");
     expect(attachments[0]?.mimeType).toBe("application/pdf");
     expect(attachments[0]?.type).toBe("file");
-    expect(host.chatMessage).toBe("send this");
+    expect(host.chatMessage).toBe("");
     expect(host.chatAttachments).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
@@ -1450,6 +1499,168 @@ describe("handleSendChat", () => {
 
     expect(request).not.toHaveBeenCalled();
     expect(host.chatMessage).toBe("do not send on rollback");
+  });
+
+  it("does not restore canceled attachments onto new draft text after model update failure", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const file = new File(["private"], "private.txt", { type: "text/plain" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "private-att",
+        mimeType: "text/plain",
+        fileName: "private.txt",
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:text/plain;base64,cHJpdmF0ZQ==",
+      file,
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatAttachments: [attachment],
+      chatMessage: "send this attachment",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    host.chatMessage = "new unrelated draft";
+
+    switchUpdate.resolve(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("new unrelated draft");
+    expect(host.chatAttachments).toStrictEqual([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+  });
+
+  it("does not restore a manually removed model-wait send after model update failure", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "remove this pending send",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    const queuedId = host.chatQueue[0]?.id;
+    expect(queuedId).toEqual(expect.any(String));
+    removeQueuedMessage(host, queuedId);
+
+    switchUpdate.resolve(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toStrictEqual([]);
+  });
+
+  it("keeps resolved model-wait sends queued under the submitted session after switching", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "send from session a",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      sessionKey: "agent:main",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue[0]?.text).toBe("send from session a");
+
+    host.chatQueueBySession = { "agent:main": [...host.chatQueue] };
+    host.chatQueue = [];
+    host.sessionKey = "agent:other";
+    host.chatMessage = "session b draft";
+    switchUpdate.resolve(true);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("session b draft");
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatQueueBySession?.["agent:main"]?.[0]).toMatchObject({
+      sendState: undefined,
+      text: "send from session a",
+    });
+  });
+
+  it("keeps failed model-wait sends retryable under the submitted session after switching", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "send from session a",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      sessionKey: "agent:main",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    host.chatQueueBySession = { "agent:main": [...host.chatQueue] };
+    host.chatQueue = [];
+    host.sessionKey = "agent:other";
+    host.chatMessage = "";
+
+    switchUpdate.resolve(false);
+    await send;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("");
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatQueueBySession?.["agent:main"]?.[0]).toMatchObject({
+      sendError: "Model selection was interrupted. Review and retry when ready.",
+      sendState: "failed",
+      text: "send from session a",
+    });
+  });
+
+  it("does not flush model-wait sends before the model picker update finishes", async () => {
+    const switchUpdate = createDeferred<boolean>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "wait for selected model",
+      chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+    expect(host.chatQueue[0]).toMatchObject({
+      sendState: "waiting-model",
+      text: "wait for selected model",
+    });
+
+    await retryReconnectableQueuedChatSends(host);
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueue[0]?.sendState).toBe("waiting-model");
+
+    switchUpdate.resolve(true);
+    await send;
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe("wait for selected model");
   });
 
   it("keeps slash-command model changes in sync with the chat header cache", async () => {

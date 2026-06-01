@@ -1,5 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveEmbeddingTimeoutMs,
   resolveMemoryIndexConcurrency,
@@ -96,6 +96,11 @@ describe("local embedding worker failure detection", () => {
 });
 
 describe("memory embedding timeout abort", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("aborts the provider operation when the timeout fires", async () => {
     let signalSeen: AbortSignal | undefined;
 

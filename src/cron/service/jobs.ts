@@ -354,9 +354,24 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   }
 }
 
+function hasConcreteFailureDestination(
+  destination: CronDelivery["failureDestination"] | undefined,
+): boolean {
+  return Boolean(
+    destination &&
+    (destination.channel !== undefined ||
+      destination.to !== undefined ||
+      destination.accountId !== undefined ||
+      destination.mode !== undefined),
+  );
+}
+
 function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   const failureDestination = job.delivery?.failureDestination;
   if (!failureDestination) {
+    return;
+  }
+  if (!hasConcreteFailureDestination(failureDestination)) {
     return;
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
@@ -690,7 +705,9 @@ export function recomputeNextRunsForMaintenance(
 /** Returns the next enabled wake timestamp from the in-memory cron store. */
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs));
+  const enabled = jobs.filter(
+    (j) => isJobEnabled(j) && hasScheduledNextRunAtMs(j.state.nextRunAtMs),
+  );
   if (enabled.length === 0) {
     return undefined;
   }
@@ -820,14 +837,18 @@ export function applyJobPatch(
   if (
     job.sessionTarget === "main" &&
     job.delivery?.mode !== "webhook" &&
-    job.delivery?.failureDestination
+    hasConcreteFailureDestination(job.delivery?.failureDestination)
   ) {
     throw new Error(
       'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
     );
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
-    job.delivery = undefined;
+    const failureDestination = job.delivery?.failureDestination;
+    job.delivery =
+      failureDestination && !hasConcreteFailureDestination(failureDestination)
+        ? { mode: "none", failureDestination }
+        : undefined;
   }
   if (patch.state) {
     job.state = { ...job.state, ...patch.state };
@@ -981,12 +1002,21 @@ function mergeCronDelivery(
     } else {
       const existingFd = next.failureDestination;
       const patchFd = patch.failureDestination;
-      const nextFd: typeof next.failureDestination = {
-        channel: existingFd?.channel,
-        to: existingFd?.to,
-        accountId: existingFd?.accountId,
-        mode: existingFd?.mode,
-      };
+      const nextFd: typeof next.failureDestination = {};
+      if (existingFd) {
+        if (Object.hasOwn(existingFd, "channel")) {
+          nextFd.channel = existingFd.channel;
+        }
+        if (Object.hasOwn(existingFd, "to")) {
+          nextFd.to = existingFd.to;
+        }
+        if (Object.hasOwn(existingFd, "accountId")) {
+          nextFd.accountId = existingFd.accountId;
+        }
+        if (Object.hasOwn(existingFd, "mode")) {
+          nextFd.mode = existingFd.mode;
+        }
+      }
       if (patchFd) {
         if ("channel" in patchFd) {
           const channel = normalizeOptionalString(patchFd.channel) ?? "";
@@ -1006,10 +1036,10 @@ function mergeCronDelivery(
         }
       }
       const hasFailureDestination =
-        nextFd.channel !== undefined ||
-        nextFd.to !== undefined ||
-        nextFd.accountId !== undefined ||
-        nextFd.mode !== undefined;
+        Object.hasOwn(nextFd, "channel") ||
+        Object.hasOwn(nextFd, "to") ||
+        Object.hasOwn(nextFd, "accountId") ||
+        Object.hasOwn(nextFd, "mode");
       next.failureDestination = hasFailureDestination ? nextFd : undefined;
     }
   }

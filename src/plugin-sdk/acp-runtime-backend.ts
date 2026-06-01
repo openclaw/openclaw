@@ -84,6 +84,8 @@ export async function tryDispatchAcpReplyHook(
     shouldRouteToOriginating: event.shouldRouteToOriginating,
     originatingChannel: event.originatingChannel,
     originatingTo: event.originatingTo,
+    originatingAccountId: event.originatingAccountId,
+    originatingThreadId: event.originatingThreadId,
     shouldSendToolSummaries: event.shouldSendToolSummaries,
     shouldSendToolSummariesNow: () => event.shouldSendToolSummaries,
     bypassForCommand,

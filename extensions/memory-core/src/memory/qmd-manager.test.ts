@@ -300,6 +300,11 @@ describe("QmdMemoryManager", () => {
   });
 
   beforeEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[MEMORY_EMBEDDING_PROVIDERS_KEY];
     spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
     watchMock.mockClear();
