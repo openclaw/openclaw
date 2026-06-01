@@ -238,6 +238,16 @@ function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
   );
 }
 
+function shouldLetActiveReplyOperationReachQueuePolicy(params: {
+  activeOperation?: ReplyOperation;
+  routeThreadId?: string | number;
+}): boolean {
+  return (
+    params.activeOperation !== undefined &&
+    !routeThreadIdsDiffer(params.activeOperation.routeThreadId, params.routeThreadId)
+  );
+}
+
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
   () => import("./get-reply-from-config.runtime.js"),
@@ -1240,10 +1250,18 @@ export async function dispatchReplyFromConfig(
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
     const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
+    const activeReplyOperation = replyRunRegistry.get(dispatchOperationSessionKey);
+    const allowActiveQueuePolicy =
+      phase === "dispatch" &&
+      replyTurnKind === "visible" &&
+      shouldLetActiveReplyOperationReachQueuePolicy({
+        activeOperation: activeReplyOperation,
+        routeThreadId,
+      });
     const allowSlackRoutedThreadBypass =
       phase === "dispatch" &&
       shouldLetSlackRoutedThreadBypassBusyReplyOperation({
-        activeOperation: replyRunRegistry.get(dispatchOperationSessionKey),
+        activeOperation: activeReplyOperation,
         ctx,
         routeThreadId,
       });
@@ -1254,11 +1272,18 @@ export async function dispatchReplyFromConfig(
       resetTriggered: false,
       routeThreadId,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
-      waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
+      waitForActive:
+        !allowActivePreDispatch && !allowActiveQueuePolicy && !allowSlackRoutedThreadBypass,
     });
     if (admission.status === "skipped") {
       if (allowActivePreDispatch && admission.reason === "active-run") {
         preDispatchAbortOperation = admission.activeOperation;
+        return { status: "ready" };
+      }
+      if (allowActiveQueuePolicy && admission.reason === "active-run") {
+        logVerbose(
+          `dispatch-from-config: allowing visible turn for ${dispatchOperationSessionKey} to reach active-run queue policy while a reply operation is active`,
+        );
         return { status: "ready" };
       }
       if (

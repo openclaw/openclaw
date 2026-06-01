@@ -1224,6 +1224,59 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
+  it("lets a same-session iMessage turn reach active-run queue policy while another turn is active", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:imessage:direct:+15551234567";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "queued for policy" }) satisfies ReplyPayload);
+
+    const resultPromise = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "imessage",
+        Surface: "imessage",
+        OriginatingChannel: "imessage",
+        OriginatingTo: "imessage:+15551234567",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        BodyForAgent: "steer the active run",
+      }),
+      cfg: {
+        messages: {
+          queue: {
+            mode: "steer",
+            byChannel: {
+              imessage: "steer",
+            },
+          },
+        },
+      } as const satisfies OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    try {
+      const result = await Promise.race([
+        resultPromise,
+        new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 1_000)),
+      ]);
+
+      expect(result).toMatchObject({
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 0 },
+      });
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+    } finally {
+      activeOperation.complete();
+      await resultPromise;
+    }
+  });
+
   it("keeps non-Slack routed direct turns behind the active reply operation", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:direct:1";
