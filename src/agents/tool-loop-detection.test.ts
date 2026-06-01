@@ -623,6 +623,102 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks repeated message sends despite volatile delivery ids", () => {
+      const params = { action: "send", to: "feishu:chat-1", content: "hello" };
+      const cases = [
+        {
+          name: "direct send result",
+          payloadAt: (index: number) => ({
+            channel: "feishu",
+            to: "feishu:chat-1",
+            via: "direct",
+            result: {
+              channel: "feishu",
+              chatId: "oc_stable_chat",
+              messageId: `om_volatile_${index}`,
+            },
+          }),
+        },
+        {
+          name: "gateway send result",
+          payloadAt: (index: number) => ({
+            channel: "feishu",
+            to: "feishu:chat-1",
+            via: "gateway",
+            result: { messageId: `gw_volatile_${index}` },
+          }),
+        },
+        {
+          name: "plugin tool result",
+          payloadAt: (index: number) => ({
+            ok: true,
+            chatId: "oc_stable_chat",
+            messageId: `plugin_volatile_${index}`,
+          }),
+        },
+      ];
+
+      for (const { name, payloadAt } of cases) {
+        const state = createState();
+
+        for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+          const payload = payloadAt(index);
+          recordSuccessfulCall(
+            state,
+            "message",
+            params,
+            {
+              content: [{ type: "text", text: JSON.stringify(payload) }],
+              details: payload,
+            },
+            index,
+          );
+        }
+
+        const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+        expect(loopResult.stuck, name).toBe(true);
+        if (loopResult.stuck) {
+          expect(loopResult.level, name).toBe("critical");
+          expect(loopResult.detector, name).toBe("generic_repeat");
+        }
+      }
+    });
+
+    it("does not block repeated message sends when stable delivery facts change", () => {
+      const state = createState();
+      const params = { action: "send", to: "feishu:chat-1", content: "hello" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const payload = {
+          channel: "feishu",
+          to: "feishu:chat-1",
+          via: "direct",
+          result: {
+            ok: true,
+            chatId: `oc_chat_${index}`,
+            messageId: `om_volatile_${index}`,
+          },
+        };
+        recordSuccessfulCall(
+          state,
+          "message",
+          params,
+          {
+            content: [{ type: "text", text: JSON.stringify(payload) }],
+            details: payload,
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
     it("keeps changing exec output below the global no-progress breaker", () => {
       const state = createState();
       const params = { command: "date" };

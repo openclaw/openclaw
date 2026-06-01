@@ -191,6 +191,61 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+  if (!text) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return isPlainObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeMessageSendOutcome(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeMessageSendOutcome(entry));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const normalized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (
+      key === "messageId" ||
+      key === "messageIds" ||
+      key === "platformMessageIds" ||
+      key === "receipt" ||
+      key === "timestamp"
+    ) {
+      continue;
+    }
+    normalized[key] = normalizeMessageSendOutcome(entry);
+  }
+  return normalized;
+}
+
+function hashMessageSendToolOutcome(
+  params: unknown,
+  details: Record<string, unknown>,
+  text: string,
+): string | undefined {
+  if (!isPlainObject(params) || params.action !== "send") {
+    return undefined;
+  }
+
+  const source = Object.keys(details).length > 0 ? details : parseJsonObject(text);
+  if (!source) {
+    return undefined;
+  }
+
+  // Delivery ids and receipts are unique per successful send. Loop detection
+  // must compare stable delivery facts so repeated sends can still be blocked.
+  return digestStable(normalizeMessageSendOutcome(source));
+}
+
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {
   const status = stringField(details.status);
   if (!status) {
@@ -249,6 +304,12 @@ function hashToolOutcome(
     const execHash = hashExecToolOutcome(details, text);
     if (execHash) {
       return { resultHash: execHash };
+    }
+  }
+  if (toolName === "message") {
+    const messageHash = hashMessageSendToolOutcome(params, details, text);
+    if (messageHash) {
+      return { resultHash: messageHash };
     }
   }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {

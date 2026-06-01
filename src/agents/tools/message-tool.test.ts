@@ -4,6 +4,9 @@ import type { ChannelMessageAdapterShape } from "../../channels/message/types.js
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
+import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
+import { CRITICAL_THRESHOLD } from "../tool-loop-detection.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
@@ -310,6 +313,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
+  resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
@@ -1079,6 +1083,68 @@ describe("message tool explicit target guard", () => {
 
     const call = firstRunMessageActionInput();
     expect(call?.params?.target).toBe("channel:C999");
+  });
+});
+
+describe("message tool loop detection action runner proof", () => {
+  function mockQaChannelGatewayActionRunner() {
+    mocks.runMessageAction.mockImplementation(async ({ params }) => {
+      const callIndex = mocks.runMessageAction.mock.calls.length;
+      const to = typeof params.to === "string" ? params.to : "channel:loop-room";
+      return {
+        kind: "send",
+        action: "send",
+        channel: "qa-channel",
+        to,
+        handledBy: "plugin",
+        payload: {
+          channel: "qa-channel",
+          to,
+          via: "gateway",
+          result: {
+            messageId: `qa-message-${callIndex}`,
+          },
+        },
+        dryRun: false,
+      } satisfies MessageActionRunResult;
+    });
+  }
+
+  it("blocks repeated qa-channel Gateway sends returned by the message tool action runner", async () => {
+    mockQaChannelGatewayActionRunner();
+    const messageTool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+    });
+    const wrappedTool = wrapToolWithBeforeToolCallHook(messageTool, {
+      agentId: "main",
+      sessionKey: "message-tool-action-runner-loop",
+      sessionId: "message-tool-action-runner-loop-session",
+      runId: "message-tool-action-runner-loop-run",
+      loopDetection: { enabled: true },
+    });
+    const params = {
+      action: "send",
+      channel: "qa-channel",
+      to: "channel:loop-room",
+      content: "same visible reply",
+    };
+
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+      const result = await wrappedTool.execute(`message-tool-send-${i}`, params);
+      expect(result.details).toMatchObject({
+        channel: "qa-channel",
+        to: "channel:loop-room",
+        via: "gateway",
+      });
+    }
+
+    const blocked = await wrappedTool.execute(`message-tool-send-${CRITICAL_THRESHOLD}`, params);
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+    expect(blocked.details).toMatchObject({
+      status: "blocked",
+      deniedReason: "tool-loop",
+    });
+    expect(String(blocked.details?.reason)).toContain("CRITICAL");
   });
 });
 
