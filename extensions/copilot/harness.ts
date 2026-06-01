@@ -270,24 +270,23 @@ async function compactTrackedSdkSession(params: {
     suppressResumeEvent: true,
   })) as unknown as CopilotHistoryCompactSession;
   params.onSession?.(session);
-  let completed = false;
+  throwIfAborted(params.abortSignal);
+  const request = params.customInstructions?.trim()
+    ? { customInstructions: params.customInstructions }
+    : undefined;
+  let result: CopilotHistoryCompactResult;
   try {
-    throwIfAborted(params.abortSignal);
-    const request = params.customInstructions?.trim()
-      ? { customInstructions: params.customInstructions }
-      : undefined;
-    const result = await session.rpc.history.compact(request);
-    completed = true;
-    return result;
-  } finally {
+    result = await session.rpc.history.compact(request);
+  } catch (error) {
     try {
       await session.disconnect();
-    } catch (error) {
-      if (!completed) {
-        throw error;
-      }
+    } catch {
+      // Preserve the compaction failure; disconnect cleanup is best-effort here.
     }
+    throw error;
   }
+  await session.disconnect();
+  return result;
 }
 
 // Build a string fingerprint of the attempt params that must agree

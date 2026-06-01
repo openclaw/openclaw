@@ -1193,7 +1193,8 @@ describe("createCopilotAgentHarness", () => {
         key: {} as any,
         client: { deleteSession: vi.fn(), resumeSession } as any,
       }));
-      pool.release = vi.fn(async () => undefined);
+      const release = vi.fn(async () => undefined);
+      pool.release = release;
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-compact",
@@ -1221,7 +1222,7 @@ describe("createCopilotAgentHarness", () => {
         sessionId: "oc-sess-compact-1",
         workspaceDir: "/this\u0000is/illegal",
         customInstructions: "Keep decisions.",
-      } as any);
+      });
 
       expect(resumeSession).toHaveBeenCalledWith(
         "sdk-sess-compact",
@@ -1236,7 +1237,7 @@ describe("createCopilotAgentHarness", () => {
       );
       expect(compact).toHaveBeenCalledWith({ customInstructions: "Keep decisions." });
       expect(disconnect).toHaveBeenCalledTimes(1);
-      expect(pool.release).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(1);
       expect(result).toEqual({
         ok: true,
         compacted: true,
@@ -1255,10 +1256,11 @@ describe("createCopilotAgentHarness", () => {
         rpc: { history: { compact } },
       }));
       const pool = makePoolMock();
-      pool.acquire = vi.fn(async () => ({
+      const acquire = vi.fn(async () => ({
         key: {} as any,
         client: { deleteSession: vi.fn(), resumeSession } as any,
       }));
+      pool.acquire = acquire;
       pool.release = vi.fn(async () => undefined);
       mocks.resolvePoolAcquire
         .mockReturnValueOnce({
@@ -1320,7 +1322,7 @@ describe("createCopilotAgentHarness", () => {
         }),
       );
 
-      expect(pool.acquire).not.toHaveBeenCalled();
+      expect(acquire).not.toHaveBeenCalled();
       expect(resumeSession).not.toHaveBeenCalled();
       expect(result).toEqual({
         ok: false,
@@ -1354,10 +1356,11 @@ describe("createCopilotAgentHarness", () => {
     it("does not compact a tracked SDK session after model changes", async () => {
       const resumeSession = vi.fn();
       const pool = makePoolMock();
-      pool.acquire = vi.fn(async () => ({
+      const acquire = vi.fn(async () => ({
         key: {} as any,
         client: { deleteSession: vi.fn(), resumeSession } as any,
       }));
+      pool.acquire = acquire;
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         deps.onSessionEstablished?.({
           sdkSessionId: "sdk-sess-model",
@@ -1376,7 +1379,7 @@ describe("createCopilotAgentHarness", () => {
         makeCompactParams({ model: "gpt-5", sessionId: "oc-sess-model" }),
       );
 
-      expect(pool.acquire).not.toHaveBeenCalled();
+      expect(acquire).not.toHaveBeenCalled();
       expect(resumeSession).not.toHaveBeenCalled();
       expect(result).toEqual({
         ok: false,
@@ -1606,10 +1609,11 @@ describe("createCopilotAgentHarness", () => {
 
       const resumeSession = vi.fn();
       const secondPool = makePoolMock();
-      secondPool.acquire = vi.fn(async () => ({
+      const secondAcquire = vi.fn(async () => ({
         key: {} as any,
         client: { deleteSession: vi.fn(), resumeSession } as any,
       }));
+      secondPool.acquire = secondAcquire;
       const secondHarness = createCopilotAgentHarness({
         pool: secondPool,
         sessionStore: sessionStore.store,
@@ -1618,7 +1622,7 @@ describe("createCopilotAgentHarness", () => {
         makeCompactParams({ auth: undefined, sessionId: "oc-sess-persisted-token" }),
       );
 
-      expect(secondPool.acquire).not.toHaveBeenCalled();
+      expect(secondAcquire).not.toHaveBeenCalled();
       expect(resumeSession).not.toHaveBeenCalled();
       expect(result).toEqual({
         ok: false,
@@ -1640,7 +1644,8 @@ describe("createCopilotAgentHarness", () => {
         options: { copilotHome: "/copilot-home", gitHubToken: "ghp_other" },
       });
       const rotatedPool = makePoolMock();
-      rotatedPool.acquire = vi.fn();
+      const rotatedAcquire = vi.fn();
+      rotatedPool.acquire = rotatedAcquire;
       const rotatedHarness = createCopilotAgentHarness({
         pool: rotatedPool,
         sessionStore: sessionStore.store,
@@ -1652,7 +1657,7 @@ describe("createCopilotAgentHarness", () => {
         }),
       );
 
-      expect(rotatedPool.acquire).not.toHaveBeenCalled();
+      expect(rotatedAcquire).not.toHaveBeenCalled();
       expect(rotatedResult).toEqual({
         ok: false,
         compacted: false,
@@ -1682,10 +1687,11 @@ describe("createCopilotAgentHarness", () => {
 
       const resumeSession = vi.fn();
       const secondPool = makePoolMock();
-      secondPool.acquire = vi.fn(async () => ({
+      const secondAcquire = vi.fn(async () => ({
         key: {} as any,
         client: { deleteSession: vi.fn(), resumeSession } as any,
       }));
+      secondPool.acquire = secondAcquire;
       secondPool.release = vi.fn(async () => undefined);
       const secondHarness = createCopilotAgentHarness({
         pool: secondPool,
@@ -1696,7 +1702,7 @@ describe("createCopilotAgentHarness", () => {
         makeCompactParams({ sessionId: "oc-sess-persisted" }),
       );
 
-      expect(secondPool.acquire).not.toHaveBeenCalled();
+      expect(secondAcquire).not.toHaveBeenCalled();
       expect(resumeSession).not.toHaveBeenCalled();
       expect(sessionStore.store.delete).not.toHaveBeenCalledWith("oc-sess-persisted");
       expect(result).toEqual({
@@ -1741,7 +1747,7 @@ describe("createCopilotAgentHarness", () => {
         ...makeCompactParams({ sessionId: "oc-sess-noop" }),
         sessionId: "oc-sess-noop",
         workspaceDir: "/this\u0000is/illegal",
-      } as any);
+      });
 
       expect(compact).toHaveBeenCalledWith(undefined);
       expect(result).toEqual({
