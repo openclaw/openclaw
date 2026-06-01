@@ -279,6 +279,21 @@ describe("connectGateway chat load startup work", () => {
     expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for startup bootstrap before the first chat refresh", async () => {
+    const bootstrap = createDeferred();
+    const { host, client } = connectHost("chat");
+    (host as typeof host & { controlUiBootstrapReady?: Promise<void> }).controlUiBootstrapReady =
+      bootstrap.promise;
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(refreshActiveTabMock).not.toHaveBeenCalled();
+
+    bootstrap.resolve();
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+  });
+
   it("records connect timing through the Control UI performance buffer", () => {
     const { host, client } = connectHost("chat");
 
@@ -302,17 +317,16 @@ describe("connectGateway chat load startup work", () => {
 
     client.emitHello();
 
-    expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
     expect(loadAgentsMock).toHaveBeenCalledWith(host);
-    expect(loadControlUiBootstrapConfigMock).not.toHaveBeenCalled();
-    expect(loadAssistantIdentityMock).not.toHaveBeenCalled();
-    expect(loadHealthStateMock).not.toHaveBeenCalled();
-    expect(verifyPushMock).not.toHaveBeenCalled();
 
     await vi.waitFor(() =>
       expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host, {
         applyIdentity: false,
       }),
+    );
+    expect(refreshActiveTabMock.mock.invocationCallOrder[0]).toBeLessThan(
+      loadControlUiBootstrapConfigMock.mock.invocationCallOrder[0],
     );
     expect(loadAssistantIdentityMock).toHaveBeenCalledWith(host);
     expect(loadHealthStateMock).toHaveBeenCalledWith(host);

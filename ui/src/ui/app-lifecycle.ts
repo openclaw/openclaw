@@ -83,6 +83,7 @@ type LifecycleHost = {
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiTabPaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
+  controlUiBootstrapReady?: Promise<void> | null;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
@@ -91,7 +92,7 @@ export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
-  void loadControlUiBootstrapConfig(
+  host.controlUiBootstrapReady = loadControlUiBootstrapConfig(
     host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
     { applyIdentity: false },
   );

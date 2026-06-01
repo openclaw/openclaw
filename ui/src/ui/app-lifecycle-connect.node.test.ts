@@ -125,7 +125,8 @@ describe("handleConnected", () => {
   });
 
   it("scrubs URL settings before starting the bootstrap fetch", () => {
-    loadBootstrapMock.mockResolvedValueOnce(undefined);
+    const bootstrap = Promise.resolve();
+    loadBootstrapMock.mockReturnValueOnce(bootstrap);
     const host = createHost();
 
     handleConnected(host as never);
@@ -136,6 +137,9 @@ describe("handleConnected", () => {
       loadBootstrapMock.mock.invocationCallOrder[0],
     );
     expect(loadBootstrapMock).toHaveBeenCalledWith(host, { applyIdentity: false });
+    expect(
+      (host as typeof host & { controlUiBootstrapReady?: Promise<void> }).controlUiBootstrapReady,
+    ).toBe(bootstrap);
   });
 
   it("starts Nodes polling only when the Nodes tab is active on connect", () => {

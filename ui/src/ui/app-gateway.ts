@@ -143,6 +143,7 @@ type GatewayHost = {
   updateAvailable: UpdateAvailable | null;
   reconcileWebPushState?: () => Promise<void> | void;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
+  controlUiBootstrapReady?: Promise<void> | null;
 };
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
@@ -632,6 +633,17 @@ async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   }
 }
 
+async function loadAgentsThenRefreshActiveTabAfterBootstrap(
+  host: GatewayHost,
+  client: GatewayBrowserClient,
+) {
+  await host.controlUiBootstrapReady?.catch(() => undefined);
+  if (host.client !== client) {
+    return;
+  }
+  await loadAgentsThenRefreshActiveTab(host);
+}
+
 function scheduleDeferredStartupWork(callback: () => void) {
   if (typeof queueMicrotask === "function") {
     queueMicrotask(callback);
@@ -757,7 +769,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host as unknown as SessionsState & { sessionKey: string },
         { force: true },
       );
-      void loadAgentsThenRefreshActiveTab(host);
+      void loadAgentsThenRefreshActiveTabAfterBootstrap(host, client);
       scheduleDeferredStartupWork(() => {
         if (host.client !== client) {
           return;
