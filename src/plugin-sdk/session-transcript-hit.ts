@@ -8,6 +8,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
+const TRANSCRIPT_KEY_PREFIX = "transcript:";
 const QMD_ARCHIVE_STEM_RE = /^(.+)-jsonl-(reset|deleted)-(.+)$/;
 const QMD_ARCHIVE_TIMESTAMP_RE =
   /^(\d{4}-\d{2}-\d{2})[tT](\d{2}-\d{2}-\d{2})(?:(?:\.|-)(\d{3}))?[zZ]$/;
@@ -48,7 +49,24 @@ export type SessionTranscriptHitIdentity = {
   archived: boolean;
 };
 
-function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: string } {
+function parseTranscriptKey(hitPath: string): { base: string; ownerAgentId?: string } | null {
+  if (!hitPath.startsWith(TRANSCRIPT_KEY_PREFIX)) {
+    return null;
+  }
+  const parts = hitPath.slice(TRANSCRIPT_KEY_PREFIX.length).split(":");
+  const agentId = parts.shift()?.trim();
+  const sessionId = parts.join(":").trim();
+  if (!agentId || !sessionId) {
+    return null;
+  }
+  return { base: sessionId, ownerAgentId: normalizeAgentId(agentId) };
+}
+
+function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: string } | null {
+  const transcriptKey = parseTranscriptKey(hitPath);
+  if (transcriptKey) {
+    return transcriptKey;
+  }
   const normalized = hitPath.replace(/\\/g, "/");
   const fromSessionsRoot = normalized.startsWith("sessions/")
     ? normalized.slice("sessions/".length)
@@ -63,10 +81,9 @@ function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: stri
 }
 
 /**
- * Derive transcript stem `S` from a memory search hit path for `source === "sessions"`.
- * Builtin index uses `sessions/<basename>.jsonl`; QMD exports use `<stem>.md`.
- * Archived transcripts (`.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`) resolve
- * to the same stem as the live `.jsonl` they were rotated from.
+ * Derive transcript stem `S` from a memory search hit key for `source === "sessions"`.
+ * Storage-neutral hits use `transcript:<agent>:<session>`. Legacy file/QMD
+ * paths remain accepted so older session collections stay visibility-gated.
  */
 export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): string | null {
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
@@ -77,7 +94,14 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
   hitPath: string,
 ): SessionTranscriptHitIdentity | null {
   const isQmdPath = hitPath.replace(/\\/g, "/").startsWith("qmd/");
-  const { base, ownerAgentId } = parseSessionsPath(hitPath);
+  const parsed = parseSessionsPath(hitPath);
+  if (!parsed) {
+    return null;
+  }
+  const { base, ownerAgentId } = parsed;
+  if (hitPath.startsWith(TRANSCRIPT_KEY_PREFIX)) {
+    return { stem: base, ownerAgentId, archived: false };
+  }
   const archivedStem = parseUsageCountedSessionIdFromFileName(base);
   if (archivedStem && base !== `${archivedStem}.jsonl`) {
     return { stem: archivedStem, ownerAgentId, archived: true };
@@ -115,12 +139,13 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
  * `createSessionVisibilityGuard`), including cross-agent cases.
  */
 export function resolveTranscriptStemToSessionKeys(params: {
-  store: Record<string, SessionEntry>;
+  store?: Record<string, SessionEntry>;
+  entries?: Record<string, SessionEntry>;
   stem: string;
   archivedOwnerAgentId?: string;
   allowQmdSlugFallback?: boolean;
 }): string[] {
-  const { store } = params;
+  const store = params.entries ?? params.store ?? {};
   const matches: string[] = [];
   const stemAsFile = params.stem.endsWith(".jsonl") ? params.stem : `${params.stem}.jsonl`;
   const parsedStemId = parseUsageCountedSessionIdFromFileName(stemAsFile);
