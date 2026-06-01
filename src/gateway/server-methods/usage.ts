@@ -992,7 +992,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const effectiveAgentId = requestedAllAgents
+    const effectiveAgentId = requestedAllAgents || (!requestedAgentId && !specificKey)
       ? undefined
       : normalizeAgentId(requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config));
     const groupingMode: UsageGroupingMode =

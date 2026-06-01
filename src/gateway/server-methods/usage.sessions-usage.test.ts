@@ -199,22 +199,27 @@ describe("sessions.usage", () => {
     vi.clearAllMocks();
   });
 
-  it("defaults list-style usage queries without agentId to the default agent", async () => {
+  it("returns all agent sessions when no agentId is specified", async () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
     expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      { agentId: "main" },
+      {},
     );
-    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
-    expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
-      "main",
-    );
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
+    expect(
+      vi
+        .mocked(discoverAllSessions)
+        .mock.calls.map((call) => (call[0] as { agentId?: string }).agentId),
+    ).toEqual(["main", "opus"]);
 
     const sessions = expectSuccessfulSessionsUsage(respond);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0].key).toBe("agent:main:s-main");
-    expect(sessions[0].agentId).toBe("main");
+    expect(sessions).toHaveLength(2);
+    expect(sessions.map((session) => session.key)).toEqual([
+      "agent:opus:s-opus",
+      "agent:main:s-main",
+    ]);
+    expect(sessions.map((session) => session.agentId)).toEqual(["opus", "main"]);
   });
 
   it("uses explicit all-agent scope for list-style usage queries", async () => {
@@ -307,7 +312,7 @@ describe("sessions.usage", () => {
       );
     }
 
-    const respondPromise = runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 3 });
+    const respondPromise = runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 3, agentId: "main" });
     await vi.waitFor(() =>
       expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledTimes(3),
     );
