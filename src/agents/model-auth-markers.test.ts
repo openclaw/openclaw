@@ -117,7 +117,7 @@ describe("model auth markers", () => {
     }
   });
 
-  it("reflects plugin-owned non-secret marker changes across calls", async () => {
+  it("keeps plugin-owned non-secret markers stable until plugin metadata is refreshed", async () => {
     let pluginMarkers = ["first-plugin-marker"];
     vi.doMock("../plugins/manifest-metadata-scan.js", () => ({
       listOpenClawPluginManifestMetadata: () => [
@@ -132,9 +132,15 @@ describe("model auth markers", () => {
 
     try {
       const markersModule = await import("./model-auth-markers.js");
+      const lifecycleModule = await import("../plugins/plugin-metadata-lifecycle.js");
       expect(markersModule.isNonSecretApiKeyMarker("first-plugin-marker")).toBe(true);
 
       pluginMarkers = ["second-plugin-marker"];
+
+      expect(markersModule.isNonSecretApiKeyMarker("second-plugin-marker")).toBe(false);
+      expect(markersModule.isNonSecretApiKeyMarker("first-plugin-marker")).toBe(true);
+
+      lifecycleModule.clearPluginMetadataLifecycleCaches();
 
       expect(markersModule.isNonSecretApiKeyMarker("second-plugin-marker")).toBe(true);
       expect(markersModule.isNonSecretApiKeyMarker("first-plugin-marker")).toBe(false);
