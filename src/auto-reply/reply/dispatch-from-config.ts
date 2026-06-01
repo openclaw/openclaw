@@ -206,6 +206,10 @@ function isDispatchReplyOperationAbortedError(
   return error instanceof DispatchReplyOperationAbortedError;
 }
 
+function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
+  return status === "failed" || status === "timeout" || status === "killed";
+}
+
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const activeSignals: AbortSignal[] = [];
   for (const signal of signals) {
@@ -1418,6 +1422,30 @@ export async function dispatchReplyFromConfig(
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: replyOperationStillActive,
           waitTimeoutMs: visibleReplyRecoveryWaitMs,
+        });
+      }
+    }
+    if (
+      admission.status === "skipped" &&
+      admission.reason === "active-run" &&
+      isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status)
+    ) {
+      const cleared = forceClearReplyRunBySessionId(
+        admission.activeOperation?.sessionId ?? operationSessionId,
+        new Error("clearing stale terminal reply operation"),
+      );
+      if (cleared) {
+        logVerbose(
+          `dispatch-from-config: cleared stale active reply operation for terminal session ${dispatchOperationSessionKey}`,
+        );
+        admission = await admitReplyTurn({
+          sessionKey: dispatchOperationSessionKey,
+          sessionId: operationSessionId,
+          kind: replyTurnKind,
+          resetTriggered: false,
+          routeThreadId,
+          upstreamAbortSignal: params.replyOptions?.abortSignal,
+          waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
         });
       }
     }

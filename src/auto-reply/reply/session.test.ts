@@ -2157,13 +2157,14 @@ describe("initSessionState reset policy", () => {
       expectNewSession: true,
     },
     {
-      name: "failed main terminal rows reuse when the transcript exists",
+      name: "failed main terminal rows recover on visible turns when the transcript exists",
       sessionKey: "agent:main:main",
       status: "failed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
       transcriptMtimeOffsetMs: 0,
       expectNewSession: false,
+      expectRecovered: true,
     },
     {
       name: "main terminal rows reuse when updatedAt already reflects the transcript",
@@ -2228,11 +2229,70 @@ describe("initSessionState reset policy", () => {
       expect(entry?.startedAt).toBeUndefined();
       expect(entry?.endedAt).toBeUndefined();
       expect(entry?.runtimeMs).toBeUndefined();
+    } else if (scenario.expectRecovered) {
+      // Visible turns recover recoverable terminal rows in place: the session id
+      // is reused, but the terminal lifecycle fields are cleared (#86827).
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(entry?.status).toBeUndefined();
+      expect(entry?.startedAt).toBeUndefined();
+      expect(entry?.endedAt).toBeUndefined();
+      expect(entry?.runtimeMs).toBeUndefined();
     } else {
       expect(result.sessionId).toBe(existingSessionId);
       expect(entry?.status).toBe(scenario.status ?? "done");
       expect(entry?.endedAt).toBe(terminalEndedAt);
     }
+  });
+
+  it("recovers failed group sessions without rotating the transcript", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-failed-entry-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1001";
+    const existingSessionId = "failed-entry-old";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        startedAt: Date.now() - 10_000,
+        endedAt: Date.now() - 1_000,
+        runtimeMs: 9_000,
+        status: "failed",
+        abortedLastRun: true,
+        chatType: "group",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "@openclaw hello",
+        RawBody: "@openclaw hello",
+        CommandBody: "@openclaw hello",
+        SessionKey: sessionKey,
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "openclaw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.abortedLastRun).toBe(false);
+    expect(result.sessionEntry.abortedLastRun).toBeUndefined();
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
+    expect(persisted[sessionKey]?.status).toBeUndefined();
+    expect(persisted[sessionKey]?.startedAt).toBeUndefined();
+    expect(persisted[sessionKey]?.endedAt).toBeUndefined();
+    expect(persisted[sessionKey]?.runtimeMs).toBeUndefined();
+    expect(persisted[sessionKey]?.abortedLastRun).toBeUndefined();
   });
 
   it("keeps the existing stale session for /reset soft", async () => {

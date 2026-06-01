@@ -8,11 +8,16 @@ import {
   createDiagnosticTraceContextFromActiveScope,
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
-import { EMPTY_CHANNEL_TURN_DISPATCH_COUNTS } from "./dispatch-result.js";
+import {
+  EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+  resolveChannelTurnDispatchCounts,
+  type ChannelTurnDispatchResultLike,
+} from "./dispatch-result.js";
 import {
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
@@ -100,6 +105,7 @@ const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   kind: "message",
   canStartAgentTurn: true,
 };
+const log = createSubsystemLogger("channels/turn/kernel");
 
 /**
  * @deprecated Compatibility assembly for legacy buffered reply dispatchers.
@@ -266,6 +272,53 @@ function resolveObserveOnlyDispatchResult<TDispatchResult>(
     queuedFinal: false,
     counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
   }) as TDispatchResult;
+}
+
+function isSystemChannelTurn(ctx: FinalizedMsgContext): boolean {
+  return (
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event"
+  );
+}
+
+function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
+  params: Pick<
+    PreparedChannelTurn<TDispatchResult>,
+    "admission" | "channel" | "ctxPayload" | "messageId" | "routeSessionKey"
+  > & {
+    dispatchResult: TDispatchResult;
+    log?: (event: ChannelTurnLogEvent) => void;
+  },
+): void {
+  if (params.admission?.kind === "observeOnly" || isSystemChannelTurn(params.ctxPayload)) {
+    return;
+  }
+  const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;
+  const counts = resolveChannelTurnDispatchCounts(dispatchResult);
+  if (
+    dispatchResult?.queuedFinal === true ||
+    counts.tool > 0 ||
+    counts.block > 0 ||
+    counts.final > 0
+  ) {
+    return;
+  }
+  log.warn(
+    `visible channel turn dispatched with no queued reply payloads: channel=${params.channel} ` +
+      `messageId=${params.messageId ?? "unknown"} sessionKey=${
+        params.ctxPayload.SessionKey ?? params.routeSessionKey
+      }`,
+  );
+  emit({
+    ...params,
+    event: {
+      stage: "dispatch",
+      event: "warning",
+      messageId: params.messageId,
+      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      admission: params.admission?.kind ?? "dispatch",
+      reason: "zero-count-visible-dispatch",
+    },
+  });
 }
 
 function isExplicitlyNonVisibleChannelDelivery(result: unknown): boolean {
@@ -549,6 +602,11 @@ async function runPreparedChannelTurnCoreInTrace<
       options.suppressObserveOnlyDispatch && admission.kind === "observeOnly"
         ? resolveObserveOnlyDispatchResult(params)
         : await params.runDispatch();
+    maybeWarnZeroCountVisibleDispatch({
+      ...params,
+      admission,
+      dispatchResult,
+    });
   } catch (err) {
     emit({
       ...params,

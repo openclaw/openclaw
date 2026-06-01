@@ -1713,6 +1713,50 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
+  it("clears stale active reply operations for terminal sessions and retries admission", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:group:-1003774691294";
+    const sessionId = "failed-session";
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      status: "failed",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "fresh reply" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        MessageSid: "visible-after-failure",
+        To: "telegram:-1003774691294",
+        BodyForAgent: "@openclaw recover",
+      }),
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(activeOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
+  });
+
   it("routes when OriginatingChannel differs from Provider", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
