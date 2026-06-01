@@ -847,11 +847,11 @@ describe("bundled plugin install/uninstall probe", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      `admin-http-rpc\tadmin-http-rpc\t1\t${path.join(root, "dist-runtime", "extensions", "admin-http-rpc")}`,
+      `admin-http-rpc\tadmin-http-rpc\t1\t1\t${path.join(root, "dist-runtime", "extensions", "admin-http-rpc")}`,
     );
   });
 
-  it("treats channel env vars as runtime smoke config requirements", () => {
+  it("treats channel env vars as runtime smoke config requirements only", () => {
     const root = makePackageRoot();
     writePluginManifest(root, "dist-runtime/extensions/clickclack", {
       id: "clickclack",
@@ -869,7 +869,7 @@ describe("bundled plugin install/uninstall probe", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      `clickclack\tclickclack\t1\t${path.join(root, "dist-runtime", "extensions", "clickclack")}`,
+      `clickclack\tclickclack\t0\t1\t${path.join(root, "dist-runtime", "extensions", "clickclack")}`,
     );
   });
 

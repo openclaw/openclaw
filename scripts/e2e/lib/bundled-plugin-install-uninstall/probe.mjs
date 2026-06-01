@@ -101,23 +101,26 @@ function readPluginsList() {
   return Array.isArray(payload.plugins) ? payload.plugins : [];
 }
 
-function pluginRequiresConfig(pluginDir) {
+function pluginConfigRequirements(pluginDir) {
   const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
   if (!fs.existsSync(manifestPath)) {
     throw new Error(`missing bundled plugin manifest: ${manifestPath}`);
   }
   const manifest = readJson(manifestPath);
   const required = manifest.configSchema?.required;
-  if (Array.isArray(required) && required.some((value) => typeof value === "string")) {
-    return true;
-  }
+  const installRequiresConfig =
+    Array.isArray(required) && required.some((value) => typeof value === "string");
   const channelEnvVars =
     manifest.channelEnvVars && typeof manifest.channelEnvVars === "object"
       ? Object.values(manifest.channelEnvVars)
       : [];
-  return channelEnvVars.some(
+  const runtimeRequiresConfig = channelEnvVars.some(
     (envVars) => Array.isArray(envVars) && envVars.some((value) => typeof value === "string"),
   );
+  return {
+    installRequiresConfig,
+    runtimeRequiresConfig: installRequiresConfig || runtimeRequiresConfig,
+  };
 }
 
 async function loadPackagedBundledEntries() {
@@ -135,7 +138,7 @@ async function loadPackagedBundledEntries() {
         id,
         dir: path.basename(pluginDir),
         rootDir: pluginDir,
-        requiresConfig: pluginRequiresConfig(pluginDir),
+        ...pluginConfigRequirements(pluginDir),
       };
     })
     .filter(Boolean)
@@ -257,7 +260,9 @@ function assertUninstalled(pluginId, pluginDir) {
 const [command, pluginId, pluginDir, requiresConfig] = process.argv.slice(2);
 if (command === "select") {
   for (const entry of await selectedManifestEntries()) {
-    console.log(`${entry.id}\t${entry.dir}\t${entry.requiresConfig ? "1" : "0"}\t${entry.rootDir}`);
+    console.log(
+      `${entry.id}\t${entry.dir}\t${entry.installRequiresConfig ? "1" : "0"}\t${entry.runtimeRequiresConfig ? "1" : "0"}\t${entry.rootDir}`,
+    );
   }
 } else if (command === "assert-installed") {
   assertInstalled(pluginId, pluginDir, requiresConfig === "1");
