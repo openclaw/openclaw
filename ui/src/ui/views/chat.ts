@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -21,6 +22,7 @@ import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
+  getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
@@ -520,6 +522,27 @@ function buildCachedChatItems(input: BuildChatItemsProps): ReturnType<typeof bui
   cached.input = input;
   cached.items = items;
   return items;
+}
+
+function deletedChatItemsSignature(
+  deleted: DeletedMessages,
+  chatItems: ReturnType<typeof buildChatItems>,
+): string {
+  const deletedKeys = chatItems
+    .map((item) => item.key)
+    .filter((key) => deleted.has(key))
+    .toSorted();
+  return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
+}
+
+function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>): string {
+  if (values.size === 0) {
+    return "";
+  }
+  return Array.from(values)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value ? "1" : "0"}`)
+    .join("\u0000");
 }
 
 /**
@@ -1377,6 +1400,8 @@ export function renderChat(props: ChatProps) {
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
+  const threadContextWindow =
+    activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
 
   const thread = html`
     <div
@@ -1430,104 +1455,129 @@ export function renderChat(props: ChatProps) {
         ${isEmpty && vs.searchOpen
           ? html` <div class="agent-chat__empty">No matching messages</div> `
           : nothing}
-        ${repeat(
-          chatItems,
-          (item) => item.key,
-          (item) => {
-            if (item.kind === "divider") {
-              return html`
-                <div class="chat-divider" data-ts=${String(item.timestamp)}>
-                  <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
-                    <span class="chat-divider__line"></span>
-                    <span class="chat-divider__label">${item.label}</span>
-                    <span class="chat-divider__line"></span>
-                  </div>
-                  ${item.description || item.action
-                    ? html`
-                        <div class="chat-divider__details">
-                          ${item.description
-                            ? html`<span class="chat-divider__description">
-                                ${item.description}
-                              </span>`
-                            : nothing}
-                          ${item.action?.kind === "session-checkpoints" &&
-                          props.onOpenSessionCheckpoints
-                            ? html`
-                                <button
-                                  type="button"
-                                  class="btn btn--subtle btn--sm chat-divider__action"
-                                  @click=${() => props.onOpenSessionCheckpoints?.()}
-                                >
-                                  ${item.action.label}
-                                </button>
-                              `
-                            : nothing}
-                        </div>
-                      `
-                    : nothing}
-                </div>
-              `;
-            }
-            if (item.kind === "reading-indicator") {
-              return renderReadingIndicatorGroup(
-                assistantIdentity,
-                props.basePath,
-                props.assistantAttachmentAuthToken ?? null,
-              );
-            }
-            if (item.kind === "stream") {
-              return renderStreamingGroup(
-                item.text,
-                item.startedAt,
-                item.isStreaming,
-                props.onOpenSidebar,
-                assistantIdentity,
-                props.basePath,
-                props.assistantAttachmentAuthToken ?? null,
-              );
-            }
-            if (item.kind === "group") {
-              if (deleted.has(item.key)) {
-                return nothing;
-              }
-              return renderMessageGroup(item, {
-                onOpenSidebar: props.onOpenSidebar,
-                sessionKey: props.sessionKey,
-                agentId: props.fullMessageAgentId,
-                showReasoning,
-                showToolCalls: props.showToolCalls,
-                autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
-                isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
-                onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
-                  expandedToolCards.set(
-                    messageId,
-                    !(expanded ?? expandedToolCards.get(messageId) ?? false),
+        ${guard(
+          [
+            chatItems,
+            deletedChatItemsSignature(deleted, chatItems),
+            stableBooleanMapSignature(expandedToolCards),
+            getAssistantAttachmentAvailabilityRenderVersion(),
+            props.sessionKey,
+            props.fullMessageAgentId,
+            showReasoning,
+            props.showToolCalls,
+            Boolean(props.autoExpandToolCalls),
+            props.assistantName,
+            assistantIdentity.avatar,
+            props.userName,
+            props.userAvatar,
+            props.basePath,
+            (props.localMediaPreviewRoots ?? []).join("\u0000"),
+            props.assistantAttachmentAuthToken,
+            props.canvasPluginSurfaceUrl,
+            props.embedSandboxMode ?? "scripts",
+            props.allowExternalEmbedUrls ?? false,
+            threadContextWindow,
+          ],
+          () =>
+            repeat(
+              chatItems,
+              (item) => item.key,
+              (item) => {
+                if (item.kind === "divider") {
+                  return html`
+                    <div class="chat-divider" data-ts=${String(item.timestamp)}>
+                      <div class="chat-divider__rule" role="separator" aria-label=${item.label}>
+                        <span class="chat-divider__line"></span>
+                        <span class="chat-divider__label">${item.label}</span>
+                        <span class="chat-divider__line"></span>
+                      </div>
+                      ${item.description || item.action
+                        ? html`
+                            <div class="chat-divider__details">
+                              ${item.description
+                                ? html`<span class="chat-divider__description">
+                                    ${item.description}
+                                  </span>`
+                                : nothing}
+                              ${item.action?.kind === "session-checkpoints" &&
+                              props.onOpenSessionCheckpoints
+                                ? html`
+                                    <button
+                                      type="button"
+                                      class="btn btn--subtle btn--sm chat-divider__action"
+                                      @click=${() => props.onOpenSessionCheckpoints?.()}
+                                    >
+                                      ${item.action.label}
+                                    </button>
+                                  `
+                                : nothing}
+                            </div>
+                          `
+                        : nothing}
+                    </div>
+                  `;
+                }
+                if (item.kind === "reading-indicator") {
+                  return renderReadingIndicatorGroup(
+                    assistantIdentity,
+                    props.basePath,
+                    props.assistantAttachmentAuthToken ?? null,
                   );
-                  requestUpdate();
-                },
-                isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
-                onToggleToolExpanded: toggleToolCardExpanded,
-                onRequestUpdate: requestUpdate,
-                assistantName: props.assistantName,
-                assistantAvatar: assistantIdentity.avatar,
-                userName: props.userName ?? null,
-                userAvatar: props.userAvatar ?? null,
-                basePath: props.basePath,
-                localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
-                assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-                embedSandboxMode: props.embedSandboxMode ?? "scripts",
-                allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
-                contextWindow:
-                  activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
-                onDelete: () => {
-                  deleted.delete(item.key);
-                  requestUpdate();
-                },
-              });
-            }
-            return nothing;
-          },
+                }
+                if (item.kind === "stream") {
+                  return renderStreamingGroup(
+                    item.text,
+                    item.startedAt,
+                    item.isStreaming,
+                    props.onOpenSidebar,
+                    assistantIdentity,
+                    props.basePath,
+                    props.assistantAttachmentAuthToken ?? null,
+                  );
+                }
+                if (item.kind === "group") {
+                  if (deleted.has(item.key)) {
+                    return nothing;
+                  }
+                  return renderMessageGroup(item, {
+                    onOpenSidebar: props.onOpenSidebar,
+                    sessionKey: props.sessionKey,
+                    agentId: props.fullMessageAgentId,
+                    showReasoning,
+                    showToolCalls: props.showToolCalls,
+                    autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
+                    isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
+                    onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
+                      expandedToolCards.set(
+                        messageId,
+                        !(expanded ?? expandedToolCards.get(messageId) ?? false),
+                      );
+                      requestUpdate();
+                    },
+                    isToolExpanded: (toolCardId: string) =>
+                      expandedToolCards.get(toolCardId) ?? false,
+                    onToggleToolExpanded: toggleToolCardExpanded,
+                    onRequestUpdate: requestUpdate,
+                    assistantName: props.assistantName,
+                    assistantAvatar: assistantIdentity.avatar,
+                    userName: props.userName ?? null,
+                    userAvatar: props.userAvatar ?? null,
+                    basePath: props.basePath,
+                    localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+                    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+                    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+                    embedSandboxMode: props.embedSandboxMode ?? "scripts",
+                    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+                    contextWindow: threadContextWindow,
+                    onDelete: () => {
+                      deleted.delete(item.key);
+                      requestUpdate();
+                    },
+                  });
+                }
+                return nothing;
+              },
+            ),
         )}
         ${renderRealtimeTalkConversation(props)}
       </div>

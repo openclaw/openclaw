@@ -100,6 +100,26 @@ const buildChatItemsMock = vi.hoisted(() =>
     return [];
   }),
 );
+const renderMessageGroupMock = vi.hoisted(() =>
+  vi.fn((group: { messages: Array<{ message: unknown }> }) => {
+    const element = document.createElement("div");
+    element.className = "chat-group";
+    element.textContent = group.messages
+      .map(({ message }) => {
+        if (typeof message === "object" && message !== null && "content" in message) {
+          const content = (message as { content?: unknown }).content;
+          if (typeof content === "string") {
+            return content;
+          }
+          return content == null ? "" : JSON.stringify(content);
+        }
+        return String(message);
+      })
+      .join("\n");
+    return element;
+  }),
+);
+const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
 
 function requireFirstAttachmentsChange(
   onAttachmentsChange: ReturnType<typeof vi.fn>,
@@ -124,23 +144,8 @@ vi.mock("../chat/build-chat-items.ts", () => ({
 }));
 
 vi.mock("../chat/grouped-render.ts", () => ({
-  renderMessageGroup: (group: { messages: Array<{ message: unknown }> }) => {
-    const element = document.createElement("div");
-    element.className = "chat-group";
-    element.textContent = group.messages
-      .map(({ message }) => {
-        if (typeof message === "object" && message !== null && "content" in message) {
-          const content = (message as { content?: unknown }).content;
-          if (typeof content === "string") {
-            return content;
-          }
-          return content == null ? "" : JSON.stringify(content);
-        }
-        return String(message);
-      })
-      .join("\n");
-    return element;
-  },
+  getAssistantAttachmentAvailabilityRenderVersion: () => assistantAttachmentRenderVersionMock.value,
+  renderMessageGroup: renderMessageGroupMock,
   renderReadingIndicatorGroup: () => {
     const element = document.createElement("div");
     element.className = "chat-reading-indicator";
@@ -490,84 +495,87 @@ function clickTalkSelectOption(container: Element, name: string, value: string):
   option.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 }
 
+function createChatProps(
+  overrides: Partial<Parameters<typeof renderChat>[0]> = {},
+): Parameters<typeof renderChat>[0] {
+  return {
+    sessionKey: "main",
+    onSessionKeyChange: () => undefined,
+    thinkingLevel: null,
+    showThinking: false,
+    showToolCalls: true,
+    loading: false,
+    sending: false,
+    compactionStatus: null,
+    fallbackStatus: null,
+    messages: [],
+    sideResult: null,
+    toolMessages: [],
+    streamSegments: [],
+    stream: null,
+    streamStartedAt: null,
+    assistantAvatarUrl: null,
+    draft: "",
+    queue: [],
+    realtimeTalkActive: false,
+    realtimeTalkStatus: "idle",
+    realtimeTalkDetail: null,
+    realtimeTalkTranscript: null,
+    connected: true,
+    canSend: true,
+    disabledReason: null,
+    error: null,
+    sessions: null,
+    sidebarOpen: false,
+    sidebarContent: null,
+    sidebarError: null,
+    splitRatio: 0.6,
+    canvasPluginSurfaceUrl: null,
+    embedSandboxMode: "scripts",
+    allowExternalEmbedUrls: false,
+    assistantName: "Val",
+    assistantAvatar: null,
+    userName: null,
+    userAvatar: null,
+    localMediaPreviewRoots: [],
+    assistantAttachmentAuthToken: null,
+    autoExpandToolCalls: false,
+    attachments: [],
+    onAttachmentsChange: () => undefined,
+    showNewMessages: false,
+    onScrollToBottom: () => undefined,
+    onRefresh: () => undefined,
+    getDraft: () => "",
+    onDraftChange: () => undefined,
+    onRequestUpdate: () => undefined,
+    onSend: () => undefined,
+    onCompact: () => undefined,
+    onToggleRealtimeTalk: () => undefined,
+    onDismissError: () => undefined,
+    onAbort: () => undefined,
+    onQueueRemove: () => undefined,
+    onQueueSteer: () => undefined,
+    onDismissSideResult: () => undefined,
+    onNewSession: () => undefined,
+    onClearHistory: () => undefined,
+    onOpenSessionCheckpoints: () => undefined,
+    agentsList: null,
+    currentAgentId: "main",
+    onAgentChange: () => undefined,
+    onNavigateToAgent: () => undefined,
+    onSessionSelect: () => undefined,
+    onOpenSidebar: () => undefined,
+    onCloseSidebar: () => undefined,
+    onSplitRatioChange: () => undefined,
+    onChatScroll: () => undefined,
+    basePath: "",
+    ...overrides,
+  };
+}
+
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
   const container = document.createElement("div");
-  render(
-    renderChat({
-      sessionKey: "main",
-      onSessionKeyChange: () => undefined,
-      thinkingLevel: null,
-      showThinking: false,
-      showToolCalls: true,
-      loading: false,
-      sending: false,
-      compactionStatus: null,
-      fallbackStatus: null,
-      messages: [],
-      sideResult: null,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      assistantAvatarUrl: null,
-      draft: "",
-      queue: [],
-      realtimeTalkActive: false,
-      realtimeTalkStatus: "idle",
-      realtimeTalkDetail: null,
-      realtimeTalkTranscript: null,
-      connected: true,
-      canSend: true,
-      disabledReason: null,
-      error: null,
-      sessions: null,
-      sidebarOpen: false,
-      sidebarContent: null,
-      sidebarError: null,
-      splitRatio: 0.6,
-      canvasPluginSurfaceUrl: null,
-      embedSandboxMode: "scripts",
-      allowExternalEmbedUrls: false,
-      assistantName: "Val",
-      assistantAvatar: null,
-      userName: null,
-      userAvatar: null,
-      localMediaPreviewRoots: [],
-      assistantAttachmentAuthToken: null,
-      autoExpandToolCalls: false,
-      attachments: [],
-      onAttachmentsChange: () => undefined,
-      showNewMessages: false,
-      onScrollToBottom: () => undefined,
-      onRefresh: () => undefined,
-      getDraft: () => "",
-      onDraftChange: () => undefined,
-      onRequestUpdate: () => undefined,
-      onSend: () => undefined,
-      onCompact: () => undefined,
-      onToggleRealtimeTalk: () => undefined,
-      onDismissError: () => undefined,
-      onAbort: () => undefined,
-      onQueueRemove: () => undefined,
-      onQueueSteer: () => undefined,
-      onDismissSideResult: () => undefined,
-      onNewSession: () => undefined,
-      onClearHistory: () => undefined,
-      onOpenSessionCheckpoints: () => undefined,
-      agentsList: null,
-      currentAgentId: "main",
-      onAgentChange: () => undefined,
-      onNavigateToAgent: () => undefined,
-      onSessionSelect: () => undefined,
-      onOpenSidebar: () => undefined,
-      onCloseSidebar: () => undefined,
-      onSplitRatioChange: () => undefined,
-      onChatScroll: () => undefined,
-      basePath: "",
-      ...overrides,
-    }),
-    container,
-  );
+  render(renderChat(createChatProps(overrides)), container);
   return container;
 }
 
@@ -673,6 +681,8 @@ describe("chat composer workbench", () => {
 afterEach(() => {
   vi.useRealTimers();
   buildChatItemsMock.mockClear();
+  renderMessageGroupMock.mockClear();
+  assistantAttachmentRenderVersionMock.value = 0;
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatViewState();
@@ -692,6 +702,51 @@ describe("chat transcript rendering cache", () => {
     renderChatView({ messages, toolMessages, streamSegments, queue, draft: "hello" });
 
     expect(buildChatItemsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rerender transcript groups for draft-only rerenders", () => {
+    const messages = [{ role: "assistant", content: "ready" }];
+    const toolMessages: unknown[] = [];
+    const streamSegments: Array<{ text: string; ts: number }> = [];
+    const queue: ChatQueueItem[] = [];
+    const container = document.createElement("div");
+
+    render(
+      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue })),
+      container,
+    );
+    render(
+      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue, draft: "h" })),
+      container,
+    );
+    render(
+      renderChat(
+        createChatProps({ messages, toolMessages, streamSegments, queue, draft: "hello" }),
+      ),
+      container,
+    );
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rerenders transcript groups when assistant attachment availability changes", () => {
+    const messages = [{ role: "assistant", content: "ready" }];
+    const toolMessages: unknown[] = [];
+    const streamSegments: Array<{ text: string; ts: number }> = [];
+    const queue: ChatQueueItem[] = [];
+    const container = document.createElement("div");
+
+    render(
+      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue })),
+      container,
+    );
+    assistantAttachmentRenderVersionMock.value += 1;
+    render(
+      renderChat(createChatProps({ messages, toolMessages, streamSegments, queue, draft: "h" })),
+      container,
+    );
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
   });
 
   it("rebuilds transcript items when the transcript reference changes", () => {
