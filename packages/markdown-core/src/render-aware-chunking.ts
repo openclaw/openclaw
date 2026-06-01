@@ -30,6 +30,7 @@ function resolveIntegerOption(value: number, fallback: number, opts: { min: numb
   return Math.max(opts.min, Math.trunc(value));
 }
 
+/** Chunks Markdown IR by rendered size while preserving styles, links, and whitespace. */
 export function renderMarkdownIRChunksWithinLimit<TRendered>(
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
 ): RenderedMarkdownChunk<TRendered>[] {
