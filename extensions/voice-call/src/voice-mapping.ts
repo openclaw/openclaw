@@ -31,7 +31,7 @@ export const DEFAULT_POLLY_VOICE = "Polly.Joanna";
 
 /**
  * Map OpenAI voice names to Twilio Polly equivalents.
- * Falls through if already a valid Polly/Google voice.
+ * OpenAI aliases are case-insensitive; Polly/Google provider voice ids pass through unchanged.
  *
  * @param voice - OpenAI voice name (alloy, echo, etc.) or Polly voice name
  * @returns Polly voice name suitable for Twilio TwiML
@@ -41,7 +41,7 @@ export function mapVoiceToPolly(voice: string | undefined): string {
     return DEFAULT_POLLY_VOICE;
   }
 
-  // Already a Polly/Google voice - pass through
+  // Preserve provider-qualified voice ids exactly; TwiML voice names are provider-owned strings.
   if (voice.startsWith("Polly.") || voice.startsWith("Google.")) {
     return voice;
   }
