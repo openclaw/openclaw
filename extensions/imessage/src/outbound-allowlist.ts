@@ -10,6 +10,7 @@ import {
   type IMessageTarget,
   resolveIMessageDirectChatHandle,
   normalizeIMessageHandle,
+  parseIMessageAllowTarget,
 } from "./targets.js";
 
 function normalizeIMessageOutboundAllowValue(raw: string | number | null | undefined): string {
@@ -74,6 +75,22 @@ function isIMessageOutboundAllowlisted(params: {
     params.allowFrom.map(normalizeIMessageOutboundAllowValue).filter(Boolean),
   );
   return allowed.has("*") || allowed.has(params.normalizedTarget);
+}
+
+function isIMessageConversationAllowTarget(entry: string | number): boolean {
+  const parsed = parseIMessageAllowTarget(String(entry));
+  return (
+    parsed.kind === "chat_id" || parsed.kind === "chat_guid" || parsed.kind === "chat_identifier"
+  );
+}
+
+function resolveIMessageOutboundGroupAllowFrom(
+  account: ResolvedIMessageAccount,
+): Array<string | number> {
+  if (account.config.groupAllowFrom !== undefined) {
+    return [...account.config.groupAllowFrom];
+  }
+  return [...(account.config.allowFrom ?? []).filter(isIMessageConversationAllowTarget)];
 }
 
 function getIMessageConversationFacts(
@@ -175,9 +192,7 @@ export async function assertIMessageOutboundAllowed(params: {
       return;
     }
     const normalizedTarget = normalizeIMessageOutboundTarget(target);
-    const configuredGroupAllowFrom = [
-      ...(account.config.groupAllowFrom ?? account.config.allowFrom ?? []),
-    ];
+    const configuredGroupAllowFrom = resolveIMessageOutboundGroupAllowFrom(account);
     const allowFrom = await expandIMessageOutboundAllowFrom({
       cfg,
       account,

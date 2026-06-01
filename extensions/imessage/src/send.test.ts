@@ -167,6 +167,28 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
+  it("does not use DM allowFrom wildcard entries as group allowlist fallback", async () => {
+    const client = createClient({ guid: "p:0/group-dm-wildcard" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            defaults: {
+              groupPolicy: "allowlist",
+            },
+            imessage: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: channels.imessage.groupAllowFrom is empty");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
   it("does not fall back to legacy allowFrom when groupAllowFrom is explicitly empty", async () => {
     const client = createClient({ guid: "p:0/group-empty-explicit" });
 
