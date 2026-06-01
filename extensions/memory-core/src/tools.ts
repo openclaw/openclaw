@@ -18,6 +18,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { asRecord } from "./dreaming-shared.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -107,6 +108,11 @@ async function runMemorySearchToolWithDeadline<T>(params: {
       clearTimeout(timer);
     }
   }
+}
+
+function isPausedMemoryIndexIdentity(status: { custom?: unknown }): boolean {
+  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  return indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing";
 }
 
 function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
@@ -447,7 +453,11 @@ export function createMemorySearchTool(options: {
                   activeMemory = refreshed;
                   rawResults = await activeMemory.manager.search(query, searchOptions);
                 }
-                if (rawResults.length === 0 && activeMemory.manager.sync) {
+                if (
+                  rawResults.length === 0 &&
+                  activeMemory.manager.sync &&
+                  !isPausedMemoryIndexIdentity(activeMemory.manager.status())
+                ) {
                   await activeMemory.manager.sync({ reason: "search", force: true });
                   rawResults = await activeMemory.manager.search(query, searchOptions);
                 }
