@@ -162,10 +162,15 @@ export async function sendMessageMSTeams(
     ref,
     log,
     conversationType,
+    replyStyle,
     tokenProvider,
     sharePointSiteId,
     sdkCloudOptions,
   } = ctx;
+
+  const isChannel = conversationType === "channel";
+  const threadActivityId =
+    isChannel && replyStyle === "thread" ? (ref.threadId ?? ref.activityId) : undefined;
 
   log.debug?.("sending proactive message", {
     conversationId,
@@ -308,6 +313,7 @@ export async function sendMessageMSTeams(
           ref,
           activity,
           serviceUrlBoundary: sdkCloudOptions,
+          threadActivityId,
         });
 
         log.info("sent native file card", {
@@ -352,6 +358,7 @@ export async function sendMessageMSTeams(
         ref,
         activity,
         serviceUrlBoundary: sdkCloudOptions,
+        threadActivityId,
       });
 
       log.info("sent message with OneDrive file link", {
@@ -449,16 +456,20 @@ type ProactiveActivityParams = {
   serviceUrlBoundary: MSTeamsProactiveContext["sdkCloudOptions"];
 };
 
-type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix">;
+type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix"> & {
+  threadActivityId?: string;
+};
 
 async function sendProactiveActivityRaw({
   app,
   ref,
   activity,
   serviceUrlBoundary,
+  threadActivityId,
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
   const response = await sendMSTeamsActivityWithReference(app, baseRef, activity, {
+    threadActivityId,
     serviceUrlBoundary,
   });
   return extractMessageId(response) ?? "unknown";

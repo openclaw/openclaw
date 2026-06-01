@@ -382,6 +382,95 @@ describe("sendMessageMSTeams", () => {
     expect(firstObjectArg(mockState.sendMSTeamsMessages).replyStyle).toBe("top-level");
   });
 
+  it("routes SharePoint file card sends to the channel thread when replyStyle is thread", async () => {
+    const threadRootId = "thread-root-message-1";
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: {},
+      appId: "app-id",
+      conversationId: "19:channel@thread.tacv2",
+      ref: {
+        threadId: threadRootId,
+        activityId: "activity-1",
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "channel",
+      replyStyle: "thread",
+      sdkCloudOptions: { cloud: "Public" },
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024 * 1024,
+      sharePointSiteId: "site-123",
+    });
+    mockSharePointPdfUpload({
+      bufferSize: 100,
+      fileName: "doc.pdf",
+      itemId: "item-1",
+      uniqueId: "{GUID-123}",
+    });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "here is a file",
+      mediaUrl: "https://example.com/doc.pdf",
+    });
+
+    // The SharePoint file card send must include threadActivityId for thread routing.
+    expect(mockState.sendMSTeamsActivityWithReference).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        threadActivityId: threadRootId,
+      }),
+    );
+  });
+
+  it("routes OneDrive fallback file sends to the channel thread when replyStyle is thread", async () => {
+    const threadRootId = "thread-root-message-2";
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: {},
+      appId: "app-id",
+      conversationId: "19:channel@thread.tacv2",
+      ref: {
+        threadId: threadRootId,
+        activityId: "activity-2",
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "channel",
+      replyStyle: "thread",
+      sdkCloudOptions: { cloud: "Public" },
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024 * 1024,
+      sharePointSiteId: undefined, // No SharePoint → falls back to OneDrive
+    });
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.alloc(100, "pdf"),
+      contentType: "application/pdf",
+      fileName: "doc.pdf",
+      kind: "file",
+    });
+    mockState.requiresFileConsent.mockReturnValue(false);
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "here is a file",
+      mediaUrl: "https://example.com/doc.pdf",
+    });
+
+    // The OneDrive fallback send must include threadActivityId for thread routing.
+    expect(mockState.sendMSTeamsActivityWithReference).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        threadActivityId: threadRootId,
+      }),
+    );
+  });
+
   it("uses graphChatId instead of conversationId when uploading to SharePoint", async () => {
     // Simulates a group chat where Bot Framework conversationId is valid but we have
     // a resolved Graph chat ID cached from a prior send.
