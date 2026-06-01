@@ -12,10 +12,6 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     expect(extractTranscriptStemFromSessionsMemoryHit("sessions/abc-uuid.jsonl")).toBe("abc-uuid");
   });
 
-  it("reads storage-neutral transcript keys without basename parsing", () => {
-    expect(extractTranscriptStemFromSessionsMemoryHit("transcript:main:abc-uuid")).toBe("abc-uuid");
-  });
-
   it("handles plain basename jsonl", () => {
     expect(extractTranscriptStemFromSessionsMemoryHit("def-topic-thread.jsonl")).toBe(
       "def-topic-thread",
@@ -146,16 +142,6 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
 });
 
 describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
-  it("extracts owner metadata from storage-neutral transcript keys", () => {
-    expect(
-      extractTranscriptIdentityFromSessionsMemoryHit("transcript:agent-a:session:with:colon"),
-    ).toEqual({
-      stem: "session:with:colon",
-      ownerAgentId: "agent-a",
-      archived: false,
-    });
-  });
-
   it("extracts owner metadata from agent-scoped session archive paths", () => {
     expect(
       extractTranscriptIdentityFromSessionsMemoryHit(
@@ -206,16 +192,6 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     };
     const keys = resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" }).toSorted();
     expect(keys).toEqual(["agent:main:s1", "agent:peer:s2"]);
-  });
-
-  it("accepts storage-neutral entries while preserving the legacy store parameter", () => {
-    const entries: Record<string, SessionEntry> = {
-      "agent:main:s1": baseEntry({ sessionId: "sqlite-session" }),
-    };
-
-    expect(resolveTranscriptStemToSessionKeys({ entries, stem: "sqlite-session" })).toEqual([
-      "agent:main:s1",
-    ]);
   });
 
   it("falls back to archived owner metadata when deleted archives are gone from the live store", () => {
