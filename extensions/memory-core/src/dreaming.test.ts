@@ -1736,6 +1736,8 @@ describe("gateway startup reconciliation", () => {
         getCron: () => undefined,
       });
 
+      expectLogContains(logger.debug, "cron service not yet available at gateway_start");
+
       await vi.advanceTimersByTimeAsync(
         constants.STARTUP_CRON_RETRY_DELAY_MS * (constants.STARTUP_CRON_RETRY_MAX_ATTEMPTS - 1),
       );
