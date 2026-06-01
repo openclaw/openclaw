@@ -32,6 +32,7 @@ type LookupCallback = (
 type LookupResult = LookupAddress | LookupAddress[];
 const DISPATCHER_CLOSE_TIMEOUT_MS = 100;
 
+/** Error type used when SSRF policy rejects a hostname, IP literal, or DNS answer. */
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
     super(message);
@@ -41,6 +42,7 @@ export class SsrFBlockedError extends Error {
 
 export type LookupFn = typeof dnsLookup;
 
+/** Policy knobs for trusted private-network exceptions and hostname/origin scoping. */
 export type SsrFPolicy = {
   allowPrivateNetwork?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
@@ -85,6 +87,7 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
   };
 }
 
+/** Compare policies by normalized security semantics, ignoring ordering and duplicates. */
 export function isSameSsrFPolicy(a?: SsrFPolicy, b?: SsrFPolicy): boolean {
   return (
     JSON.stringify(normalizeSsrFPolicyForComparison(a)) ===
@@ -92,6 +95,7 @@ export function isSameSsrFPolicy(a?: SsrFPolicy, b?: SsrFPolicy): boolean {
   );
 }
 
+/** Merge optional SSRF policies while preserving the most permissive explicit opt-ins. */
 export function mergeSsrFPolicies(
   ...policies: Array<SsrFPolicy | undefined>
 ): SsrFPolicy | undefined {
@@ -131,6 +135,7 @@ export function mergeSsrFPolicies(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+/** Build a policy that trusts only the hostname parsed from an HTTP/S base URL. */
 export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
@@ -177,11 +182,13 @@ function normalizeSsrFPolicyOrigins(values?: string[]): string[] {
   ).toSorted();
 }
 
+/** Build an exact-origin policy from an HTTP/S base URL for per-request hostname trust. */
 export function ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl: string): SsrFPolicy | undefined {
   const origin = normalizeSsrFPolicyOrigin(baseUrl);
   return origin ? { allowedOrigins: [origin] } : undefined;
 }
 
+/** Build the fake-IP proxy policy used by providers that resolve targets into proxy ranges. */
 export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
   baseUrl: string,
 ): SsrFPolicy | undefined {
@@ -214,10 +221,12 @@ function normalizeHostnameSet(values?: string[]): Set<string> {
   return new Set(normalizePolicyHostnames(values));
 }
 
+/** Normalize hostname allowlist entries and drop catch-all patterns from enforced checks. */
 export function normalizeHostnameAllowlist(values?: string[]): string[] {
   return normalizePolicyHostnames(values).filter((value) => value !== "*" && value !== "*.");
 }
 
+/** Return whether policy explicitly allows private/special-use network destinations. */
 export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
   return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
 }
@@ -229,6 +238,10 @@ function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): 
   );
 }
 
+/**
+ * Resolve per-request policy. Exact allowed origins promote only the current
+ * URL hostname into trusted hostnames for the active redirect/request step.
+ */
 export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPolicy | undefined {
   if (!policy?.allowedOrigins?.length) {
     return policy;
@@ -260,6 +273,7 @@ function resolveIpv6SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv6SpecialUseB
   };
 }
 
+/** Match exact hostnames or subdomains for `*.example.com` allowlist patterns. */
 export function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
   if (pattern.startsWith("*.")) {
     const suffix = pattern.slice(2);
@@ -271,6 +285,7 @@ export function isHostnameAllowedByPattern(hostname: string, pattern: string): b
   return hostname === pattern;
 }
 
+/** Return whether a normalized hostname passes the caller's hostname allowlist. */
 export function matchesHostnameAllowlist(hostname: string, allowlist: string[]): boolean {
   if (allowlist.length === 0) {
     return true;
@@ -291,7 +306,7 @@ function looksLikeUnsupportedIpv4Literal(address: string): boolean {
   return parts.every((part) => /^[0-9]+$/.test(part) || /^0x/i.test(part));
 }
 
-// Returns true for private/internal and special-use non-global addresses.
+/** Classify private, internal, special-use, malformed, and legacy IP literals as blocked. */
 export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolean {
   const normalized = normalizeHostname(address);
   if (!normalized) {
@@ -329,6 +344,7 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
   return false;
 }
 
+/** Return whether a normalized hostname is an always-blocked local/internal name. */
 export function isBlockedHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
@@ -348,6 +364,7 @@ function isBlockedHostnameNormalized(normalized: string): boolean {
   );
 }
 
+/** Apply both blocked-hostname and blocked-IP literal checks to one host string. */
 export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
@@ -421,6 +438,10 @@ function normalizeLookupResults(results: LookupResult): readonly LookupAddress[]
   return [results];
 }
 
+/**
+ * Create a DNS lookup function pinned to prevalidated addresses for one hostname.
+ * Other hostnames fall through to the provided fallback lookup.
+ */
 export function createPinnedLookup(params: {
   hostname: string;
   addresses: string[];
@@ -483,17 +504,20 @@ export function createPinnedLookup(params: {
   }) as typeof dnsLookupCb;
 }
 
+/** DNS pinning result passed to undici dispatchers and redirect fetch loops. */
 export type PinnedHostname = {
   hostname: string;
   addresses: string[];
   lookup: typeof dnsLookupCb;
 };
 
+/** Test/runtime override for replacing pinned addresses without changing the hostname. */
 export type PinnedHostnameOverride = {
   hostname: string;
   addresses: string[];
 };
 
+/** Dispatcher route policy that keeps DNS pinning across direct and proxy fetch paths. */
 export type PinnedDispatcherPolicy =
   | {
       mode: "direct";
@@ -532,6 +556,10 @@ function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
   return [...ipv4, ...otherFamilies];
 }
 
+/**
+ * Resolve, validate, and pin a hostname under SSRF policy before any network fetch.
+ * DNS answers are rechecked after lookup so public names cannot rebind to private IPs.
+ */
 export async function resolvePinnedHostnameWithPolicy(
   hostname: string,
   params: { lookupFn?: LookupFn; policy?: SsrFPolicy } = {},
@@ -572,10 +600,12 @@ export async function resolvePinnedHostnameWithPolicy(
   };
 }
 
+/** Validate a hostname against SSRF policy without performing DNS resolution. */
 export function assertHostnameAllowedWithPolicy(hostname: string, policy?: SsrFPolicy): string {
   return resolveHostnamePolicyChecks(hostname, policy).normalized;
 }
 
+/** Resolve and pin a hostname using the default SSRF policy. */
 export async function resolvePinnedHostname(
   hostname: string,
   lookupFn: LookupFn = dnsLookup,
@@ -620,6 +650,10 @@ function resolvePinnedDispatcherLookup(
   });
 }
 
+/**
+ * Create an undici dispatcher that carries the pinned lookup through direct,
+ * env-proxy, or explicit-proxy routing.
+ */
 export function createPinnedDispatcher(
   pinned: PinnedHostname,
   policy?: PinnedDispatcherPolicy,
@@ -701,6 +735,7 @@ async function waitForDispatcherClose(candidate: ClosableDispatcher): Promise<vo
   }
 }
 
+/** Close or destroy an undici dispatcher without letting cleanup failures leak. */
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
   if (!dispatcher) {
     return;
@@ -713,6 +748,7 @@ export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<v
   }
 }
 
+/** Assert that a hostname resolves only to public addresses under default policy. */
 export async function assertPublicHostname(
   hostname: string,
   lookupFn: LookupFn = dnsLookup,
