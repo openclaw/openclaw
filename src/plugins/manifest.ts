@@ -358,8 +358,8 @@ export type PluginManifest = {
    */
   syntheticAuthRefs?: string[];
   /**
-   * Bundled-plugin-owned placeholder API key values that represent non-secret
-   * local, OAuth, or ambient credential state.
+   * Plugin-owned placeholder API key values that represent non-secret local,
+   * OAuth, or ambient credential state.
    */
   nonSecretAuthMarkers?: string[];
   /**
