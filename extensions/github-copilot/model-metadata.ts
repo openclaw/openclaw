@@ -8,7 +8,6 @@ const COPILOT_CHAT_COMPLETIONS_COMPAT: ModelDefinitionConfig["compat"] = {
   supportsDeveloperRole: false,
   supportsUsageInStreaming: false,
   maxTokensField: "max_tokens",
-  requiresToolResultName: true,
 };
 
 const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([

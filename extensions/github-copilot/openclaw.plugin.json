@@ -69,16 +69,16 @@
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
           },
           {
-            "id": "gemini-3-flash-preview",
-            "name": "Gemini 3 Flash Preview",
+            "id": "gemini-3-flash",
+            "name": "Gemini 3 Flash",
             "input": ["text", "image"],
             "contextWindow": 128000,
             "maxTokens": 8192,
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
           },
           {
-            "id": "gemini-3.1-pro-preview",
-            "name": "Gemini 3.1 Pro Preview",
+            "id": "gemini-3.1-pro",
+            "name": "Gemini 3.1 Pro",
             "input": ["text", "image"],
             "contextWindow": 128000,
             "maxTokens": 8192,
