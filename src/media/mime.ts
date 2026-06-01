@@ -38,6 +38,8 @@ const EXT_BY_MIME: Record<string, string> = {
   "video/quicktime": ".mov",
   "application/pdf": ".pdf",
   "application/vnd.android.package-archive": ".apk",
+  "application/x-pem-file": ".pem",
+  "application/x-x509-ca-cert": ".crt",
   "application/json": ".json",
   "application/zip": ".zip",
   "application/gzip": ".gz",
@@ -80,6 +82,10 @@ const MIME_BY_EXT: Record<string, string> = {
   ".log": "text/plain",
   ".htm": "text/html",
   ".xml": "text/xml",
+  ".apk": "application/vnd.android.package-archive",
+  ".cer": "application/x-x509-ca-cert",
+  ".crt": "application/x-x509-ca-cert",
+  ".pem": "application/x-pem-file",
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([

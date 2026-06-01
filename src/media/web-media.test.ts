@@ -666,6 +666,24 @@ describe("loadWebMedia", () => {
 
   it.each([
     {
+      label: "CRT",
+      fileName: "root.crt",
+      contentType: "application/x-x509-ca-cert",
+      buffer: Buffer.from("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", "utf8"),
+    },
+    {
+      label: "CER",
+      fileName: "root.cer",
+      contentType: "application/x-x509-ca-cert",
+      buffer: Buffer.from("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", "utf8"),
+    },
+    {
+      label: "PEM",
+      fileName: "root.pem",
+      contentType: "application/x-pem-file",
+      buffer: Buffer.from("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", "utf8"),
+    },
+    {
       label: "ZIP",
       fileName: "archive.zip",
       contentType: "application/zip",
@@ -730,8 +748,11 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "opaque.csv" },
+    { label: "CER", fileName: "opaque.cer" },
+    { label: "CRT", fileName: "opaque.crt" },
     { label: "HTML", fileName: "opaque.html" },
     { label: "Markdown", fileName: "opaque.md" },
+    { label: "PEM", fileName: "opaque.pem" },
   ])("rejects opaque non-NUL binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
     const opaqueBinary = Buffer.alloc(9000);

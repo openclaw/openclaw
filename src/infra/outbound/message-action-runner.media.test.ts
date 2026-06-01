@@ -540,6 +540,40 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
+    it("allows host-local certificate attachments when fs root expansion is enabled", async () => {
+      await restoreRealMediaLoader();
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-crt-"));
+      try {
+        const outsidePath = path.join(tempDir, "root.crt");
+        await fs.writeFile(
+          outsidePath,
+          Buffer.from("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n", "utf8"),
+        );
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "sendAttachment",
+          params: {
+            channel: "attachmentchat",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        });
+
+        const payload = requireActionPayload(result);
+        expect(payload.ok).toBe(true);
+        expect(payload.filename).toBe("root.crt");
+        expect(payload.contentType).toBe("application/x-x509-ca-cert");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it("hydrates buffer and filename from media for attachment upload-file", async () => {
       const result = await runAttachmentRemoteMediaAction({ cfg, action: "upload-file" });
 
