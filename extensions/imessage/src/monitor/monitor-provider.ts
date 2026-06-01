@@ -673,7 +673,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             client: getActiveClient(),
             maxBytes: mediaMaxBytes,
             accountId: accountInfo.accountId,
-            ...(chatId ? { chatId } : {}),
           });
         },
         onReplyError: (err) => {
