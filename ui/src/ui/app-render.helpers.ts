@@ -161,7 +161,12 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   if (previousSessionKey !== sessionKey) {
     resetChatSessionPickerState(state);
   }
-  (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
+  const chatSessionState = state as unknown as {
+    currentSessionId?: string | null;
+    reconnectResumeSessionId?: string | null;
+  };
+  chatSessionState.currentSessionId = null;
+  chatSessionState.reconnectResumeSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatMessages = restoreChatMessagesForSession(state, sessionKey);

@@ -2428,7 +2428,7 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.send forwards the requested session id to reply initialization", async () => {
+  test("chat.send forwards the requested session resume to reply initialization", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
       await connectOk(ws);
@@ -2444,6 +2444,7 @@ describe("gateway server chat", () => {
       const sendRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         sessionId: "sess-main",
+        resumeSession: true,
         message: "hello after reconnect",
         idempotencyKey: "idem-requested-session-id",
       });
@@ -2454,6 +2455,7 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
 
       expect(capturedOpts?.requestedSessionId).toBe("sess-main");
+      expect(capturedOpts?.resumeRequestedSession).toBe(true);
     });
   });
 

@@ -3124,6 +3124,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
+      resumeSession?: boolean;
       message: string;
       thinking?: string;
       fastMode?: boolean;
@@ -3955,6 +3956,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   }
                 : {}),
               requestedSessionId,
+              resumeRequestedSession: p.resumeSession === true,
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,

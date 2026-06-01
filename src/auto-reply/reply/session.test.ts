@@ -1785,7 +1785,38 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
-  it("reuses an idle-expired session when a reconnecting client asserts the current session id", async () => {
+  it("preserves idle rollover when an ordinary send asserts the current session id", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-requested-session-ordinary-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "webchat-ordinary-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg,
+      commandAuthorized: true,
+      requestedSessionId: existingSessionId,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("reuses an idle-expired session when a reconnecting client requests current session resume", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-requested-session-");
     const storePath = path.join(root, "sessions.json");
@@ -1810,6 +1841,7 @@ describe("initSessionState reset policy", () => {
       cfg,
       commandAuthorized: true,
       requestedSessionId: existingSessionId,
+      resumeRequestedSession: true,
     });
 
     expect(result.isNewSession).toBe(false);
@@ -1841,6 +1873,7 @@ describe("initSessionState reset policy", () => {
       cfg,
       commandAuthorized: true,
       requestedSessionId: "webchat-stale-session-id",
+      resumeRequestedSession: true,
     });
 
     expect(result.isNewSession).toBe(true);

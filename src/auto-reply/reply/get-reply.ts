@@ -481,6 +481,7 @@ export async function getReplyFromConfig(
           cfg,
           commandAuthorized,
           requestedSessionId: resolvedOpts?.requestedSessionId,
+          resumeRequestedSession: resolvedOpts?.resumeRequestedSession,
         }),
       );
   const {
