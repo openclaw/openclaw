@@ -209,7 +209,13 @@ export function findFirstClosedMediaTag(
     let mediaPath = match[2]?.trim() ?? "";
     if (isFileUriMediaPath(mediaPath)) {
       log?.error?.(`findFirstClosedMediaTag: blocked file URI in <${tagName}> media tag`);
-      continue;
+      return {
+        textBefore,
+        tagName,
+        mediaPath: "",
+        tagEndIndex: match.index + match[0].length,
+        itemType: "file",
+      };
     }
 
     mediaPath = normalizePath(mediaPath);
