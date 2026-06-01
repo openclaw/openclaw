@@ -205,8 +205,8 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
-      getSessionEntry: typeof import("../../config/sessions/store.js").getSessionEntry;
-      listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
+      getSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
+      listSessionEntries: typeof import("../../config/sessions/session-accessor.js").listSessionEntries;
       patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
       upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
       /**

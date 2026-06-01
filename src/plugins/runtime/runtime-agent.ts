@@ -12,8 +12,10 @@ import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/th
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
-  getSessionEntry,
   listSessionEntries,
+  loadSessionEntry as getSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import {
   loadSessionStore,
   patchSessionEntry,
   saveSessionStore,
