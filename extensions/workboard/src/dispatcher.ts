@@ -126,7 +126,7 @@ function selectStartableCards(cards: WorkboardCard[], limit: number): WorkboardC
   if (limit <= 0) {
     return [];
   }
-  const activeStatuses = new Set<WorkboardStatus>(["running", "review"]);
+  const activeStatuses = new Set<WorkboardStatus>(["running"]);
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
     if (!activeStatuses.has(card.status) || cardIsArchived(card)) {
