@@ -15,6 +15,7 @@
 # Required env on the tenant runtime:
 #   ROCKIELAB_API_URL          — e.g. https://api.rockielab.com
 #   ROCKIELAB_TENANT_TOKEN     — service/dev auth token for X-Tenant-Token
+#   ROCKIELAB_TENANT_DEV_TOKEN — compatibility alias for the same auth token
 #   ROCKIELAB_TENANT_ID        — tenant id for the X-Tenant-Id header
 #   ROCKIELAB_SOURCE_ID        — the git_repo source.id whose install token
 #                                we want (set per-shell by mcp-rockie when
@@ -49,8 +50,9 @@ done
 # Bail silently if any required env is missing. The platform side fills
 # these for any shell mcp-rockie spawns; running `git` from a free shell
 # without them is allowed but unauthed.
+tenant_token="${ROCKIELAB_TENANT_TOKEN:-${ROCKIELAB_TENANT_DEV_TOKEN:-}}"
 if [ -z "${ROCKIELAB_API_URL:-}" ] \
-   || [ -z "${ROCKIELAB_TENANT_TOKEN:-}" ] \
+   || [ -z "${tenant_token}" ] \
    || [ -z "${ROCKIELAB_TENANT_ID:-}" ] \
    || [ -z "${ROCKIELAB_SOURCE_ID:-}" ]; then
   exit 0
@@ -60,7 +62,7 @@ fi
 # falls back to its own credential UI. `-f` makes curl exit non-zero
 # on HTTP 4xx/5xx so we can suppress noisy responses.
 token=$(curl -fsSL \
-  -H "X-Tenant-Token: ${ROCKIELAB_TENANT_TOKEN}" \
+  -H "X-Tenant-Token: ${tenant_token}" \
   -H "X-Tenant-Id: ${ROCKIELAB_TENANT_ID}" \
   "${ROCKIELAB_API_URL%/}/api/internal/git-token?source_id=${ROCKIELAB_SOURCE_ID}" \
   2>/dev/null \

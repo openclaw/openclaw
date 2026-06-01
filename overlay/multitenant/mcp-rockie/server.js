@@ -12,7 +12,8 @@
  *
  *   ROCKIELAB_API_BASE          (default https://api.rockielab.com)
  *   ROCKIELAB_API_PASSWORD      (mirrors OPEN_NOTEBOOK_PASSWORD)
- *   ROCKIELAB_TENANT_DEV_TOKEN  (service/dev auth token)
+ *   ROCKIELAB_TENANT_TOKEN      (service/dev auth token, preferred)
+ *   ROCKIELAB_TENANT_DEV_TOKEN  (compatibility alias for same auth token)
  *   ROCKIELAB_TENANT_ID         (tenant identity)
  *
  * Registered into ~/.claude/mcp.json + ~/.codex/mcp.json at image
@@ -25,7 +26,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 const API_BASE = process.env.ROCKIELAB_API_BASE || "https://api.rockielab.com";
 const API_PASSWORD = process.env.ROCKIELAB_API_PASSWORD || process.env.OPEN_NOTEBOOK_PASSWORD || "";
-const TENANT_TOKEN = process.env.ROCKIELAB_TENANT_DEV_TOKEN || "";
+const TENANT_TOKEN =
+  process.env.ROCKIELAB_TENANT_TOKEN || process.env.ROCKIELAB_TENANT_DEV_TOKEN || "";
 const TENANT_ID = process.env.ROCKIELAB_TENANT_ID || "";
 
 // Tool catalog. Keep in lockstep with

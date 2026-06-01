@@ -31,6 +31,7 @@ Reads two env vars set by `overlay/multitenant/entrypoint.sh`:
 
   ROCKIELAB_API_BASE        — e.g. https://api.rockielab.com
   ROCKIELAB_TENANT_TOKEN    — passed as X-Tenant-Token for auth
+  ROCKIELAB_TENANT_DEV_TOKEN — compatibility alias for the same auth token
   ROCKIELAB_TENANT_ID       — passed as X-Tenant-Id for tenant scope
 
 And the broker is on localhost (same Fly machine):
@@ -76,7 +77,11 @@ from typing import Any, Optional
 DEFAULT_API_BASE = os.environ.get(
     "ROCKIELAB_API_BASE", "https://api.rockielab.com"
 )
-TENANT_TOKEN = os.environ.get("ROCKIELAB_TENANT_TOKEN", "").strip()
+TENANT_TOKEN = (
+    os.environ.get("ROCKIELAB_TENANT_TOKEN")
+    or os.environ.get("ROCKIELAB_TENANT_DEV_TOKEN")
+    or ""
+).strip()
 TENANT_ID = os.environ.get("ROCKIELAB_TENANT_ID", "").strip()
 # Bearer for PasswordAuthMiddleware on platform-context. Mirrors the
 # env-var fallback chain mcp-rockie uses.
@@ -150,7 +155,10 @@ def _build_request(
         headers["Authorization"] = f"Bearer {API_PASSWORD}"
     token = token if token is not None else TENANT_TOKEN
     if not token:
-        raise CLIError("ROCKIELAB_TENANT_TOKEN is required", exit_code=2)
+        raise CLIError(
+            "ROCKIELAB_TENANT_TOKEN or ROCKIELAB_TENANT_DEV_TOKEN is required",
+            exit_code=2,
+        )
     if not TENANT_ID:
         raise CLIError("ROCKIELAB_TENANT_ID is required", exit_code=2)
     headers["X-Tenant-Token"] = token

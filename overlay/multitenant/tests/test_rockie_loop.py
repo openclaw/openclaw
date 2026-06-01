@@ -10,13 +10,17 @@ import pytest
 LOOP_PATH = Path(__file__).resolve().parents[1] / "rockie-loop" / "rockie_loop.py"
 
 
-@pytest.fixture()
-def loop():
-    loader = importlib.machinery.SourceFileLoader("rockie_loop", str(LOOP_PATH))
-    spec = importlib.util.spec_from_loader("rockie_loop", loader)
+def _load_loop(name: str = "rockie_loop"):
+    loader = importlib.machinery.SourceFileLoader(name, str(LOOP_PATH))
+    spec = importlib.util.spec_from_loader(name, loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
     return mod
+
+
+@pytest.fixture()
+def loop():
+    return _load_loop()
 
 
 def test_gpu_smoke_queue_row_uses_broker_provision_and_teardown(loop, monkeypatch):
@@ -89,6 +93,19 @@ def test_build_request_sends_auth_token_and_tenant_id(loop, monkeypatch):
     headers = dict(req.header_items())
 
     assert headers["X-tenant-token"] == "service-token"
+    assert headers["X-tenant-id"] == "t-loop"
+
+
+def test_build_request_uses_tenant_dev_token_alias(monkeypatch):
+    monkeypatch.delenv("ROCKIELAB_TENANT_TOKEN", raising=False)
+    monkeypatch.setenv("ROCKIELAB_TENANT_DEV_TOKEN", "dev-service-token")
+    monkeypatch.setenv("ROCKIELAB_TENANT_ID", "t-loop")
+    loop = _load_loop("rockie_loop_dev_token_alias")
+
+    req = loop._build_request("GET", "/api/labs/lab-1/loop-state")
+    headers = dict(req.header_items())
+
+    assert headers["X-tenant-token"] == "dev-service-token"
     assert headers["X-tenant-id"] == "t-loop"
 
 

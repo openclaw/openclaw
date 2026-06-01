@@ -14,9 +14,10 @@ Pass ``--human`` for k:v dicts and ascii-table lists.
 
 Tenant auth and identity:
 
-  ``ROCKIELAB_TENANT_TOKEN`` is sent as ``X-Tenant-Token`` for service
-  auth. ``ROCKIELAB_TENANT_ID`` is sent separately as ``X-Tenant-Id`` for
-  tenant scoping.
+  ``ROCKIELAB_TENANT_TOKEN`` (or compatibility alias
+  ``ROCKIELAB_TENANT_DEV_TOKEN``) is sent as ``X-Tenant-Token`` for
+  service auth. ``ROCKIELAB_TENANT_ID`` is sent separately as
+  ``X-Tenant-Id`` for tenant scoping.
 
 Same ladder for the API base URL:
 
@@ -88,12 +89,14 @@ def _load_local_config(path: str = CONFIG_PATH_DEFAULT) -> dict:
 
 def _get_token() -> str:
     """Resolve tenant auth token. Raises ``CLIError`` with exit code 2
-    when ``ROCKIELAB_TENANT_TOKEN`` is not set."""
-    tok = os.environ.get("ROCKIELAB_TENANT_TOKEN")
+    when neither tenant auth env var is set."""
+    tok = os.environ.get("ROCKIELAB_TENANT_TOKEN") or os.environ.get(
+        "ROCKIELAB_TENANT_DEV_TOKEN"
+    )
     if tok and tok.strip():
         return tok.strip()
     raise CLIError(
-        "ROCKIELAB_TENANT_TOKEN is required",
+        "ROCKIELAB_TENANT_TOKEN or ROCKIELAB_TENANT_DEV_TOKEN is required",
         exit_code=2,
     )
 

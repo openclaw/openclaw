@@ -39,6 +39,7 @@ def _isolate_env(monkeypatch, tmp_path):
     tmp dir, so we never touch the real ``~/.rockie/config.json``."""
     monkeypatch.delenv("ROCKIELAB_TENANT_ID", raising=False)
     monkeypatch.delenv("ROCKIELAB_TENANT_TOKEN", raising=False)
+    monkeypatch.delenv("ROCKIELAB_TENANT_DEV_TOKEN", raising=False)
     monkeypatch.delenv("BROKER_TENANT_TOKEN", raising=False)
     monkeypatch.delenv("ROCKIELAB_API_BASE", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -69,6 +70,12 @@ def test_tenant_id_env_var_is_used(cli, monkeypatch):
     monkeypatch.setenv("BROKER_TENANT_TOKEN", "broker-token")
     assert cli._get_token() == "service-token"
     assert cli._get_tenant_id() == "t-aaa"
+
+
+def test_tenant_dev_token_alias_is_used_for_auth(cli, monkeypatch):
+    monkeypatch.setenv("ROCKIELAB_TENANT_DEV_TOKEN", "dev-service-token")
+
+    assert cli._get_token() == "dev-service-token"
 
 
 def test_config_file_tenant_token_is_not_identity(cli, tmp_path):

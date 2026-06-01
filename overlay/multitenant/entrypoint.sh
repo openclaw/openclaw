@@ -31,15 +31,23 @@ export ROCKIELAB_API_URL="${ROCKIELAB_API_URL:-${ROCKIELAB_API_BASE}}"
 export OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-${PLATFORM_TARGET_DIR:-${TARGET_DIR:-/home/runtime}}}"
 export OPENCLAW_SKILLS_DIR="${OPENCLAW_SKILLS_DIR:-${HOME:-/home/runtime}/.claude/skills}"
 # ROCKIELAB_TENANT_ID is tenant identity. ROCKIELAB_TENANT_TOKEN is the
-# tenant-scoped service/dev auth token sent as X-Tenant-Token. Runtime
-# clients send both X-Tenant-Token and X-Tenant-Id so auth and tenant
-# scoping stay separate. Do not alias the token to the id here: the PTY
-# broker inherits this PID-1 env before SSH sessions are created, so
-# aliasing breaks chat-spawned runtime API calls even when Fly SSH sees
-# the correct secret later.
+# tenant-scoped service/dev auth token sent as X-Tenant-Token. Some older
+# helpers name the same auth secret ROCKIELAB_TENANT_DEV_TOKEN, so keep
+# both auth aliases in sync while never aliasing either token to the id.
+# Runtime clients send both X-Tenant-Token and X-Tenant-Id so auth and
+# tenant scoping stay separate. The PTY broker inherits this PID-1 env
+# before SSH sessions are created, so id-as-token aliasing breaks
+# chat-spawned runtime API calls even when Fly SSH sees the correct
+# secret later.
 if [ -z "${ROCKIELAB_TENANT_ID:-}" ]; then
   printf '[entrypoint] ERROR: ROCKIELAB_TENANT_ID is required\n' >&2
   exit 1
+fi
+if [ -z "${ROCKIELAB_TENANT_TOKEN:-}" ] && [ -n "${ROCKIELAB_TENANT_DEV_TOKEN:-}" ]; then
+  export ROCKIELAB_TENANT_TOKEN="${ROCKIELAB_TENANT_DEV_TOKEN}"
+fi
+if [ -z "${ROCKIELAB_TENANT_DEV_TOKEN:-}" ] && [ -n "${ROCKIELAB_TENANT_TOKEN:-}" ]; then
+  export ROCKIELAB_TENANT_DEV_TOKEN="${ROCKIELAB_TENANT_TOKEN}"
 fi
 if [ -z "${ROCKIELAB_TENANT_TOKEN:-}" ]; then
   printf '[entrypoint] WARN: ROCKIELAB_TENANT_TOKEN is unset; token-gated platform APIs may 401\n' >&2
