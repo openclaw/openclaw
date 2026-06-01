@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { Selectable } from "kysely";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -303,7 +304,7 @@ function resolveSqliteScope(
       ? normalizeAgentId(scope.agentId)
       : resolveAgentIdFromSessionKey(scope.sessionKey),
     ...(scope.env ? { env: scope.env } : {}),
-    ...(scope.storePath ? { path: scope.storePath } : {}),
+    ...(scope.storePath ? { path: resolveSqlitePathFromSessionStorePath(scope.storePath) } : {}),
     sessionKey: normalizeSqliteSessionKey(scope.sessionKey),
   };
 }
@@ -323,9 +324,25 @@ function resolveSqliteReadScope(
   return {
     agentId,
     ...(scope.env ? { env: scope.env } : {}),
-    ...(scope.storePath ? { path: scope.storePath } : {}),
+    ...(scope.storePath ? { path: resolveSqlitePathFromSessionStorePath(scope.storePath) } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };
+}
+
+function resolveSqlitePathFromSessionStorePath(storePath: string): string {
+  const resolved = path.resolve(storePath);
+  if (path.basename(resolved) !== "sessions.json") {
+    return resolved;
+  }
+  const sessionsDir = path.dirname(resolved);
+  if (path.basename(sessionsDir) !== "sessions") {
+    return resolved;
+  }
+  const agentDir = path.dirname(sessionsDir);
+  if (path.basename(path.dirname(agentDir)) !== "agents") {
+    return resolved;
+  }
+  return path.join(agentDir, "agent", "openclaw-agent.sqlite");
 }
 
 function resolveSqliteTranscriptScope(
