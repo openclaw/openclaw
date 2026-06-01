@@ -40,7 +40,6 @@ describe("memory targeted session sync", () => {
     expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
     expect(syncSessionFiles).toHaveBeenLastCalledWith({
       needsFullReindex: false,
-      reindexUnchanged: true,
       targetSessionFiles: ["/tmp/targeted-fallback.jsonl"],
       progress: undefined,
     });

@@ -27,11 +27,9 @@ export async function runMemoryTargetedSessionSync(params: {
   targetSessionFiles: Set<string> | null;
   reason?: string;
   progress?: TargetedSyncProgress;
-  reindexUnchanged?: boolean;
   sessionsDirtyFiles: Set<string>;
   syncSessionFiles: (params: {
     needsFullReindex: boolean;
-    reindexUnchanged?: boolean;
     targetSessionFiles?: string[];
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
@@ -48,7 +46,6 @@ export async function runMemoryTargetedSessionSync(params: {
   try {
     await params.syncSessionFiles({
       needsFullReindex: false,
-      reindexUnchanged: params.reindexUnchanged,
       targetSessionFiles: Array.from(params.targetSessionFiles),
       progress: params.progress,
     });
@@ -68,7 +65,6 @@ export async function runMemoryTargetedSessionSync(params: {
     }
     await params.syncSessionFiles({
       needsFullReindex: false,
-      reindexUnchanged: true,
       targetSessionFiles: Array.from(params.targetSessionFiles),
       progress: params.progress,
     });

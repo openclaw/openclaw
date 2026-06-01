@@ -440,6 +440,8 @@ describe("memory cli", () => {
     expectLogged(log, "Provider: ollama (requested: ollama)");
     expectLogged(log, "Dirty: yes");
     expectLogged(log, "Index identity: index was built for provider openai, expected ollama");
+    expectLogged(log, "Vector search: paused until memory is rebuilt");
+    expectLogged(log, "Fix: Run: openclaw memory status --index --agent main");
     expect(close).toHaveBeenCalled();
   });
 

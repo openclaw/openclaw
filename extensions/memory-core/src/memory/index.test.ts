@@ -443,8 +443,8 @@ describe("memory index", () => {
       );
       await nextManager.sync({ reason: "watch" });
 
-      const repairedResults = await nextManager.search("alpha");
-      expect(repairedResults[0]?.snippet).toContain("Alpha memory line changed");
+      const stillPausedResults = await nextManager.search("alpha");
+      expect(stillPausedResults).toStrictEqual([]);
       expect(nextManager.status().dirty).toBe(true);
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "mismatched",
@@ -670,7 +670,7 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps provider cutover repair targeted during targeted session sync", async () => {
+  it("keeps provider cutover vector search paused during targeted session sync", async () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-targeted-cutover"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
@@ -726,17 +726,7 @@ describe("memory index", () => {
           reason: "index was built for model old-embed, expected new-embed",
         });
         const results = await nextManager.search("alpha");
-        expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(false);
-        const currentSessionChunks = (
-          nextManager as unknown as {
-            db: { prepare: (sql: string) => { get: (...args: unknown[]) => { c: number } } };
-          }
-        ).db
-          .prepare(
-            "SELECT COUNT(*) AS c FROM chunks WHERE source = 'sessions' AND provider = ? AND model = ?",
-          )
-          .get("gemini", "new-embed").c;
-        expect(currentSessionChunks).toBeGreaterThan(0);
+        expect(results).toStrictEqual([]);
       } finally {
         await nextManager.close?.();
       }
@@ -1271,7 +1261,7 @@ describe("memory index", () => {
     });
   });
 
-  it("activates configured fallback when local embeddings degrade during search", async () => {
+  it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({
       storePath: path.join(workspaceDir, "index-search-degraded-fallback.sqlite"),
       fallback: "fallback-provider",
@@ -1304,16 +1294,14 @@ describe("memory index", () => {
     const results = await manager.search("alpha");
 
     expect(results).toStrictEqual([]);
-    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
-      "fallback-provider",
-    );
+    expect(providerCalls.slice(callsBeforeSearch)).toStrictEqual([]);
     expect(
       (
         manager as unknown as {
           provider: { id: string } | null;
         }
       ).provider?.id,
-    ).toBe("fallback-provider");
+    ).toBe("local");
   });
 
   it("activates configured fallback after probe-time local degradation", async () => {
