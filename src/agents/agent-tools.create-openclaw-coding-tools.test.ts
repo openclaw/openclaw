@@ -440,6 +440,55 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("message");
   });
 
+  it("preserves configured media tools through local model lean filtering", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+          list: [
+            {
+              id: "artist",
+              tools: {
+                alsoAllow: ["video_generate"],
+                byProvider: {
+                  ollama: {
+                    alsoAllow: ["tts"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+        tools: {
+          alsoAllow: ["pdf"],
+          byProvider: {
+            "ollama/qwen3.5:9b": {
+              alsoAllow: ["image_generate"],
+            },
+          },
+        },
+      },
+      agentId: "artist",
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toEqual(
+      expect.arrayContaining(["image_generate", "pdf", "tts", "video_generate"]),
+    );
+  });
+
   it("preserves forced message through local model lean filtering without runtime allowlist", () => {
     const tools = createOpenClawCodingTools({
       config: {
