@@ -208,9 +208,29 @@ only for behavior that really belongs to the backend.
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions |
 | `nativeToolMode`                   | Declare whether the CLI has always-on native tools     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge           |
+| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers      |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when a
 backend hook can express the behavior.
+
+### `ownsNativeCompaction`: opting out of OpenClaw compaction
+
+If your backend runs an agent that compacts its **own** transcript, set
+`ownsNativeCompaction: true` so OpenClaw's safeguard summarizer never runs against its
+sessions - the CLI compaction lifecycle returns a no-op and the turn proceeds. This is
+the **same opt-out Codex uses** (its app-server owns automatic compaction); `claude-cli`
+declares it because Claude Code compacts internally with no harness endpoint. It also
+removes any need to inflate `contextTokens` just to keep the safeguard from firing.
+
+**Only declare it when all of the following hold**, or a deferred over-budget session can
+stay over budget / go stale (OpenClaw no longer rescues it):
+
+- the backend reliably compacts or bounds its own transcript as it nears its window;
+- it persists a resumable session so the compacted state survives turns
+  (e.g. `--resume` / `--session-id`);
+- it is **not** a native-harness compaction session - a session whose `agentHarnessId`
+  matches the provider routes to the harness endpoint instead; this no-op applies only
+  when there is no harness endpoint.
 
 ## MCP tool bridge
 

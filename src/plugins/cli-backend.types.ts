@@ -84,9 +84,20 @@ export type CliBackendPlugin = {
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   /**
    * When true, the backend manages its own transcript compaction lifecycle
-   * (e.g. Claude Code's internal auto-compaction). OpenClaw will skip its
-   * safeguard summarizer and return a no-op from the compaction path instead
-   * of fighting the backend's own compaction or hard-failing the turn.
+   * (e.g. Claude Code's internal auto-compaction). OpenClaw skips its safeguard
+   * summarizer and returns a no-op from the CLI compaction path instead of
+   * fighting the backend's own compaction or hard-failing the turn.
+   *
+   * Safety contract - only declare this when ALL of the following hold, or an
+   * over-budget session can stay over budget / go stale (OpenClaw no longer
+   * rescues it):
+   *  - the backend reliably compacts or bounds its own transcript as it nears
+   *    its context window;
+   *  - it persists a resumable session so the compacted state survives across
+   *    turns (e.g. `--resume` / `--session-id`);
+   *  - it is NOT a native-harness compaction session - a session whose
+   *    `agentHarnessId` matches the provider still routes to the harness
+   *    endpoint, so this no-op applies only when there is no harness endpoint.
    */
   ownsNativeCompaction?: boolean;
   /**
