@@ -29,6 +29,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { isGemma4ModelId } from "../shared/google-models.js";
+import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -2526,6 +2527,7 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
+  const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
   type ToolCallBlock = {
     type: "toolCall";
     id: string;
@@ -2661,6 +2663,22 @@ async function processOpenAICompletionsStream(
       appendVisibleTextDelta(part);
     }
   };
+  const appendRoutedContentDelta = (delta: CompletionsReasoningDelta) => {
+    if (delta.kind === "text") {
+      appendFilteredVisibleTextDelta(delta.text);
+      return;
+    }
+    if (currentBlock?.type === "toolCall") {
+      queuePostToolCallDelta(delta);
+    } else {
+      appendThinkingDelta(delta);
+    }
+  };
+  const appendPartitionedVisibleDelta = (delta: { kind: "text" | "thinking"; text: string }) => {
+    if (delta.kind === "text") {
+      appendFilteredVisibleTextDelta(delta.text);
+    }
+  };
   const flushDeepSeekTextFilterAtEnd = () => {
     const parts = deepSeekTextFilter?.flush();
     if (!parts) {
@@ -2668,6 +2686,11 @@ async function processOpenAICompletionsStream(
     }
     for (const part of parts) {
       appendVisibleTextDelta(part);
+    }
+  };
+  const flushReasoningTagTextPartitionerAtEnd = () => {
+    for (const delta of reasoningTagTextPartitioner.flush()) {
+      appendPartitionedVisibleDelta(delta);
     }
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
@@ -2708,24 +2731,32 @@ async function processOpenAICompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
+    const reasoningDeltas = getCompletionsReasoningDeltas(
+      choiceDelta as Record<string, unknown>,
+      compat.visibleReasoningDetailTypes,
+    );
+    const hasMirroredReasoning = reasoningDeltas.some((delta) => delta.kind === "thinking");
+    if (hasMirroredReasoning) {
+      reasoningTagTextPartitioner.markStrict();
+    }
     if (choiceDelta.content) {
       // Structured content can contain visible text and thinking blocks in the
       // same delta, so route each extracted block through the normal stream path.
       const contentDeltas = getCompletionsContentDeltas(choiceDelta.content);
       for (const contentDelta of contentDeltas) {
         if (contentDelta.kind === "text") {
-          appendFilteredVisibleTextDelta(contentDelta.text);
-        } else if (currentBlock?.type === "toolCall") {
-          queuePostToolCallDelta(contentDelta);
+          const routedDeltas = hasMirroredReasoning
+            ? reasoningTagTextPartitioner.push(contentDelta.text)
+            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
+          for (const routedDelta of routedDeltas) {
+            appendPartitionedVisibleDelta(routedDelta);
+          }
         } else {
-          appendThinkingDelta(contentDelta);
+          reasoningTagTextPartitioner.markStrict();
+          appendRoutedContentDelta(contentDelta);
         }
       }
     }
-    const reasoningDeltas = getCompletionsReasoningDeltas(
-      choiceDelta as Record<string, unknown>,
-      compat.visibleReasoningDetailTypes,
-    );
     for (const reasoningDelta of reasoningDeltas) {
       if (currentBlock?.type === "toolCall") {
         queuePostToolCallDelta({ ...reasoningDelta });
@@ -2738,6 +2769,7 @@ async function processOpenAICompletionsStream(
       }
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      flushReasoningTagTextPartitionerAtEnd();
       for (const toolCall of choiceDelta.tool_calls) {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
         let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
@@ -2803,6 +2835,7 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     await cooperativeScheduler.afterEvent();
   }
+  flushReasoningTagTextPartitionerAtEnd();
   flushDeepSeekTextFilterAtEnd();
   finishAllToolCallBlocks();
   currentBlock = null;
