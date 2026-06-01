@@ -149,6 +149,81 @@ describe("OpenAI-compatible completions params", () => {
     expect(result.stopReason).toBe("error");
     expect(capturedStop).toEqual(["STOP"]);
   });
+
+  it("keeps prompt cache keys when long retention is disabled", async () => {
+    let capturedCacheKey: unknown;
+    let capturedRetention: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        compat: {
+          supportsPromptCacheKey: true,
+          supportsLongCacheRetention: false,
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        sessionId: "session-123",
+        cacheRetention: "long",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          capturedRetention = (payload as { prompt_cache_retention?: unknown })
+            .prompt_cache_retention;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBe("session-123");
+    expect(capturedRetention).toBeUndefined();
+  });
+
+  it("omits prompt cache retention when third-party models have not opted into cache keys", async () => {
+    let capturedCacheKey: unknown;
+    let capturedRetention: unknown;
+    const stream = streamOpenAICompletions(createModel(32_000), context, {
+      apiKey: "sk-test",
+      sessionId: "session-123",
+      cacheRetention: "long",
+      onPayload(payload) {
+        capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+        capturedRetention = (payload as { prompt_cache_retention?: unknown })
+          .prompt_cache_retention;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBeUndefined();
+    expect(capturedRetention).toBeUndefined();
+  });
+
+  it("keeps OpenAI long retention even when no cache key is available", async () => {
+    let capturedCacheKey: unknown;
+    let capturedRetention: unknown;
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+      cacheRetention: "long",
+      onPayload(payload) {
+        capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+        capturedRetention = (payload as { prompt_cache_retention?: unknown })
+          .prompt_cache_retention;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBeUndefined();
+    expect(capturedRetention).toBe("24h");
+  });
 });
 
 describe("openai-completions stop-reason tool-call guard", () => {

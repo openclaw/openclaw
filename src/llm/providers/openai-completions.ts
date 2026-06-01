@@ -594,6 +594,8 @@ function buildParams(
     reasoning_effort?: string;
     stream_options?: { include_usage: boolean };
     max_tokens?: number;
+    prompt_cache_key?: string;
+    prompt_cache_retention?: "24h";
     tool_stream?: boolean;
     enable_thinking?: boolean;
     chat_template_kwargs?: { enable_thinking: boolean; preserve_thinking: boolean };
@@ -602,17 +604,21 @@ function buildParams(
     providerOptions?: unknown;
   };
 
+  const supportsPromptCacheKey =
+    model.baseUrl.includes("api.openai.com") || compat.supportsPromptCacheKey;
+  const promptCacheKey =
+    supportsPromptCacheKey && cacheRetention !== "none"
+      ? clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId)
+      : undefined;
   const params: ChatCompletionRequestParams = {
     model: model.id,
     messages,
     stream: true,
-    prompt_cache_key:
-      (model.baseUrl.includes("api.openai.com") && cacheRetention !== "none") ||
-      (cacheRetention === "long" && compat.supportsLongCacheRetention)
-        ? clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId)
-        : undefined,
+    prompt_cache_key: promptCacheKey,
     prompt_cache_retention:
-      cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
+      supportsPromptCacheKey && cacheRetention === "long" && compat.supportsLongCacheRetention
+        ? "24h"
+        : undefined,
   };
 
   if (compat.supportsUsageInStreaming) {
@@ -1266,6 +1272,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
     cacheControlFormat,
     sendSessionAffinityHeaders: false,
+    supportsPromptCacheKey: false,
     supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
   };
 }
@@ -1303,6 +1310,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
     cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
     sendSessionAffinityHeaders:
       model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
+    supportsPromptCacheKey: model.compat.supportsPromptCacheKey ?? detected.supportsPromptCacheKey,
     supportsLongCacheRetention:
       model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
   };

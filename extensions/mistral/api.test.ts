@@ -12,6 +12,7 @@ import mistralPlugin from "./index.js";
 type MistralCompatShape = {
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   reasoningEffortMap?: Record<string, string>;
+  supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;
   supportsReasoningEffort?: boolean;
   supportsStore?: boolean;
@@ -27,6 +28,10 @@ function supportsStore(model: unknown): boolean | undefined {
 
 function supportsPromptCacheKey(model: unknown): boolean | undefined {
   return readCompat(model)?.supportsPromptCacheKey;
+}
+
+function supportsLongCacheRetention(model: unknown): boolean | undefined {
+  return readCompat(model)?.supportsLongCacheRetention;
 }
 
 function supportsReasoningEffort(model: unknown): boolean | undefined {
@@ -57,6 +62,7 @@ describe("resolveMistralCompatPatch", () => {
     expect(resolveMistralCompatPatch({ id: MISTRAL_SMALL_LATEST_ID })).toEqual({
       supportsStore: false,
       supportsPromptCacheKey: true,
+      supportsLongCacheRetention: false,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
       reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
@@ -67,6 +73,7 @@ describe("resolveMistralCompatPatch", () => {
     expect(resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID })).toEqual({
       supportsStore: false,
       supportsPromptCacheKey: true,
+      supportsLongCacheRetention: false,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
       reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
@@ -86,6 +93,7 @@ describe("applyMistralModelCompat", () => {
     const normalized = applyMistralModelCompat({});
     expect(supportsStore(normalized)).toBe(false);
     expect(supportsPromptCacheKey(normalized)).toBe(true);
+    expect(supportsLongCacheRetention(normalized)).toBe(false);
     expect(supportsReasoningEffort(normalized)).toBe(false);
     expect(maxTokensField(normalized)).toBe("max_tokens");
     expect(reasoningEffortMap(normalized)).toBeUndefined();
@@ -137,6 +145,7 @@ describe("applyMistralModelCompat", () => {
       compat: {
         supportsStore: false,
         supportsPromptCacheKey: true,
+        supportsLongCacheRetention: false,
         supportsReasoningEffort: false,
         maxTokensField: "max_tokens" as const,
       },

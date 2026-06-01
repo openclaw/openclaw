@@ -5700,6 +5700,41 @@ describe("openai transport stream", () => {
     expect(defaultRetention).not.toHaveProperty("prompt_cache_retention");
   });
 
+  it("keeps Mistral prompt cache keys without unsupported long retention", () => {
+    const model = {
+      id: "mistral-large-latest",
+      name: "Mistral Large",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      compat: {
+        supportsPromptCacheKey: true,
+        supportsLongCacheRetention: false,
+        supportsStore: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+      },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const params = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "long",
+    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
+
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+  });
+
   it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
     const model = {
       id: "custom-model",
