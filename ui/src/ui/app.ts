@@ -103,6 +103,7 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -144,13 +145,6 @@ import type {
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
-import type {
-  SkillWorkshopActionBusy,
-  SkillWorkshopActionNotice,
-  SkillWorkshopMode,
-  SkillWorkshopProposal,
-  SkillWorkshopStatusFilter,
-} from "./views/skill-workshop.ts";
 
 declare global {
   interface Window {
@@ -637,19 +631,19 @@ export class OpenClawApp extends LitElement {
   @state() skillWorkshopLoaded = false;
   @state() skillWorkshopError: string | null = null;
   @state() skillWorkshopInspectingKey: string | null = null;
-  @state() skillWorkshopProposals: SkillWorkshopProposal[] = [];
+  @state() skillWorkshopProposals: SkillWorkshopState["skillWorkshopProposals"] = [];
   @state() skillWorkshopSelectedKey: string | null = null;
-  @state() skillWorkshopActionBusy: SkillWorkshopActionBusy | null = null;
-  @state() skillWorkshopActionNotice: SkillWorkshopActionNotice | null = null;
+  @state() skillWorkshopActionBusy: SkillWorkshopState["skillWorkshopActionBusy"] = null;
+  @state() skillWorkshopActionNotice: SkillWorkshopState["skillWorkshopActionNotice"] = null;
   skillWorkshopActionNoticeTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
   @state() skillWorkshopRevisionKey: string | null = null;
   @state() skillWorkshopRevisionDraft = "";
-  @state() skillWorkshopStatusFilter: SkillWorkshopStatusFilter = "pending";
+  @state() skillWorkshopStatusFilter: SkillWorkshopState["skillWorkshopStatusFilter"] = "pending";
   @state() skillWorkshopQuery = "";
   @state() skillWorkshopFilePreviewKey: string | null = null;
   @state() skillWorkshopFilePreviewQuery = "";
   @state() skillWorkshopQueueWidth = 360;
-  @state() skillWorkshopMode: SkillWorkshopMode = "today";
+  @state() skillWorkshopMode: SkillWorkshopState["skillWorkshopMode"] = "today";
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;

@@ -11,6 +11,7 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -51,13 +52,6 @@ import type {
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
-import type {
-  SkillWorkshopActionBusy,
-  SkillWorkshopActionNotice,
-  SkillWorkshopMode,
-  SkillWorkshopProposal,
-  SkillWorkshopStatusFilter,
-} from "./views/skill-workshop.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {
@@ -432,23 +426,6 @@ export type AppViewState = {
     skillCardContentKeys: Record<string, string>;
     skillCardLoadingKey: string | null;
     skillCardErrors: Record<string, string>;
-    skillWorkshopLoading: boolean;
-    skillWorkshopLoaded: boolean;
-    skillWorkshopError: string | null;
-    skillWorkshopInspectingKey: string | null;
-    skillWorkshopProposals: SkillWorkshopProposal[];
-    skillWorkshopSelectedKey: string | null;
-    skillWorkshopActionBusy: SkillWorkshopActionBusy | null;
-    skillWorkshopActionNotice: SkillWorkshopActionNotice | null;
-    skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
-    skillWorkshopRevisionKey: string | null;
-    skillWorkshopRevisionDraft: string;
-    skillWorkshopStatusFilter: SkillWorkshopStatusFilter;
-    skillWorkshopQuery: string;
-    skillWorkshopFilePreviewKey: string | null;
-    skillWorkshopFilePreviewQuery: string;
-    skillWorkshopQueueWidth: number;
-    skillWorkshopMode: SkillWorkshopMode;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
@@ -576,4 +553,4 @@ export type AppViewState = {
     handleWebPushSubscribe: () => Promise<void>;
     handleWebPushUnsubscribe: () => Promise<void>;
     handleWebPushTest: () => Promise<void>;
-  };
+  } & SkillWorkshopState;

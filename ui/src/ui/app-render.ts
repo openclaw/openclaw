@@ -3082,23 +3082,30 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "skillWorkshop"
           ? renderLazyView(lazySkillWorkshop, (m) => {
-              const proposals = state.skillWorkshopProposals;
+              const visibleProposals = m.filterSkillWorkshopProposals(
+                state.skillWorkshopProposals,
+                state.skillWorkshopStatusFilter,
+                state.skillWorkshopQuery,
+              );
               const selectedIndex = Math.max(
                 0,
-                proposals.findIndex((proposal) => proposal.key === state.skillWorkshopSelectedKey),
+                visibleProposals.findIndex(
+                  (proposal) => proposal.key === state.skillWorkshopSelectedKey,
+                ),
               );
               const selectRelativeProposal = (delta: -1 | 1) => {
-                if (proposals.length === 0) {
+                if (visibleProposals.length === 0) {
                   return;
                 }
-                const nextIndex = (selectedIndex + delta + proposals.length) % proposals.length;
-                selectSkillWorkshopProposal(state, proposals[nextIndex].key);
+                const nextIndex =
+                  (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
+                selectSkillWorkshopProposal(state, visibleProposals[nextIndex].key);
               };
               return m.renderSkillWorkshop({
                 loading: state.skillWorkshopLoading,
                 error: state.skillWorkshopError,
                 inspectingKey: state.skillWorkshopInspectingKey,
-                proposals,
+                proposals: state.skillWorkshopProposals,
                 selectedKey: state.skillWorkshopSelectedKey,
                 statusFilter: state.skillWorkshopStatusFilter,
                 query: state.skillWorkshopQuery,
@@ -3111,7 +3118,7 @@ export function renderApp(state: AppViewState) {
                 revisionKey: state.skillWorkshopRevisionKey,
                 revisionDraft: state.skillWorkshopRevisionDraft,
                 assistantName: state.assistantName,
-                counts: countSkillWorkshopProposals(proposals),
+                counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
                 onStatusFilterChange: (status) => (state.skillWorkshopStatusFilter = status),
                 onQueryChange: (query) => (state.skillWorkshopQuery = query),
                 onFilePreviewQueryChange: (query) => (state.skillWorkshopFilePreviewQuery = query),
