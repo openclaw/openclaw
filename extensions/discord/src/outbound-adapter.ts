@@ -104,7 +104,12 @@ async function maybeSendDiscordWebhookText(params: {
 }
 
 export const discordOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
+  // Discord public sends must pass through the gateway-owned durable delivery
+  // path so gateway-scoped message_sending/message_sent hooks (including
+  // Action Gate ownership checks) run for direct CLI callers too. The gateway
+  // handler itself still performs the final platform send through this adapter,
+  // so this avoids local-CLI hook bypass without creating a send loop.
+  deliveryMode: "gateway",
   chunker: (text, limit, ctx) =>
     chunkDiscordTextWithMode(text, {
       maxChars: limit,

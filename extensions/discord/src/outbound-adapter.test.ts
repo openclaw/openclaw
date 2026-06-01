@@ -89,6 +89,10 @@ describe("discordOutbound", () => {
     resetDiscordOutboundMocks(hoisted);
   });
 
+  it("routes direct CLI/core sends through the gateway delivery path", () => {
+    expect(discordOutbound.deliveryMode).toBe("gateway");
+  });
+
   it("routes text sends to thread target when threadId is provided", async () => {
     const result = await discordOutbound.sendText?.({
       cfg: {},
