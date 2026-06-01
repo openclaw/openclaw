@@ -7034,6 +7034,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let sessionid: String?
+    public let resumesession: Bool?
     public let message: String
     public let thinking: String?
     public let fastmode: Bool?
@@ -7053,6 +7054,7 @@ public struct ChatSendParams: Codable, Sendable {
         sessionkey: String,
         agentid: String? = nil,
         sessionid: String?,
+        resumesession: Bool?,
         message: String,
         thinking: String?,
         fastmode: Bool?,
@@ -7071,6 +7073,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.sessionid = sessionid
+        self.resumesession = resumesession
         self.message = message
         self.thinking = thinking
         self.fastmode = fastmode
@@ -7091,6 +7094,7 @@ public struct ChatSendParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case sessionid = "sessionId"
+        case resumesession = "resumeSession"
         case message
         case thinking
         case fastmode = "fastMode"
