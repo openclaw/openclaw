@@ -1,17 +1,20 @@
 /**
  * Canonical bundled chat-channel id list.
  *
- * Re-exports the same constant the inbound-envelope formatter
- * (src/auto-reply/envelope.ts -> formatInboundEnvelope -> formatAgentEnvelope)
- * uses for its leading `[<channel> ...]` header, so any plugin that needs to
- * recognize an envelope-prefixed message (for example a memory plugin filtering
- * envelope sludge out of long-term capture) does not have to hardcode its own
- * channel-id table that can drift from the formatter contract.
+ * Mirrors the channel catalog ids that can be passed to the inbound-envelope
+ * formatter (src/auto-reply/envelope.ts -> formatInboundEnvelope ->
+ * formatAgentEnvelope) for its leading `[<channel> ...]` header. Plugins that
+ * need to recognize an envelope-prefixed message (for example a memory plugin
+ * filtering envelope sludge out of long-term capture) should not hardcode their
+ * own channel-id table that can drift from the catalog.
  *
- * The list is derived from the bundled channel config metadata
- * (`src/config/bundled-channel-config-metadata.generated.ts`) and stays in
- * lockstep with channel registration; new bundled channels appear here
- * automatically.
+ * The list is derived from the same bundled/official channel catalog reader as
+ * runtime channel metadata so catalog-only channels stay covered even when they
+ * do not have a generated config metadata entry.
  */
-export { CHAT_CHANNEL_ORDER as BUNDLED_CHAT_CHANNEL_IDS } from "../channels/ids.js";
+import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
+
+export const BUNDLED_CHAT_CHANNEL_IDS = Object.freeze(
+  listBundledChannelCatalogEntries().map((entry) => entry.id),
+);
 export type { ChatChannelId } from "../channels/ids.js";
