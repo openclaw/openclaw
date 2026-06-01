@@ -252,6 +252,33 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
+  it("reports hook-selected models as normal selected models, not fallbacks", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_model_resolve",
+    );
+    mockedGlobalHookRunner.runBeforeModelResolve.mockResolvedValueOnce({
+      providerOverride: "openai",
+      modelOverride: "hook-selected-model",
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "initial-model",
+      runId: "run-before-model-resolve-runtime-settings",
+    });
+
+    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledTimes(1);
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      provider: "openai",
+      modelId: "hook-selected-model",
+      requestedModelId: "hook-selected-model",
+      fallbackActive: false,
+      fallbackReason: null,
+    });
+  });
+
   it("passes resolved auth profile into run attempts for context-engine afterTurn propagation", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 

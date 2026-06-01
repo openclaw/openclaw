@@ -603,7 +603,6 @@ export async function runEmbeddedAgent(
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-      const requestedModelId = modelId;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
@@ -661,6 +660,7 @@ export async function runEmbeddedAgent(
       });
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
+      const requestedModelId = modelId;
       const beforeAgentStartResult = hookSelection.beforeAgentStartResult;
       startupStages.mark("hooks");
       await ensureSelectedAgentHarnessPlugin({
