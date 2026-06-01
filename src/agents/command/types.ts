@@ -165,6 +165,8 @@ export type AgentCommandOpts = {
   acpTurnSource?: AcpTurnSource;
   /** Internal handoffs can feed the model without writing the synthetic prompt to transcript. */
   suppressPromptPersistence?: boolean;
+  /** Skip the soul-reflection pre-turn (set on sub-turns spawned by reflection to avoid recursion). */
+  skipSoulReflection?: boolean;
 };
 
 /** Restricted option surface for external ingress callsites. */

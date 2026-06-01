@@ -148,6 +148,32 @@ export async function appendSoulRule(input: SoulUpdateInput): Promise<SoulUpdate
 }
 
 /**
+ * Read the most recent rule from `## Auto-added` without modifying SOUL.md.
+ * Returns null when SOUL.md is missing, the section is absent, or it contains no rules.
+ */
+export async function readLastSoulRule(workspaceDir: string): Promise<string | null> {
+  const soulPath = path.join(workspaceDir, DEFAULT_SOUL_FILENAME);
+  if (!(await pathExists(soulPath))) {
+    return null;
+  }
+  const existing = await fs.readFile(soulPath, "utf-8");
+  const lines = existing.split(/\r?\n/);
+  const bounds = findAutoAddedSectionBounds(lines);
+  if (bounds === null) {
+    return null;
+  }
+  const sectionLines = lines.slice(bounds.start + 1, bounds.end);
+  for (let i = sectionLines.length - 1; i >= 0; i -= 1) {
+    const line = sectionLines[i] ?? "";
+    const stripped = line.replace(/<!--.*?-->/g, "").trim();
+    if (stripped.startsWith("-")) {
+      return stripped.slice(1).trim();
+    }
+  }
+  return null;
+}
+
+/**
  * Remove the most recent entry from `## Auto-added`. Returns the rule that was removed,
  * or null if the section is missing or empty.
  */

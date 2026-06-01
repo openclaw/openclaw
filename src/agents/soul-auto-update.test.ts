@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendSoulRule, undoLastSoulRule } from "./soul-auto-update.js";
+import { appendSoulRule, readLastSoulRule, undoLastSoulRule } from "./soul-auto-update.js";
 import { DEFAULT_SOUL_FILENAME } from "./workspace.js";
 
 let workspaceDir: string;
@@ -164,6 +164,27 @@ describe("appendSoulRule", () => {
       rule: "Anything.",
     });
     expect(result).toEqual({ ok: false, reason: "soul-missing" });
+  });
+});
+
+describe("readLastSoulRule", () => {
+  it("returns null when SOUL.md is missing", async () => {
+    expect(await readLastSoulRule(workspaceDir)).toBeNull();
+  });
+
+  it("returns null when the Auto-added section is absent", async () => {
+    await writeSoul("# SOUL.md\n\nNo auto-added section here.\n");
+    expect(await readLastSoulRule(workspaceDir)).toBeNull();
+  });
+
+  it("returns the most recent rule without modifying the file", async () => {
+    await writeSoul("# SOUL.md\n");
+    await appendSoulRule({ workspaceDir, rule: "First." });
+    await appendSoulRule({ workspaceDir, rule: "Second." });
+
+    const before = await readSoul();
+    expect(await readLastSoulRule(workspaceDir)).toBe("Second.");
+    expect(await readSoul()).toBe(before);
   });
 });
 
