@@ -106,10 +106,6 @@ function isCodexAccountTokenError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Failed to extract accountId from token");
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => void> {
   if (!CODEX_HARNESS_DEBUG) {
     return () => undefined;
