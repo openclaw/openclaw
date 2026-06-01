@@ -41,8 +41,8 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -907,7 +907,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   }).sessionStartedAt;
   const sessionDuration =
     typeof sessionStartedAt === "number"
-      ? formatDurationCompact(now - sessionStartedAt)
+      ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
       : undefined;
   const sessionLine = [
     `Session: ${args.sessionKey ?? "unknown"}`,
