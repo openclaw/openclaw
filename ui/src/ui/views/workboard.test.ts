@@ -669,15 +669,13 @@ describe("renderWorkboard", () => {
           failureCount: 1,
           comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 3 }],
           links: [{ id: "link-1", type: "relates_to", url: "https://example.com", createdAt: 4 }],
-          proof: [
-            {
-              id: "proof-1",
-              status: "passed",
-              command: "pnpm test",
-              url: "https://example.com/proof",
-              createdAt: 5,
-            },
-          ],
+          proof: Array.from({ length: 7 }, (_, index) => ({
+            id: `proof-${index + 1}`,
+            status: "passed",
+            command: `pnpm test ${index + 1}`,
+            url: `https://example.com/proof-${index + 1}`,
+            createdAt: 5 + index,
+          })),
           stale: { detectedAt: 6, reason: "No recent activity." },
         },
       },
@@ -711,7 +709,7 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Plugin");
     expect(container.textContent).toContain("1 failed");
     expect(container.textContent).toContain("1 comments");
-    expect(container.textContent).toContain("1 proof");
+    expect(container.textContent).toContain("7 proof");
     expect(container.textContent).toContain("stale");
     expect(container.textContent).not.toContain("Archived task");
 
@@ -732,9 +730,10 @@ describe("renderWorkboard", () => {
     );
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 attempts");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 links");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test");
+    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain("pnpm test 1");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 7");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "https://example.com/proof",
+      "https://example.com/proof-7",
     );
   });
 

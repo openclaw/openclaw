@@ -806,7 +806,7 @@ function renderDetailList(
   const entries = values
     .map((value) => value.trim())
     .filter(Boolean)
-    .slice(0, 6);
+    .slice(-6);
   if (entries.length === 0) {
     return empty;
   }
