@@ -136,7 +136,13 @@ describe("bootstrap-extra-files hook", () => {
     ).toBe(true);
   });
 
-  it("re-applies subagent bootstrap allowlist after extras are added", async () => {
+  it("re-applies subagent minimal allowlist and excludes hook-loaded extras", async () => {
+    // Subagent sessions default to the `minimal` tier, which (like `standard`)
+    // intentionally drops hook-loaded extras. A `packages/persona/SOUL.md`
+    // configured by the bootstrap-extra-files hook must NOT slip into a
+    // subagent context just because its basename happens to be in the minimal
+    // allowlist — otherwise minimal would return files that standard would not,
+    // breaking the `minimal ⊂ standard ⊂ full` inclusion order.
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-subagent-");
     const extraDir = path.join(tempDir, "packages", "persona");
     await fs.mkdir(extraDir, { recursive: true });
@@ -155,6 +161,12 @@ describe("bootstrap-extra-files hook", () => {
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
     await handler(event);
+    // Only the root files survive — the hook-loaded SOUL.md is filtered out.
     expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+    expect(
+      context.bootstrapFiles.some((f) =>
+        f.path.endsWith(path.join("packages", "persona", "SOUL.md")),
+      ),
+    ).toBe(false);
   });
 });

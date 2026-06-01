@@ -1169,10 +1169,15 @@ export function filterBootstrapFilesForSession(
 ): WorkspaceBootstrapFile[] {
   const tier = resolveBootstrapTier(sessionKey, tierOverride);
   if (tier === "minimal") {
-    if (sessionKey && isCronSessionKey(sessionKey)) {
-      return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
-    }
-    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+    // Mirror the standard-tier guard: a hook-loaded extra whose basename
+    // matches the allowlist (e.g. `packages/*\/AGENTS.md` from the
+    // `bootstrap-extra-files` hook) would otherwise sneak into the leanest
+    // tier and break the `minimal ⊂ standard ⊂ full` inclusion order.
+    const allowlist =
+      sessionKey && isCronSessionKey(sessionKey)
+        ? CRON_BOOTSTRAP_ALLOWLIST
+        : SUBAGENT_BOOTSTRAP_ALLOWLIST;
+    return files.filter((file) => file.source !== "hook" && allowlist.has(file.name));
   }
   if (tier === "standard") {
     // Standard includes only recognized root bootstrap files. Hook-loaded extras
