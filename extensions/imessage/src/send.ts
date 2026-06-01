@@ -831,7 +831,20 @@ function normalizeIMessageOutboundAllowValue(raw: string | number | null | undef
   if (raw === null || raw === undefined) {
     return "";
   }
-  return normalizeIMessageHandle(String(raw));
+  const value = String(raw).trim();
+  if (value === "*") {
+    return "*";
+  }
+  return normalizeIMessageHandle(value);
+}
+
+function resolveIMessageDirectChatIdentifier(target: ParsedIMessageTarget): string | null {
+  if (target.kind !== "chat_identifier") {
+    return null;
+  }
+  const match = /^(?:iMessage|SMS);-;(.+)$/iu.exec(target.chatIdentifier.trim());
+  const handle = match?.[1]?.trim();
+  return handle || null;
 }
 
 function normalizeIMessageOutboundTarget(target: ParsedIMessageTarget): string {
@@ -841,17 +854,62 @@ function normalizeIMessageOutboundTarget(target: ParsedIMessageTarget): string {
   if (target.kind === "chat_guid") {
     return `chat_guid:${target.chatGuid}`;
   }
+  const directChatIdentifier = resolveIMessageDirectChatIdentifier(target);
+  if (directChatIdentifier) {
+    return normalizeIMessageHandle(directChatIdentifier);
+  }
   if (target.kind === "chat_identifier") {
     return `chat_identifier:${target.chatIdentifier}`;
   }
   return normalizeIMessageHandle(target.to);
 }
 
+function isIMessageOutboundDmTarget(target: ParsedIMessageTarget): boolean {
+  return target.kind === "handle" || resolveIMessageDirectChatIdentifier(target) !== null;
+}
+
+function isIMessageConversationAllowEntry(normalized: string): boolean {
+  return (
+    normalized.startsWith("chat_id:") ||
+    normalized.startsWith("chat_guid:") ||
+    normalized.startsWith("chat_identifier:")
+  );
+}
+
+function hasIMessageSenderBasedAllowEntry(allowFrom: readonly (string | number)[]): boolean {
+  return allowFrom.some((entry) => {
+    const normalized = normalizeIMessageOutboundAllowValue(entry);
+    if (!normalized || normalized === "*") {
+      return false;
+    }
+    if (normalized.toLowerCase().startsWith("accessgroup:")) {
+      return false;
+    }
+    return !isIMessageConversationAllowEntry(normalized);
+  });
+}
+
+function isIMessageOutboundAllowlisted(params: {
+  allowFrom: readonly (string | number)[];
+  normalizedTarget: string;
+  allowSenderBasedGroupReply?: boolean;
+}): boolean {
+  const allowed = new Set(
+    params.allowFrom.map(normalizeIMessageOutboundAllowValue).filter(Boolean),
+  );
+  if (allowed.has("*") || allowed.has(params.normalizedTarget)) {
+    return true;
+  }
+  return (
+    params.allowSenderBasedGroupReply === true && hasIMessageSenderBasedAllowEntry(params.allowFrom)
+  );
+}
+
 function isIMessageOutboundTargetAllowed(
   senderId: string,
   allowFrom: readonly (string | number)[],
 ): boolean {
-  return allowFrom.some((entry) => normalizeIMessageOutboundAllowValue(entry) === senderId);
+  return isIMessageOutboundAllowlisted({ allowFrom, normalizedTarget: senderId });
 }
 
 async function expandIMessageOutboundAllowFrom(params: {
@@ -875,9 +933,10 @@ export async function assertIMessageOutboundAllowed(params: {
   cfg: OpenClawConfig;
   account: ResolvedIMessageAccount;
   target: ParsedIMessageTarget;
+  replyContext?: boolean;
 }): Promise<void> {
   const { cfg, account, target } = params;
-  if (target.kind !== "handle") {
+  if (!isIMessageOutboundDmTarget(target)) {
     if (account.config.groupPolicy === "disabled") {
       throw new Error("iMessage outbound blocked: group targets are disabled");
     }
@@ -891,11 +950,16 @@ export async function assertIMessageOutboundAllowed(params: {
       target,
       allowFrom: account.config.groupAllowFrom ?? [],
     });
-    const allowed = new Set(allowFrom.map(normalizeIMessageOutboundAllowValue).filter(Boolean));
-    if (allowed.size === 0) {
+    if (allowFrom.length === 0) {
       throw new Error("iMessage outbound blocked: channels.imessage.groupAllowFrom is empty");
     }
-    if (!allowed.has(normalizedTarget)) {
+    if (
+      !isIMessageOutboundAllowlisted({
+        allowFrom,
+        normalizedTarget,
+        allowSenderBasedGroupReply: params.replyContext === true,
+      })
+    ) {
       throw new Error(
         "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
       );
@@ -915,11 +979,10 @@ export async function assertIMessageOutboundAllowed(params: {
       ...(account.config.defaultTo ? [account.config.defaultTo] : []),
     ],
   });
-  const allowed = new Set(allowFrom.map(normalizeIMessageOutboundAllowValue).filter(Boolean));
-  if (allowed.size === 0) {
+  if (allowFrom.length === 0) {
     throw new Error("iMessage outbound blocked: channels.imessage.allowFrom/defaultTo is empty");
   }
-  if (!allowed.has(normalizedTarget)) {
+  if (!isIMessageOutboundAllowlisted({ allowFrom, normalizedTarget })) {
     throw new Error(
       "iMessage outbound blocked: target is not in channels.imessage.allowFrom/defaultTo",
     );
@@ -946,7 +1009,12 @@ export async function sendMessageIMessage(
     remoteHost: account.config.remoteHost,
   });
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
-  await assertIMessageOutboundAllowed({ cfg, account, target });
+  await assertIMessageOutboundAllowed({
+    cfg,
+    account,
+    target,
+    replyContext: Boolean(opts.replyToId),
+  });
   const service =
     opts.service ??
     resolveTargetService(target) ??
