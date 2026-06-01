@@ -908,6 +908,63 @@ async function agentCommandInternal(
 
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
+      const persistDirectAcpTurnTranscript = async () => {
+        const finalTextRaw = visibleTextAccumulator.finalizeRaw();
+        try {
+          const [{ resolveAcpSessionCwd }, { resolveSessionTranscriptFile }] = await Promise.all([
+            loadAcpSessionIdentifiersRuntime(),
+            loadTranscriptResolveRuntime(),
+          ]);
+          const internalSource = suppressVisibleSessionEffects
+            ? await resolveSessionTranscriptFile({
+                sessionId,
+                sessionKey,
+                sessionEntry,
+                agentId: sessionAgentId,
+                threadId: opts.threadId,
+              })
+            : undefined;
+          const internalSessionFile = suppressVisibleSessionEffects
+            ? await prepareInternalSessionEffectsTranscript({
+                sessionFile: internalSource?.sessionFile,
+                runId,
+              })
+            : undefined;
+          const transcriptSessionEntry: SessionEntry | undefined = internalSessionFile
+            ? {
+                ...(sessionEntry ?? {
+                  sessionId,
+                  updatedAt: Date.now(),
+                  sessionStartedAt: Date.now(),
+                }),
+                sessionId,
+                sessionFile: internalSessionFile,
+              }
+            : sessionEntry;
+          sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
+            body,
+            transcriptBody,
+            finalText: finalTextRaw,
+            sessionId,
+            sessionKey,
+            sessionEntry: transcriptSessionEntry,
+            sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+            storePath: suppressVisibleSessionEffects ? undefined : storePath,
+            sessionAgentId,
+            threadId: opts.threadId,
+            sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
+            config: cfg,
+          });
+          if (internalSessionFile) {
+            sessionEntry = prepared.sessionEntry;
+          }
+        } catch (error) {
+          log.warn(
+            `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
+          );
+          throw error;
+        }
+      };
       try {
         const {
           resolveAcpAgentPolicyError,
@@ -978,6 +1035,13 @@ async function agentCommandInternal(
               delta: visibleUpdate.delta,
             });
           },
+          onBeforeTurnSaveHook: async (completion) => {
+            if (!completion.success || opts.abortSignal?.aborted) {
+              return false;
+            }
+            await persistDirectAcpTurnTranscript();
+            return true;
+          },
         });
       } catch (error) {
         const { toAcpRuntimeError } = await loadAcpRuntimeErrorsRuntime();
@@ -996,61 +1060,7 @@ async function agentCommandInternal(
 
       attemptExecutionRuntime.emitAcpLifecycleEnd({ runId });
 
-      const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
-      try {
-        const [{ resolveAcpSessionCwd }, { resolveSessionTranscriptFile }] = await Promise.all([
-          loadAcpSessionIdentifiersRuntime(),
-          loadTranscriptResolveRuntime(),
-        ]);
-        const internalSource = suppressVisibleSessionEffects
-          ? await resolveSessionTranscriptFile({
-              sessionId,
-              sessionKey,
-              sessionEntry,
-              agentId: sessionAgentId,
-              threadId: opts.threadId,
-            })
-          : undefined;
-        const internalSessionFile = suppressVisibleSessionEffects
-          ? await prepareInternalSessionEffectsTranscript({
-              sessionFile: internalSource?.sessionFile,
-              runId,
-            })
-          : undefined;
-        const transcriptSessionEntry: SessionEntry | undefined = internalSessionFile
-          ? {
-              ...(sessionEntry ?? {
-                sessionId,
-                updatedAt: Date.now(),
-                sessionStartedAt: Date.now(),
-              }),
-              sessionId,
-              sessionFile: internalSessionFile,
-            }
-          : sessionEntry;
-        sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
-          body,
-          transcriptBody,
-          finalText: finalTextRaw,
-          sessionId,
-          sessionKey,
-          sessionEntry: transcriptSessionEntry,
-          sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
-          storePath: suppressVisibleSessionEffects ? undefined : storePath,
-          sessionAgentId,
-          threadId: opts.threadId,
-          sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
-          config: cfg,
-        });
-        if (internalSessionFile) {
-          sessionEntry = prepared.sessionEntry;
-        }
-      } catch (error) {
-        log.warn(
-          `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
-        );
-      }
 
       const result = attemptExecutionRuntime.buildAcpResult({
         payloadText: finalText,

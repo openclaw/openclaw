@@ -185,6 +185,19 @@ function writeAcpSessionStore(storePath: string, agent = "codex") {
   );
 }
 
+type MockAcpRunTurnInput = {
+  mode?: string;
+  onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
+  onBeforeTurnSaveHook?: (context: {
+    sessionKey: string;
+    success: boolean;
+    durationMs: number;
+    errorCode?: string;
+  }) => Promise<boolean | void> | boolean | void;
+  sessionKey?: string;
+  text?: string;
+};
+
 function resolveReadySession(
   sessionKey: string,
   agent = "codex",
@@ -242,13 +255,16 @@ async function withAcpSessionEnvInfo(
 
 function createRunTurnFromTextDeltas(chunks: string[]) {
   return vi.fn(async (paramsUnknown: unknown) => {
-    const params = paramsUnknown as {
-      onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
-    };
+    const params = paramsUnknown as MockAcpRunTurnInput;
     for (const text of chunks) {
       await params.onEvent?.({ type: "text_delta", text });
     }
     await params.onEvent?.({ type: "done", stopReason: "stop" });
+    await params.onBeforeTurnSaveHook?.({
+      sessionKey: params.sessionKey ?? "agent:codex:acp:test",
+      success: true,
+      durationMs: 1,
+    });
   });
 }
 
@@ -310,9 +326,7 @@ function expectPersistedAcpTranscript(params: { userContent: string; assistantTe
 }
 
 function firstRunTurnInput(runTurn: { mock: { calls: unknown[][] } }) {
-  return runTurn.mock.calls[0]?.[0] as
-    | { mode?: string; sessionKey?: string; text?: string }
-    | undefined;
+  return runTurn.mock.calls[0]?.[0] as MockAcpRunTurnInput | undefined;
 }
 
 async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
@@ -375,6 +389,7 @@ describe("agentCommand ACP runtime routing", () => {
       expect(runTurnInput?.sessionKey).toBe("agent:codex:acp:test");
       expect(runTurnInput?.text).toBe("  ping\n");
       expect(runTurnInput?.mode).toBe("prompt");
+      expect(runTurnInput?.onBeforeTurnSaveHook).toEqual(expect.any(Function));
       expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
       const hasAckLog = vi
         .mocked(runtime.log)
@@ -384,6 +399,88 @@ describe("agentCommand ACP runtime routing", () => {
         userContent: "  ping\n",
         assistantText: "  ACP_OK\n",
       });
+      expect(attemptExecutionMocks.persistAcpTurnTranscript).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("persists direct ACP transcripts through the manager save callback", async () => {
+    await withAcpSessionEnv(async () => {
+      const order: string[] = [];
+      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as MockAcpRunTurnInput;
+        await params.onEvent?.({ type: "text_delta", text: "saved" });
+        await params.onEvent?.({ type: "done", stopReason: "stop" });
+        order.push("before-save");
+        const result = await params.onBeforeTurnSaveHook?.({
+          sessionKey: params.sessionKey ?? "agent:codex:acp:test",
+          success: true,
+          durationMs: 1,
+        });
+        order.push(`save:${String(result)}`);
+      });
+      attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(async (params) => {
+        order.push("persist");
+        return (params as { sessionEntry?: unknown }).sessionEntry;
+      });
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      expect(order).toEqual(["before-save", "persist", "save:true"]);
+      expectPersistedAcpTranscript({
+        userContent: "ping",
+        assistantText: "saved",
+      });
+      expect(attemptExecutionMocks.persistAcpTurnTranscript).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("surfaces direct ACP transcript persistence failures to the save callback", async () => {
+    await withAcpSessionEnv(async () => {
+      attemptExecutionMocks.persistAcpTurnTranscript.mockRejectedValueOnce(new Error("disk full"));
+      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as MockAcpRunTurnInput;
+        await params.onEvent?.({ type: "text_delta", text: "answer" });
+        await params.onEvent?.({ type: "done", stopReason: "stop" });
+        await expect(
+          params.onBeforeTurnSaveHook?.({
+            sessionKey: params.sessionKey ?? "agent:codex:acp:test",
+            success: true,
+            durationMs: 1,
+          }),
+        ).rejects.toThrow("disk full");
+      });
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      expect(attemptExecutionMocks.persistAcpTurnTranscript).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("declines direct ACP save callbacks for failed runtime turns", async () => {
+    await withAcpSessionEnv(async () => {
+      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as MockAcpRunTurnInput;
+        const result = await params.onBeforeTurnSaveHook?.({
+          sessionKey: params.sessionKey ?? "agent:codex:acp:test",
+          success: false,
+          durationMs: 1,
+          errorCode: "ACP_TURN_FAILED",
+        });
+        expect(result).toBe(false);
+      });
+      mockAcpManager({
+        runTurn: (params: unknown) => runTurn(params),
+      });
+
+      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+
+      expect(attemptExecutionMocks.persistAcpTurnTranscript).not.toHaveBeenCalled();
     });
   });
 

@@ -846,9 +846,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
-      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
+      const runTurnParams = params as {
+        onBeforeTurnSaveHook?: (completion: {
+          durationMs: number;
+          success: boolean;
+        }) => boolean | Promise<boolean>;
+        onEvent?: (event: unknown) => void;
+      };
+      const onEvent = runTurnParams.onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });
       onEvent?.({ type: "done", stopReason: "end_turn" });
+      await runTurnParams.onBeforeTurnSaveHook?.({ durationMs: 0, success: true });
     });
     state.createAcpVisibleTextAccumulatorMock.mockImplementation(() => {
       let text = "";
