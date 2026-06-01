@@ -204,17 +204,6 @@ function lookupStoredBinding(
   }
 }
 
-function lookupStoredCurrentBinding(
-  store: CopilotSessionBindingStore | undefined,
-  key: string,
-): CopilotSessionBinding | undefined {
-  try {
-    return normalizeBinding(store?.lookup(key));
-  } catch {
-    return undefined;
-  }
-}
-
 function registerStoredBinding(
   store: CopilotSessionBindingStore | undefined,
   key: string,
@@ -621,18 +610,9 @@ export function createCopilotAgentHarness(
           ? tracked
           : undefined;
       if (!compatibleTracked) {
-        const stored = !resetBlockedStoredSessions.has(openclawSessionId)
-          ? lookupStoredCurrentBinding(options?.sessionStore, openclawSessionId)
-          : undefined;
-        if (stored?.compactKey === currentCompactKey && sessionAuthMatches(stored, currentAuth)) {
-          deleteStoredBinding(options?.sessionStore, openclawSessionId);
-          return {
-            ok: false,
-            compacted: false,
-            reason: "stale_thread_binding",
-            failure: { reason: "stale_thread_binding" },
-          };
-        }
+        // Durable bindings only carry SDK session ids. Manual SDK compaction also
+        // needs the live SessionConfig with OpenClaw hooks/tools, so preserve the
+        // binding for the next attempt and let the host compact transcript state.
         return {
           ok: false,
           compacted: false,

@@ -1695,12 +1695,12 @@ describe("createCopilotAgentHarness", () => {
 
       expect(secondPool.acquire).not.toHaveBeenCalled();
       expect(resumeSession).not.toHaveBeenCalled();
-      expect(sessionStore.store.delete).toHaveBeenCalledWith("oc-sess-persisted");
+      expect(sessionStore.store.delete).not.toHaveBeenCalledWith("oc-sess-persisted");
       expect(result).toEqual({
         ok: false,
         compacted: false,
-        reason: "stale_thread_binding",
-        failure: { reason: "stale_thread_binding" },
+        reason: "missing_thread_binding",
+        failure: { reason: "missing_thread_binding" },
       });
     });
 
