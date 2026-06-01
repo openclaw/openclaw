@@ -986,7 +986,7 @@ describe("chrome MCP page parsing", () => {
     await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/startup failed/);
 
     expect(factoryCalls).toBe(1);
-    expect(closeMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
   });
 
   it("does not reuse a stale ready-pending session for ephemeral probes", async () => {
@@ -1043,7 +1043,7 @@ describe("chrome MCP page parsing", () => {
     await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
   });
 
-  it("starts a fresh shared session after a readiness timeout while another waiter remains", async () => {
+  it("keeps a shared session after a readiness timeout while another waiter remains", async () => {
     let factoryCalls = 0;
     let releaseFirstReady: (() => void) | undefined;
     const firstReadyGate = new Promise<void>((resolve) => {
@@ -1081,14 +1081,42 @@ describe("chrome MCP page parsing", () => {
     await vi.waitFor(() => expect(firstReadyThen).toHaveBeenCalledTimes(2));
     await timedOutTabsExpectation;
 
+    const laterTabsPromise = listChromeMcpTabs("chrome-live");
+    releaseFirstReady();
+
+    await expect(keptTabsPromise).resolves.toHaveLength(2);
+    await expect(laterTabsPromise).resolves.toHaveLength(2);
+    expect(factoryCalls).toBe(1);
+    expect(closeMocks[0]).not.toHaveBeenCalled();
+    keptCtrl.abort(new Error("kept waiter cancelled"));
+  });
+
+  it("closes a shared pending session after a readiness timeout with no other waiters", async () => {
+    let factoryCalls = 0;
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      closeMocks.push(closeMock);
+      session.client.close = closeMock as typeof session.client.close;
+      if (factoryCalls === 1) {
+        session.ready = new Promise<void>(() => {});
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      listChromeMcpTabs("chrome-live", undefined, {
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow(/timed out/);
+    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+
     await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
     expect(factoryCalls).toBe(2);
     expect(closeMocks[1]).not.toHaveBeenCalled();
-
-    keptCtrl.abort(new Error("kept waiter cancelled"));
-    releaseFirstReady();
-    await expect(keptTabsPromise).rejects.toThrow(/kept waiter cancelled/);
-    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
   });
 
   it("preserves session after tool-level errors (isError)", async () => {

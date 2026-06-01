@@ -1009,10 +1009,19 @@ async function getSession(
       if (signal?.aborted && pendingLease) {
         await pendingLease.release(true);
         pendingLease = undefined;
+      } else if (pendingLease && leasedPending && leasedPending.state.waiters > 1) {
+        await pendingLease.release(false);
+        pendingLease = undefined;
       } else {
         forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
         if (leasedPending) {
           forgetPendingChromeMcpSessionIfCurrent(cacheKey, leasedPending);
+        }
+        if (pendingLease) {
+          await pendingLease.release(true);
+          pendingLease = undefined;
+        } else {
+          await closeChromeMcpSessionHandle(session);
         }
       }
       throw err;
@@ -1053,9 +1062,14 @@ async function getExistingSession(
       if (signal?.aborted) {
         await pendingLease.release(true);
         pendingLease = undefined;
+      } else if (pending.state.waiters > 1) {
+        await pendingLease.release(false);
+        pendingLease = undefined;
       } else {
         forgetCachedChromeMcpSessionIfCurrent(cacheKey, session);
         forgetPendingChromeMcpSessionIfCurrent(cacheKey, pending);
+        await pendingLease.release(true);
+        pendingLease = undefined;
       }
       throw err;
     } finally {
