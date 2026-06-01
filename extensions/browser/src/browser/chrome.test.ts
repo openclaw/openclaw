@@ -312,6 +312,16 @@ describe("browser chrome profile decoration", () => {
     expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
   });
 
+  it("keeps singleton artifacts when the lock owner is malformed", async () => {
+    const userDataDir = await createUserDataDir();
+    await fsp.writeFile(path.join(userDataDir, "SingletonCookie"), "cookie");
+    await fsp.symlink("-12345", path.join(userDataDir, "SingletonLock"));
+
+    expect(clearStaleChromeSingletonLocks(userDataDir, os.hostname())).toBe(false);
+    expect(fs.lstatSync(path.join(userDataDir, "SingletonLock")).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(path.join(userDataDir, "SingletonCookie"))).toBe(true);
+  });
+
   it("keeps singleton artifacts when the lock PID exists but cannot be signaled", async () => {
     const userDataDir = await createUserDataDir();
     await fsp.symlink(`${os.hostname()}-12345`, path.join(userDataDir, "SingletonLock"));

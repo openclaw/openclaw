@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer, type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,11 +11,13 @@ import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const execFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
+    execFile: (...args: unknown[]) => execFileMock(...args),
     spawn: (...args: unknown[]) => spawnMock(...args),
   };
 });
@@ -111,6 +113,55 @@ function requireSpawnOptions(index = 0): { env?: NodeJS.ProcessEnv } {
     throw new Error(`expected spawn options for call #${index + 1}`);
   }
   return options as { env?: NodeJS.ProcessEnv };
+}
+
+function mockChromeProcessProbeExecutables(): void {
+  const realAccessSync = fs.accessSync;
+  vi.spyOn(fs, "accessSync").mockImplementation((p, mode) => {
+    const s = String(p);
+    if (s.endsWith("/lsof") || s.endsWith("/ps")) {
+      return;
+    }
+    return realAccessSync(p, mode);
+  });
+}
+
+async function getAvailableLoopbackPort(): Promise<number> {
+  const server = createTcpServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address() as AddressInfo;
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+  return address.port;
+}
+
+function mockLinuxProcCommandLine(
+  pid: number,
+  args: readonly string[],
+  startTime = "123456",
+  isAlive: () => boolean = () => true,
+): void {
+  const realReadFileSync = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation(((filePath, options) => {
+    if (String(filePath) === `/proc/${pid}/cmdline`) {
+      if (!isAlive()) {
+        throw Object.assign(new Error("no such process"), { code: "ENOENT" });
+      }
+      return args.join("\0");
+    }
+    if (String(filePath) === `/proc/${pid}/stat`) {
+      if (!isAlive()) {
+        throw Object.assign(new Error("no such process"), { code: "ENOENT" });
+      }
+      const fields = ["S", ...Array(18).fill("0"), startTime, "0"];
+      return `${pid} (${path.basename(args[0] ?? "chrome")}) ${fields.join(" ")}`;
+    }
+    return realReadFileSync(filePath, options as never);
+  }) as typeof fs.readFileSync);
 }
 
 function effectiveSpawnCommand(call: unknown[]): unknown {
@@ -214,6 +265,7 @@ describe("chrome.ts internal", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     spawnMock.mockReset();
+    execFileMock.mockReset();
     ensurePortAvailableMock.mockReset();
     ensurePortAvailableMock.mockImplementation(async () => {});
     registerManagedProxyBrowserCdpBypassMock.mockReset();
@@ -360,6 +412,19 @@ describe("chrome.ts internal", () => {
         userDataDir: "/tmp/foo",
       });
       expect(args).toContain("--no-proxy-server");
+    });
+
+    it("keeps the managed ownership args adjacent at the start of the launch command", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: baseProfile,
+        userDataDir: "/tmp/openclaw profile with spaces",
+      });
+      expect(args.slice(0, 3)).toEqual([
+        "--remote-debugging-port=19222",
+        "--user-data-dir=/tmp/openclaw profile with spaces",
+        "--no-first-run",
+      ]);
     });
   });
 
@@ -1078,6 +1143,1730 @@ describe("chrome.ts internal", () => {
   });
 
   describe("launchOpenClawChrome remaining branches", () => {
+    it("stops an unresponsive Chrome that owns the managed profile before retrying the CDP port", async () => {
+      const profileName = `owned-stale-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      let staleAlive = true;
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(
+        stalePid,
+        [
+          "/usr/bin/google-chrome",
+          `--remote-debugging-port=${cdpPort}`,
+          `--user-data-dir=${userDataDir}`,
+          "--no-first-run",
+        ],
+        "123456",
+        () => staleAlive,
+      );
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid) {
+          if (signal === 0 || signal == null) {
+            if (staleAlive) {
+              return true;
+            }
+            throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+          }
+          staleAlive = false;
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+
+      ensurePortAvailableMock
+        .mockRejectedValueOnce(
+          Object.assign(new Error("Port 18800 is already in use."), {
+            name: "PortInUseError",
+            code: "EADDRINUSE",
+          }),
+        )
+        .mockResolvedValueOnce(undefined);
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        const args = _args as string[];
+        if (cmd.endsWith("/lsof")) {
+          if (args.includes("-d")) {
+            callback(null, `p${stalePid}\nftxt\nn/usr/bin/google-chrome\n`, "");
+            return;
+          }
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        if (cmd.endsWith("/ps")) {
+          if (args.includes("lstart=")) {
+            if (staleAlive) {
+              callback(null, "Mon Jun  1 15:00:00 2026\n", "");
+              return;
+            }
+            callback(new Error("no such process"), "", "");
+            return;
+          }
+          callback(
+            null,
+            `/usr/bin/google-chrome --remote-debugging-port=${cdpPort} --user-data-dir=${userDataDir} --no-first-run\n`,
+            "",
+          );
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+      spawnMock.mockImplementation(() => makeFakeProc());
+
+      try {
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Failed to start Chrome CDP on port ${cdpPort}`,
+        );
+
+        expect(processKillSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(execFileMock).toHaveBeenCalledWith(
+          expect.stringMatching(/\/lsof$/),
+          ["-nP", `-iTCP:${cdpPort}`, "-sTCP:LISTEN", "-Fp"],
+          expect.objectContaining({ timeout: expect.any(Number) }),
+          expect.any(Function),
+        );
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(2);
+        expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+      } finally {
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not stop an owned Chrome that becomes CDP-ready during recovery grace", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `owned-starting-${Date.now()}`;
+      const stalePid = 76543;
+      const wsPath = "/devtools/browser/starting";
+      let versionRequests = 0;
+      const server = createServer((req, res) => {
+        if (req.url === "/json/version") {
+          versionRequests += 1;
+          if (versionRequests === 1) {
+            res.writeHead(503);
+            res.end("starting");
+            return;
+          }
+          const addr = server.address() as AddressInfo;
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}${wsPath}`,
+            }),
+          );
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+      const wss = new WebSocketServer({ noServer: true });
+      wss.on("connection", (ws) => {
+        ws.on("message", (raw) => {
+          const message = JSON.parse(rawDataToString(raw)) as {
+            id?: unknown;
+            method?: unknown;
+          };
+          if (message.method === "Browser.getVersion" && typeof message.id === "number") {
+            ws.send(
+              JSON.stringify({
+                id: message.id,
+                result: { product: "Chrome/Mock", userAgent: "OpenClawTest" },
+              }),
+            );
+          }
+        });
+      });
+      server.on("upgrade", (req, socket, head) => {
+        if (req.url !== wsPath) {
+          socket.destroy();
+          return;
+        }
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit("connection", ws, req);
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const cdpPort = (server.address() as AddressInfo).port;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      const staleAlive = true;
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(
+        stalePid,
+        [
+          "/usr/bin/google-chrome",
+          `--remote-debugging-port=${cdpPort}`,
+          `--user-data-dir=${userDataDir}`,
+          "--no-first-run",
+        ],
+        "123456",
+        () => staleAlive,
+      );
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+          localLaunchTimeoutMs: 50,
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(versionRequests).toBeGreaterThanOrEqual(2);
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("accepts Linux Chrome wrapper processes when the live binary replaces the launcher path", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `linux-wrapper-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      let staleAlive = true;
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(
+        stalePid,
+        [
+          "/opt/google/chrome/chrome",
+          `--remote-debugging-port=${cdpPort}`,
+          `--user-data-dir=${userDataDir}`,
+          "--no-first-run",
+        ],
+        "123456",
+        () => staleAlive,
+      );
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome") || s.includes("/opt/google/chrome/chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid) {
+          if (signal === 0 || signal == null) {
+            if (staleAlive) {
+              return true;
+            }
+            throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+          }
+          staleAlive = false;
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+
+      ensurePortAvailableMock
+        .mockRejectedValueOnce(
+          Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+            name: "PortInUseError",
+            code: "EADDRINUSE",
+          }),
+        )
+        .mockResolvedValueOnce(undefined);
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+      spawnMock.mockImplementation(() => makeFakeProc());
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Failed to start Chrome CDP on port ${cdpPort}`,
+        );
+
+        expect(processKillSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(2);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("accepts supported Linux stable wrapper processes when the live binary replaces the launcher path", async () => {
+      const originalPlatform = process.platform;
+      const cases = [
+        {
+          configured: "/usr/bin/brave-browser-stable",
+          live: "/opt/brave.com/brave/brave-browser",
+        },
+        {
+          configured: "/usr/bin/microsoft-edge-stable",
+          live: "/usr/bin/microsoft-edge",
+        },
+        {
+          configured: "/usr/bin/vivaldi-stable",
+          live: "/opt/vivaldi/vivaldi",
+        },
+        {
+          configured: "/usr/bin/opera-stable",
+          live: "/usr/lib/x86_64-linux-gnu/opera/opera",
+        },
+        {
+          configured: "/usr/bin/yandex-browser",
+          live: "/opt/yandex/browser/yandex-browser",
+        },
+      ];
+      let currentStalePid = 0;
+      const staleAlive = new Map<number, boolean>();
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (staleAlive.has(pid)) {
+          if (signal === 0 || signal == null) {
+            if (staleAlive.get(pid)) {
+              return true;
+            }
+            throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+          }
+          staleAlive.set(pid, false);
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (cases.some(({ configured, live }) => s.includes(configured) || s.includes(live))) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+      mockChromeProcessProbeExecutables();
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${currentStalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+      spawnMock.mockImplementation(() => makeFakeProc());
+      mockExpiredLaunchPollingClock();
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        for (const [index, candidate] of cases.entries()) {
+          const profileName = `linux-stable-wrapper-${index}-${Date.now()}`;
+          const cdpPort = await getAvailableLoopbackPort();
+          currentStalePid = 77000 + index;
+          staleAlive.set(currentStalePid, true);
+          const userDataDir = resolveOpenClawUserDataDir(profileName);
+          await fsp.mkdir(userDataDir, { recursive: true });
+          await fsp.symlink(
+            `${os.hostname()}-${currentStalePid}`,
+            path.join(userDataDir, "SingletonLock"),
+          );
+          mockLinuxProcCommandLine(
+            currentStalePid,
+            [
+              candidate.live,
+              `--remote-debugging-port=${cdpPort}`,
+              `--user-data-dir=${userDataDir}`,
+              "--no-first-run",
+            ],
+            "123456",
+            () => staleAlive.get(currentStalePid) ?? false,
+          );
+          ensurePortAvailableMock
+            .mockRejectedValueOnce(
+              Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+                name: "PortInUseError",
+                code: "EADDRINUSE",
+              }),
+            )
+            .mockResolvedValueOnce(undefined);
+          const profile = {
+            name: profileName,
+            color: "#FF4500",
+            cdpPort,
+            cdpUrl: `http://127.0.0.1:${cdpPort}`,
+            cdpIsLoopback: true,
+          } as unknown as ResolvedBrowserProfile;
+          const resolved = {
+            executablePath: candidate.configured,
+            headless: true,
+            noSandbox: true,
+            extraArgs: [],
+          } as unknown as ResolvedBrowserConfig;
+
+          try {
+            await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+              `Failed to start Chrome CDP on port ${cdpPort}`,
+            );
+            expect(processKillSpy).toHaveBeenCalledWith(currentStalePid, "SIGTERM");
+          } finally {
+            await fsp.rm(userDataDir, { recursive: true, force: true });
+          }
+        }
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
+    });
+
+    it("does not accept a different Linux Chromium family as the managed executable", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `linux-cross-family-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(stalePid, [
+        "/opt/brave.com/brave/brave-browser",
+        `--remote-debugging-port=${cdpPort}`,
+        `--user-data-dir=${userDataDir}`,
+        "--no-first-run",
+      ]);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome") || s.includes("/opt/brave.com/brave/brave-browser")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not escalate to SIGKILL when the singleton PID stops matching before escalation", async () => {
+      const profileName = `sigkill-recheck-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(stalePid, [
+        "/usr/bin/google-chrome",
+        `--remote-debugging-port=${cdpPort}`,
+        `--user-data-dir=${userDataDir}`,
+        "--no-first-run",
+      ]);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null || signal === "SIGTERM")) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      let lsofCalls = 0;
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        const args = _args as string[];
+        if (cmd.endsWith("/lsof")) {
+          if (args.includes("-d")) {
+            callback(null, `p${stalePid}\nftxt\nn/usr/bin/google-chrome\n`, "");
+            return;
+          }
+          lsofCalls += 1;
+          callback(null, lsofCalls < 4 ? `p${stalePid}\n` : "p87654\n", "");
+          return;
+        }
+        if (cmd.endsWith("/ps")) {
+          callback(
+            null,
+            `/usr/bin/google-chrome --remote-debugging-port=${cdpPort} --user-data-dir=${userDataDir} --no-first-run\n`,
+            "",
+          );
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+      mockExpiredLaunchPollingClock();
+
+      try {
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(processKillSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not clear singleton artifacts when another owner appears after stop", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `owner-changed-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const newOwnerPid = 87654;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      const lockPath = path.join(userDataDir, "SingletonLock");
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, lockPath);
+      mockLinuxProcCommandLine(stalePid, [
+        "/usr/bin/google-chrome",
+        `--remote-debugging-port=${cdpPort}`,
+        `--user-data-dir=${userDataDir}`,
+        "--no-first-run",
+      ]);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+      const realReadlinkSync = fs.readlinkSync;
+
+      let staleAlive = true;
+      vi.spyOn(fs, "readlinkSync").mockImplementation((p, options) => {
+        if (String(p) === lockPath) {
+          return `${os.hostname()}-${staleAlive ? stalePid : newOwnerPid}`;
+        }
+        return realReadlinkSync(p, options as never);
+      });
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid) {
+          if (signal === 0 || signal == null) {
+            if (staleAlive) {
+              return true;
+            }
+            throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+          }
+          staleAlive = false;
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(processKillSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(fs.readlinkSync(lockPath)).toBe(`${os.hostname()}-${newOwnerPid}`);
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not clear singleton artifacts when the stopped PID is reused before cleanup", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `pid-reused-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      const lockPath = path.join(userDataDir, "SingletonLock");
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, lockPath);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+      const realReadFileSync = fs.readFileSync;
+      let staleAlive = true;
+      vi.spyOn(fs, "readFileSync").mockImplementation(((filePath, options) => {
+        const s = String(filePath);
+        if (s === `/proc/${stalePid}/cmdline`) {
+          return [
+            "/usr/bin/google-chrome",
+            `--remote-debugging-port=${cdpPort}`,
+            `--user-data-dir=${userDataDir}`,
+            "--no-first-run",
+          ].join("\0");
+        }
+        if (s === `/proc/${stalePid}/stat`) {
+          const startTime = staleAlive ? "123456" : "999999";
+          const fields = ["S", ...Array(18).fill("0"), startTime, "0"];
+          return `${stalePid} (google-chrome) ${fields.join(" ")}`;
+        }
+        return realReadFileSync(filePath, options as never);
+      }) as typeof fs.readFileSync);
+
+      const realKill = process.kill.bind(process);
+      let stoppedPidZeroProbes = 0;
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid) {
+          if (signal === 0 || signal == null) {
+            if (staleAlive) {
+              return true;
+            }
+            stoppedPidZeroProbes += 1;
+            if (stoppedPidZeroProbes >= 3) {
+              return true;
+            }
+            throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+          }
+          staleAlive = false;
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(processKillSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(fs.readlinkSync(lockPath)).toBe(`${os.hostname()}-${stalePid}`);
+        expect(await fsp.lstat(lockPath)).toBeTruthy();
+        expect(stoppedPidZeroProbes).toBeGreaterThanOrEqual(3);
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not accept parsed argv when managed launch flags are not adjacent", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `argv-order-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(stalePid, [
+        "/usr/bin/google-chrome",
+        `--remote-debugging-port=${cdpPort}`,
+        "--no-first-run",
+        `--user-data-dir=${userDataDir}`,
+      ]);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not stop a singleton PID when the listener is not the managed profile process", async () => {
+      const profileName = `wrong-cmdline-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(stalePid, [
+        "/usr/bin/google-chrome-beta",
+        `--remote-debugging-port=${cdpPort}0`,
+        `--user-data-dir=${userDataDir}-old`,
+      ]);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error("Port 18800 is already in use."), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        if (cmd.endsWith("/ps")) {
+          callback(
+            null,
+            `/usr/bin/google-chrome-beta --remote-debugging-port=${cdpPort}0 --user-data-dir=${userDataDir}-old\n`,
+            "",
+          );
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          "Port 18800 is already in use.",
+        );
+
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects ambiguous ps user-data-dir prefixes before stopping a stale PID", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `ps-prefix-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        if (cmd.endsWith("/ps")) {
+          callback(
+            null,
+            `/usr/bin/google-chrome --remote-debugging-port=${cdpPort} --user-data-dir=${userDataDir} old --no-first-run\n`,
+            "",
+          );
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        Object.defineProperty(process, "platform", { value: "darwin" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not probe CDP before proving the port listener owns the managed profile", async () => {
+      const profileName = `probe-after-owner-${Date.now()}`;
+      const stalePid = 76543;
+      let discoveryHits = 0;
+      const server = createServer((req, res) => {
+        if (req.url === "/json/version") {
+          discoveryHits += 1;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1:9/devtools/browser/test" }));
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const cdpPort = (server.address() as AddressInfo).port;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(stalePid, [
+        "/usr/bin/google-chrome",
+        `--remote-debugging-port=${cdpPort}`,
+        `--user-data-dir=${userDataDir}-other`,
+      ]);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(discoveryHits).toBe(0);
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not probe CDP in the loopback-held branch before ownership proof", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `loopback-probe-after-owner-${Date.now()}`;
+      const stalePid = 76543;
+      let discoveryHits = 0;
+      const server = createServer((req, res) => {
+        if (req.url === "/json/version") {
+          discoveryHits += 1;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1:9/devtools/browser/test" }));
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const cdpPort = (server.address() as AddressInfo).port;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(stalePid, [
+        "/usr/bin/google-chrome",
+        `--remote-debugging-port=${cdpPort}`,
+        `--user-data-dir=${userDataDir}-other`,
+      ]);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockResolvedValue(undefined);
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(discoveryHits).toBe(0);
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("requires the raw ps executable match at the command head before stopping a stale PID", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `ps-exe-head-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        if (cmd.endsWith("/ps")) {
+          callback(
+            null,
+            `/usr/bin/node --remote-debugging-port=${cdpPort} --user-data-dir=${userDataDir} --no-first-run --wrapper=/usr/bin/google-chrome\n`,
+            "",
+          );
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+
+      try {
+        Object.defineProperty(process, "platform", { value: "darwin" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("accepts macOS ps output for managed executable and profile paths that contain spaces", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `ps space profile ${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      const executablePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s === executablePath || s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      let staleAlive = true;
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid) {
+          if (signal === 0 || signal == null) {
+            if (staleAlive) {
+              return true;
+            }
+            throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+          }
+          staleAlive = false;
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Port ${cdpPort} is already in use.`), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        const args = _args as string[];
+        if (cmd.endsWith("/lsof")) {
+          if (args.includes("-d")) {
+            callback(null, `p${stalePid}\nftxt\nn${executablePath}\n`, "");
+            return;
+          }
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        if (cmd.endsWith("/ps") && args.includes("lstart=")) {
+          if (staleAlive) {
+            callback(null, "Mon Jun  1 15:00:00 2026\n", "");
+            return;
+          }
+          callback(new Error("no such process"), "", "");
+          return;
+        }
+        if (cmd.endsWith("/ps")) {
+          callback(
+            null,
+            `${executablePath} --remote-debugging-port=${cdpPort} --user-data-dir=${userDataDir} --no-first-run\n`,
+            "",
+          );
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+      spawnMock.mockImplementation(() => makeFakeProc());
+      mockExpiredLaunchPollingClock();
+
+      try {
+        Object.defineProperty(process, "platform", { value: "darwin" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath,
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Failed to start Chrome CDP on port ${cdpPort}`,
+        );
+
+        expect(processKillSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(2);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not stop a singleton PID that is not the CDP port listener", async () => {
+      const profileName = `pid-reused-${Date.now()}`;
+      const cdpPort = await getAvailableLoopbackPort();
+      const stalePid = 76543;
+      const listenerPid = 76544;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid && (signal === 0 || signal == null)) {
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error("Port 18800 is already in use."), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        callback(null, `p${listenerPid}\n`, "");
+      });
+
+      try {
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          "Port 18800 is already in use.",
+        );
+
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(processKillSpy).not.toHaveBeenCalledWith(stalePid, "SIGKILL");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("clears a proven stale lock before surfacing a still-held loopback port", async () => {
+      const originalPlatform = process.platform;
+      const profileName = `loopback-held-${Date.now()}`;
+      const stalePid = 76543;
+      const server = createServer((_req, res) => {
+        res.writeHead(404);
+        res.end();
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      let serverClosed = false;
+      const cdpPort = (server.address() as AddressInfo).port;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+      await fsp.symlink(`${os.hostname()}-${stalePid}`, path.join(userDataDir, "SingletonLock"));
+      mockLinuxProcCommandLine(stalePid, [
+        "/usr/bin/google-chrome",
+        `--remote-debugging-port=${cdpPort}`,
+        `--user-data-dir=${userDataDir}`,
+        "--no-first-run",
+      ]);
+      mockChromeProcessProbeExecutables();
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (s.includes("google-chrome")) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+
+      let staleAlive = true;
+      const realKill = process.kill.bind(process);
+      const processKillSpy = vi.spyOn(process, "kill").mockImplementation(((
+        pid: number,
+        signal?: NodeJS.Signals | number,
+      ) => {
+        if (pid === stalePid) {
+          if (signal === 0 || signal == null) {
+            if (staleAlive) {
+              return true;
+            }
+            throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+          }
+          staleAlive = false;
+          if (!serverClosed) {
+            serverClosed = true;
+            server.closeAllConnections?.();
+            server.closeIdleConnections?.();
+            server.close();
+          }
+          return true;
+        }
+        return realKill(pid, signal as NodeJS.Signals);
+      }) as typeof process.kill);
+      ensurePortAvailableMock.mockResolvedValue(undefined);
+      execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+        const cmd = String(_cmd);
+        if (cmd.endsWith("/lsof")) {
+          callback(null, `p${stalePid}\n`, "");
+          return;
+        }
+        callback(new Error(`unexpected command: ${cmd}`), "", "");
+      });
+      spawnMock.mockImplementation(() => makeFakeProc());
+
+      try {
+        Object.defineProperty(process, "platform", { value: "linux" });
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort,
+          cdpUrl: `http://127.0.0.1:${cdpPort}`,
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          executablePath: "/usr/bin/google-chrome",
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+          localLaunchTimeoutMs: 1,
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          `Port ${cdpPort} is already in use.`,
+        );
+
+        expect(processKillSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+        expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        if (!serverClosed) {
+          serverClosed = true;
+          await new Promise<void>((resolve) => {
+            server.close(() => resolve());
+          });
+        }
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not run managed port recovery for non-loopback profiles", async () => {
+      const processKillSpy = vi.spyOn(process, "kill");
+      const profile = {
+        name: "remote-profile",
+        color: "#FF4500",
+        cdpPort: 18800,
+        cdpUrl: "http://10.0.0.42:18800",
+        cdpIsLoopback: false,
+      } as unknown as ResolvedBrowserProfile;
+      const resolved = {
+        executablePath: "/usr/bin/google-chrome",
+        headless: true,
+        noSandbox: true,
+        extraArgs: [],
+      } as unknown as ResolvedBrowserConfig;
+
+      await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+        'Profile "remote-profile" is remote; cannot launch local Chrome.',
+      );
+
+      expect(ensurePortAvailableMock).not.toHaveBeenCalled();
+      expect(execFileMock).not.toHaveBeenCalled();
+      expect(processKillSpy).not.toHaveBeenCalled();
+    });
+
+    it("leaves an occupied managed port alone when no local singleton owner is present", async () => {
+      const profileName = `unowned-port-${Date.now()}`;
+      const userDataDir = resolveOpenClawUserDataDir(profileName);
+      await fsp.mkdir(userDataDir, { recursive: true });
+
+      const realExistsSync = fs.existsSync;
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
+          return true;
+        }
+        return realExistsSync(p);
+      });
+      const processKillSpy = vi.spyOn(process, "kill");
+      ensurePortAvailableMock.mockRejectedValueOnce(
+        Object.assign(new Error("Port 18800 is already in use."), {
+          name: "PortInUseError",
+          code: "EADDRINUSE",
+        }),
+      );
+
+      try {
+        const profile = {
+          name: profileName,
+          color: "#FF4500",
+          cdpPort: 18800,
+          cdpUrl: "http://127.0.0.1:18800",
+          cdpIsLoopback: true,
+        } as unknown as ResolvedBrowserProfile;
+        const resolved = {
+          headless: true,
+          noSandbox: true,
+          extraArgs: [],
+        } as unknown as ResolvedBrowserConfig;
+
+        await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+          "Port 18800 is already in use.",
+        );
+
+        expect(processKillSpy).not.toHaveBeenCalled();
+        expect(ensurePortAvailableMock).toHaveBeenCalledTimes(1);
+      } finally {
+        await fsp.rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+
     it("skips decoration entirely when the profile is already decorated", async () => {
       // Covers the `needsDecorate` false branch by writing a real,
       // properly-shaped Local State + Preferences pair that matches
