@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient, MIN_CODEX_APP_SERVER_VERSION } from "./client.js";
@@ -50,6 +53,14 @@ let retainSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js
 let releaseLeasedSharedCodexAppServerClient: typeof import("./shared-client.js").releaseLeasedSharedCodexAppServerClient;
 let retireSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").retireSharedCodexAppServerClientIfCurrent;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
+
+const tempDirs: string[] = [];
+
+async function createTempDir(): Promise<string> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-shared-codex-log-retention-"));
+  tempDirs.push(dir);
+  return dir;
+}
 
 async function sendInitializeResult(
   harness: ReturnType<typeof createClientHarness>,
@@ -131,10 +142,11 @@ describe("shared Codex app-server client", () => {
     } = await import("./shared-client.js"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     resetSharedCodexAppServerClientForTests();
-    vi.restoreAllMocks();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
     mocks.applyCodexAppServerAuthProfile.mockClear();
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockClear();
@@ -150,6 +162,123 @@ describe("shared Codex app-server client", () => {
     mocks.embeddedAgentLog.debug.mockClear();
     mocks.embeddedAgentLog.warn.mockClear();
     mocks.resolveDefaultAgentDir.mockClear();
+    for (const dir of tempDirs.splice(0)) {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rotates oversized CODEX_HOME logs before a stdio app-server process starts", async () => {
+    const codexHome = await createTempDir();
+    const proofPath = path.join(codexHome, "startup-observation.json");
+    await writeFile(path.join(codexHome, "logs_2.sqlite"), "123456", "utf8");
+    await writeFile(path.join(codexHome, "logs_2.sqlite-wal"), "wal", "utf8");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_LOG_MAX_BYTES", "4");
+
+    const fakeAppServer = `
+const fs = require("node:fs");
+const path = require("node:path");
+const codexHome = process.env.CODEX_HOME;
+const entries = fs.readdirSync(codexHome).sort();
+fs.writeFileSync(process.env.PROOF_PATH, JSON.stringify({
+  sawOriginalDbAtStartup: fs.existsSync(path.join(codexHome, "logs_2.sqlite")),
+  sawRetiredDbAtStartup: entries.some((entry) => /^logs_2\\.sqlite\\.retired\\./u.test(entry)),
+  entries
+}, null, 2));
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk.toString("utf8");
+  const lines = buffer.split("\\n");
+  buffer = lines.pop() ?? "";
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      process.stdout.write(JSON.stringify({
+        id: message.id,
+        result: { userAgent: "openclaw/0.125.0 (macOS; startup-retention-proof)" }
+      }) + "\\n");
+    }
+  }
+});
+`;
+
+    const client = await createIsolatedCodexAppServerClient({
+      authProfileId: null,
+      timeoutMs: 5000,
+      startOptions: {
+        transport: "stdio",
+        command: process.execPath,
+        commandSource: "config",
+        args: ["-e", fakeAppServer],
+        headers: {},
+        env: { CODEX_HOME: codexHome, PROOF_PATH: proofPath },
+      },
+    });
+    client.close();
+    const proof = JSON.parse(await readFile(proofPath, "utf8")) as {
+      sawOriginalDbAtStartup: boolean;
+      sawRetiredDbAtStartup: boolean;
+      entries: string[];
+    };
+
+    expect(proof.sawOriginalDbAtStartup).toBe(false);
+    expect(proof.sawRetiredDbAtStartup).toBe(true);
+    expect(proof.entries).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^logs_2\.sqlite\.retired\./u),
+        expect.stringMatching(/^logs_2\.sqlite\.retired\..*-wal$/u),
+      ]),
+    );
+    expect(mocks.embeddedAgentLog.warn).toHaveBeenCalledWith(
+      "codex app-server log database rotated before startup",
+      expect.objectContaining({ codexHome, sizeBytes: 9, maxBytes: 4 }),
+    );
+  });
+
+  it("does not rotate CODEX_HOME logs while another app-server is active", async () => {
+    const codexHome = await createTempDir();
+    const dbPath = path.join(codexHome, "logs_2.sqlite");
+    const walPath = path.join(codexHome, "logs_2.sqlite-wal");
+    await writeFile(dbPath, "1", "utf8");
+    await writeFile(walPath, "wal", "utf8");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_LOG_MAX_BYTES", "4");
+
+    const sharedHarness = createClientHarness();
+    const isolatedHarness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(sharedHarness.client)
+      .mockReturnValueOnce(isolatedHarness.client);
+    const startOptions = {
+      transport: "stdio" as const,
+      command: process.execPath,
+      commandSource: "config" as const,
+      args: ["-e", ""],
+      headers: {},
+      env: { CODEX_HOME: codexHome },
+    };
+
+    const sharedPromise = getSharedCodexAppServerClient({
+      authProfileId: null,
+      timeoutMs: 1000,
+      startOptions,
+    });
+    await sendInitializeResult(sharedHarness, "openclaw/0.125.0 (macOS; shared)");
+    await expect(sharedPromise).resolves.toBe(sharedHarness.client);
+    await writeFile(dbPath, "123456", "utf8");
+
+    const isolatedPromise = createIsolatedCodexAppServerClient({
+      authProfileId: null,
+      timeoutMs: 1000,
+      startOptions,
+    });
+    await sendInitializeResult(isolatedHarness, "openclaw/0.125.0 (macOS; isolated)");
+    await expect(isolatedPromise).resolves.toBe(isolatedHarness.client);
+
+    await expect(readFile(dbPath, "utf8")).resolves.toBe("123456");
+    await expect(readFile(walPath, "utf8")).resolves.toBe("wal");
+    expect(mocks.embeddedAgentLog.warn).not.toHaveBeenCalled();
   });
 
   it("closes the shared app-server when the version gate fails", async () => {

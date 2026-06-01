@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyCodexAppServerAuthProfile,
@@ -11,6 +12,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerStartOptions,
 } from "./config.js";
+import { applyCodexAppServerLogRetention } from "./log-retention.js";
 import { resolveManagedCodexAppServerStartOptions } from "./managed-binary.js";
 import { withTimeout } from "./timeout.js";
 
@@ -37,6 +39,21 @@ type KeyedSharedCodexAppServerClientState = {
 };
 
 const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
+const CODEX_LOG_RETENTION_STARTUP_STATE = Symbol.for(
+  "openclaw.codexAppServerLogRetentionStartupState",
+);
+
+type CodexLogRetentionStartupState = {
+  activeByHome: Map<string, number>;
+  startingByHome: Map<string, { promise: Promise<void>; resolve: () => void }>;
+};
+
+type CodexLogRetentionStartupGuard = {
+  shouldApplyRetention: boolean;
+  waitForPriorStartup: () => Promise<void>;
+  trackStartedClient: (client: CodexAppServerClient) => void;
+  release: () => void;
+};
 
 function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   const globalState = globalThis as typeof globalThis & {
@@ -77,6 +94,22 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   return nextState;
 }
 
+function getCodexLogRetentionStartupState(): CodexLogRetentionStartupState {
+  const globalState = globalThis as typeof globalThis & {
+    [CODEX_LOG_RETENTION_STARTUP_STATE]?: CodexLogRetentionStartupState;
+  };
+  const state = globalState[CODEX_LOG_RETENTION_STARTUP_STATE];
+  if (state) {
+    return state;
+  }
+  const nextState: CodexLogRetentionStartupState = {
+    activeByHome: new Map(),
+    startingByHome: new Map(),
+  };
+  globalState[CODEX_LOG_RETENTION_STARTUP_STATE] = nextState;
+  return nextState;
+}
+
 function readKeyedSharedCodexAppServerClientState(
   value: unknown,
 ): KeyedSharedCodexAppServerClientState | undefined {
@@ -94,6 +127,76 @@ function readLegacySharedCodexAppServerClientState(
     return undefined;
   }
   return value as LegacySharedCodexAppServerClientState;
+}
+
+function beginCodexLogRetentionStartup(
+  startOptions: CodexAppServerStartOptions,
+): CodexLogRetentionStartupGuard {
+  const codexHome = normalizeCodexHomeForRetention(startOptions);
+  if (!codexHome) {
+    return {
+      shouldApplyRetention: false,
+      waitForPriorStartup: async () => undefined,
+      trackStartedClient: () => undefined,
+      release: () => undefined,
+    };
+  }
+  const state = getCodexLogRetentionStartupState();
+  const hasActiveHome = (state.activeByHome.get(codexHome) ?? 0) > 0;
+  const startingHome = state.startingByHome.get(codexHome);
+  const shouldApplyRetention = !hasActiveHome && !startingHome;
+  let startedHome: { promise: Promise<void>; resolve: () => void } | undefined;
+  if (shouldApplyRetention) {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    startedHome = { promise, resolve };
+    state.startingByHome.set(codexHome, startedHome);
+  }
+  let tracked = false;
+  let released = false;
+  const releaseStartingHome = () => {
+    if (!released && shouldApplyRetention) {
+      state.startingByHome.delete(codexHome);
+      startedHome?.resolve();
+    }
+    released = true;
+  };
+  return {
+    shouldApplyRetention,
+    waitForPriorStartup: startingHome ? () => startingHome.promise : async () => undefined,
+    trackStartedClient: (client) => {
+      if (tracked) {
+        return;
+      }
+      tracked = true;
+      releaseStartingHome();
+      state.activeByHome.set(codexHome, (state.activeByHome.get(codexHome) ?? 0) + 1);
+      client.addCloseHandler(() => releaseCodexLogRetentionActiveHome(codexHome));
+    },
+    release: releaseStartingHome,
+  };
+}
+
+function releaseCodexLogRetentionActiveHome(codexHome: string): void {
+  const state = getCodexLogRetentionStartupState();
+  const activeCount = state.activeByHome.get(codexHome) ?? 0;
+  if (activeCount <= 1) {
+    state.activeByHome.delete(codexHome);
+    return;
+  }
+  state.activeByHome.set(codexHome, activeCount - 1);
+}
+
+function normalizeCodexHomeForRetention(
+  startOptions: CodexAppServerStartOptions,
+): string | undefined {
+  if (startOptions.transport !== "stdio") {
+    return undefined;
+  }
+  const codexHome = startOptions.env?.CODEX_HOME?.trim();
+  return codexHome ? path.resolve(codexHome) : undefined;
 }
 
 type CodexAppServerClientOptions = {
@@ -197,9 +300,21 @@ async function acquireSharedCodexAppServerClient(
   const sharedPromise =
     entry.promise ??
     (entry.promise = (async () => {
-      const client = CodexAppServerClient.start(startOptions);
-      entry.client = client;
-      client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
+      const retentionStartup = beginCodexLogRetentionStartup(startOptions);
+      let client: CodexAppServerClient | undefined;
+      try {
+        await retentionStartup.waitForPriorStartup();
+        if (retentionStartup.shouldApplyRetention) {
+          await applyCodexAppServerLogRetention({ startOptions });
+        }
+        client = CodexAppServerClient.start(startOptions);
+        retentionStartup.trackStartedClient(client);
+        entry.client = client;
+        client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
+      } catch (error) {
+        retentionStartup.release();
+        throw error;
+      }
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
       try {
         await client.initialize();
@@ -241,7 +356,19 @@ export async function createIsolatedCodexAppServerClient(
 ): Promise<CodexAppServerClient> {
   const { agentDir, usesNativeAuth, authProfileId, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
-  const client = CodexAppServerClient.start(startOptions);
+  const retentionStartup = beginCodexLogRetentionStartup(startOptions);
+  let client: CodexAppServerClient;
+  try {
+    await retentionStartup.waitForPriorStartup();
+    if (retentionStartup.shouldApplyRetention) {
+      await applyCodexAppServerLogRetention({ startOptions });
+    }
+    client = CodexAppServerClient.start(startOptions);
+    retentionStartup.trackStartedClient(client);
+  } catch (error) {
+    retentionStartup.release();
+    throw error;
+  }
   const initialize = client.initialize();
   try {
     await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
@@ -264,6 +391,9 @@ export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   const clients = collectSharedClients(state);
   state.clients.clear();
+  const retentionState = getCodexLogRetentionStartupState();
+  retentionState.activeByHome.clear();
+  retentionState.startingByHome.clear();
   state.leasedReleases = new WeakMap();
   for (const client of clients) {
     client.close();

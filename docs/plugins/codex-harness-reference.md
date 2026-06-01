@@ -456,9 +456,21 @@ Environment overrides remain available for local testing:
 - `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`
+- `OPENCLAW_CODEX_APP_SERVER_LOG_RETENTION=0|false|off|no`
+- `OPENCLAW_CODEX_APP_SERVER_LOG_MAX_BYTES=<positive integer>`
+- `OPENCLAW_CODEX_APP_SERVER_RETIRED_LOG_SNAPSHOTS=<non-negative integer>`
 
 `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
 `appServer.command` is unset.
+
+For local stdio app-server launches, OpenClaw checks the per-agent `CODEX_HOME`
+before startup and rotates `logs_2.sqlite`, `logs_2.sqlite-wal`, and
+`logs_2.sqlite-shm` when their combined size exceeds the retention cap. The
+default cap is 512 MiB and the 2 newest retired snapshot groups are kept.
+Set `OPENCLAW_CODEX_APP_SERVER_LOG_RETENTION=off` to disable this startup cap
+for a local test run, or tune the cap/snapshot count with
+`OPENCLAW_CODEX_APP_SERVER_LOG_MAX_BYTES` and
+`OPENCLAW_CODEX_APP_SERVER_RETIRED_LOG_SNAPSHOTS`.
 
 `OPENCLAW_CODEX_APP_SERVER_GUARDIAN=1` was removed. Use
 `plugins.entries.codex.config.appServer.mode: "guardian"` instead, or

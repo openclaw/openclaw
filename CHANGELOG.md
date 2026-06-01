@@ -2,6 +2,14 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+### Fixes
+
+- Codex: cap managed app-server trace logs before startup so per-agent Codex homes cannot grow without bound. (#86233) Thanks @ghitafilali.
+
 ## 2026.6.1
 
 ### Highlights
