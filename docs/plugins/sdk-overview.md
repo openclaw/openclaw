@@ -113,6 +113,15 @@ can consume this generic provider surface. The older
 `contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
 existing memory-specific providers migrate.
 
+Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
+the existing per-file batching contract unless their runtime explicitly sets
+`sourceWideBatchEmbed: true`. That opt-in lets the memory host submit chunks from
+multiple dirty memory files and enabled sources in one `batchEmbed(...)` call up
+to the host batch limits. The provider must return one embedding per input chunk
+in the same order as `batch.chunks`; omit the flag when the provider expects
+file-local batches or cannot preserve input ordering across a larger source-wide
+job.
+
 ### Tools and commands
 
 Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
