@@ -323,6 +323,42 @@ export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
 }
 
+export function findMatchingRunningBackgroundSession(params: {
+  command: string;
+  cwd?: string;
+  scopeKey?: string;
+  sessionKey?: string;
+}) {
+  const scopeKey = params.scopeKey?.trim() || undefined;
+  const sessionKey = params.sessionKey?.trim() || undefined;
+
+  if (!scopeKey && !sessionKey) {
+    return undefined;
+  }
+
+  // Duplicate exec retries should resolve to the session the process tool can manage.
+  // Require a scoped identity so unscoped ad hoc runs cannot collapse unrelated work.
+  for (const session of runningSessions.values()) {
+    if (!session.backgrounded || session.exited) {
+      continue;
+    }
+    if (session.command !== params.command) {
+      continue;
+    }
+    if (session.cwd !== params.cwd) {
+      continue;
+    }
+    if (scopeKey && (session.scopeKey?.trim() || undefined) !== scopeKey) {
+      continue;
+    }
+    if (sessionKey && (session.sessionKey?.trim() || undefined) !== sessionKey) {
+      continue;
+    }
+    return session;
+  }
+  return undefined;
+}
+
 /** Clears retained finished sessions without touching running processes. */
 export function clearFinished() {
   finishedSessions.clear();

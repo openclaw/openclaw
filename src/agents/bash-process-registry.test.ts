@@ -11,6 +11,7 @@ import {
   appendOutput,
   drainSession,
   listFinishedSessions,
+  findMatchingRunningBackgroundSession,
   markBackgrounded,
   markExited,
   resetProcessRegistryForTests,
@@ -138,6 +139,66 @@ describe("bash process registry", () => {
         totalOutputChars: 0,
       },
     ]);
+  });
+
+  it("matches only scoped running background sessions with the same exec identity", () => {
+    const session = createRegistrySession({
+      id: "match",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: true,
+    });
+    session.command = "sleep 0.05";
+    session.cwd = "/tmp/project";
+    session.scopeKey = "scope-a";
+    session.sessionKey = "session-a";
+    addSession(session);
+
+    expect(
+      findMatchingRunningBackgroundSession({
+        command: "sleep 0.05",
+        cwd: "/tmp/project",
+        scopeKey: "scope-a",
+      }),
+    ).toBe(session);
+    expect(
+      findMatchingRunningBackgroundSession({
+        command: "sleep 0.05",
+        cwd: "/tmp/project",
+        sessionKey: "session-a",
+      }),
+    ).toBe(session);
+
+    const misses = [
+      { command: "sleep 0.05", cwd: "/tmp/project" },
+      { command: "sleep 0.05", cwd: "/tmp/project", scopeKey: "scope-b" },
+      { command: "sleep 0.05", cwd: "/tmp/project", sessionKey: "session-b" },
+      { command: "sleep 0.1", cwd: "/tmp/project", scopeKey: "scope-a" },
+      { command: "sleep 0.05", cwd: "/tmp/other", scopeKey: "scope-a" },
+    ];
+    for (const params of misses) {
+      expect(findMatchingRunningBackgroundSession(params)).toBeUndefined();
+    }
+  });
+
+  it("does not match foreground sessions", () => {
+    const session = createRegistrySession({
+      id: "foreground",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+    });
+    session.command = "sleep 0.05";
+    session.scopeKey = "scope-a";
+    addSession(session);
+
+    expect(
+      findMatchingRunningBackgroundSession({
+        command: "sleep 0.05",
+        cwd: session.cwd,
+        scopeKey: "scope-a",
+      }),
+    ).toBeUndefined();
   });
 });
 

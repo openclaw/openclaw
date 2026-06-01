@@ -21,6 +21,7 @@ import {
   addSession,
   appendOutput,
   getFinishedSession,
+  listRunningSessions,
   markBackgrounded,
   markExited,
   resetProcessRegistryForTests,
@@ -268,6 +269,7 @@ const OUTPUT_EXEC_COMPLETED = "Exec completed";
 const OUTPUT_EXIT_CODE_1 = "Command exited with code 1";
 const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `echo ${message}`);
 const COMMAND_NOOP = isWin ? "$null" : ":";
+const SCOPED_BACKGROUND_COMMAND = isWin ? "Start-Sleep -Milliseconds 50" : "sleep 0.05";
 const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
@@ -765,6 +767,42 @@ describe("exec tool backgrounding", () => {
     const sessions = await listProcessSessions(processTool);
     expect(hasSession(sessions, sessionId)).toBe(true);
     expect(sessions.find((s) => s.sessionId === sessionId)?.name).toBe(COMMAND_ECHO_HELLO);
+  });
+
+  it("reuses a running scoped background session for identical commands", async () => {
+    const scopedTools = createScopedToolSet(SCOPE_KEY_ALPHA);
+
+    const firstResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const firstSessionId = requireRunningSessionId(firstResult);
+
+    const secondResult = await executeExecCommand(scopedTools.exec, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const secondSessionId = requireRunningSessionId(secondResult);
+
+    expect(secondSessionId).toBe(firstSessionId);
+    expect(listRunningSessions()).toHaveLength(1);
+    const sessions = await listProcessSessions(scopedTools.process);
+    expect(hasSession(sessions, firstSessionId)).toBe(true);
+  });
+
+  it("restarts a scoped background command once the previous run completes", async () => {
+    const tool = createTestExecTool({ backgroundMs: 0, scopeKey: SCOPE_KEY_ALPHA });
+
+    const firstResult = await executeExecCommand(tool, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const firstSessionId = requireRunningSessionId(firstResult);
+    await waitForCompletion(firstSessionId);
+
+    const secondResult = await executeExecCommand(tool, SCOPED_BACKGROUND_COMMAND, {
+      background: true,
+    });
+    const secondSessionId = requireRunningSessionId(secondResult);
+
+    expect(secondSessionId).not.toBe(firstSessionId);
   });
 
   it.each<DisallowedElevationCase>(DISALLOWED_ELEVATION_CASES)(
