@@ -75,6 +75,22 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+async function resolveExistingRealPath(targetPath: string): Promise<string | null> {
+  try {
+    return path.resolve(await fs.realpath(targetPath));
+  } catch {
+    return null;
+  }
+}
+
+async function pathsResolveToSameFile(leftPath: string, rightPath: string): Promise<boolean> {
+  const [leftRealPath, rightRealPath] = await Promise.all([
+    resolveExistingRealPath(leftPath),
+    resolveExistingRealPath(rightPath),
+  ]);
+  return leftRealPath !== null && rightRealPath !== null && leftRealPath === rightRealPath;
+}
+
 async function collectStateAgentDirs(env: NodeJS.ProcessEnv): Promise<string[]> {
   const agentsRoot = path.join(resolveStateDir(env), "agents");
   const entries = await fs.readdir(agentsRoot, { withFileTypes: true }).catch(() => []);
@@ -135,6 +151,7 @@ export async function scanStaleOAuthProfileShadows(params: {
   const now = params.now ?? Date.now();
   const mainAgentDir = resolveDefaultAgentDir({}, env);
   const mainAuthPath = path.resolve(resolveAuthStorePath(mainAgentDir));
+  const mainAuthRealPath = await resolveExistingRealPath(mainAuthPath);
   const mainStore = loadPersistedAuthProfileStore(mainAgentDir);
   if (!mainStore) {
     return [];
@@ -143,6 +160,10 @@ export async function scanStaleOAuthProfileShadows(params: {
   for (const agentDir of await collectCandidateAgentDirs(params.cfg, env)) {
     const authPath = path.resolve(resolveAuthStorePath(agentDir));
     if (authPath === mainAuthPath || !(await pathExists(authPath))) {
+      continue;
+    }
+    const authRealPath = await resolveExistingRealPath(authPath);
+    if (authRealPath === null || authRealPath === mainAuthRealPath) {
       continue;
     }
     const rawLocalStore = await loadRawAuthProfileStore(authPath);
@@ -218,21 +239,32 @@ function formatProfileList(profileIds: string[]): string {
 
 async function repairStaleOAuthProfilesForAgent(params: {
   agentDir: string;
+  mainAgentDir?: string;
   mainStore: AuthProfileStore;
   profileIds: Set<string>;
   now: number;
 }): Promise<
   { status: "changed"; removedProfileIds: string[] } | { status: "missing" | "unchanged" }
 > {
+  const authPath = resolveAuthStorePath(params.agentDir);
+  const mainAuthPath = resolveAuthStorePath(
+    params.mainAgentDir ?? resolveDefaultAgentDir({}, process.env),
+  );
+  if (await pathsResolveToSameFile(authPath, mainAuthPath)) {
+    return { status: "unchanged" };
+  }
   return await withFileLock(
-    resolveAuthStorePath(params.agentDir),
+    authPath,
     AUTH_STORE_LOCK_OPTIONS,
     async () => {
+      if (await pathsResolveToSameFile(authPath, mainAuthPath)) {
+        return { status: "unchanged" };
+      }
       const store = loadPersistedAuthProfileStore(params.agentDir);
       if (!store) {
         return { status: "missing" };
       }
-      const rawStore = await loadRawAuthProfileStore(resolveAuthStorePath(params.agentDir));
+      const rawStore = await loadRawAuthProfileStore(authPath);
       const profileIds = new Set(
         [...params.profileIds].filter(
           (profileId) => !hasLegacyOAuthSidecarRef(rawStore, profileId),
@@ -296,6 +328,7 @@ export async function repairStaleOAuthProfileShadows(params: {
     try {
       const repair = await repairStaleOAuthProfilesForAgent({
         agentDir,
+        mainAgentDir: resolveDefaultAgentDir({}, env),
         mainStore,
         profileIds,
         now,

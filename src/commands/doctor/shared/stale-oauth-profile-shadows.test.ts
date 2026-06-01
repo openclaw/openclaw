@@ -266,6 +266,42 @@ describe("stale OAuth profile shadow doctor repair", () => {
     expect(childStore?.lastGood?.anthropic).toBeUndefined();
   });
 
+  it("does not prune main OAuth profiles through child auth store symlinks", async () => {
+    const profileId = "openai-codex:default";
+    const now = Date.now();
+    const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    await writeRawAuthStore(
+      mainAgentDir,
+      storeWith(
+        profileId,
+        oauthCredential({
+          provider: "openai-codex",
+          access: "main-access",
+          refresh: "main-refresh",
+          expires: now + 60 * 60 * 1000,
+          accountId: "acct-shared",
+        }),
+      ),
+    );
+    await fs.mkdir(childAgentDir, { recursive: true });
+    await fs.symlink(resolveAuthStorePath(mainAgentDir), resolveAuthStorePath(childAgentDir));
+
+    const hits = await scanStaleOAuthProfileShadows({
+      cfg: { agents: { list: [{ id: "telegram" }] } } satisfies OpenClawConfig,
+      now,
+    });
+    const result = await repairStaleOAuthProfileShadows({
+      cfg: { agents: { list: [{ id: "telegram" }] } } satisfies OpenClawConfig,
+      now,
+    });
+
+    expect(hits).toEqual([]);
+    expect(result).toEqual({ changes: [], warnings: [] });
+    expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toBeDefined();
+    expect((await fs.lstat(resolveAuthStorePath(childAgentDir))).isSymbolicLink()).toBe(true);
+  });
+
   it("does not remove a child OAuth profile for a different account", async () => {
     const profileId = "anthropic:default";
     const now = Date.now();
