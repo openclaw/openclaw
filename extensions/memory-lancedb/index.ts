@@ -703,6 +703,8 @@ const MESSAGE_TOOL_DELIVERY_HINT_RE = new RegExp(
   ).join("|")})\\s*$`,
   "m",
 );
+const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
+const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 
 const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
 
@@ -855,6 +857,10 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return true;
   }
 
+  if (text.includes(HISTORY_CONTEXT_MARKER) || text.includes(CURRENT_MESSAGE_MARKER)) {
+    return true;
+  }
+
   // Check for active-turn-recovery boilerplate
   if (ACTIVE_TURN_RECOVERY_RE.test(text)) {
     return true;
@@ -971,6 +977,18 @@ function findFirstInboundEnvelopeIndex(text: string, options?: { skipReplyQuoteL
   return -1;
 }
 
+function stripPendingHistoryContextBeforeCurrentMessage(text: string): string {
+  const candidateText = text.trimStart();
+  if (!candidateText.startsWith(HISTORY_CONTEXT_MARKER)) {
+    return text;
+  }
+  const currentMessageIndex = candidateText.lastIndexOf(CURRENT_MESSAGE_MARKER);
+  if (currentMessageIndex === -1) {
+    return text;
+  }
+  return candidateText.slice(currentMessageIndex + CURRENT_MESSAGE_MARKER.length);
+}
+
 function stripLeadingCurrentMessageContextBeforeEnvelope(text: string): string {
   const candidateText = text.trimStart();
   if (!LEADING_CURRENT_MESSAGE_CONTEXT_RE.test(candidateText)) {
@@ -987,7 +1005,7 @@ function stripLeadingCurrentMessageContextBeforeEnvelope(text: string): string {
 
 function stripLeadingInboundEnvelope(text: string): string {
   const candidateText = stripLeadingCurrentMessageContextBeforeEnvelope(
-    stripLeadingMessageToolDeliveryHints(text),
+    stripPendingHistoryContextBeforeCurrentMessage(stripLeadingMessageToolDeliveryHints(text)),
   ).trimStart();
   const envelopePrefixMatch =
     candidateText.match(INBOUND_ENVELOPE_PREFIX_RE) ??
