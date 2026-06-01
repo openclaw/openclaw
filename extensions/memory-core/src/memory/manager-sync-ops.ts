@@ -528,8 +528,9 @@ export abstract class MemoryManagerSyncOps {
       }
     }
     if (fileWatchPaths.size > 0) {
-      if (this.watcher) {
-        this.watcher.add(Array.from(fileWatchPaths));
+      const existingWatcher = this.currentMemoryChokidarWatcher();
+      if (existingWatcher) {
+        existingWatcher.add(Array.from(fileWatchPaths));
       } else {
         this.watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
           ignoreInitial: true,
@@ -548,6 +549,10 @@ export abstract class MemoryManagerSyncOps {
         });
       }
     }
+  }
+
+  private currentMemoryChokidarWatcher(): FSWatcher | null {
+    return this.watcher;
   }
 
   // Attach a native recursive `fs.watch` to `dir` plus a non-recursive
@@ -854,7 +859,7 @@ export abstract class MemoryManagerSyncOps {
           if (currentInode === recordedInode) {
             return;
           }
-          this.closeNativeMemoryWatchPair(pair!);
+          this.closeNativeMemoryWatchPair(pair);
           if (this.closed) {
             return;
           }
