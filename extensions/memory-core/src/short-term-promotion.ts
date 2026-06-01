@@ -1726,18 +1726,34 @@ function relocateCandidateRange(
       const snippet = normalizeRangeSnippet(lines, startLine, endLine);
       const comparison = compareCandidateWindow(targetSnippet, snippet);
       const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
+      const listMarkerFreeMatchSnippet = buildListMarkerFreeMatchSnippet(
+        lines,
+        startLine,
+        listMarkerFreeSnippet,
+      );
       const listMarkerFreeComparison =
         listMarkerFreeSnippet === snippet
           ? { matched: false, quality: 0 }
           : compareCandidateWindow(targetSnippet, listMarkerFreeSnippet);
-      const useListMarkerFree = listMarkerFreeComparison.quality > comparison.quality;
-      const bestComparison = useListMarkerFree ? listMarkerFreeComparison : comparison;
+      const listMarkerFreeContextComparison =
+        listMarkerFreeMatchSnippet === listMarkerFreeSnippet
+          ? { matched: false, quality: 0 }
+          : compareCandidateWindow(targetSnippet, listMarkerFreeMatchSnippet);
+      const useListMarkerFreeContext =
+        listMarkerFreeContextComparison.quality > comparison.quality &&
+        listMarkerFreeContextComparison.quality >= listMarkerFreeComparison.quality;
+      const useListMarkerFree =
+        !useListMarkerFreeContext && listMarkerFreeComparison.quality > comparison.quality;
+      const bestComparison = useListMarkerFreeContext
+        ? listMarkerFreeContextComparison
+        : useListMarkerFree
+          ? listMarkerFreeComparison
+          : comparison;
       if (!bestComparison.matched) {
         continue;
       }
-      const matchedSnippet = useListMarkerFree
-        ? buildListMarkerFreeMatchSnippet(lines, startLine, listMarkerFreeSnippet)
-        : snippet;
+      const matchedSnippet =
+        useListMarkerFree || useListMarkerFreeContext ? listMarkerFreeMatchSnippet : snippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
