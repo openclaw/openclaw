@@ -1,6 +1,14 @@
 import { parse as partialParse } from "partial-json";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+const JSON_CONTROL_ESCAPES = new Set(["b", "f", "n", "r", "t"]);
+const DECODED_WINDOWS_PATH_ESCAPES = new Map([
+  ["\b", "\\b"],
+  ["\f", "\\f"],
+  ["\n", "\\n"],
+  ["\r", "\\r"],
+  ["\t", "\\t"],
+]);
 
 function isControlCharacter(char: string): boolean {
   const codePoint = char.codePointAt(0);
@@ -24,6 +32,31 @@ function escapeControlCharacter(char: string): string {
   }
 }
 
+function isLikelyWindowsPathPrefix(value: string): boolean {
+  return /^[A-Za-z]:(?:[\\/].*)?$/u.test(value);
+}
+
+function normalizeDecodedWindowsPathEscapes(value: unknown): unknown {
+  if (typeof value === "string") {
+    if (!/^[A-Za-z]:[\\/\b\f\n\r\t]/u.test(value)) {
+      return value;
+    }
+    return value.replace(
+      /[\b\f\n\r\t]/gu,
+      (char) => DECODED_WINDOWS_PATH_ESCAPES.get(char) ?? char,
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeDecodedWindowsPathEscapes(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, normalizeDecodedWindowsPathEscapes(item)]),
+    );
+  }
+  return value;
+}
+
 /**
  * Repairs malformed JSON string literals by:
  * - escaping raw control characters inside strings
@@ -32,6 +65,7 @@ function escapeControlCharacter(char: string): string {
 export function repairJson(json: string): string {
   let repaired = "";
   let inString = false;
+  let stringPrefix = "";
 
   for (let index = 0; index < json.length; index++) {
     const char = json[index];
@@ -40,6 +74,7 @@ export function repairJson(json: string): string {
       repaired += char;
       if (char === '"') {
         inString = true;
+        stringPrefix = "";
       }
       continue;
     }
@@ -47,6 +82,7 @@ export function repairJson(json: string): string {
     if (char === '"') {
       repaired += char;
       inString = false;
+      stringPrefix = "";
       continue;
     }
 
@@ -54,6 +90,7 @@ export function repairJson(json: string): string {
       const nextChar = json[index + 1];
       if (nextChar === undefined) {
         repaired += "\\\\";
+        stringPrefix += "\\";
         continue;
       }
 
@@ -61,6 +98,7 @@ export function repairJson(json: string): string {
         const unicodeDigits = json.slice(index + 2, index + 6);
         if (/^[0-9a-fA-F]{4}$/.test(unicodeDigits)) {
           repaired += `\\u${unicodeDigits}`;
+          stringPrefix += String.fromCodePoint(Number.parseInt(unicodeDigits, 16));
           index += 5;
           continue;
         }
@@ -69,32 +107,48 @@ export function repairJson(json: string): string {
         // hit the valid-escape branch (VALID_JSON_ESCAPES contains "u") and
         // re-emit the broken \u, leaving the JSON unparseable.
         repaired += "\\\\";
+        stringPrefix += "\\";
+        continue;
+      }
+
+      if (JSON_CONTROL_ESCAPES.has(nextChar) && isLikelyWindowsPathPrefix(stringPrefix)) {
+        repaired += "\\\\";
+        stringPrefix += "\\";
         continue;
       }
 
       if (VALID_JSON_ESCAPES.has(nextChar)) {
         repaired += `\\${nextChar}`;
+        stringPrefix += nextChar;
         index += 1;
         continue;
       }
 
       repaired += "\\\\";
+      stringPrefix += "\\";
       continue;
     }
 
     repaired += isControlCharacter(char) ? escapeControlCharacter(char) : char;
+    stringPrefix += char;
   }
 
   return repaired;
 }
 
-export function parseJsonWithRepair(json: string): unknown {
+export function parseJsonWithRepair(
+  json: string,
+  options?: { normalizeWindowsPathEscapes?: boolean },
+): unknown {
+  const normalize = (value: unknown): unknown =>
+    options?.normalizeWindowsPathEscapes ? normalizeDecodedWindowsPathEscapes(value) : value;
+
   try {
-    return JSON.parse(json) as unknown;
+    return normalize(JSON.parse(json) as unknown);
   } catch (error) {
     const repairedJson = repairJson(json);
     if (repairedJson !== json) {
-      return JSON.parse(repairedJson) as unknown;
+      return normalize(JSON.parse(repairedJson) as unknown);
     }
     throw error;
   }
@@ -113,15 +167,17 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
   }
 
   try {
-    return parseJsonWithRepair(partialJson) as Record<string, unknown>;
+    return parseJsonWithRepair(partialJson, {
+      normalizeWindowsPathEscapes: true,
+    }) as Record<string, unknown>;
   } catch {
     try {
       const result = partialParse(partialJson);
-      return (result ?? {}) as Record<string, unknown>;
+      return normalizeDecodedWindowsPathEscapes(result ?? {}) as Record<string, unknown>;
     } catch {
       try {
         const result = partialParse(repairJson(partialJson));
-        return (result ?? {}) as Record<string, unknown>;
+        return normalizeDecodedWindowsPathEscapes(result ?? {}) as Record<string, unknown>;
       } catch {
         return {};
       }

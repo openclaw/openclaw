@@ -18,4 +18,26 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     const args = '{"cmd":"\\underline{x}"}';
     expect(parseStreamingJson(args)).toEqual({ cmd: "\\underline{x}" });
   });
+
+  it.each([
+    ['{"path":"C:\\bin\\app.exe"}', "C:\\bin\\app.exe"],
+    ['{"path":"C:\\temp\\x"}', "C:\\temp\\x"],
+    ['{"path":"C:\\new\\file"}', "C:\\new\\file"],
+    ['{"path":"D:\\reports\\q"}', "D:\\reports\\q"],
+    ['{"path":"C:\\users\\bob"}', "C:\\users\\bob"],
+  ])("keeps unescaped Windows path control-letter segments literal for %s", (args, path) => {
+    expect(parseStreamingJson(args)).toEqual({ path });
+  });
+
+  it("normalizes decoded Windows path escapes in nested tool arguments", () => {
+    expect(parseStreamingJson('{"edits":[{"path":"C:\\new\\file"}]}')).toEqual({
+      edits: [{ path: "C:\\new\\file" }],
+    });
+  });
+
+  it("does not rewrite legitimate non-path control escapes", () => {
+    expect(parseStreamingJson('{"message":"first\\nsecond"}')).toEqual({
+      message: "first\nsecond",
+    });
+  });
 });
