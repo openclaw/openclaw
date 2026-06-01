@@ -28,7 +28,11 @@ function resolveClientNodeId(
   return trimmed.length > 0 ? trimmed : null;
 }
 
-/** Gateway handlers for queueing work until a paired node reconnects. */
+/**
+ * Gateway handlers for node-managed pending work. Nodes drain with their own
+ * connected device identity; operators enqueue by explicit node id and may ask
+ * the gateway to wake disconnected devices.
+ */
 export const nodePendingHandlers: GatewayRequestHandlers = {
   "node.pending.drain": async ({ params, respond, client }) => {
     if (!validateNodePendingDrainParams(params)) {
