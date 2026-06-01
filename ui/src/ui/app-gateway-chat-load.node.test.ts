@@ -252,6 +252,35 @@ describe("connectGateway chat load startup work", () => {
     expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
   });
 
+  it("starts literal global chat refresh before agents.list when hello names the default agent", async () => {
+    const agentsList = createDeferred();
+    loadAgentsMock.mockReturnValueOnce(agentsList.promise);
+    const { host, client } = connectHost("chat");
+    host.sessionKey = "global";
+
+    client.emitHello({
+      type: "hello-ok",
+      protocol: 4,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "ops",
+          mainKey: "main",
+          mainSessionKey: "agent:ops:main",
+        },
+      },
+      auth: { role: "operator", scopes: [] },
+    });
+
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
+    expect(loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+
+    agentsList.resolve();
+    await agentsList.promise;
+    await Promise.resolve();
+    expect(refreshActiveTabMock).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for agents.list when a stale agent session may need fallback", async () => {
     const agentsList = createDeferred();
     const { host, client } = connectHost("chat");

@@ -574,7 +574,9 @@ function canRefreshActiveTabBeforeAgents(host: GatewayHost): boolean {
     return false;
   }
   if (isUiGlobalSessionKey(host.sessionKey)) {
-    return false;
+    return Boolean(
+      host.assistantAgentId || (!host.agentsList?.defaultId && resolveFreshDefaultAgentId(host)),
+    );
   }
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (!parsed) {
