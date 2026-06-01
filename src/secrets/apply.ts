@@ -202,6 +202,39 @@ function applyProviderPlanMutations(params: {
     changed = true;
   }
 
+  for (const providerConfig of Object.values(params.upserts ?? {})) {
+    if (providerConfig.source !== "exec" || !("pluginIntegration" in providerConfig)) {
+      continue;
+    }
+    // Plugin-managed exec providers fail closed unless the owner is active.
+    // A secrets plan that upserts one must also make that owner resolvable.
+    const pluginId = providerConfig.pluginIntegration.pluginId.trim();
+    params.config.plugins ??= {};
+    const previousEntry = params.config.plugins.entries?.[pluginId];
+    if (previousEntry?.enabled === false) {
+      throw new Error(
+        `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.entries.${pluginId}.enabled is false. Enable the plugin explicitly before applying this plan.`,
+      );
+    }
+    if (
+      Array.isArray(params.config.plugins.allow) &&
+      params.config.plugins.allow.length > 0 &&
+      !params.config.plugins.allow.includes(pluginId)
+    ) {
+      params.config.plugins.allow = [...params.config.plugins.allow, pluginId];
+      changed = true;
+    }
+    params.config.plugins.entries ??= {};
+    if (previousEntry?.enabled === true) {
+      continue;
+    }
+    params.config.plugins.entries[pluginId] = {
+      ...(isRecord(previousEntry) ? previousEntry : {}),
+      enabled: true,
+    };
+    changed = true;
+  }
+
   if (!changed) {
     return false;
   }

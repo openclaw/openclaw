@@ -1240,6 +1240,7 @@
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
+                  "plugins/vault",
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
                   "plugins/oc-path",
