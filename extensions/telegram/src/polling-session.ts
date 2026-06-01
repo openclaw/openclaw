@@ -50,11 +50,64 @@ import {
 } from "./telegram-reply-fence.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
-  initialMs: 2000,
-  maxMs: 30_000,
-  factor: 1.8,
-  jitter: 0.25,
+  initialMs: 30_000,
+  maxMs: 600_000,
+  factor: 2,
+  jitter: 0.2,
 };
+
+const TELEGRAM_POLL_STOP_TIMEOUT_COOLDOWN_POLICY = {
+  initialMs: 120_000,
+  maxMs: 600_000,
+  factor: 2,
+  jitter: 0.2,
+};
+const TELEGRAM_POLL_STOP_TIMEOUT_BURST_LIMIT = 2;
+
+type TelegramRestartBackoffState = {
+  restartAttempts: number;
+  stopTimeoutBurst: number;
+  stopTimeoutCooldownAttempts: number;
+};
+
+function createTelegramRestartBackoffState(): TelegramRestartBackoffState {
+  return {
+    restartAttempts: 0,
+    stopTimeoutBurst: 0,
+    stopTimeoutCooldownAttempts: 0,
+  };
+}
+
+function resetTelegramRestartBackoffState(state: TelegramRestartBackoffState): void {
+  state.restartAttempts = 0;
+  state.stopTimeoutBurst = 0;
+  state.stopTimeoutCooldownAttempts = 0;
+}
+
+function resolveTelegramRestartDelayMs(
+  state: TelegramRestartBackoffState,
+  opts: { stopTimedOut?: boolean } = {},
+): { delayMs: number; stopTimeoutSuffix: string } {
+  state.restartAttempts += 1;
+  let delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, state.restartAttempts);
+  let stopTimeoutSuffix = "";
+  if (opts.stopTimedOut) {
+    state.stopTimeoutBurst += 1;
+    if (state.stopTimeoutBurst >= TELEGRAM_POLL_STOP_TIMEOUT_BURST_LIMIT) {
+      state.stopTimeoutCooldownAttempts += 1;
+      const cooldownMs = computeBackoff(
+        TELEGRAM_POLL_STOP_TIMEOUT_COOLDOWN_POLICY,
+        state.stopTimeoutCooldownAttempts,
+      );
+      delayMs = Math.max(delayMs, cooldownMs);
+      stopTimeoutSuffix = ` Stop timeout burst=${state.stopTimeoutBurst}; applying cooldown.`;
+    }
+  } else {
+    state.stopTimeoutBurst = 0;
+    state.stopTimeoutCooldownAttempts = 0;
+  }
+  return { delayMs, stopTimeoutSuffix };
+}
 
 const DEFAULT_POLL_STALL_THRESHOLD_MS = 120_000;
 const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
@@ -239,7 +292,7 @@ function isSpooledUpdateHandlerKeyForSpool(handlerKey: string, spoolDir: string)
 }
 
 export class TelegramPollingSession {
-  #restartAttempts = 0;
+  #restartBackoffState = createTelegramRestartBackoffState();
   #webhookCleared = false;
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
@@ -321,11 +374,20 @@ export class TelegramPollingSession {
     }
   }
 
-  async #waitBeforeRestart(buildLine: (delay: string) => string): Promise<boolean> {
-    this.#restartAttempts += 1;
-    const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, this.#restartAttempts);
+  #noteHealthyPollingCycle() {
+    resetTelegramRestartBackoffState(this.#restartBackoffState);
+  }
+
+  async #waitBeforeRestart(
+    buildLine: (delay: string) => string,
+    opts: { stopTimedOut?: boolean } = {},
+  ): Promise<boolean> {
+    const { delayMs, stopTimeoutSuffix } = resolveTelegramRestartDelayMs(
+      this.#restartBackoffState,
+      opts,
+    );
     const delay = formatDurationPrecise(delayMs);
-    this.opts.log(buildLine(delay));
+    this.opts.log(`${buildLine(delay)}${stopTimeoutSuffix}`);
     try {
       await sleepWithAbort(delayMs, this.opts.abortSignal);
     } catch (sleepErr) {
@@ -761,6 +823,7 @@ export class TelegramPollingSession {
     let consecutiveDrainFailures = 0;
     let restartRequested = false;
     let stalledRestart = false;
+    let stopTimedOut = false;
     let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
     let forceCycleResolve: (() => void) | undefined;
     const forceCyclePromise = new Promise<void>((resolve) => {
@@ -796,6 +859,7 @@ export class TelegramPollingSession {
       if (message.type === "poll-success") {
         liveness.noteGetUpdatesSuccessCount(message.count, message.finishedAt);
         liveness.noteGetUpdatesFinished();
+        this.#noteHealthyPollingCycle();
         if (!restartRequested && stalledBacklogKeys.size === 0) {
           this.#status.notePollSuccess(message.finishedAt);
         }
@@ -915,6 +979,7 @@ export class TelegramPollingSession {
           this.opts.log(
             `[telegram] Isolated polling ingress stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
           );
+          stopTimedOut = true;
           forceCycleResolve?.();
         }, POLL_STOP_GRACE_MS);
       }
@@ -951,7 +1016,11 @@ export class TelegramPollingSession {
             `[telegram][diag] isolated polling ingress finished reason=polling stall detected ${liveness.formatDiagnosticFields("error")}`,
           );
         }
-        return "continue";
+        const shouldRestart = await this.#waitBeforeRestart(
+          (delay) => `Telegram isolated polling ingress restart requested; restarting in ${delay}.`,
+          { stopTimedOut },
+        );
+        return shouldRestart ? "continue" : "exit";
       }
       const errorText = pollState.error ? ` error=${pollState.error}` : "";
       this.opts.log(
@@ -981,6 +1050,7 @@ export class TelegramPollingSession {
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     const liveness = new TelegramPollingLivenessTracker({
       onPollSuccess: (finishedAt) => {
+        this.#noteHealthyPollingCycle();
         this.#status.notePollSuccess(finishedAt);
         this.#drainPendingDeliveriesAfterReconnect();
       },
@@ -1030,12 +1100,14 @@ export class TelegramPollingSession {
         });
       return stopPromise;
     };
+    let stopBotPromise: Promise<void> | undefined;
     const stopBot = () => {
-      return Promise.resolve(bot.stop())
+      stopBotPromise ??= Promise.resolve(bot.stop())
         .then(() => undefined)
         .catch(() => {
           // Bot may already be stopped by runner stop/abort paths.
         });
+      return stopBotPromise;
     };
     const stopOnAbort = () => {
       if (this.opts.abortSignal?.aborted) {
@@ -1043,8 +1115,31 @@ export class TelegramPollingSession {
       }
     };
 
+    let restartRequested = false;
+    let stopTimedOut = false;
+    const requestStopForRestart = () => {
+      if (restartRequested) {
+        return;
+      }
+      restartRequested = true;
+      void stopRunner();
+      void stopBot();
+      if (!forceCycleTimer) {
+        forceCycleTimer = setTimeout(() => {
+          if (this.opts.abortSignal?.aborted) {
+            return;
+          }
+          this.opts.log(
+            `[telegram] Polling runner stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
+          );
+          stopTimedOut = true;
+          forceCycleResolve?.();
+        }, POLL_STOP_GRACE_MS);
+      }
+    };
+
     const watchdog = setInterval(() => {
-      if (this.opts.abortSignal?.aborted) {
+      if (this.opts.abortSignal?.aborted || restartRequested) {
         return;
       }
 
@@ -1055,19 +1150,7 @@ export class TelegramPollingSession {
         this.#transportState.markDirty();
         stalledRestart = true;
         this.opts.log(`[telegram] ${stall.message}`);
-        void stopRunner();
-        void stopBot();
-        if (!forceCycleTimer) {
-          forceCycleTimer = setTimeout(() => {
-            if (this.opts.abortSignal?.aborted) {
-              return;
-            }
-            this.opts.log(
-              `[telegram] Polling runner stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
-            );
-            forceCycleResolve?.();
-          }, POLL_STOP_GRACE_MS);
-        }
+        requestStopForRestart();
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
 
@@ -1088,6 +1171,7 @@ export class TelegramPollingSession {
       );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
+        { stopTimedOut },
       );
       return shouldRestart ? "continue" : "exit";
     } catch (err) {
@@ -1166,6 +1250,9 @@ export const testing = {
   resetActiveSpooledUpdateHandlersForTests: (): void => {
     activeSpooledUpdateHandlersByLane.clear();
   },
+  createTelegramRestartBackoffState,
+  resetTelegramRestartBackoffState,
+  resolveTelegramRestartDelayMs,
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
     resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };
