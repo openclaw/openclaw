@@ -2502,4 +2502,87 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(activity.activeWorkKind).toBe("embedded_run");
     expect(activity.hasActiveEmbeddedRun).toBe(true);
   });
+
+  it("clears stale tool and model markers while preserving a fresh embedded owner", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    markDiagnosticToolStartedForTest({ sessionId, sessionKey, toolName: "Bash", toolCallId: "t1" });
+    markDiagnosticModelStartedForTest({
+      sessionId,
+      sessionKey,
+      runId: sessionId,
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    const staleGeneration = state.generation;
+
+    requestStuckSessionRecovery({
+      recover: () => {
+        markDiagnosticEmbeddedRunStarted({
+          sessionId: "reply-run-1",
+          sessionKey,
+          workKey: `reply:${sessionKey}`,
+        });
+        return Promise.resolve(abortedOutcome());
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: staleGeneration,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBe("embedded_run");
+    expect(activity.hasActiveEmbeddedRun).toBe(true);
+    expect(activity.activeToolName).toBeUndefined();
+  });
+
+  it("keeps fresh tool markers when a different embedded owner blocks recovery clearing", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    markDiagnosticToolStartedForTest({ sessionId, sessionKey, toolName: "Bash", toolCallId: "t1" });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    const staleGeneration = state.generation;
+
+    requestStuckSessionRecovery({
+      recover: () => {
+        markDiagnosticEmbeddedRunStarted({ sessionId: "reply-run-1", sessionKey });
+        markDiagnosticToolStartedForTest({
+          sessionId: "reply-run-1",
+          sessionKey,
+          toolName: "ReplyTool",
+          toolCallId: "fresh-tool",
+        });
+        return Promise.resolve(abortedOutcome());
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: staleGeneration,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
+    expect(activity.activeWorkKind).toBe("tool_call");
+    expect(activity.hasActiveEmbeddedRun).toBe(true);
+    expect(activity.activeToolName).toBe("ReplyTool");
+  });
 });

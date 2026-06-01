@@ -9,16 +9,25 @@ type SessionActivity = {
   sessionKey?: string;
   activeEmbeddedRuns: Set<string>;
   activeTools: Map<string, ActiveTool>;
-  activeModelCalls: Set<string>;
+  activeModelCalls: Map<string, ActiveModelCall>;
   lastProgressAt: number;
   lastProgressReason?: string;
 };
 
 type ActiveTool = {
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
   toolName: string;
   toolCallId?: string;
   startedAt: number;
   lastProgressAt: number;
+};
+
+type ActiveModelCall = {
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
 };
 
 type DiagnosticToolStartedActivityEvent = Pick<
@@ -98,8 +107,8 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
   for (const [key, tool] of source.activeTools) {
     target.activeTools.set(key, tool);
   }
-  for (const key of source.activeModelCalls) {
-    target.activeModelCalls.add(key);
+  for (const [key, modelCall] of source.activeModelCalls) {
+    target.activeModelCalls.set(key, modelCall);
   }
   if (source.lastProgressAt > target.lastProgressAt) {
     target.lastProgressAt = source.lastProgressAt;
@@ -148,7 +157,7 @@ function resolveSessionActivity(params: {
     sessionKey: params.sessionKey,
     activeEmbeddedRuns: new Set(),
     activeTools: new Map(),
-    activeModelCalls: new Set(),
+    activeModelCalls: new Map(),
     lastProgressAt: Date.now(),
   };
   registerSessionActivityRefs(created, params);
@@ -183,6 +192,9 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   }
   const now = Date.now();
   activity.activeTools.set(toolKey(event), {
+    runId: event.runId,
+    sessionId: event.sessionId,
+    sessionKey: event.sessionKey,
     toolName: event.toolName,
     toolCallId: event.toolCallId,
     startedAt: now,
@@ -210,7 +222,11 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   if (!activity) {
     return;
   }
-  activity.activeModelCalls.add(modelCallKey(event));
+  activity.activeModelCalls.set(modelCallKey(event), {
+    runId: event.runId,
+    sessionId: event.sessionId,
+    sessionKey: event.sessionKey,
+  });
   touchSessionActivity(activity, "model_call:started");
 }
 
@@ -286,6 +302,42 @@ function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string
   return params.workKey ?? params.sessionId;
 }
 
+function ownerRefsForRecovery(params: {
+  sessionId?: string;
+  activeSessionId?: string;
+}): Set<string> {
+  const refs = [params.activeSessionId?.trim(), params.sessionId?.trim()].filter(
+    (ref): ref is string => Boolean(ref),
+  );
+  return new Set(refs);
+}
+
+function markerBelongsToRecoveredOwner(
+  marker: { runId?: string; sessionId?: string },
+  ownerRefs: Set<string>,
+): boolean {
+  return (
+    (marker.runId !== undefined && ownerRefs.has(marker.runId)) ||
+    (marker.sessionId !== undefined && ownerRefs.has(marker.sessionId))
+  );
+}
+
+function clearRecoveredOwnerMarkers(activity: SessionActivity, ownerRefs: Set<string>): void {
+  if (ownerRefs.size === 0) {
+    return;
+  }
+  for (const [key, tool] of activity.activeTools) {
+    if (markerBelongsToRecoveredOwner(tool, ownerRefs)) {
+      activity.activeTools.delete(key);
+    }
+  }
+  for (const [key, modelCall] of activity.activeModelCalls) {
+    if (markerBelongsToRecoveredOwner(modelCall, ownerRefs)) {
+      activity.activeModelCalls.delete(key);
+    }
+  }
+}
+
 // Reconciles a session's terminal embedded-run activity at once. Used when an
 // authority (stuck-session recovery) declares the lane idle and the per-run
 // markDiagnosticEmbeddedRunEnded may have been bypassed. Clears the embedded-run
@@ -308,12 +360,12 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   ) {
     return { cleared: false, blockedByActiveEmbeddedRun: false };
   }
-  const recoveredWorkKey = resolveEmbeddedRunWorkKey({
-    sessionId: params.activeSessionId ?? params.sessionId ?? "",
-  });
+  const ownerRefs = ownerRefsForRecovery(params);
+  const recoveredWorkKey = resolveEmbeddedRunWorkKey({ sessionId: [...ownerRefs][0] ?? "" });
   if (recoveredWorkKey) {
     activity.activeEmbeddedRuns.delete(recoveredWorkKey);
   }
+  clearRecoveredOwnerMarkers(activity, ownerRefs);
   if (activity.activeEmbeddedRuns.size > 0) {
     touchSessionActivity(activity, "embedded_run:recovery_skipped_active_owner");
     return { cleared: false, blockedByActiveEmbeddedRun: true };
