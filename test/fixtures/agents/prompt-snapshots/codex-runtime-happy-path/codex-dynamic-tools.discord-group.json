@@ -208,16 +208,27 @@
                   "additionalProperties": true,
                   "properties": {
                     "accountId": {
+                      "description": "Failure delivery account",
                       "type": "string"
                     },
                     "channel": {
+                      "description": "Failure delivery channel",
                       "type": "string"
                     },
                     "mode": {
-                      "enum": ["announce", "webhook"],
-                      "type": "string"
+                      "anyOf": [
+                        {
+                          "const": "announce",
+                          "type": "string"
+                        },
+                        {
+                          "const": "webhook",
+                          "type": "string"
+                        }
+                      ]
                     },
                     "to": {
+                      "description": "Failure delivery target",
                       "type": "string"
                     }
                   },
@@ -419,34 +430,56 @@
               "additionalProperties": true,
               "properties": {
                 "accountId": {
-                  "description": "Delivery account",
+                  "description": "Delivery account, or null to clear",
                   "type": "string"
                 },
                 "bestEffort": {
                   "type": "boolean"
                 },
                 "channel": {
-                  "description": "Delivery channel",
+                  "description": "Delivery channel, or null to clear",
                   "type": "string"
                 },
                 "failureDestination": {
-                  "additionalProperties": true,
-                  "properties": {
-                    "accountId": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "accountId": {
+                          "description": "Failure delivery account, or null to clear",
+                          "type": "string"
+                        },
+                        "channel": {
+                          "description": "Failure delivery channel, or null to clear",
+                          "type": "string"
+                        },
+                        "mode": {
+                          "anyOf": [
+                            {
+                              "const": "announce",
+                              "type": "string"
+                            },
+                            {
+                              "const": "webhook",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "to": {
+                          "description": "Failure delivery target, or null to clear",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
                     },
-                    "channel": {
-                      "type": "string"
-                    },
-                    "mode": {
-                      "enum": ["announce", "webhook"],
-                      "type": "string"
-                    },
-                    "to": {
-                      "type": "string"
+                    {
+                      "type": "null"
                     }
-                  },
-                  "type": "object"
+                  ],
+                  "description": "Failure destination, or null to clear"
                 },
                 "mode": {
                   "description": "Delivery mode",
@@ -460,12 +493,15 @@
                     },
                     {
                       "type": "number"
+                    },
+                    {
+                      "type": "null"
                     }
                   ],
                   "description": "Thread/topic id"
                 },
                 "to": {
-                  "description": "Delivery target",
+                  "description": "Delivery target, or null to clear",
                   "type": "string"
                 }
               },
