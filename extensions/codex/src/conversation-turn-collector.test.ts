@@ -208,6 +208,7 @@ describe("codex conversation turn collector", () => {
       await expect(completion).resolves.toEqual({ replyText: "" });
     } finally {
       vi.restoreAllMocks();
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });
