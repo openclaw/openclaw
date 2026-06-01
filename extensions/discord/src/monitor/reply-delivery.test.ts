@@ -264,7 +264,7 @@ describe("deliverDiscordReply", () => {
     await deliverDiscordReply({
       replies: [
         {
-          text: "tool_call: calling tool\ntool_result: inspect private state",
+          text: "commentary: calling tool\nanalysis: inspect private state",
           mediaUrl: "https://example.com/result.png",
         },
       ],
@@ -304,7 +304,7 @@ describe("deliverDiscordReply", () => {
     await deliverDiscordReply({
       replies: [
         {
-          text: "tool_result: internal only",
+          text: "analysis: internal only",
           channelData,
         },
       ],
@@ -334,7 +334,7 @@ describe("deliverDiscordReply", () => {
     await deliverDiscordReply({
       replies: [
         {
-          text: "function_call: hidden",
+          text: "commentary: hidden",
           presentation,
         },
       ],
