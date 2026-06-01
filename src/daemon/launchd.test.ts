@@ -87,6 +87,33 @@ function createDefaultLaunchdEnv(): Record<string, string | undefined> {
   };
 }
 
+async function withProcessEnv<T>(
+  overrides: Record<string, string | undefined>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(overrides)) {
+    previous.set(key, process.env[key]);
+    const value = overrides[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaunchAgent>[0]) {
   vi.useFakeTimers();
   try {
@@ -1002,6 +1029,76 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent");
   });
 
+  it("refuses in-band LaunchAgent stop before launchctl bootout", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
+      },
+      async () => {
+        await expect(stopLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+          "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
+        );
+      },
+    );
+
+    expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("refuses in-band LaunchAgent stop when XPC_SERVICE_NAME is inherited", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: "0",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      },
+      async () => {
+        await expect(stopLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+          "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
+        );
+      },
+    );
+
+    expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("allows external LaunchAgent label overrides to stop the selected target", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.gateway",
+    };
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+      },
+      async () => {
+        await stopLaunchAgent({ env, stdout });
+      },
+    );
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/com.example.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([["bootout", serviceId]]);
+    expect(output).toContain("Stopped LaunchAgent");
+  });
+
   it("verifies the configured gateway port is released before reporting stop success", async () => {
     const env = {
       ...createDefaultLaunchdEnv(),
@@ -1099,6 +1196,25 @@ describe("launchd install", () => {
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19005);
     expect(inspectPortUsage).toHaveBeenCalledWith(19005);
     expect(output).toContain("Stopped LaunchAgent");
+  });
+
+  it("refuses in-band LaunchAgent disable-stop before any launchctl call", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
+      },
+      async () => {
+        await expect(
+          stopLaunchAgent({ env, stdout: new PassThrough(), disable: true }),
+        ).rejects.toThrow(
+          "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
+        );
+      },
+    );
+
+    expect(state.launchctlCalls).toEqual([]);
   });
 
   it("treats already-unloaded services as successfully stopped without bootout fallback (--disable)", async () => {

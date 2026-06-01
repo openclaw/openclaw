@@ -81,6 +81,22 @@ function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): bo
   return Boolean(configuredLabel && label === configuredLabel);
 }
 
+function isCurrentProcessLaunchdServiceStopTarget(
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  for (const launchdLabel of [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME]) {
+    if (launchdLabel?.trim() === label) {
+      return true;
+    }
+  }
+  return (
+    env.OPENCLAW_SERVICE_MARKER?.trim() === GATEWAY_SERVICE_MARKER &&
+    Boolean(env.OPENCLAW_SERVICE_KIND?.trim()) &&
+    env.OPENCLAW_LAUNCHD_LABEL?.trim() === label
+  );
+}
+
 export function isOpenClawUpdateLaunchdLabel(label: unknown): label is string {
   return normalizeOpenClawUpdateLaunchdLabel(label) !== null;
 }
@@ -789,6 +805,12 @@ export async function stopLaunchAgent({
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
+
+  if (isCurrentProcessLaunchdServiceStopTarget(label)) {
+    throw new Error(
+      `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
+    );
+  }
 
   if (!persistDisable) {
     // Default: bootout only. Removes the job from the current launchd domain without
