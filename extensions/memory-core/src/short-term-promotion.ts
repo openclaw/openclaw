@@ -1924,7 +1924,13 @@ function buildPromotionSection(
 
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
+    // "signals" = recallCount + dailyCount + groundedCount (the value checked
+    // against minRecallCount). Fall back to computing it when the field is absent
+    // for older entries that pre-date the signalCount property.
+    const signalCount =
+      candidate.signalCount ??
+      candidate.recallCount + (candidate.dailyCount ?? 0) + (candidate.groundedCount ?? 0);
+    const metadata = `[score=${candidate.score.toFixed(3)} signals=${signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     // Cap only the visible MEMORY.md text. The recall store keeps the full
     // rehydrated snippet so ranking, provenance, and dream narratives remain
