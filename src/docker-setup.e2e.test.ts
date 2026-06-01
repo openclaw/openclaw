@@ -23,6 +23,19 @@ fail_match="\${DOCKER_STUB_FAIL_MATCH:-}"
 if [[ "\${1:-}" == "compose" && "\${2:-}" == "version" ]]; then
   exit 0
 fi
+if [[ "\${1:-}" == "image" && "\${2:-}" == "inspect" ]]; then
+  image="\${3:-}"
+  echo "image inspect $image" >>"$log"
+  missing_images=",\${DOCKER_STUB_MISSING_IMAGES:-},"
+  if [[ "$missing_images" == *",$image,"* ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+if [[ "\${1:-}" == "pull" ]]; then
+  echo "pull $*" >>"$log"
+  exit 0
+fi
 if [[ "\${1:-}" == "build" ]]; then
   if [[ -n "$fail_match" && "$*" == *"$fail_match"* ]]; then
     echo "build-fail $*" >>"$log"
@@ -43,8 +56,22 @@ echo "unknown $*" >>"$log"
 exit 0
 `;
 
+  const timeoutStub = `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == --kill-after=* ]]; then
+  shift
+elif [[ "\${1:-}" == "--kill-after" ]]; then
+  shift 2
+fi
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+exec "$@"
+`;
+
   await mkdir(binDir, { recursive: true });
   await writeFile(join(binDir, "docker"), stub, { mode: 0o755 });
+  await writeFile(join(binDir, "timeout"), timeoutStub, { mode: 0o755 });
   await writeFile(logPath, "");
 }
 
@@ -140,8 +167,9 @@ function requireSandbox(sandbox: DockerSetupSandbox | null): DockerSetupSandbox 
 function runDockerSetup(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
+  args: string[] = [],
 ) {
-  return spawnSync("bash", [sandbox.scriptPath], {
+  return spawnSync("bash", [sandbox.scriptPath, ...args], {
     cwd: sandbox.rootDir,
     env: createEnv(sandbox, overrides),
     encoding: "utf8",
@@ -436,6 +464,85 @@ describe("scripts/docker/setup.sh", () => {
       (line) => !line.includes("DOCKER_BUILDKIT=1"),
     );
     expect(buildLinesWithoutBuildKit).toStrictEqual([]);
+  });
+
+  it("offline mode reuses a preloaded local image without build or pull", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(
+      activeSandbox,
+      {
+        OPENCLAW_IMAGE: "openclaw:local",
+        OPENCLAW_SKIP_ONBOARDING: "1",
+      },
+      ["--offline"],
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Using preloaded Docker image: openclaw:local");
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("image inspect openclaw:local");
+    expect(log).not.toContain("build ");
+    expect(log).not.toContain("pull ");
+    expect(log).toContain("config set --batch-json");
+    expect(log).toContain("up -d openclaw-gateway");
+  });
+
+  it("offline mode fails before setup when the main image is missing", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(
+      activeSandbox,
+      {
+        OPENCLAW_IMAGE: "ghcr.io/openclaw/openclaw:offline",
+        DOCKER_STUB_MISSING_IMAGES: "ghcr.io/openclaw/openclaw:offline",
+      },
+      ["--offline"],
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Offline Docker setup requires preloaded image ghcr.io/openclaw/openclaw:offline",
+    );
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("image inspect ghcr.io/openclaw/openclaw:offline");
+    expect(log).not.toContain("build ");
+    expect(log).not.toContain("pull ");
+    expect(log).not.toContain("up -d openclaw-gateway");
+  });
+
+  it("offline sandbox warns for a missing optional sandbox image without building it", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await mkdir(join(activeSandbox.rootDir, "scripts", "docker", "sandbox"), { recursive: true });
+    await writeFile(
+      join(activeSandbox.rootDir, "scripts", "docker", "sandbox", "Dockerfile"),
+      "FROM scratch\n",
+    );
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(
+      activeSandbox,
+      {
+        OPENCLAW_SANDBOX: "1",
+        OPENCLAW_SKIP_ONBOARDING: "1",
+        DOCKER_STUB_MISSING_IMAGES: "openclaw-sandbox:bookworm-slim",
+      },
+      ["--offline"],
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("did not find optional sandbox image");
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("image inspect openclaw:local");
+    expect(log).toContain("image inspect openclaw-sandbox:bookworm-slim");
+    expect(log).not.toContain("build ");
+    expect(log).not.toContain("pull ");
+    expect(log).toContain("config set agents.defaults.sandbox.mode");
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {

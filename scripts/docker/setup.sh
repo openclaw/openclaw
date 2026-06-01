@@ -15,11 +15,24 @@ TIMEZONE="${OPENCLAW_TZ:-}"
 RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
 SKIP_ONBOARDING=""
 DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"
+OFFLINE_MODE=""
 
 fail() {
   echo "ERROR: $*" >&2
   exit 1
 }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --offline)
+      OFFLINE_MODE="1"
+      ;;
+    *)
+      fail "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -45,6 +58,14 @@ run_docker_pull() {
     return
   fi
   docker pull "$image"
+}
+
+require_local_docker_image() {
+  local image="$1"
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    return 0
+  fi
+  fail "Offline Docker setup requires preloaded image $image. Load it with 'docker load -i <image.tar>' before running scripts/docker/setup.sh --offline."
 }
 
 is_truthy_value() {
@@ -535,7 +556,10 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_OTEL_PRELOADED \
   OPENCLAW_SKIP_ONBOARDING
 
-if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
+if [[ -n "$OFFLINE_MODE" ]]; then
+  require_local_docker_image "$IMAGE_NAME"
+  echo "==> Using preloaded Docker image: $IMAGE_NAME"
+elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   run_docker_build \
     --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
@@ -624,7 +648,15 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo "==> Sandbox setup"
 
   sandbox_dockerfile="$ROOT_DIR/scripts/docker/sandbox/Dockerfile"
-  if [[ -f "$sandbox_dockerfile" ]]; then
+  if [[ -n "$OFFLINE_MODE" ]]; then
+    if docker image inspect "openclaw-sandbox:bookworm-slim" >/dev/null 2>&1; then
+      echo "Using preloaded sandbox image: openclaw-sandbox:bookworm-slim"
+    else
+      echo "WARNING: offline Docker setup did not find optional sandbox image openclaw-sandbox:bookworm-slim." >&2
+      echo "  Load it with 'docker load -i <sandbox-image.tar>' before running sandboxed agents." >&2
+      echo "  Sandbox config will be applied but agent exec may fail if no sandbox image is available." >&2
+    fi
+  elif [[ -f "$sandbox_dockerfile" ]]; then
     echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
     run_docker_build \
       -t "openclaw-sandbox:bookworm-slim" \
