@@ -22,9 +22,14 @@ When the add-on bootstrap is run through `sudo` without an explicit `OPENCLAW_HO
 
 ## Agent-Readable Markdown
 
-The bootstrap writes a Zorg MemoryDB usage block into the OpenClaw workspace markdown files the agent reads at startup: `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md`. It also copies `ZORG_MEMORYDB_MASTER_RULES.md` into the workspace root.
+The bootstrap writes a Zorg MemoryDB usage block into the OpenClaw workspace markdown files the agent reads at startup: `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md`. It also copies `RESURRECTION.md` and `ZORG_MEMORYDB_MASTER_RULES.md` into the workspace root.
 
 This is required because importing rules into PostgreSQL alone is not enough: the local LLM must be able to read how to use the database memory path before it can reliably call the DB-backed recall tools.
+
+`RESURRECTION.md` is the filesystem-first recovery path for the case where the
+database is empty, damaged, or unavailable. It tells a new agent where backups
+live, how to run a recovery drill, how to restore a verified dump, and how to
+verify recall after restore without relying on broken DB memory.
 
 The Python recall tools install their dependencies from `zorg/requirements.txt` into `.venv-sqlmem`. They also re-exec through `.venv-sqlmem/bin/python` when launched with plain `python3`, so agent-readable commands do not fail just because the system Python lacks `psycopg2`.
 

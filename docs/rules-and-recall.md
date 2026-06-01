@@ -5,7 +5,7 @@
 1. Memory check is Priority 0.
 2. DB-backed recall is primary.
 3. Flat-file memory fallback is retired. If DB recall is unavailable, repair/restore DB memory or ask the operator before any exceptional non-DB fallback.
-4. The workspace root ZORG_MEMORYDB_MASTER_RULES.md is the master recovery contract for upgrade/regression lockout. If an OpenClaw upgrade, config rewrite, or package replacement bypasses normal rule priority, consult that file and repair DB recall before unrelated work.
+4. The workspace root RESURRECTION.md is the filesystem-first restore map when DB recall is unavailable, and ZORG_MEMORYDB_MASTER_RULES.md is the master recovery contract for upgrade/regression lockout. If an OpenClaw upgrade, config rewrite, or package replacement bypasses normal rule priority, consult those files and repair DB recall before unrelated work.
 5. Weak first-pass recall requires deeper recall, not an immediate conclusion.
 6. Before claiming inability, search prior working solutions, runbooks, project records, backups, mirrors, and related operational facts.
 7. Preserve all source history forever; never prune, delete, truncate, age out, compact-by-removal, or discard original/source data for performance. The database must grow continuously.

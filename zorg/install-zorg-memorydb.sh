@@ -314,6 +314,9 @@ install_agent_readable_markdown() {
   if [[ -f "$ZORG_WORKSPACE_DIR/rules/ZORG_MEMORYDB_MASTER_RULES.md" ]]; then
     cp "$ZORG_WORKSPACE_DIR/rules/ZORG_MEMORYDB_MASTER_RULES.md" "$OPENCLAW_WORKSPACE/ZORG_MEMORYDB_MASTER_RULES.md"
   fi
+  if [[ -f "$ZORG_WORKSPACE_DIR/rules/RESURRECTION.md" ]]; then
+    cp "$ZORG_WORKSPACE_DIR/rules/RESURRECTION.md" "$OPENCLAW_WORKSPACE/RESURRECTION.md"
+  fi
   python3 - "$OPENCLAW_WORKSPACE" <<'PY'
 from pathlib import Path
 import sys
@@ -340,6 +343,7 @@ Zorg MemoryDB is the active durable memory backend for this OpenClaw workspace. 
 - Recall CLI: memory_sql_tool.py
 - Recall router: memory_recall_router.py
 - Packaged rules: zorg-memorydb/rules/
+- Filesystem resurrection restore path: RESURRECTION.md
 - Master public install rule file: ZORG_MEMORYDB_MASTER_RULES.md
 
 ### Quick Verification Commands

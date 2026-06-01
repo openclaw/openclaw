@@ -7,7 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - QA-Lab: add `qa coverage --match <query>` so focused proof selection can discover matching scenarios from existing metadata before running live or remote lanes.
-- Zorg MemoryDB: document the root-level `RESURRECTION.md` recovery pointer so backups remain useful even when DB recall is unavailable.
+- Zorg MemoryDB: install and document the root-level `RESURRECTION.md` recovery pointer so backups remain useful even when DB recall is unavailable.
 - Zorg MemoryDB: backfill live pgvector ANN coverage for eligible local-hash rows, including missing logic-rule embeddings, refresh ANN planner statistics, add a bounded ANN-neighbor edge batch, and mark low-information derived ANN payloads inactive without deleting source memory.
 - Control UI: add an ephemeral Activity tab for sanitized live tool activity summaries without persisting raw telemetry. Fixes #12831. Thanks @BunsDev.
 - Build: include `ui:build` in the `full` and `ciArtifacts` profiles of `scripts/build-all.mjs` so `pnpm build` always rebuilds `dist/control-ui` after `tsdown` cleans `dist`, removing the second-command requirement and the missing-asset failure mode for source/runtime installs and CI artifact uploads. (#85206)

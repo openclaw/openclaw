@@ -18,6 +18,7 @@ def iter_markdown(workspace: Path, rules_dir: Path):
         "TOOLS.md",
         "IDENTITY.md",
         "HEARTBEAT.md",
+        "RESURRECTION.md",
         "ZORG_MEMORYDB_MASTER_RULES.md",
     ]
     for name in core_markdown:

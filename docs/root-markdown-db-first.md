@@ -2,7 +2,7 @@
 
 OpenClaw/Zorg runtime workspaces keep root markdown files small. Durable operating rules, process rules, user/project history, and other long-lived context belong in PostgreSQL-backed Zorg MemoryDB tables, not in oversized markdown files.
 
-Root markdown files should contain only the minimum bootstrap pointer needed to recover the backend memory database and verify DB-backed recall. The canonical local repair pointer is `ZORG_MEMORYDB_MASTER_RULES.md`; workspace entry files such as `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md` may point to that recovery file but should not duplicate the full rule corpus.
+Root markdown files should contain only the minimum bootstrap pointer needed to recover the backend memory database and verify DB-backed recall. The canonical filesystem restore pointer is `RESURRECTION.md`; the canonical local repair/rule pointer is `ZORG_MEMORYDB_MASTER_RULES.md`. Workspace entry files such as `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md` may point to those recovery files but should not duplicate the full rule corpus.
 
 Before shrinking existing root markdown, sync current rules into structured DB recall:
 
