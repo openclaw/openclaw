@@ -113,6 +113,43 @@ describe("custom theme import helpers", () => {
     });
   });
 
+  it("accepts built-in tweakcn theme names shorter than 8 characters", () => {
+    // Built-in themes like 'claude' (6), 'zinc' (4), 'slate' (5) were rejected
+    // by the old THEME_ID_PATTERN which required a minimum of 8 total characters.
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/zinc")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/zinc",
+      fetchUrl: "https://tweakcn.com/r/themes/zinc",
+      themeId: "zinc",
+    });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/slate")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/slate",
+      fetchUrl: "https://tweakcn.com/r/themes/slate",
+      themeId: "slate",
+    });
+    // Single-char bare id should also be accepted
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/a")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/a",
+      fetchUrl: "https://tweakcn.com/r/themes/a",
+      themeId: "a",
+    });
+    // Bare short ids as raw input
+    expect(normalizeTweakcnThemeUrl("claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
+    expect(normalizeTweakcnThemeUrl("zinc")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/zinc",
+      fetchUrl: "https://tweakcn.com/r/themes/zinc",
+      themeId: "zinc",
+    });
+  });
+
   it("maps a tweakcn payload into a normalized imported theme record", () => {
     const imported = createImportedTheme();
 
