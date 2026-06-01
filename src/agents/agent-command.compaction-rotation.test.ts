@@ -5,16 +5,18 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../config/sessions.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
+type RunAgentAttempt = typeof import("./command/attempt-execution.runtime.js").runAgentAttempt;
 
 const state = vi.hoisted(() => ({
   cfg: undefined as OpenClawConfig | undefined,
   workspaceDir: undefined as string | undefined,
   agentDir: undefined as string | undefined,
-  runAgentAttemptMock: vi.fn(),
+  runAgentAttemptMock: vi.fn<RunAgentAttempt>(),
   loadManifestModelCatalogMock: vi.fn((_params: LoadManifestModelCatalogParams) => []),
   normalizeProviderModelIdWithRuntimeMock: vi.fn(
     (_params: ProviderModelNormalizationParams) => undefined,
@@ -135,7 +137,7 @@ vi.mock("./command/attempt-execution.runtime.js", async () => {
   );
   return {
     ...actual,
-    runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
+    runAgentAttempt: (params: Parameters<RunAgentAttempt>[0]) => state.runAgentAttemptMock(params),
   };
 });
 
@@ -198,7 +200,7 @@ function makeResult(params: {
   sessionFile?: string;
   text: string;
   compactionCount?: number;
-}) {
+}): EmbeddedAgentRunResult {
   return {
     payloads: [{ text: params.text }],
     meta: {

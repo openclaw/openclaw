@@ -539,6 +539,7 @@ vi.mock("./model-selection.js", () => {
     modelKey: (p: string, m: string) => `${p}/${m}`,
     normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
     normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
     resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
