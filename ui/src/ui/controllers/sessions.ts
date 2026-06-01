@@ -709,6 +709,17 @@ async function loadSessionsOnce(
           ? appendSessionsResult(state.sessionsResult, projected)
           : projected;
       if (hasCurrentChatSession(state)) {
+        const currentRow = state.sessionsResult.sessions.find(
+          (row) => row.key === state.sessionKey,
+        );
+        if (
+          currentRow &&
+          currentRow.status &&
+          currentRow.status !== "running" &&
+          currentRow.hasActiveRun === true
+        ) {
+          currentRow.hasActiveRun = false;
+        }
         reconcileChatRunFromCurrentSessionRow(state, {
           publishRunStatus: overrides?.publishChatRunStatus !== false,
         });

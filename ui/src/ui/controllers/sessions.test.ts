@@ -592,6 +592,59 @@ describe("loadSessions", () => {
     expect(isSessionRunActive(current!)).toBe(false);
   });
 
+  it("corrects stale hasActiveRun=true when status is already terminal", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 2,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            hasActiveRun: true,
+            status: "done",
+          },
+        ],
+      };
+    });
+    const state = createState(request, {
+      sessionKey: "main",
+      chatRunId: null,
+      chatStream: null,
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    } as Partial<SessionsState & { sessionKey: string }>);
+
+    await loadSessions(state);
+
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "main",
+      hasActiveRun: false,
+      status: "done",
+    });
+    expect(isSessionRunActive(current!)).toBe(false);
+  });
+
   it("omits the active-window cutoff when archived sessions are shown", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
