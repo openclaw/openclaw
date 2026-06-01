@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Plugin SDK: expose the exec approvals runtime subpath used by newer Codex plugins, so an already-installed \`@openclaw/codex\` package does not fail to load with \`MODULE_NOT_FOUND\` for \`openclaw/plugin-sdk/exec-approvals-runtime\`.
+- Docker release: include the Zorg lifecycle helpers in the dependency-install layer so package preinstall/postinstall scripts can run inside release image builds.
 - Docker release: normalize GHCR image repository names to lowercase so release tags from mixed-case forks publish valid Docker refs.
 - Zorg docs: document the DB-first root markdown policy, public-safe MemoryDB maintenance checks, and curated MemoryDB release process.
 - Zorg docs: document that install/package repairs must be grounded in product docs, package metadata, source patterns, and clean-install verification instead of local-only assumptions.
