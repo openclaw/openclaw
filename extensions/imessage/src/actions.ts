@@ -521,7 +521,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     };
 
     if (action === "react") {
-      await assertPrivateApiEnabled();
       const { emoji, remove, isEmpty } = readReactionParams(params, {
         removeErrorMessage: "Emoji is required to remove an iMessage reaction.",
       });
@@ -538,6 +537,8 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           "iMessage react supports love, like, dislike, laugh, emphasize, and question tapbacks.",
         );
       }
+      await assertOutboundActionAllowed();
+      await assertPrivateApiEnabled();
       const resolvedMessageId = messageId();
       const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const resolvedChatGuid = await chatGuid();
@@ -556,8 +557,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "edit") {
-      await assertPrivateApiEnabled();
-      const resolvedMessageId = messageId({ requireFromMe: true });
       const text =
         readStringParam(params, "text") ??
         readStringParam(params, "newText") ??
@@ -565,6 +564,9 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("iMessage edit requires text, newText, or message.");
       }
+      await assertOutboundActionAllowed();
+      await assertPrivateApiEnabled();
+      const resolvedMessageId = messageId({ requireFromMe: true });
       const partIndex = readNonNegativeIntegerParam(params, "partIndex");
       const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
       const resolvedChatGuid = await chatGuid();
@@ -580,6 +582,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "unsend") {
+      await assertOutboundActionAllowed();
       await assertPrivateApiEnabled();
       const resolvedMessageId = messageId({ requireFromMe: true });
       const partIndex = readNonNegativeIntegerParam(params, "partIndex");
