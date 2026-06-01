@@ -74,6 +74,13 @@ describe("resetReplyRunSession", () => {
       fallbackNoticeSelectedModel: "anthropic/claude",
       fallbackNoticeActiveModel: "openai/gpt",
       fallbackNoticeReason: "rate limit",
+      compactionCount: 5,
+      memoryFlushAt: 123,
+      memoryFlushCompactionCount: 4,
+      memoryFlushContextHash: "stale-context",
+      memoryFlushFailureCount: 3,
+      memoryFlushLastFailedAt: 456,
+      memoryFlushLastFailureError: "provider crashed",
       systemPromptReport: {
         source: "run",
         generatedAt: 1,
@@ -119,6 +126,13 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.fallbackNoticeSelectedModel).toBeUndefined();
     expect(activeSessionEntry?.fallbackNoticeActiveModel).toBeUndefined();
     expect(activeSessionEntry?.fallbackNoticeReason).toBeUndefined();
+    expect(activeSessionEntry?.compactionCount).toBe(0);
+    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "main",
@@ -134,6 +148,10 @@ describe("resetReplyRunSession", () => {
     expect(persisted.main.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted.main.contextBudgetStatus).toBeUndefined();
     expect(persisted.main.fallbackNoticeReason).toBeUndefined();
+    expect(persisted.main.compactionCount).toBe(0);
+    expect(persisted.main.memoryFlushFailureCount).toBeUndefined();
+    expect(persisted.main.memoryFlushLastFailedAt).toBeUndefined();
+    expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
   });
 
   it("cleans up the old transcript when requested", async () => {
