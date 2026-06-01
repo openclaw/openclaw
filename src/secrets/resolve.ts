@@ -438,7 +438,7 @@ async function resolveFileRefs(params: {
   }
   for (const ref of params.refs) {
     try {
-      resolved.set(ref.id, readJsonPointer(payload, ref.id, { onMissing: "throw" }));
+      resolved.set(ref.id, readJsonFileSecretRef(payload, ref.id));
     } catch (err) {
       throw refResolutionError({
         source: "file",
@@ -450,6 +450,17 @@ async function resolveFileRefs(params: {
     }
   }
   return resolved;
+}
+
+function readJsonFileSecretRef(payload: unknown, refId: string): unknown {
+  try {
+    return readJsonPointer(payload, refId, { onMissing: "throw" });
+  } catch (err) {
+    if (!refId.startsWith("/") && isRecord(payload) && Object.hasOwn(payload, refId)) {
+      return payload[refId];
+    }
+    throw err;
+  }
 }
 
 type ExecRunResult = {

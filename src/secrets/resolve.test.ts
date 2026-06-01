@@ -482,6 +482,31 @@ describe("secret ref resolver", () => {
     expect(value).toBe("sk-test-123");
   });
 
+  it("resolves legacy bare root keys from JSON file providers", async () => {
+    const dir = await createCaseDir("legacy-file-root-key");
+    const filePath = path.join(dir, "secrets.json");
+    await writeSecureFile(
+      filePath,
+      JSON.stringify({
+        SLACK_COMPBIO_APP_TOKEN: "app-token-value",
+      }),
+    );
+
+    const value = await resolveSecretRefString(
+      { source: "file", provider: "filemain", id: "SLACK_COMPBIO_APP_TOKEN" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              filemain: createFileProviderConfig(filePath),
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("app-token-value");
+  });
+
   it("strips UTF-8 BOM from file provider singleValue mode", async () => {
     const dir = await createCaseDir("bom-single");
     const filePath = path.join(dir, "secret-with-bom.txt");
