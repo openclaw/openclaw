@@ -136,6 +136,14 @@ export function armGatewayPostShutdownExitWatchdog(opts?: {
   reason?: string;
   shutdownDurationMs?: number;
 }): { cancel: () => void } {
+  // Skip in vitest workers: any test that exercises the production close path
+  // without mocking this dep would otherwise trip the watchdog and call
+  // process.exit() on the worker, killing the whole shard. Tests that want to
+  // exercise the watchdog itself (the explicit zombie-detected coverage) inject
+  // a mock exitProcess via opts. Production gateways have no VITEST set.
+  if (process.env.VITEST !== undefined && opts?.exitProcess === undefined) {
+    return { cancel: () => {} };
+  }
   const timeoutMs = Math.max(0, Math.floor(opts?.timeoutMs ?? resolvePostShutdownExitTimeoutMs()));
   const exit = opts?.exitProcess ?? ((code: number) => process.exit(code));
   const reason = opts?.reason ?? "gateway stopping";
