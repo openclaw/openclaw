@@ -107,22 +107,12 @@ export function transformMessages<TApi extends Api>(
           if (block.redacted) {
             return isSameModel ? block : [];
           }
-          // For same model: keep thinking blocks with signatures (needed for replay)
-          // even if the thinking text is empty (OpenAI encrypted reasoning)
-          if (isSameModel && block.thinkingSignature) {
-            return block;
-          }
-          // Skip empty thinking blocks, convert others to plain text
-          if (!block.thinking || block.thinking.trim() === "") {
-            return [];
-          }
-          if (isSameModel) {
-            return block;
-          }
-          return {
-            type: "text" as const,
-            text: block.thinking,
-          };
+          // Strip ALL thinking blocks from historical assistant messages.
+          // Anthropic thinking signatures are time-limited and single-use;
+          // replaying them causes "Invalid signature in thinking block" errors.
+          // The current-turn thinking block (if any) is preserved by the stream handler,
+          // not by transcript replay.
+          return [];
         }
 
         if (block.type === "text") {

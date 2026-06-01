@@ -79,7 +79,7 @@ describe("Anthropic provider", () => {
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
   });
 
-  it("preserves provider-signed Anthropic thinking text on replay", async () => {
+  it("strips all thinking blocks from historical messages to avoid expired signature errors", async () => {
     const highSurrogate = String.fromCharCode(0xd83d);
     const signedThinking = `keep${highSurrogate}signed`;
     let capturedPayload: unknown;
@@ -154,18 +154,7 @@ describe("Anthropic provider", () => {
 
     const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
     const assistantMessage = payload.messages.find((message) => message.role === "assistant");
-    expect(assistantMessage?.content).toEqual([
-      {
-        type: "thinking",
-        thinking: signedThinking,
-        signature: "sig_1",
-      },
-      {
-        type: "thinking",
-        thinking: "sanitizesynthetic",
-        signature: "reasoning_content",
-      },
-    ]);
+    expect(assistantMessage?.content).toEqual([]);
   });
 
   it("clamps max adaptive effort when the Claude model does not advertise it", async () => {
