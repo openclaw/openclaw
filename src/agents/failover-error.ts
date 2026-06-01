@@ -327,6 +327,10 @@ function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
   );
 }
 
+export function isEmbeddedAttemptSessionTakeoverError(err: unknown): boolean {
+  return isEmbeddedAttemptSessionTakeover(err);
+}
+
 function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
   if (isEmbeddedAttemptSessionTakeover(err)) {
     return true;

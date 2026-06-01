@@ -45,7 +45,7 @@ import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { isFailoverError } from "../../agents/failover-error.js";
+import { isEmbeddedAttemptSessionTakeoverError, isFailoverError } from "../../agents/failover-error.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -3295,6 +3295,24 @@ export async function runAgentTurnWithFallback(params: {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
             text: providerRequestError.userMessage,
+          }),
+        };
+      }
+
+      if (isEmbeddedAttemptSessionTakeoverError(err)) {
+        params.replyOperation?.fail("run_failed", err);
+        const text = params.isHeartbeat
+          ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+          : "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.";
+        return {
+          kind: "final",
+          payload: markAgentRunFailureReplyPayload({
+            text: resolveExternalRunFailureTextForConversation({
+              text,
+              sessionCtx: params.sessionCtx,
+              isGenericRunnerFailure: false,
+              cfg: params.followupRun.run.config,
+            }),
           }),
         };
       }
