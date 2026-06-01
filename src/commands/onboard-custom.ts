@@ -55,6 +55,11 @@ const COMPATIBILITY_OPTIONS: Array<{
     hintKey: "wizard.customProvider.compatibilityOpenAiHint",
   },
   {
+    value: "openai-responses",
+    labelKey: "wizard.customProvider.compatibilityOpenAiResponses",
+    hintKey: "wizard.customProvider.compatibilityOpenAiResponsesHint",
+  },
+  {
     value: "anthropic",
     labelKey: "wizard.customProvider.compatibilityAnthropic",
     hintKey: "wizard.customProvider.compatibilityAnthropicHint",
@@ -117,6 +122,7 @@ async function requestOpenAiVerification(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  responsesApi?: boolean;
 }): Promise<VerificationResult> {
   return await requestVerification(buildOpenAiVerificationProbeRequest(params));
 }
@@ -259,30 +265,42 @@ export async function promptCustomApiConfig(params: {
         compatibility = "openai";
         verifiedFromProbe = true;
       } else {
-        const anthropicProbe = await requestAnthropicVerification({
+        const openaiResponsesProbe = await requestOpenAiVerification({
           baseUrl,
           apiKey: resolvedApiKey,
           modelId,
+          responsesApi: true,
         });
-        if (anthropicProbe.ok) {
-          probeSpinner.stop(t("wizard.customProvider.detectedAnthropic"));
-          compatibility = "anthropic";
+        if (openaiResponsesProbe.ok) {
+          probeSpinner.stop(t("wizard.customProvider.detectedOpenAiResponses"));
+          compatibility = "openai-responses";
           verifiedFromProbe = true;
         } else {
-          probeSpinner.stop(t("wizard.customProvider.detectionFailed"));
-          await prompter.note(
-            t("wizard.customProvider.detectionFailedNote"),
-            t("wizard.customProvider.detectionNoteTitle"),
-          );
-          const retryChoice = await promptCustomApiRetryChoice(prompter);
-          ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
-            prompter,
-            config,
-            secretInputMode: params.secretInputMode,
-            retryChoice,
-            current: { baseUrl, apiKey, resolvedApiKey, modelId },
-          }));
-          continue;
+          const anthropicProbe = await requestAnthropicVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+          });
+          if (anthropicProbe.ok) {
+            probeSpinner.stop(t("wizard.customProvider.detectedAnthropic"));
+            compatibility = "anthropic";
+            verifiedFromProbe = true;
+          } else {
+            probeSpinner.stop(t("wizard.customProvider.detectionFailed"));
+            await prompter.note(
+              t("wizard.customProvider.detectionFailedNote"),
+              t("wizard.customProvider.detectionNoteTitle"),
+            );
+            const retryChoice = await promptCustomApiRetryChoice(prompter);
+            ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+              prompter,
+              config,
+              secretInputMode: params.secretInputMode,
+              retryChoice,
+              current: { baseUrl, apiKey, resolvedApiKey, modelId },
+            }));
+            continue;
+          }
         }
       }
     }
@@ -295,7 +313,12 @@ export async function promptCustomApiConfig(params: {
     const result =
       compatibility === "anthropic"
         ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
+        : await requestOpenAiVerification({
+            baseUrl,
+            apiKey: resolvedApiKey,
+            modelId,
+            responsesApi: compatibility === "openai-responses",
+          });
     if (result.ok) {
       verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
       break;

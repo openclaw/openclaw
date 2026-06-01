@@ -106,6 +106,24 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.confirm).not.toHaveBeenCalled();
   });
 
+  it("handles explicit OpenAI Responses flow", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://proxy.example.com/v1", "test-key", "gpt-5.4", "custom", ""],
+      select: ["plaintext", "openai-responses"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.api).toBe("openai-responses");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example.com/v1/responses");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: "gpt-5.4",
+      input: "Hi",
+      max_output_tokens: 16,
+    });
+  });
+
   it("skips the image-input prompt for known custom vision models", async () => {
     const prompter = createTestPrompter({
       text: ["https://proxy.example.com/v1", "test-key", "gpt-4o", "custom", ""],
@@ -174,6 +192,22 @@ describe("promptCustomApiConfig", () => {
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
   });
 
+  it("detects OpenAI Responses compatibility when chat completions fail", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "unknown"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: false, status: 503 }, { ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.api).toBe("openai-responses");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://example.com/v1/chat/completions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://example.com/v1/responses");
+    expect(prompter.text).toHaveBeenCalledTimes(5);
+    expect(prompter.select).toHaveBeenCalledTimes(2);
+  });
+
   it("re-prompts base url when unknown detection fails", async () => {
     const prompter = createTestPrompter({
       text: [
@@ -187,11 +221,16 @@ describe("promptCustomApiConfig", () => {
       ],
       select: ["plaintext", "unknown", "baseUrl", "plaintext"],
     });
-    stubFetchSequence([{ ok: false, status: 404 }, { ok: false, status: 404 }, { ok: true }]);
+    stubFetchSequence([
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: true },
+    ]);
     await runPromptCustomApi(prompter);
 
     expect(prompter.note).toHaveBeenCalledWith(
-      "This endpoint did not respond to OpenAI or Anthropic style requests.",
+      "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
       "Endpoint detection",
     );
   });
