@@ -7,6 +7,7 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./chat/attachment-payload-store.ts";
+import { removeStoredChatComposerQueueItem } from "./chat/composer-persistence.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -78,7 +79,7 @@ export type ChatHost = ChatInputHistoryState & {
   lastError?: string | null;
   chatError?: string | null;
   basePath: string;
-  settings?: { token?: string | null };
+  settings?: { gatewayUrl?: string | null; token?: string | null };
   password?: string | null;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
@@ -540,6 +541,9 @@ function cancelPendingSendBeforeRequest(
     if (willRestoreAttachments) {
       host.chatAttachments = opts.previousAttachments ?? [];
     }
+  }
+  if (removed?.sessionKey) {
+    removeStoredChatComposerQueueItem(host, removed.sessionKey, removed.id);
   }
   if (removed && !willRestoreAttachments) {
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, removed.attachments));

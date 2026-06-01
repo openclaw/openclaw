@@ -5,6 +5,7 @@ import type { ChatQueueItem } from "../ui-types.ts";
 import {
   loadChatComposerSnapshot,
   persistChatComposerState,
+  removeStoredChatComposerQueueItem,
   restoreChatComposerState,
 } from "./composer-persistence.ts";
 
@@ -216,6 +217,30 @@ describe("chat composer persistence", () => {
         sendRunId: "run-waiting-model",
       },
     ]);
+  });
+
+  it("removes one stored queued item without dropping the stored draft", () => {
+    persistChatComposerState(
+      createState({
+        chatMessage: "keep this draft",
+        chatQueue: [
+          { id: "remove-me", text: "stale queued send", createdAt: 1 },
+          { id: "keep-me", text: "still queued", createdAt: 2 },
+        ],
+      }),
+    );
+
+    removeStoredChatComposerQueueItem(createState(), "agent:lily:main", "remove-me");
+
+    expect(
+      loadChatComposerSnapshot(
+        { settings: { gatewayUrl: "ws://gateway.test/control" } },
+        "agent:lily:main",
+      ),
+    ).toEqual({
+      draft: "keep this draft",
+      queue: [{ id: "keep-me", text: "still queued", createdAt: 2 }],
+    });
   });
 
   it("does not restore steered messages tied to a previous active run", () => {

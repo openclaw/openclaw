@@ -359,6 +359,42 @@ export function persistChatComposerState(
   }
 }
 
+export function removeStoredChatComposerQueueItem(
+  state: Pick<
+    ChatComposerPersistenceState,
+    "settings" | "assistantAgentId" | "agentsList" | "hello"
+  >,
+  sessionKey: string,
+  id: string,
+): void {
+  const storage = getSafeSessionStorage();
+  if (!storage || !sessionKey.trim() || !id.trim()) {
+    return;
+  }
+  try {
+    const key = storageKeyForGateway(state.settings?.gatewayUrl);
+    const store = readStore(storage, key);
+    const storeSessionKey = storageSessionKeyForState(state, sessionKey);
+    const session = normalizeStoredSession(store.sessions[storeSessionKey]);
+    if (!session?.queue?.length) {
+      return;
+    }
+    const queue = session.queue.filter((item) => item.id !== id);
+    if (!session.draft && queue.length === 0) {
+      delete store.sessions[storeSessionKey];
+    } else {
+      store.sessions[storeSessionKey] = {
+        ...(session.draft ? { draft: session.draft } : {}),
+        ...(queue.length ? { queue } : {}),
+        updatedAt: Date.now(),
+      };
+    }
+    writeStore(storage, key, store);
+  } catch {
+    // Best-effort only: queue persistence must not make cancellation fail.
+  }
+}
+
 export function restoreChatComposerState(
   state: ChatComposerPersistenceState,
   options: RestoreOptions = {},
