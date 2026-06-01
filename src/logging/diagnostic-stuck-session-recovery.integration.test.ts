@@ -145,6 +145,7 @@ describe("stuck session recovery integration", () => {
 
     expect(getQueueSize(lane)).toBe(2);
     await activeStarted;
+    await delay(5);
 
     const outcome = await recoverStuckDiagnosticSession({
       sessionId,
@@ -152,11 +153,21 @@ describe("stuck session recovery integration", () => {
       ageMs: 720_000,
       queueDepth: 1,
       allowActiveAbort: true,
+      staleActiveProgressAbortMs: 1,
     });
 
     await expect(active).resolves.toBe("aborted");
     await expect(queued).resolves.toBe("drained");
     expect(outcome.status).toBe("aborted");
+    expect(operation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_by_system",
+      reason: "stuck_recovery",
+    });
+    expect(operation.abortSignal.reason).toMatchObject({
+      name: "AbortError",
+      message: "Reply operation aborted by system reason=stuck_recovery",
+    });
     expect(getQueueSize(lane)).toBe(0);
   });
 

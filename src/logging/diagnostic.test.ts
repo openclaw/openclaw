@@ -1689,7 +1689,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
-  it("recovers queued sessions behind terminal embedded progress after the abort threshold", () => {
+  it("does not recover queued sessions behind recent terminal embedded progress just because the session is old", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionWarnMs = 30_000;
@@ -1739,6 +1739,59 @@ describe("stuck session diagnostics threshold", () => {
       terminalProgressStale: true,
       lastProgressReason: terminalReason,
     });
+    expect(events.findLast((event) => event.type === "session.recovery.requested")).toBeUndefined();
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("recovers queued sessions behind terminal embedded progress once that progress is stale", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 60_000;
+    const terminalReason = "codex_app_server:notification:rawResponseItem/completed";
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs,
+            stuckSessionAbortMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+      vi.advanceTimersByTime(stuckSessionAbortMs - 1);
+      markDiagnosticRunProgressForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        reason: terminalReason,
+      });
+      vi.advanceTimersByTime(stuckSessionAbortMs + 1);
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "stalled_agent_run",
+        reason: "queued_behind_terminal_active_work",
+        activeWorkKind: "embedded_run",
+        queueDepth: 1,
+        terminalProgressStale: true,
+        lastProgressReason: terminalReason,
+      },
+    );
     expectRecoveryCall(
       recoverStuckSession,
       { sessionId: "s1", sessionKey: "main", queueDepth: 1, allowActiveAbort: true },

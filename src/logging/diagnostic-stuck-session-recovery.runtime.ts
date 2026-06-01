@@ -36,7 +36,27 @@ function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): 
     : STUCK_SESSION_PROGRESS_STALE_MS;
 }
 
-function isActiveRunProgressStale(params: {
+function getActiveRunProgressAgeMs(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): number | undefined {
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
+  return activity.lastProgressAgeMs;
+}
+
+function hasRecentTrackedActiveRunProgress(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  staleAbortMs: number;
+}): boolean {
+  const lastProgressAgeMs = getActiveRunProgressAgeMs(params);
+  return typeof lastProgressAgeMs === "number" && lastProgressAgeMs < params.staleAbortMs;
+}
+
+function isQueuedActiveRunProgressStale(params: {
   sessionId?: string;
   sessionKey?: string;
   queueDepth?: number;
@@ -45,11 +65,7 @@ function isActiveRunProgressStale(params: {
   if ((params.queueDepth ?? 0) <= 0) {
     return false;
   }
-  const activity = getDiagnosticSessionActivitySnapshot({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-  });
-  const lastProgressAgeMs = activity.lastProgressAgeMs;
+  const lastProgressAgeMs = getActiveRunProgressAgeMs(params);
   return typeof lastProgressAgeMs === "number" && lastProgressAgeMs >= params.staleAbortMs;
 }
 
@@ -137,15 +153,21 @@ export async function recoverStuckDiagnosticSession(
     const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
 
     if (activeSessionId) {
+      const preserveTrackedActiveRun =
+        hasRecentTrackedActiveRunProgress({
+          sessionId: activeSessionId,
+          sessionKey: params.sessionKey,
+          staleAbortMs: staleActiveProgressAbortMs,
+        });
       const reclaimStaleActiveRun =
         params.allowActiveAbort !== true &&
-        isActiveRunProgressStale({
+        isQueuedActiveRunProgressStale({
           sessionId: activeSessionId,
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
           staleAbortMs: staleActiveProgressAbortMs,
         });
-      if (params.allowActiveAbort !== true && !reclaimStaleActiveRun) {
+      if (preserveTrackedActiveRun || (params.allowActiveAbort !== true && !reclaimStaleActiveRun)) {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
           action: "observe_only",
@@ -179,14 +201,33 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedAgentRunActive(activeWorkSessionId)) {
+      const preserveTrackedReplyWork =
+        hasRecentTrackedActiveRunProgress({
+          sessionId: activeWorkSessionId,
+          sessionKey: params.sessionKey,
+          staleAbortMs: staleActiveProgressAbortMs,
+        });
       const reclaimStaleReplyWork =
         params.allowActiveAbort !== true &&
-        isActiveRunProgressStale({
+        isQueuedActiveRunProgressStale({
           sessionId: activeWorkSessionId,
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
           staleAbortMs: staleActiveProgressAbortMs,
         });
+      if (preserveTrackedReplyWork) {
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "keep_lane",
+          reason: "active_reply_work",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId: activeWorkSessionId,
+          activeWorkKind: "embedded_run",
+        };
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
+      }
       if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
         if (reclaimStaleReplyWork) {
           diag.warn(

@@ -180,6 +180,9 @@ describe("stuck session recovery", () => {
   });
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressAgeMs: 10 * 60_000,
+    });
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
@@ -196,8 +199,38 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
+  it("does not abort an active embedded run with recent tracked progress even when active abort recovery is enabled", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressAgeMs: 18_000,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "observe_only",
+      reason: "active_embedded_run",
+      activeSessionId: "session-1",
+    });
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+  });
+
   it("returns an abort outcome for a stale tool call on an active embedded run", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-tool");
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      activeToolAgeMs: 10 * 60_000,
+      lastProgressAgeMs: 10 * 60_000,
+    });
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
@@ -364,6 +397,9 @@ describe("stuck session recovery", () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressAgeMs: 10 * 60_000,
+    });
     mocks.abortEmbeddedAgentRun.mockReturnValue(true);
     mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
 
@@ -383,6 +419,35 @@ describe("stuck session recovery", () => {
       "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
       "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=0",
     ]);
+  });
+
+  it("does not abort active reply work with recent tracked progress even when active abort recovery is enabled", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressAgeMs: 18_000,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "active_reply_work",
+      activeSessionId: "queued-reply-session",
+    });
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
   it("reports queued lane work when aborting active work releases a lane", async () => {
