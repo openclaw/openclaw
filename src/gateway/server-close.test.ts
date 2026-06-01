@@ -1729,6 +1729,36 @@ describe("createGatewayCloseHandler", () => {
     expect(armArgs?.reason).toBe("test");
     expect(armArgs?.shutdownDurationMs).toBe(result.durationMs);
   });
+
+  // ClawSweeper #88908 review P1: the in-process restart path (SIGUSR1) closes
+  // and then immediately starts the next gateway iteration in the same node
+  // process. Arming the unref'd watchdog there would kill the restarted gateway
+  // ~5s into its next life. Restart reasons must skip the watchdog.
+  it("skips the post-shutdown exit watchdog on in-process restart close reasons", async () => {
+    const armPostShutdownExitWatchdog = vi.fn<
+      (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
+    >(() => null);
+    const deps = createGatewayCloseTestDeps({ armPostShutdownExitWatchdog });
+    const close = createGatewayCloseHandler(deps);
+
+    await close({ reason: "gateway restarting" });
+
+    expect(armPostShutdownExitWatchdog).not.toHaveBeenCalled();
+  });
+
+  it("arms the watchdog for ordinary stop reasons even when other dep mocks differ", async () => {
+    // Sibling assertion to the restart-skip case above. Confirms the
+    // restart-aware gate only suppresses on restart-shaped reasons.
+    const armPostShutdownExitWatchdog = vi.fn<
+      (opts: { reason: string; shutdownDurationMs: number }) => { cancel: () => void } | null
+    >(() => null);
+    const deps = createGatewayCloseTestDeps({ armPostShutdownExitWatchdog });
+    const close = createGatewayCloseHandler(deps);
+
+    await close({ reason: "gateway stopping" });
+
+    expect(armPostShutdownExitWatchdog).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("armGatewayPostShutdownExitWatchdog", () => {

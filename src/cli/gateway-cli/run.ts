@@ -518,7 +518,11 @@ async function probeGatewayHealthz(params: {
       {
         hostname: normalizeGatewayHealthProbeHost(params.host),
         port: params.port,
-        path: "/healthz",
+        // ?strict=1 opts into shutdown-aware 503 responses (see
+        // `isStrictLiveProbeRequest` in server-http.ts). Public probes that
+        // hit /healthz without this marker continue to receive 200 even during
+        // shutdown, so external monitors keep their legacy contract.
+        path: "/healthz?strict=1",
         method: "GET",
         timeout: timeoutMs,
         // The probe sends no credentials. Pin the configured certificate below
@@ -621,6 +625,10 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
   const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS;
   const startedAt = now();
+  // Dedup the zombie_detected signal across the recovery cycle. Cleared when
+  // the cycle resolves (either the prior gateway becomes healthy and we defer,
+  // or we time out and throw); a fresh recovery later starts a new cycle.
+  let zombieDetectedThisCycle = false;
 
   for (;;) {
     try {
@@ -647,17 +655,26 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
 
       const elapsedMs = now() - startedAt;
       // Probe came back unhealthy while the lock is held. Either the previous
-      // gateway is mid-shutdown (now returns 503 from /healthz thanks to the
-      // shutting-down flag) or it is a zombie that lost the close path but
-      // kept the HTTP listener. Either way, log the detection so the next
+      // gateway is mid-shutdown (now returns 503 from /healthz?strict=1 thanks
+      // to the shutting-down flag) or it is a zombie that lost the close path
+      // but kept the HTTP listener. Either way, log the detection so the next
       // supervisor cycle can be correlated in OTel/Loki.
-      recordGatewayRestartTrace("gateway.preflight.zombie_detected", elapsedMs, [
-        ["supervisor", supervisor],
-        ["port", params.port],
-      ]);
-      params.log.warn(
-        `gateway.preflight.zombie_detected supervisor=${supervisor} port=${params.port}; lock held but /healthz reported unhealthy (likely zombie or draining)`,
-      );
+      //
+      // Emit the zombie_detected signal once per recovery cycle, not every
+      // retry tick. A normally-draining previous gateway can otherwise inflate
+      // telemetry with duplicate alerts during a 30s drain window. Per
+      // ClawSweeper review on #88908.
+      if (!zombieDetectedThisCycle) {
+        recordGatewayRestartTrace("gateway.preflight.zombie_detected", elapsedMs, [
+          ["supervisor", supervisor],
+          ["port", params.port],
+        ]);
+        params.log.warn(
+          `gateway.preflight.zombie_detected supervisor=${supervisor} port=${params.port}; lock held but /healthz reported unhealthy (likely zombie or draining)`,
+        );
+        // oxlint-disable-next-line no-useless-assignment -- value is read on the next iteration of the supervisor for-loop
+        zombieDetectedThisCycle = true;
+      }
       if (elapsedMs >= timeoutMs) {
         throw new SupervisedGatewayLockError(
           `gateway already running under ${supervisor}; existing gateway did not become healthy after ${timeoutMs}ms`,

@@ -281,6 +281,14 @@ describe("supervised gateway lock recovery", () => {
           msg.includes("gateway.preflight.zombie_detected supervisor=launchd port=18789"),
         ),
       ).toBe(true);
+
+      // ClawSweeper #88908 review P3: emit the zombie_detected trace + warn
+      // once per recovery cycle, not on every retry tick. Multiple retries
+      // against the same draining gateway should not inflate telemetry.
+      const zombieWarnCount = warnMessages.filter((msg) =>
+        msg.includes("gateway.preflight.zombie_detected"),
+      ).length;
+      expect(zombieWarnCount).toBe(1);
     } finally {
       resetGatewayRestartTraceForTest();
       if (originalRestartTraceEnv === undefined) {

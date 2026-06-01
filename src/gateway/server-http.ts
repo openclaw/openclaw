@@ -84,6 +84,26 @@ export function resetGatewayHealthzShuttingDownLogForTest(): void {
   shuttingDownResponseLogged = false;
 }
 
+// Strict-mode live probe: only the supervised lock-recovery preflight uses
+// `?strict=1` to opt into shutdown-aware 503 responses. Public probes (external
+// monitors, service managers) hit /health or /healthz without the marker and
+// keep receiving 200 even during shutdown, preserving the legacy contract.
+function isStrictLiveProbeRequest(req: IncomingMessage): boolean {
+  const url = req.url ?? "";
+  const queryStart = url.indexOf("?");
+  if (queryStart < 0) {
+    return false;
+  }
+  const search = url.slice(queryStart + 1);
+  for (const pair of search.split("&")) {
+    const [rawKey, rawValue] = pair.split("=", 2);
+    if (rawKey === "strict" && (rawValue === "1" || rawValue === "true")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
   res: ServerResponse,
@@ -321,7 +341,14 @@ async function handleGatewayProbeRequest(
   // recovery distinguishes a healthy gateway from a zombie that still holds
   // the HTTP listener. The flag is owned by `server-close` and is set before
   // any close-handler await.
-  if (status === "live" && getShuttingDown()) {
+  //
+  // To preserve the public live-probe contract (external monitors and service
+  // managers expect 200 on /health and /healthz during normal shutdown),
+  // shutdown-aware 503 is gated on an explicit ?strict=1 query parameter that
+  // the supervised lock-recovery preflight sets. Public callers without the
+  // strict marker continue to receive 200. Per ClawSweeper review on #88908.
+  const isStrictLiveProbe = isStrictLiveProbeRequest(req);
+  if (status === "live" && isStrictLiveProbe && getShuttingDown()) {
     noteShuttingDownProbeResponse(requestPath);
     statusCode = 503;
     body = JSON.stringify({ live: false, phase: "shutting_down" });

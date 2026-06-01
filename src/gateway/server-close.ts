@@ -1192,8 +1192,18 @@ export function createGatewayCloseHandler(
     // process (and its HTTP listener) alive after every owned subsystem has
     // closed. The unref'd timer is a no-op when natural exit wins, and exits
     // with the canonical zombie warn + trace event when it does not.
+    //
+    // Skip the watchdog for in-process restart reasons (SIGUSR1 path that
+    // closes and immediately starts the next gateway iteration in the same
+    // node process). For restarts the process is intentionally kept alive, so
+    // the unref'd timer would otherwise fire 5 seconds after close and call
+    // process.exit(0) on the restarted gateway. Per ClawSweeper review on
+    // #88908 (clawsweeper-verdict:needs-human item=88908).
     const armWatchdog = params.armPostShutdownExitWatchdog ?? armGatewayPostShutdownExitWatchdog;
-    armWatchdog({ reason, shutdownDurationMs: durationMs });
+    const isInProcessRestart = /\brestart(ing|ed)?\b/i.test(reason);
+    if (!isInProcessRestart) {
+      armWatchdog({ reason, shutdownDurationMs: durationMs });
+    }
     return { durationMs, warnings };
   };
 }
