@@ -2428,6 +2428,35 @@ describe("gateway server chat", () => {
     );
   });
 
+  test("chat.send forwards the requested session id to reply initialization", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const spy = getReplyFromConfig;
+      await connectOk(ws);
+
+      await createSessionDir();
+      await writeMainSessionStore();
+      let capturedOpts: GetReplyOptions | undefined;
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        capturedOpts = opts;
+        return undefined;
+      });
+
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        sessionId: "sess-main",
+        message: "hello after reconnect",
+        idempotencyKey: "idem-requested-session-id",
+      });
+      expect(sendRes.ok).toBe(true);
+
+      await vi.waitFor(() => {
+        expect(spy.mock.calls.length).toBeGreaterThan(0);
+      }, FAST_WAIT_OPTS);
+
+      expect(capturedOpts?.requestedSessionId).toBe("sess-main");
+    });
+  });
+
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;

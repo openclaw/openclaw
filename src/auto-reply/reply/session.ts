@@ -231,6 +231,7 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  requestedSessionId?: string;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
   // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
@@ -431,6 +432,10 @@ export async function initSessionState(params: {
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
+  const requestedSessionId = params.requestedSessionId?.trim() || undefined;
+  const requestedCurrentSession = Boolean(
+    requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
+  );
   const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
@@ -475,7 +480,9 @@ export async function initSessionState(params: {
     }));
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
-    (((entryFreshness?.fresh ?? false) || (softResetAllowed && canReuseExistingEntry)) &&
+    (((requestedCurrentSession && canReuseExistingEntry) ||
+      (entryFreshness?.fresh ?? false) ||
+      (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
