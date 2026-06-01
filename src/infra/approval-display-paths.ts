@@ -1,9 +1,11 @@
+/** Compact approval CWD paths under user homes without hiding unsafe relative segments. */
 export function formatApprovalDisplayPath(value: string): string {
   const normalized = value.trim();
   if (!normalized || hasRelativePathSegment(normalized)) {
     return normalized;
   }
 
+  // Approval messages may cross chat boundaries; replace local usernames in common home roots.
   const unixHomeMatch = normalized.match(/^\/(?:home|Users)\/([^/]+)(.*)$/);
   if (unixHomeMatch && isSafeHomeSegment(unixHomeMatch[1])) {
     return compactHomeSuffix(unixHomeMatch[2] ?? "");
