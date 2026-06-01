@@ -7,6 +7,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -235,6 +236,25 @@ export function resolveInFlightRunSnapshot(params: {
   // should still adopt the run and show a `streaming` status (not idle) and
   // render the result cleanly when it lands.
   return { runId: best.runId, text: params.chatRunBuffers?.get(best.runId) ?? "" };
+}
+
+export function boundInFlightRunSnapshotForChatHistory(params: {
+  snapshot: { runId: string; text: string } | undefined;
+  messages: unknown[];
+  maxBytes: number;
+}): { runId: string; text: string } | undefined {
+  if (!params.snapshot?.text) {
+    return params.snapshot;
+  }
+  const messagesBytes = jsonUtf8Bytes(params.messages);
+  const snapshotBytes = jsonUtf8Bytes(params.snapshot);
+  if (messagesBytes + snapshotBytes <= params.maxBytes) {
+    return params.snapshot;
+  }
+  // The run id is the recovery contract; buffered partial text is opportunistic.
+  // If it would break the history payload budget, keep adoption and wait for the
+  // next live delta/final instead of sending an oversized chat.history response.
+  return { runId: params.snapshot.runId, text: "" };
 }
 
 export type ChatAbortOps = {

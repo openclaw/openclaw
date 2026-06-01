@@ -99,6 +99,7 @@ import {
 } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
+  boundInFlightRunSnapshotForChatHistory,
   type ChatAbortControllerEntry,
   type ChatAbortOps,
   isChatStopCommandText,
@@ -2556,6 +2557,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
       defaultAgentId: resolveDefaultAgentId(cfg),
     });
+    const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
+      snapshot: inFlightRun,
+      messages: bounded.messages,
+      maxBytes: maxHistoryBytes,
+    });
     respond(true, {
       sessionKey,
       sessionId,
@@ -2565,7 +2571,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
-      ...(inFlightRun ? { inFlightRun } : {}),
+      ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     });
   },
   "chat.message.get": async ({ params, respond, context }) => {

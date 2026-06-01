@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
+  boundInFlightRunSnapshotForChatHistory,
   isChatStopCommandText,
   registerChatAbortController,
   resolveAgentRunExpiresAtMs,
@@ -543,5 +544,25 @@ describe("resolveInFlightRunSnapshot", () => {
         sessionKey: "agent:main:s",
       }),
     ).toEqual({ runId: "run-b", text: "b" });
+  });
+
+  it("keeps in-flight text when it fits the chat history budget", () => {
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: { runId: "run-1", text: "partial" },
+        messages: [],
+        maxBytes: 1_000,
+      }),
+    ).toEqual({ runId: "run-1", text: "partial" });
+  });
+
+  it("drops oversized in-flight text but keeps the run id for adoption", () => {
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: { runId: "run-1", text: "x".repeat(1_000) },
+        messages: [],
+        maxBytes: 100,
+      }),
+    ).toEqual({ runId: "run-1", text: "" });
   });
 });
