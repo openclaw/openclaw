@@ -87,6 +87,7 @@ type CliCompactionRuntimeContextParams = {
   sessionKey: string;
   messageChannel?: string;
   agentAccountId?: string;
+  authProfileId?: string;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -211,7 +212,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       messageChannel: params.messageChannel,
       messageProvider: params.messageChannel,
       agentAccountId: params.agentAccountId,
-      authProfileId: undefined,
+      authProfileId: params.authProfileId,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
       agentDir: params.agentDir,
@@ -360,6 +361,7 @@ async function compactNativeHarnessCliTranscript(params: {
   try {
     const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey);
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
+    const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,
       modelId: params.model,
@@ -382,6 +384,7 @@ async function compactNativeHarnessCliTranscript(params: {
           skillsSnapshot: params.skillsSnapshot,
           provider: params.provider,
           model: params.model,
+          authProfileId,
           contextTokenBudget: params.contextTokenBudget,
           currentTokenCount: params.currentTokenCount,
           trigger: "budget",
@@ -399,6 +402,7 @@ async function compactNativeHarnessCliTranscript(params: {
                   sessionKey: params.sessionKey,
                   messageChannel: params.messageChannel,
                   agentAccountId: params.agentAccountId,
+                  authProfileId,
                   workspaceDir: params.workspaceDir,
                   cwd: params.cwd,
                   agentDir: params.agentDir,

@@ -280,6 +280,8 @@ describe("runCliTurnCompactionLifecycle", () => {
       totalTokens: 950,
       totalTokensFresh: true,
       agentHarnessId: "codex",
+      authProfileOverride: "github-copilot:work",
+      authProfileOverrideSource: "auto",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
@@ -368,8 +370,12 @@ describe("runCliTurnCompactionLifecycle", () => {
       currentTokenCount: 950,
       contextEngine,
       agentHarnessId: "codex",
+      authProfileId: "github-copilot:work",
       trigger: "budget",
       force: true,
+    });
+    expect(compactAgentHarnessSessionCalls[0]?.[0].contextEngineRuntimeContext).toMatchObject({
+      authProfileId: "github-copilot:work",
     });
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
