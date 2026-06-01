@@ -15,8 +15,14 @@ import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import { writeJson } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { scheduleGatewaySigusr1Restart } from "./restart.js";
+import { detectRespawnSupervisor } from "./supervisor-markers.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
+import {
+  resolveManagedServiceHandoffRestartDelayMs,
+  startManagedServiceUpdateHandoff,
+} from "./update-managed-service-handoff.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -48,6 +54,8 @@ type AutoUpdateRunResult = {
   stderr?: string;
   reason?: string;
 };
+
+const AUTO_UPDATE_RESTART_REASON = "update.run";
 
 export type UpdateAvailable = {
   currentVersion: string;
@@ -253,6 +261,48 @@ async function runAutoUpdateCommand(params: {
   timeoutMs: number;
   root?: string;
 }): Promise<AutoUpdateRunResult> {
+  const supervisor = detectRespawnSupervisor(process.env, process.platform);
+  if (supervisor) {
+    try {
+      const handoffId = randomUUID();
+      const restartDelayMs = resolveManagedServiceHandoffRestartDelayMs(undefined, supervisor);
+      const handoff = await startManagedServiceUpdateHandoff({
+        root: params.root ?? path.dirname(process.execPath),
+        timeoutMs: params.timeoutMs,
+        channel: params.channel,
+        restartDelayMs,
+        handoffId,
+        supervisor,
+        env: {
+          ...process.env,
+          OPENCLAW_AUTO_UPDATE: "1",
+        },
+        meta: {
+          handoffId,
+          note: "OpenClaw auto-update started a managed-service update handoff.",
+        },
+      });
+      const restart = scheduleGatewaySigusr1Restart({
+        delayMs: restartDelayMs,
+        reason: AUTO_UPDATE_RESTART_REASON,
+        skipDeferral: true,
+        skipCooldown: true,
+      });
+      return {
+        ok: restart.ok,
+        code: restart.ok ? 0 : 1,
+        stdout: handoff.logPath,
+        reason: restart.ok ? "managed-service-handoff-started" : "managed-service-restart-failed",
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        code: null,
+        reason: String(err),
+      };
+    }
+  }
+
   const baseArgs = ["update", "--yes", "--channel", params.channel, "--json"];
   const execPath = process.execPath?.trim();
   const argv1 = process.argv[1]?.trim();
@@ -487,13 +537,21 @@ export async function runGatewayUpdateCheck(params: {
           root: root ?? undefined,
         });
         if (outcome.ok) {
-          nextState.autoLastSuccessVersion = resolved.version;
-          nextState.autoLastSuccessAt = resolveUpdateCheckTimestamp(now);
-          params.log.info("auto-update applied", {
-            channel,
-            version: resolved.version,
-            tag,
-          });
+          if (outcome.reason === "managed-service-handoff-started") {
+            params.log.info("auto-update handoff started", {
+              channel,
+              version: resolved.version,
+              tag,
+            });
+          } else {
+            nextState.autoLastSuccessVersion = resolved.version;
+            nextState.autoLastSuccessAt = resolveUpdateCheckTimestamp(now);
+            params.log.info("auto-update applied", {
+              channel,
+              version: resolved.version,
+              tag,
+            });
+          }
         } else {
           params.log.info("auto-update attempt failed", {
             channel,

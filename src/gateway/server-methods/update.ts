@@ -30,11 +30,10 @@ import type { GatewayRequestHandlers } from "./types.js";
 import {
   buildManagedServiceHandoffUnavailableMessage,
   formatManagedServiceUpdateCommand,
+  resolveManagedServiceHandoffRestartDelayMs,
   startManagedServiceUpdateHandoff,
 } from "./update-managed-service-handoff.js";
 import { assertValidParams } from "./validation.js";
-
-const SYSTEMD_HANDOFF_RESTART_GRACE_MS = 2000;
 
 function formatUpdateRunErrorMessage(err: unknown): string {
   if (err instanceof Error) {
@@ -49,21 +48,6 @@ function tryResolveProcessCwd(): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function resolveManagedServiceHandoffRestartDelayMs(
-  restartDelayMs: number | undefined,
-  supervisor: ReturnType<typeof detectRespawnSupervisor>,
-): number | undefined {
-  if (supervisor !== "systemd") {
-    return restartDelayMs;
-  }
-  // systemd needs a short grace period after the handoff process starts before
-  // the gateway exits, otherwise the service can restart before handoff state is durable.
-  return Math.max(
-    restartDelayMs ?? SYSTEMD_HANDOFF_RESTART_GRACE_MS,
-    SYSTEMD_HANDOFF_RESTART_GRACE_MS,
-  );
 }
 
 export const updateHandlers: GatewayRequestHandlers = {

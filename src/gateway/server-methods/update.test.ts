@@ -133,6 +133,10 @@ vi.mock("./update-managed-service-handoff.js", () => ({
       : "openclaw update --yes",
   buildManagedServiceHandoffUnavailableMessage: (command: string) =>
     `Run \`${command}\` from a shell outside the gateway service.`,
+  resolveManagedServiceHandoffRestartDelayMs: (
+    restartDelayMs: number | undefined,
+    supervisor: string | null,
+  ) => (supervisor === "systemd" ? Math.max(restartDelayMs ?? 2000, 2000) : restartDelayMs),
 }));
 
 vi.mock("./validation.js", () => ({

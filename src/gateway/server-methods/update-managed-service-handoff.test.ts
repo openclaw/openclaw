@@ -189,6 +189,46 @@ describe("managed service update handoff", () => {
     expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toMatch(/sentinel-meta\.json$/u);
   });
 
+  it("passes an explicit update channel through the managed-service handoff command", async () => {
+    const { formatManagedServiceUpdateCommand, startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+
+    expect(formatManagedServiceUpdateCommand(1_800_000, "beta")).toBe(
+      "openclaw update --yes --channel beta --timeout 1800",
+    );
+
+    const result = await startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      timeoutMs: 1_800_000,
+      channel: "beta",
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      env: {},
+      meta: {
+        continuationMessage: "continue after restart",
+      },
+    });
+
+    expect(result.command).toBe("openclaw update --yes --channel beta --timeout 1800");
+    const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    tempDirs.add(path.dirname(args[0] ?? result.logPath));
+    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as {
+      commandArgv?: string[];
+    };
+    expect(helperParams.commandArgv).toEqual([
+      "/usr/local/bin/node",
+      "/opt/openclaw/openclaw.mjs",
+      "update",
+      "--yes",
+      "--json",
+      "--channel",
+      "beta",
+      "--timeout",
+      "1800",
+    ]);
+  });
+
   it("launches systemd handoffs through a transient user scope", async () => {
     const { startManagedServiceUpdateHandoff } =
       await import("./update-managed-service-handoff.js");

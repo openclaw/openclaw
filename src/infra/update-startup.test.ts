@@ -7,6 +7,33 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
+type StartManagedServiceUpdateHandoff =
+  (typeof import("./update-managed-service-handoff.js"))["startManagedServiceUpdateHandoff"];
+
+const detectRespawnSupervisorMock = vi.hoisted(() =>
+  vi.fn<() => "launchd" | "systemd" | "schtasks" | null>(() => null),
+);
+const scheduleGatewaySigusr1RestartMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    ok: true,
+    pid: 12_345,
+    signal: "SIGUSR1" as const,
+    delayMs: 2000,
+    reason: "update.run",
+    mode: "emit" as const,
+    coalesced: false,
+    cooldownMsApplied: 0,
+  })),
+);
+const startManagedServiceUpdateHandoffMock = vi.hoisted(() =>
+  vi.fn<StartManagedServiceUpdateHandoff>(async () => ({
+    status: "started" as const,
+    pid: 23_456,
+    command: "openclaw update --yes --channel beta --timeout 2700",
+    logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
+  })),
+);
+
 vi.mock("./openclaw-root.js", async () => {
   const actual = await vi.importActual<typeof import("./openclaw-root.js")>("./openclaw-root.js");
   return {
@@ -45,6 +72,29 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+vi.mock("./supervisor-markers.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./supervisor-markers.js")>("./supervisor-markers.js");
+  return {
+    ...actual,
+    detectRespawnSupervisor: detectRespawnSupervisorMock,
+  };
+});
+
+vi.mock("./restart.js", () => ({
+  scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
+}));
+
+vi.mock("./update-managed-service-handoff.js", async () => {
+  const actual = await vi.importActual<typeof import("./update-managed-service-handoff.js")>(
+    "./update-managed-service-handoff.js",
+  );
+  return {
+    ...actual,
+    startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
+  };
+});
+
 describe("update-startup", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-check-suite-" });
   let tempDir: string;
@@ -77,8 +127,10 @@ describe("update-startup", () => {
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
     tempDir = await suiteRootTracker.make("case");
     envSnapshot = captureEnv([
+      "OPENCLAW_LAUNCHD_LABEL",
       "OPENCLAW_NO_AUTO_UPDATE",
       "OPENCLAW_STATE_DIR",
+      "OPENCLAW_SYSTEMD_UNIT",
       "NODE_ENV",
       "VITEST",
     ]);
@@ -106,6 +158,26 @@ describe("update-startup", () => {
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
     vi.mocked(runCommandWithTimeout).mockClear();
+    detectRespawnSupervisorMock.mockClear();
+    detectRespawnSupervisorMock.mockReturnValue(null);
+    scheduleGatewaySigusr1RestartMock.mockClear();
+    scheduleGatewaySigusr1RestartMock.mockReturnValue({
+      ok: true,
+      pid: 12_345,
+      signal: "SIGUSR1",
+      delayMs: 2000,
+      reason: "update.run",
+      mode: "emit",
+      coalesced: false,
+      cooldownMsApplied: 0,
+    });
+    startManagedServiceUpdateHandoffMock.mockClear();
+    startManagedServiceUpdateHandoffMock.mockResolvedValue({
+      status: "started",
+      pid: 23_456,
+      command: "openclaw update --yes --channel beta --timeout 2700",
+      logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
+    });
     resetUpdateAvailableStateForTest();
   });
 
@@ -511,6 +583,105 @@ describe("update-startup", () => {
       env: {
         OPENCLAW_AUTO_UPDATE: "1",
       },
+    });
+  });
+
+  it("starts a managed-service handoff for auto-update inside a supervised gateway", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    const log = { info: vi.fn() };
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/opt/openclaw",
+        timeoutMs: 45 * 60 * 1000,
+        channel: "beta",
+        supervisor: "launchd",
+        env: expect.objectContaining({
+          OPENCLAW_AUTO_UPDATE: "1",
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        }),
+        handoffId: expect.any(String),
+        meta: expect.objectContaining({
+          handoffId: expect.any(String),
+        }),
+      }),
+    );
+    const [handoffParams] = startManagedServiceUpdateHandoffMock.mock.calls[0] ?? [];
+    expect(handoffParams?.meta.handoffId).toBe(handoffParams?.handoffId);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delayMs: undefined,
+        reason: "update.run",
+        skipCooldown: true,
+        skipDeferral: true,
+      }),
+    );
+    expect(log.info).toHaveBeenCalledWith("auto-update handoff started", {
+      channel: "beta",
+      version: "2.0.0-beta.1",
+      tag: "beta",
+    });
+  });
+
+  it("uses a startup grace before restarting after a systemd auto-update handoff", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+
+    await runAutoUpdateCheckWithDefaults({
+      cfg: createBetaAutoUpdateConfig(),
+    });
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restartDelayMs: 2000,
+        supervisor: "systemd",
+      }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delayMs: 2000,
+        reason: "update.run",
+        skipCooldown: true,
+        skipDeferral: true,
+      }),
+    );
+  });
+
+  it("does not restart when a supervised auto-update handoff fails to start", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(new Error("handoff unavailable"));
+    const log = { info: vi.fn() };
+
+    await runGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("auto-update attempt failed", {
+      channel: "beta",
+      version: "2.0.0-beta.1",
+      tag: "beta",
+      reason: "Error: handoff unavailable",
     });
   });
 
