@@ -59,7 +59,12 @@ import {
   runCodexBoundConversationPrompt,
   startCodexConversationThread,
 } from "./conversation-binding.js";
-import { answerCodexUserInput, consumeCodexPlanDecision } from "./conversation-chat-controls.js";
+import {
+  answerCodexUserInput,
+  consumeCodexPlanDecision,
+  parseCodexPlanDecisionCallback,
+  type CodexPlanDecisionAction,
+} from "./conversation-chat-controls.js";
 import {
   formatPlanMode,
   formatPermissionsMode,
@@ -1073,9 +1078,43 @@ async function handleConversationPlanDecision(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-  action: "approve" | "approve-clean" | "stay",
+  action: CodexPlanDecisionAction,
   token: string,
 ): Promise<PluginCommandResult> {
+  return (await handleConversationPlanDecisionWithStatus(deps, ctx, pluginConfig, action, token))
+    .reply;
+}
+
+export async function handleCodexPlanDecisionCallback(params: {
+  deps?: Partial<CodexCommandDeps>;
+  ctx: PluginCommandContext;
+  pluginConfig?: unknown;
+  payload: string;
+}): Promise<{ handled: false } | { handled: true; consumed: boolean; reply: PluginCommandResult }> {
+  const parsed = parseCodexPlanDecisionCallback(params.payload);
+  if (!parsed) {
+    return { handled: false };
+  }
+  const deps = { ...defaultCodexCommandDeps, ...params.deps };
+  return {
+    handled: true,
+    ...(await handleConversationPlanDecisionWithStatus(
+      deps,
+      params.ctx,
+      params.pluginConfig,
+      parsed.action,
+      parsed.token,
+    )),
+  };
+}
+
+async function handleConversationPlanDecisionWithStatus(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  action: CodexPlanDecisionAction,
+  token: string,
+): Promise<{ consumed: boolean; reply: PluginCommandResult }> {
   const sessionFile = await resolveControlSessionFile(ctx);
   const decision = consumeCodexPlanDecision({
     token,
@@ -1083,13 +1122,16 @@ async function handleConversationPlanDecision(
     sessionFile,
   });
   if (!decision.ok) {
-    return { text: decision.message };
+    return { consumed: false, reply: { text: decision.message } };
   }
   if (action === "stay") {
-    return { text: "Codex will stay in plan mode." };
+    return { consumed: true, reply: { text: "Codex will stay in plan mode." } };
   }
   if (action === "approve-clean") {
-    return await approveConversationPlanWithCleanContext(deps, ctx, pluginConfig, decision);
+    return {
+      consumed: true,
+      reply: await approveConversationPlanWithCleanContext(deps, ctx, pluginConfig, decision),
+    };
   }
   await deps.setCodexConversationPlanMode({
     sessionFile: decision.sessionFile,
@@ -1101,15 +1143,18 @@ async function handleConversationPlanDecision(
     sessionFile: decision.sessionFile,
     workspaceDir: binding?.cwd || deps.resolveCodexDefaultWorkspaceDir(pluginConfig),
   });
-  return (
-    await deps.runCodexBoundConversationPrompt({
-      data,
-      prompt: "Approved. Execute the proposed plan now.",
-      event: buildCommandInboundEvent(ctx, "Approved. Execute the proposed plan now."),
-      ctx: buildCommandInboundContext(ctx),
-      pluginConfig,
-    })
-  ).reply;
+  return {
+    consumed: true,
+    reply: (
+      await deps.runCodexBoundConversationPrompt({
+        data,
+        prompt: "Approved. Execute the proposed plan now.",
+        event: buildCommandInboundEvent(ctx, "Approved. Execute the proposed plan now."),
+        ctx: buildCommandInboundContext(ctx),
+        pluginConfig,
+      })
+    ).reply,
+  };
 }
 
 async function approveConversationPlanWithCleanContext(

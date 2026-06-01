@@ -6,7 +6,7 @@ import {
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -17,7 +17,7 @@ import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding.js";
-import { answerCodexUserInputCallback } from "./src/conversation-chat-controls.js";
+import { resolveCodexUserInputCallback } from "./src/conversation-chat-controls.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import {
   createCodexCliSessionNodeHostCommands,
@@ -48,7 +48,10 @@ export default definePluginEntry({
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
-    registerCodexUserInputInteractiveHandlers(api);
+    registerCodexUserInputInteractiveHandlers(api, {
+      resolveCurrentConfig,
+      resolveCurrentPluginConfig,
+    });
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
     }
@@ -223,9 +226,22 @@ type CodexInteractiveRegistration = {
 
 type CodexPluginInteractiveApi = {
   registerInteractiveHandler?: (registration: CodexInteractiveRegistration) => void;
+  config?: OpenClawConfig;
 };
 
-function registerCodexUserInputInteractiveHandlers(api: CodexPluginInteractiveApi): void {
+type CodexInteractiveConversationBindingHelpers = {
+  requestConversationBinding?: (...args: never[]) => Promise<unknown>;
+  detachConversationBinding?: (...args: never[]) => Promise<unknown>;
+  getCurrentConversationBinding?: (...args: never[]) => Promise<unknown>;
+};
+
+function registerCodexUserInputInteractiveHandlers(
+  api: CodexPluginInteractiveApi,
+  options: {
+    resolveCurrentConfig?: () => OpenClawConfig | undefined;
+    resolveCurrentPluginConfig?: () => unknown;
+  } = {},
+): void {
   api.registerInteractiveHandler?.({
     channel: "telegram",
     namespace: "codex",
@@ -235,9 +251,13 @@ function registerCodexUserInputInteractiveHandlers(api: CodexPluginInteractiveAp
         senderId?: string;
         threadId?: number;
         callback: { payload: string };
-        respond: { reply: (params: { text: string }) => Promise<void> };
-      };
-      const text = answerCodexUserInputCallback({
+        auth?: { isAuthorizedSender?: boolean };
+        respond: {
+          reply: (params: { text: string }) => Promise<void>;
+          clearButtons?: () => Promise<void>;
+        };
+      } & CodexInteractiveConversationBindingHelpers;
+      const result = resolveCodexUserInputCallback({
         payload: ctx.callback.payload,
         ctx: {
           channel: "telegram",
@@ -246,10 +266,35 @@ function registerCodexUserInputInteractiveHandlers(api: CodexPluginInteractiveAp
           messageThreadId: ctx.threadId,
         },
       });
-      if (!text) {
+      if (result.matched) {
+        if (result.consumed) {
+          await ctx.respond.clearButtons?.();
+        }
+        await ctx.respond.reply({ text: result.message });
+        return { handled: true };
+      }
+      const planResult = await handleCodexPlanDecisionCallbackLazy({
+        ctx: buildCodexInteractiveCommandContext({
+          channel: "telegram",
+          accountId: ctx.accountId,
+          senderId: ctx.senderId,
+          messageThreadId: ctx.threadId,
+          isAuthorizedSender: ctx.auth?.isAuthorizedSender,
+          config: options.resolveCurrentConfig?.() ?? api.config ?? {},
+          bindingHelpers: ctx,
+        }),
+        pluginConfig: options.resolveCurrentPluginConfig?.(),
+        payload: ctx.callback.payload,
+      });
+      if (!planResult.handled) {
         return { handled: false };
       }
-      await ctx.respond.reply({ text });
+      if (planResult.consumed) {
+        await ctx.respond.clearButtons?.();
+      }
+      if (planResult.reply.text) {
+        await ctx.respond.reply({ text: planResult.reply.text });
+      }
       return { handled: true };
     },
   });
@@ -261,9 +306,13 @@ function registerCodexUserInputInteractiveHandlers(api: CodexPluginInteractiveAp
         accountId: string;
         senderId?: string;
         interaction: { payload: string };
-        respond: { reply: (params: { text: string; ephemeral?: boolean }) => Promise<void> };
-      };
-      const text = answerCodexUserInputCallback({
+        auth?: { isAuthorizedSender?: boolean };
+        respond: {
+          reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
+          clearComponents?: (params?: { text?: string }) => Promise<void>;
+        };
+      } & CodexInteractiveConversationBindingHelpers;
+      const result = resolveCodexUserInputCallback({
         payload: ctx.interaction.payload,
         ctx: {
           channel: "discord",
@@ -271,10 +320,34 @@ function registerCodexUserInputInteractiveHandlers(api: CodexPluginInteractiveAp
           senderId: ctx.senderId,
         },
       });
-      if (!text) {
+      if (result.matched) {
+        if (result.consumed) {
+          await ctx.respond.clearComponents?.();
+        }
+        await ctx.respond.reply({ text: result.message, ephemeral: true });
+        return { handled: true };
+      }
+      const planResult = await handleCodexPlanDecisionCallbackLazy({
+        ctx: buildCodexInteractiveCommandContext({
+          channel: "discord",
+          accountId: ctx.accountId,
+          senderId: ctx.senderId,
+          isAuthorizedSender: ctx.auth?.isAuthorizedSender,
+          config: options.resolveCurrentConfig?.() ?? api.config ?? {},
+          bindingHelpers: ctx,
+        }),
+        pluginConfig: options.resolveCurrentPluginConfig?.(),
+        payload: ctx.interaction.payload,
+      });
+      if (!planResult.handled) {
         return { handled: false };
       }
-      await ctx.respond.reply({ text, ephemeral: true });
+      if (planResult.consumed) {
+        await ctx.respond.clearComponents?.();
+      }
+      if (planResult.reply.text) {
+        await ctx.respond.reply({ text: planResult.reply.text, ephemeral: true });
+      }
       return { handled: true };
     },
   });
@@ -287,9 +360,13 @@ function registerCodexUserInputInteractiveHandlers(api: CodexPluginInteractiveAp
         senderId?: string;
         threadId?: string;
         interaction: { payload: string };
-        respond: { reply: (params: { text: string }) => Promise<void> };
-      };
-      const text = answerCodexUserInputCallback({
+        auth?: { isAuthorizedSender?: boolean };
+        respond: {
+          reply: (params: { text: string }) => Promise<void>;
+          editMessage?: (params: { text?: string; blocks?: unknown[] }) => Promise<void>;
+        };
+      } & CodexInteractiveConversationBindingHelpers;
+      const result = resolveCodexUserInputCallback({
         payload: ctx.interaction.payload,
         ctx: {
           channel: "slack",
@@ -298,13 +375,82 @@ function registerCodexUserInputInteractiveHandlers(api: CodexPluginInteractiveAp
           messageThreadId: ctx.threadId,
         },
       });
-      if (!text) {
+      if (result.matched) {
+        if (result.consumed) {
+          await ctx.respond.editMessage?.({ blocks: [] });
+        }
+        await ctx.respond.reply({ text: result.message });
+        return { handled: true };
+      }
+      const planResult = await handleCodexPlanDecisionCallbackLazy({
+        ctx: buildCodexInteractiveCommandContext({
+          channel: "slack",
+          accountId: ctx.accountId,
+          senderId: ctx.senderId,
+          messageThreadId: ctx.threadId,
+          isAuthorizedSender: ctx.auth?.isAuthorizedSender,
+          config: options.resolveCurrentConfig?.() ?? api.config ?? {},
+          bindingHelpers: ctx,
+        }),
+        pluginConfig: options.resolveCurrentPluginConfig?.(),
+        payload: ctx.interaction.payload,
+      });
+      if (!planResult.handled) {
         return { handled: false };
       }
-      await ctx.respond.reply({ text });
+      if (planResult.consumed) {
+        await ctx.respond.editMessage?.({ blocks: [] });
+      }
+      if (planResult.reply.text) {
+        await ctx.respond.reply({ text: planResult.reply.text });
+      }
       return { handled: true };
     },
   });
+}
+
+let codexPlanDecisionCallbackPromise:
+  | Promise<typeof import("./src/command-handlers.js").handleCodexPlanDecisionCallback>
+  | undefined;
+
+async function handleCodexPlanDecisionCallbackLazy(
+  ...args: Parameters<typeof import("./src/command-handlers.js").handleCodexPlanDecisionCallback>
+): ReturnType<typeof import("./src/command-handlers.js").handleCodexPlanDecisionCallback> {
+  codexPlanDecisionCallbackPromise ??= import("./src/command-handlers.js").then(
+    (module) => module.handleCodexPlanDecisionCallback,
+  );
+  return await (
+    await codexPlanDecisionCallbackPromise
+  )(...args);
+}
+
+function buildCodexInteractiveCommandContext(params: {
+  channel: "telegram" | "discord" | "slack";
+  accountId: string;
+  senderId?: string;
+  messageThreadId?: string | number;
+  isAuthorizedSender?: boolean;
+  config: OpenClawConfig;
+  bindingHelpers: CodexInteractiveConversationBindingHelpers;
+}): PluginCommandContext {
+  return {
+    channel: params.channel,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    ...(params.messageThreadId != null ? { messageThreadId: params.messageThreadId } : {}),
+    isAuthorizedSender: params.isAuthorizedSender ?? true,
+    commandBody: "/codex",
+    config: params.config,
+    requestConversationBinding: (params.bindingHelpers.requestConversationBinding ??
+      (async () => ({
+        status: "error",
+        message: "No conversation binding available.",
+      }))) as PluginCommandContext["requestConversationBinding"],
+    detachConversationBinding: (params.bindingHelpers.detachConversationBinding ??
+      (async () => ({ removed: false }))) as PluginCommandContext["detachConversationBinding"],
+    getCurrentConversationBinding: (params.bindingHelpers.getCurrentConversationBinding ??
+      (async () => null)) as PluginCommandContext["getCurrentConversationBinding"],
+  };
 }
 
 function resolveProgressReplyTarget(

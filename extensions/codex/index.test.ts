@@ -12,6 +12,7 @@ const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
 const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
 const handleCodexConversationInboundClaimMock = vi.hoisted(() => vi.fn());
 const handleCodexConversationBindingResolvedMock = vi.hoisted(() => vi.fn());
+const handleCodexPlanDecisionCallbackMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt: runCodexAppServerAttemptMock,
@@ -22,6 +23,9 @@ vi.mock("./src/app-server/side-question.js", () => ({
 vi.mock("./src/conversation-binding.js", () => ({
   handleCodexConversationBindingResolved: handleCodexConversationBindingResolvedMock,
   handleCodexConversationInboundClaim: handleCodexConversationInboundClaimMock,
+}));
+vi.mock("./src/command-handlers.js", () => ({
+  handleCodexPlanDecisionCallback: handleCodexPlanDecisionCallbackMock,
 }));
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
@@ -37,6 +41,7 @@ describe("codex plugin", () => {
     resetCodexConversationChatControlsForTests();
     handleCodexConversationInboundClaimMock.mockReset();
     handleCodexConversationBindingResolvedMock.mockReset();
+    handleCodexPlanDecisionCallbackMock.mockReset();
   });
 
   it("is opt-in by default", () => {
@@ -201,15 +206,209 @@ describe("codex plugin", () => {
       .find((registration) => registration?.channel === "telegram");
 
     const reply = vi.fn(async () => undefined);
+    const clearButtons = vi.fn(async () => undefined);
     await telegramRegistration.handler({
       accountId: "default",
       senderId: "user-1",
       callback: { payload: buttonValue?.slice("codex:".length) },
-      respond: { reply },
+      respond: { reply, clearButtons },
     });
 
+    expect(clearButtons).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({ text: "Sent answer to Codex." });
     await expect(answered).resolves.toBe("2");
+  });
+
+  it("clears Discord Codex input controls after a consumed callback", async () => {
+    const registerInteractiveHandler = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const prompt = createCodexUserInputPrompt({
+      scope: {
+        sessionFile: "/tmp/session.jsonl",
+        threadId: "thread-1",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+      },
+      resolveText,
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Pick one",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Workspace", description: "" },
+            { label: "Runtime", description: "" },
+          ],
+        },
+      ],
+    });
+    const buttonValue = prompt.presentation?.blocks
+      .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
+      .at(0)?.value;
+    const discordRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "discord");
+
+    const reply = vi.fn(async () => undefined);
+    const clearComponents = vi.fn(async () => undefined);
+    await discordRegistration.handler({
+      accountId: "default",
+      senderId: "user-1",
+      interaction: { payload: buttonValue?.slice("codex:".length) },
+      respond: { reply, clearComponents },
+    });
+
+    expect(clearComponents).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({ text: "Sent answer to Codex.", ephemeral: true });
+    await expect(answered).resolves.toBe("1");
+  });
+
+  it("clears Slack Codex input controls after a consumed callback", async () => {
+    const registerInteractiveHandler = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const prompt = createCodexUserInputPrompt({
+      scope: {
+        sessionFile: "/tmp/session.jsonl",
+        threadId: "thread-1",
+        channel: "slack",
+        senderId: "user-1",
+        accountId: "default",
+        messageThreadId: "thread-ts",
+      },
+      resolveText,
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Pick one",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Workspace", description: "" },
+            { label: "Runtime", description: "" },
+          ],
+        },
+      ],
+    });
+    const buttonValue = prompt.presentation?.blocks
+      .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
+      .at(1)?.value;
+    const slackRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "slack");
+
+    const reply = vi.fn(async () => undefined);
+    const editMessage = vi.fn(async () => undefined);
+    await slackRegistration.handler({
+      accountId: "default",
+      senderId: "user-1",
+      threadId: "thread-ts",
+      interaction: { payload: buttonValue?.slice("codex:".length) },
+      respond: { reply, editMessage },
+    });
+
+    expect(editMessage).toHaveBeenCalledWith({ blocks: [] });
+    expect(reply).toHaveBeenCalledWith({ text: "Sent answer to Codex." });
+    await expect(answered).resolves.toBe("2");
+  });
+
+  it("clears Codex plan controls after a consumed callback", async () => {
+    const registerInteractiveHandler = vi.fn();
+    handleCodexPlanDecisionCallbackMock.mockResolvedValueOnce({
+      handled: true,
+      consumed: true,
+      reply: { text: "Codex will stay in plan mode." },
+    });
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: { config: { current: () => ({}) } } as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+    const discordRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "discord");
+
+    const reply = vi.fn(async () => undefined);
+    const clearComponents = vi.fn(async () => undefined);
+    await discordRegistration.handler({
+      accountId: "default",
+      senderId: "user-1",
+      auth: { isAuthorizedSender: true },
+      interaction: { payload: "plan:token-1:stay" },
+      respond: { reply, clearComponents },
+      requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(handleCodexPlanDecisionCallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: "plan:token-1:stay",
+        pluginConfig: {},
+      }),
+    );
+    expect(clearComponents).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      text: "Codex will stay in plan mode.",
+      ephemeral: true,
+    });
   });
 
   it("renders progress reply presentations before channel payload delivery", async () => {

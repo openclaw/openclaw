@@ -13,6 +13,7 @@ const MAX_PENDING_CONTROLS = 200;
 const PROPOSED_PLAN_RE = /<proposed_plan>[\s\S]*?<\/proposed_plan>/i;
 const CODEX_INTERACTIVE_NAMESPACE = "codex";
 const CODEX_USER_INPUT_CALLBACK_PREFIX = "input:";
+const CODEX_PLAN_DECISION_CALLBACK_PREFIX = "plan:";
 
 type ControlScope = {
   sessionFile: string;
@@ -44,6 +45,12 @@ export type CodexPlanDecisionResult =
   | { ok: true; sessionFile: string; threadId: string; planText: string }
   | { ok: false; message: string };
 
+export type CodexPlanDecisionAction = "approve" | "approve-clean" | "stay";
+
+export type CodexUserInputCallbackResult =
+  | { matched: false }
+  | { matched: true; consumed: boolean; message: string };
+
 export function resetCodexConversationChatControlsForTests(): void {
   pendingPlanDecisions.clear();
   pendingUserInputs.clear();
@@ -70,17 +77,29 @@ export function buildCodexPlanDecisionReply(params: {
           buttons: [
             {
               label: "Approve and execute",
-              value: `/codex plan approve ${token}`,
+              action: {
+                type: "callback",
+                value: buildCodexPlanDecisionCallbackValue({ token, action: "approve" }),
+              },
               style: "success",
             },
             {
               label: "Approve and execute with clean context",
-              value: `/codex plan approve-clean ${token}`,
+              action: {
+                type: "callback",
+                value: buildCodexPlanDecisionCallbackValue({
+                  token,
+                  action: "approve-clean",
+                }),
+              },
               style: "primary",
             },
             {
               label: "Stay in plan mode",
-              value: `/codex plan stay ${token}`,
+              action: {
+                type: "callback",
+                value: buildCodexPlanDecisionCallbackValue({ token, action: "stay" }),
+              },
               style: "secondary",
             },
           ],
@@ -143,18 +162,7 @@ export function answerCodexUserInput(params: {
   sessionFile?: string;
   now?: number;
 }): string {
-  pruneExpiredControls(params.now);
-  const pending = pendingUserInputs.get(params.token);
-  if (!pending) {
-    return "No pending Codex input request was found. The request may have expired.";
-  }
-  const mismatch = readControlScopeMismatch(pending, params.ctx, params.sessionFile);
-  if (mismatch) {
-    return mismatch;
-  }
-  pendingUserInputs.delete(params.token);
-  pending.resolveText(params.answerText);
-  return "Sent answer to Codex.";
+  return consumeCodexUserInput(params).message;
 }
 
 export function answerCodexUserInputCallback(params: {
@@ -166,17 +174,31 @@ export function answerCodexUserInputCallback(params: {
   sessionFile?: string;
   now?: number;
 }): string | undefined {
+  const result = resolveCodexUserInputCallback(params);
+  return result.matched ? result.message : undefined;
+}
+
+export function resolveCodexUserInputCallback(params: {
+  payload: string;
+  ctx: Pick<
+    PluginCommandContext,
+    "senderId" | "channel" | "accountId" | "sessionKey" | "messageThreadId"
+  >;
+  sessionFile?: string;
+  now?: number;
+}): CodexUserInputCallbackResult {
   const parsed = parseCodexUserInputCallback(params.payload);
   if (!parsed) {
-    return undefined;
+    return { matched: false };
   }
-  return answerCodexUserInput({
+  const result = consumeCodexUserInput({
     token: parsed.token,
     answerText: parsed.answerText,
     ctx: params.ctx,
     sessionFile: params.sessionFile,
     now: params.now,
   });
+  return { matched: true, ...result };
 }
 
 export function buildCodexUserInputCallbackValue(params: {
@@ -186,6 +208,37 @@ export function buildCodexUserInputCallbackValue(params: {
   return `${CODEX_INTERACTIVE_NAMESPACE}:${CODEX_USER_INPUT_CALLBACK_PREFIX}${params.token}:${
     params.answerIndex
   }`;
+}
+
+export function buildCodexPlanDecisionCallbackValue(params: {
+  token: string;
+  action: CodexPlanDecisionAction;
+}): string {
+  return `${CODEX_INTERACTIVE_NAMESPACE}:${CODEX_PLAN_DECISION_CALLBACK_PREFIX}${params.token}:${
+    params.action
+  }`;
+}
+
+export function parseCodexPlanDecisionCallback(
+  payload: string,
+): { token: string; action: CodexPlanDecisionAction } | undefined {
+  const normalizedPayload = payload.startsWith(`${CODEX_INTERACTIVE_NAMESPACE}:`)
+    ? payload.slice(`${CODEX_INTERACTIVE_NAMESPACE}:`.length)
+    : payload;
+  if (!normalizedPayload.startsWith(CODEX_PLAN_DECISION_CALLBACK_PREFIX)) {
+    return undefined;
+  }
+  const remainder = normalizedPayload.slice(CODEX_PLAN_DECISION_CALLBACK_PREFIX.length);
+  const separator = remainder.lastIndexOf(":");
+  if (separator <= 0 || separator === remainder.length - 1) {
+    return undefined;
+  }
+  const token = remainder.slice(0, separator);
+  const action = remainder.slice(separator + 1);
+  if (action !== "approve" && action !== "approve-clean" && action !== "stay") {
+    return undefined;
+  }
+  return token ? { token, action } : undefined;
 }
 
 function extractCodexProposedPlan(text: string): string | undefined {
@@ -229,6 +282,33 @@ function createPendingUserInput(params: {
   });
   trimOldest(pendingUserInputs);
   return token;
+}
+
+function consumeCodexUserInput(params: {
+  token: string;
+  answerText: string;
+  ctx: Pick<
+    PluginCommandContext,
+    "senderId" | "channel" | "accountId" | "sessionKey" | "messageThreadId"
+  >;
+  sessionFile?: string;
+  now?: number;
+}): { consumed: boolean; message: string } {
+  pruneExpiredControls(params.now);
+  const pending = pendingUserInputs.get(params.token);
+  if (!pending) {
+    return {
+      consumed: false,
+      message: "No pending Codex input request was found. The request may have expired.",
+    };
+  }
+  const mismatch = readControlScopeMismatch(pending, params.ctx, params.sessionFile);
+  if (mismatch) {
+    return { consumed: false, message: mismatch };
+  }
+  pendingUserInputs.delete(params.token);
+  pending.resolveText(params.answerText);
+  return { consumed: true, message: "Sent answer to Codex." };
 }
 
 function buildUserInputInteractive(

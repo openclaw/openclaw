@@ -6,12 +6,15 @@ import {
   consumeCodexPlanDecision,
   createCodexUserInputPrompt,
   hasCodexProposedPlan,
+  parseCodexPlanDecisionCallback,
+  resolveCodexUserInputCallback,
   resetCodexConversationChatControlsForTests,
 } from "./conversation-chat-controls.js";
 
 type TestButton = {
   label: string;
   value?: string;
+  action?: { type?: string; value?: string };
 };
 
 const scope = {
@@ -53,13 +56,16 @@ describe("codex conversation chat controls", () => {
       "Stay in plan mode",
     ]);
     expect(normalizeMessagePresentation(reply.presentation)).toBeDefined();
-    expect(buttons.map((button) => button.value?.split(" ").slice(0, 3).join(" "))).toEqual([
-      "/codex plan approve",
-      "/codex plan approve-clean",
-      "/codex plan stay",
+    expect(buttons.map((button) => button.action?.type)).toEqual([
+      "callback",
+      "callback",
+      "callback",
     ]);
+    expect(
+      buttons.map((button) => parseCodexPlanDecisionCallback(button.action?.value ?? "")?.action),
+    ).toEqual(["approve", "approve-clean", "stay"]);
 
-    const token = buttons[0]?.value?.split(" ").at(-1) ?? "";
+    const token = parseCodexPlanDecisionCallback(buttons[0]?.action?.value ?? "")?.token ?? "";
     expect(consumeCodexPlanDecision({ token, ctx, sessionFile: scope.sessionFile })).toEqual({
       ok: true,
       sessionFile: scope.sessionFile,
@@ -77,7 +83,8 @@ describe("codex conversation chat controls", () => {
       text: "<proposed_plan>do this</proposed_plan>",
       scope,
     });
-    const token = readButtons(reply)[0]?.value?.split(" ").at(-1) ?? "";
+    const token =
+      parseCodexPlanDecisionCallback(readButtons(reply)[0]?.action?.value ?? "")?.token ?? "";
 
     expect(
       consumeCodexPlanDecision({
@@ -122,6 +129,46 @@ describe("codex conversation chat controls", () => {
       "Sent answer to Codex.",
     );
     await expect(answered).resolves.toBe("2");
+  });
+
+  it("reports whether user input callbacks consumed a pending request", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const reply = createCodexUserInputPrompt({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "q1",
+          header: "Mode",
+          question: "Pick a mode",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Execute", description: "Run now" },
+            { label: "Plan", description: "Stay in planning" },
+          ],
+        },
+      ],
+    });
+    const payload = readButtons(reply)[0]?.value?.slice(6) ?? "";
+
+    expect(resolveCodexUserInputCallback({ payload, ctx })).toEqual({
+      matched: true,
+      consumed: true,
+      message: "Sent answer to Codex.",
+    });
+    await expect(answered).resolves.toBe("1");
+    expect(resolveCodexUserInputCallback({ payload, ctx })).toEqual({
+      matched: true,
+      consumed: false,
+      message: "No pending Codex input request was found. The request may have expired.",
+    });
+    expect(resolveCodexUserInputCallback({ payload: "other:payload", ctx })).toEqual({
+      matched: false,
+    });
   });
 
   it("creates option buttons when a single question also allows an other reply", async () => {

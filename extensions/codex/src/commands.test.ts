@@ -153,14 +153,29 @@ function requireResultText(result: PluginCommandResult): string {
 
 function readInteractiveButtons(result: {
   interactive?: { blocks?: unknown[] };
+  presentation?: { blocks?: unknown[] };
 }): Array<{ label: string; value: string }> {
-  const block = result.interactive?.blocks?.find(
-    (entry): entry is { buttons: Array<{ label: string; value: string }> } =>
+  const blocks = result.presentation?.blocks ?? result.interactive?.blocks;
+  const block = blocks?.find(
+    (
+      entry,
+    ): entry is {
+      buttons: Array<{
+        label: string;
+        value?: string;
+        action?: { command?: string; value?: string };
+      }>;
+    } =>
       Boolean(entry) &&
       typeof entry === "object" &&
       Array.isArray((entry as { buttons?: unknown }).buttons),
   );
-  return block?.buttons ?? [];
+  return (
+    block?.buttons.map((button) => ({
+      label: button.label,
+      value: button.value ?? button.action?.command ?? button.action?.value ?? "",
+    })) ?? []
+  );
 }
 
 function expectResultTextContains(result: PluginCommandResult, expected: string): void {
@@ -3878,9 +3893,9 @@ describe("codex command", () => {
       },
     });
     const cleanButton = readInteractiveButtons(reply).find((button) =>
-      button.value.includes(" approve-clean "),
+      button.value.includes(":approve-clean"),
     );
-    const token = cleanButton?.value.split(" ").at(-1) ?? "";
+    const token = cleanButton?.value.split(":").at(-2) ?? "";
     const startCodexConversationThread = vi.fn(async () => ({
       kind: "codex-app-server-session" as const,
       version: 1 as const,
