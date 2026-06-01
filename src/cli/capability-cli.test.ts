@@ -2274,7 +2274,7 @@ describe("capability cli", () => {
     };
     mocks.loadConfig.mockReturnValue(rawConfig);
     mocks.resolveTtsConfig.mockReturnValue({
-      providers: { openai: { apiKey: "config-key", speakerVoice: "nova" } },
+      providerConfigs: { openai: { apiKey: "config-key", speakerVoice: "nova" } },
     });
     mocks.resolveApiKeyForProvider.mockResolvedValueOnce({
       apiKey: "profile-openai-key",
