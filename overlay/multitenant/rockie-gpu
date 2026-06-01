@@ -57,9 +57,26 @@ CONFIG_PATH_DEFAULT = "~/.rockie/config.json"
 class CLIError(Exception):
     """Structured CLI error with a process exit code."""
 
-    def __init__(self, message: str, exit_code: int = 1):
+    def __init__(
+        self,
+        message: str,
+        exit_code: int = 1,
+        *,
+        http_status: Optional[int] = None,
+        payload: Any = None,
+    ):
         super().__init__(message)
         self.message = message
+        self.exit_code = exit_code
+        self.http_status = http_status
+        self.payload = payload
+
+
+class CommandOutcome:
+    """Command payload plus process exit code."""
+
+    def __init__(self, payload: Any, exit_code: int = 0):
+        self.payload = payload
         self.exit_code = exit_code
 
 
@@ -162,16 +179,24 @@ def _http(method: str, path: str, body: Optional[dict] = None) -> Any:
             except ValueError:
                 return None
     except urllib.error.HTTPError as e:
+        parsed_payload: Any = None
         try:
             payload = e.read().decode("utf-8")
+            parsed_payload = json.loads(payload) if payload else None
         except Exception:
             payload = ""
         if 400 <= e.code < 500:
             raise CLIError(
-                f"HTTP {e.code}: {payload or e.reason}", exit_code=3
+                f"HTTP {e.code}: {payload or e.reason}",
+                exit_code=3,
+                http_status=e.code,
+                payload=parsed_payload,
             ) from e
         raise CLIError(
-            f"HTTP {e.code}: {payload or e.reason}", exit_code=4
+            f"HTTP {e.code}: {payload or e.reason}",
+            exit_code=4,
+            http_status=e.code,
+            payload=parsed_payload,
         ) from e
     except urllib.error.URLError as e:
         raise CLIError(f"Network error: {e.reason}", exit_code=1) from e
@@ -249,7 +274,93 @@ def _cmd_provision(args: argparse.Namespace) -> Any:
     }
     if args.provider:
         body["provider"] = args.provider
-    return _http("POST", "/api/gpu/provision", body=body)
+    result = _http("POST", "/api/gpu/provision", body=body)
+    if not isinstance(result, dict) or result.get("dry_run"):
+        return result
+
+    pod_id = result.get("pod_id")
+    provider = result.get("provider") or args.provider or "runpod"
+    if not pod_id:
+        return CommandOutcome(
+            _provision_unverified_payload(
+                result,
+                tenant_id=_get_tenant_id(),
+                provider=provider,
+                error_code="missing_pod_id",
+                error_message="Broker provision response did not include pod_id.",
+            ),
+            exit_code=3,
+        )
+
+    status_path = (
+        f"/api/gpu/pods/{urllib.parse.quote(str(pod_id), safe='')}/status?"
+        f"{urllib.parse.urlencode({'provider': str(provider)})}"
+    )
+    try:
+        status_result = _http("GET", status_path)
+    except CLIError as e:
+        return CommandOutcome(
+            _provision_unverified_payload(
+                result,
+                tenant_id=_get_tenant_id(),
+                provider=provider,
+                error_code=_error_code_from_payload(e.payload),
+                error_message=e.message,
+                http_status=e.http_status,
+            ),
+            exit_code=e.exit_code,
+        )
+
+    verified = dict(result)
+    verified["tenant_id"] = _get_tenant_id()
+    verified["ownership_check_status"] = "VERIFIED"
+    verified["ownership_check_path"] = status_path
+    verified["broker_status"] = status_result
+    return verified
+
+
+def _error_code_from_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if isinstance(detail, dict):
+            error = detail.get("error")
+            if isinstance(error, dict) and error.get("code"):
+                return str(error["code"])
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("code"):
+            return str(error["code"])
+    return "ownership_check_failed"
+
+
+def _provision_unverified_payload(
+    provision: dict[str, Any],
+    *,
+    tenant_id: str,
+    provider: Any,
+    error_code: str,
+    error_message: str,
+    http_status: Optional[int] = None,
+) -> dict[str, Any]:
+    return {
+        "status": "PROVISION_UNVERIFIED",
+        "ownership_check_status": "FAILED",
+        "tenant_id": tenant_id,
+        "pod_id": provision.get("pod_id"),
+        "provider": provider,
+        "gpu_type": provision.get("gpu_type"),
+        "provision_status": provision.get("status"),
+        "estimated_cost_cents": provision.get("estimated_cost_cents"),
+        "dry_run": bool(provision.get("dry_run")),
+        "ownership_check_error": {
+            "code": error_code,
+            "message": error_message,
+            "http_status": http_status,
+        },
+        "next_action": (
+            "Do not report this pod as running. Retry provisioning through "
+            "rockie-gpu, or inspect broker ownership with rockie-gpu status."
+        ),
+    }
 
 
 def _cmd_status(args: argparse.Namespace) -> Any:
@@ -345,6 +456,9 @@ def main(argv: list[str]) -> int:
     except CLIError as e:
         print(e.message, file=sys.stderr)
         return e.exit_code
+    if isinstance(result, CommandOutcome):
+        _emit(result.payload, human=bool(args.human))
+        return result.exit_code
     _emit(result, human=bool(args.human))
     return 0
 

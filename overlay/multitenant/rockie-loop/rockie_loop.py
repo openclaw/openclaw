@@ -460,6 +460,19 @@ def _provision_gpu_smoke(spec: dict) -> Optional[dict]:
         return None
 
 
+def _status_gpu_pod(provider: str, pod_id: str) -> Optional[dict]:
+    path = (
+        f"/api/gpu/pods/{urllib.parse.quote(pod_id, safe='')}/status"
+        f"?{urllib.parse.urlencode({'provider': provider})}"
+    )
+    try:
+        status = _http("GET", path)
+    except CLIError as e:
+        _log(f"WARN: gpu smoke ownership/status check failed: {e}")
+        return None
+    return status if isinstance(status, dict) else None
+
+
 def _teardown_gpu_pod(provider: str, pod_id: str) -> bool:
     path = (
         f"/api/gpu/pods/{urllib.parse.quote(pod_id, safe='')}"
@@ -595,6 +608,15 @@ def _launch_queued_row(lab_id: str, row: dict) -> tuple[Optional[str], str]:
         provider = result.get("provider")
         if pod_id and provider:
             handle = f"gpu:{provider}:{pod_id}"
+            status = _status_gpu_pod(str(provider), str(pod_id))
+            if not status:
+                _teardown_gpu_pod(str(provider), str(pod_id))
+                _transition_queue(
+                    lab_id=lab_id, qid=qid, state="failed",
+                    experiment_id=handle,
+                    error="gpu smoke provision unverified",
+                )
+                return handle, f"gpu smoke provision unverified: {title!r}"
             teardown_ok = _teardown_gpu_pod(str(provider), str(pod_id))
             if teardown_ok:
                 _transition_queue(
@@ -605,7 +627,8 @@ def _launch_queued_row(lab_id: str, row: dict) -> tuple[Optional[str], str]:
                     title=f"GPU smoke provisioned: {title}",
                     body=(
                         f"Provisioned {result.get('gpu_type') or spec.get('gpu_type')} "
-                        f"via {provider}; immediate teardown succeeded."
+                        f"via {provider}; broker status={status.get('state') or 'unknown'}; "
+                        "immediate teardown succeeded."
                     ),
                 )
                 return handle, f"gpu smoke provisioned and torn down: {title!r}"

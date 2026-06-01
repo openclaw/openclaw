@@ -155,3 +155,86 @@ def test_list_alias_dispatches_to_list_prices_handler(cli):
     # argparse aliases display the canonical name in --help, so a
     # textual comparison would be misleading.
     assert alias.func is canonical.func
+
+
+def test_provision_verifies_broker_status_before_success(
+    cli, monkeypatch, capsys
+):
+    monkeypatch.setenv("ROCKIELAB_TENANT_ID", "t-demo")
+    monkeypatch.setenv("ROCKIELAB_TENANT_TOKEN", "service-token")
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_http(method: str, path: str, body=None):
+        calls.append((method, path, body))
+        if method == "POST" and path == "/api/gpu/provision":
+            return {
+                "pod_id": "cfom41v9yy9ze7",
+                "provider": "runpod",
+                "gpu_type": "A40_48GB",
+                "status": "RUNNING",
+                "estimated_cost_cents": 14,
+                "dry_run": False,
+            }
+        if method == "GET" and path == (
+            "/api/gpu/pods/cfom41v9yy9ze7/status?provider=runpod"
+        ):
+            return {"pod_id": "cfom41v9yy9ze7", "provider": "runpod", "state": "RUNNING"}
+        raise AssertionError((method, path, body))
+
+    monkeypatch.setattr(cli, "_http", fake_http)
+
+    rc = cli.main(["provision", "--gpu", "A40_48GB", "--hours", "0.25"])
+
+    assert rc == 0
+    assert calls[0][0:2] == ("POST", "/api/gpu/provision")
+    assert calls[1][0:2] == (
+        "GET",
+        "/api/gpu/pods/cfom41v9yy9ze7/status?provider=runpod",
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["pod_id"] == "cfom41v9yy9ze7"
+    assert payload["tenant_id"] == "t-demo"
+    assert payload["ownership_check_status"] == "VERIFIED"
+
+
+def test_provision_reports_unverified_when_status_says_pod_not_owned(
+    cli, monkeypatch, capsys
+):
+    monkeypatch.setenv("ROCKIELAB_TENANT_ID", "t-99562d476fef")
+    monkeypatch.setenv("ROCKIELAB_TENANT_TOKEN", "service-token")
+
+    def fake_http(method: str, path: str, body=None):
+        if method == "POST" and path == "/api/gpu/provision":
+            return {
+                "pod_id": "cfom41v9yy9ze7",
+                "provider": "runpod",
+                "gpu_type": "A40_48GB",
+                "status": "RUNNING",
+                "estimated_cost_cents": 14,
+                "dry_run": False,
+            }
+        if method == "GET" and path == (
+            "/api/gpu/pods/cfom41v9yy9ze7/status?provider=runpod"
+        ):
+            raise cli.CLIError(
+                'HTTP 403: {"detail":{"error":{"code":"pod_not_owned"}}}',
+                exit_code=3,
+                http_status=403,
+                payload={"detail": {"error": {"code": "pod_not_owned"}}},
+            )
+        raise AssertionError((method, path, body))
+
+    monkeypatch.setattr(cli, "_http", fake_http)
+
+    rc = cli.main(["provision", "--gpu", "A40_48GB", "--hours", "0.25"])
+
+    assert rc == 3
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "PROVISION_UNVERIFIED"
+    assert payload["pod_id"] == "cfom41v9yy9ze7"
+    assert payload["provider"] == "runpod"
+    assert payload["gpu_type"] == "A40_48GB"
+    assert payload["estimated_cost_cents"] == 14
+    assert payload["tenant_id"] == "t-99562d476fef"
+    assert payload["ownership_check_status"] == "FAILED"
+    assert payload["ownership_check_error"]["code"] == "pod_not_owned"

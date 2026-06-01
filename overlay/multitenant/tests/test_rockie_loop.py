@@ -34,6 +34,12 @@ def test_gpu_smoke_queue_row_uses_broker_provision_and_teardown(loop, monkeypatc
                 "provider": "runpod",
                 "gpu_type": "A40_48GB",
             }
+        if method == "GET" and path == "/api/gpu/pods/pod%2F403/status?provider=runpod":
+            return {
+                "pod_id": "pod/403",
+                "provider": "runpod",
+                "state": "RUNNING",
+            }
         return {}
 
     monkeypatch.setattr(loop, "_http", fake_http)
@@ -76,13 +82,14 @@ def test_gpu_smoke_queue_row_uses_broker_provision_and_teardown(loop, monkeypatc
             "region": "ord",
         },
     )
-    assert calls[1] == ("DELETE", "/api/gpu/pods/pod%2F403?provider=runpod", None)
-    assert calls[2] == (
+    assert calls[1] == ("GET", "/api/gpu/pods/pod%2F403/status?provider=runpod", None)
+    assert calls[2] == ("DELETE", "/api/gpu/pods/pod%2F403?provider=runpod", None)
+    assert calls[3] == (
         "POST",
         "/api/labs/lab-1/loop-queue/queue-1/state",
         {"state": "done", "experiment_id": "gpu:runpod:pod/403"},
     )
-    assert calls[3][0:2] == ("POST", "/api/agent-tools/emit_artifact")
+    assert calls[4][0:2] == ("POST", "/api/agent-tools/emit_artifact")
 
 
 def test_build_request_sends_auth_token_and_tenant_id(loop, monkeypatch):
@@ -107,6 +114,73 @@ def test_build_request_uses_tenant_dev_token_alias(monkeypatch):
 
     assert headers["X-tenant-token"] == "dev-service-token"
     assert headers["X-tenant-id"] == "t-loop"
+
+
+def test_gpu_smoke_queue_row_fails_when_broker_status_rejects_ownership(
+    loop, monkeypatch
+):
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_http(method: str, path: str, body=None, **_kwargs):
+        calls.append((method, path, body))
+        if method == "POST" and path == "/api/gpu/provision":
+            return {
+                "pod_id": "cfom41v9yy9ze7",
+                "provider": "runpod",
+                "gpu_type": "A40_48GB",
+            }
+        if method == "GET" and path == (
+            "/api/gpu/pods/cfom41v9yy9ze7/status?provider=runpod"
+        ):
+            raise loop.CLIError(
+                'HTTP 403: {"detail":{"error":{"code":"pod_not_owned"}}}'
+            )
+        return {}
+
+    monkeypatch.setattr(loop, "_http", fake_http)
+
+    handle, summary = loop._launch_queued_row(
+        "lab-1",
+        {
+            "id": "queue-1",
+            "title": "demo repro",
+            "spec": {
+                "kind": "gpu_smoke",
+                "gpu_type": "A40_48GB",
+                "gpu_count": 1,
+                "spot": True,
+                "hours": 0.25,
+                "route_quote_available": True,
+                "route_quote_provider": "runpod",
+                "route_quote_gpu_type": "A40_48GB",
+                "route_quote_region": "ord",
+                "route_quote_spot": True,
+                "dry_run_preflight": True,
+                "dry_run_preflight_pod_id": "dryrun-403",
+            },
+        },
+    )
+
+    assert handle == "gpu:runpod:cfom41v9yy9ze7"
+    assert summary == "gpu smoke provision unverified: 'demo repro'"
+    assert calls[0][0:2] == ("POST", "/api/gpu/provision")
+    assert calls[1][0:2] == (
+        "GET",
+        "/api/gpu/pods/cfom41v9yy9ze7/status?provider=runpod",
+    )
+    assert calls[2][0:2] == (
+        "DELETE",
+        "/api/gpu/pods/cfom41v9yy9ze7?provider=runpod",
+    )
+    assert calls[3] == (
+        "POST",
+        "/api/labs/lab-1/loop-queue/queue-1/state",
+        {
+            "state": "failed",
+            "experiment_id": "gpu:runpod:cfom41v9yy9ze7",
+            "error": "gpu smoke provision unverified",
+        },
+    )
 
 
 def test_gpu_smoke_queue_row_rejects_unbounded_or_credential_fields(loop, monkeypatch):
