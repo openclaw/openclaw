@@ -1,9 +1,9 @@
 import path from "node:path";
 import { initCommands } from "../commands/slash-commands-impl.js";
+import { formatQqbotNotConfiguredError } from "../errors.js";
 import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
-import { formatQqbotNotConfiguredError } from "../errors.js";
 import {
   clearTokenCache,
   getAccessToken,

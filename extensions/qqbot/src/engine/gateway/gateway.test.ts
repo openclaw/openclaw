@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EngineAdapters } from "../adapter/index.js";
-import type { CoreGatewayContext, GatewayPluginRuntime } from "./types.js";
 import { startGateway } from "./gateway.js";
+import type { CoreGatewayContext, GatewayPluginRuntime } from "./types.js";
 
 function createContext(): CoreGatewayContext {
   const runtime: GatewayPluginRuntime = {

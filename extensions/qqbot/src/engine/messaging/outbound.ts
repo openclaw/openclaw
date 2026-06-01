@@ -33,8 +33,8 @@ export {
   sendVoice,
 } from "./outbound-media-send.js";
 
-import type { GatewayAccount } from "../types.js";
 import { formatQqbotNotConfiguredError } from "../errors.js";
+import type { GatewayAccount } from "../types.js";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
