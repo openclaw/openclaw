@@ -2,6 +2,7 @@ import { sanitizeEnvVars, validateEnvVarValue } from "../../agents/sandbox/sanit
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import {
+  inspectHostExecEnvOverrides,
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
 } from "../../infra/host-env-security.js";
@@ -104,7 +105,7 @@ function sanitizeSkillEnvOverrides(params: {
   }
 
   const result = sanitizeEnvVars(params.overrides);
-  const allowed: Record<string, string> = {};
+  const allowedCandidates: Record<string, string> = {};
   const blocked = new Set<string>();
   const warnings = [...result.warnings];
 
@@ -113,7 +114,7 @@ function sanitizeSkillEnvOverrides(params: {
       blocked.add(key);
       continue;
     }
-    allowed[key] = value;
+    allowedCandidates[key] = value;
   }
 
   for (const key of result.blocked) {
@@ -132,6 +133,23 @@ function sanitizeSkillEnvOverrides(params: {
         continue;
       }
       warnings.push(`${key}: ${warning}`);
+    }
+    allowedCandidates[key] = value;
+  }
+
+  const hostDiagnostics = inspectHostExecEnvOverrides({
+    overrides: allowedCandidates,
+    blockPathOverrides: true,
+  });
+  const hostBlocked = new Set([
+    ...hostDiagnostics.rejectedOverrideBlockedKeys,
+    ...hostDiagnostics.rejectedOverrideInvalidKeys,
+  ]);
+  const allowed: Record<string, string> = {};
+  for (const [key, value] of Object.entries(allowedCandidates)) {
+    if (hostBlocked.has(key) || hostBlocked.has(key.toUpperCase())) {
+      blocked.add(key);
+      continue;
     }
     allowed[key] = value;
   }
