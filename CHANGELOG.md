@@ -6622,7 +6622,6 @@ This audited record covers the complete v2026.5.28..v2026.5.31-beta.4 history: 4
 - Amazon Bedrock embeddings: report malformed provider response JSON with provider-owned errors instead of leaking raw parser failures.
 - QQBot: report malformed access-token JSON with provider-owned errors instead of leaking raw parser failures.
 - OpenAI embeddings: report malformed batch output JSONL with provider-owned errors instead of leaking raw parser failures.
-- OpenAI embeddings: apply query instruction prefixes for instruction-aware embedding models such as Qwen3, Nomic, and Mixedbread on memory searches while leaving document batches raw.
 - Synology Chat: report malformed JSON webhook payloads with stable channel-owned parser errors.
 - Mattermost: report malformed interaction callback JSON with stable channel-owned parser errors.
 - Twilio voice-call: report malformed media stream WebSocket JSON with an owned parser error instead of logging raw parser failures.

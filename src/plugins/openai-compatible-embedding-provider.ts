@@ -116,6 +116,44 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   return normalized ? normalized : undefined;
 }
 
+/**
+ * Query instruction templates for models that require instruction-aware embeddings.
+ * Mirrors the behavior implemented by the OpenAI and Ollama embedding adapters.
+ */
+const QUERY_INSTRUCTION_TEMPLATES = [
+  {
+    prefix: "qwen3-embedding",
+    template:
+      "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:{query}",
+  },
+  {
+    prefix: "nomic-embed-text",
+    template: "search_query: {query}",
+  },
+  {
+    prefix: "mxbai-embed-large",
+    template: "Represent this sentence for searching relevant passages: {query}",
+  },
+] as const;
+
+function normalizeTemplateMatchModel(model: string): string {
+  const normalizedModel = model.trim().toLowerCase();
+  const segments = normalizedModel.split("/").filter(Boolean);
+  return segments.at(-1) ?? normalizedModel;
+}
+
+function matchesTemplateModelAlias(model: string, prefix: string): boolean {
+  return model === prefix || model.startsWith(`${prefix}-`) || model.includes(`-${prefix}`);
+}
+
+function applyQueryInstructionTemplate(model: string, queryText: string): string {
+  const normalizedModel = normalizeTemplateMatchModel(model);
+  const match = QUERY_INSTRUCTION_TEMPLATES.find(({ prefix }) =>
+    matchesTemplateModelAlias(normalizedModel, prefix),
+  );
+  return match ? match.template.replace("{query}", () => queryText) : queryText;
+}
+
 function chooseSecretInputOverride<T>(
   override: T | undefined,
   fallback: T | undefined,
@@ -331,9 +369,13 @@ async function postEmbeddingRequest(params: {
 }): Promise<number[][]> {
   const { client, input } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
+  const requestInput =
+    params.inputType === "query"
+      ? input.map((text) => applyQueryInstructionTemplate(client.model, text))
+      : input;
   const body = {
     model: client.model,
-    input,
+    input: requestInput,
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
