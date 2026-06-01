@@ -28,6 +28,7 @@ function resolveRuntimeContextRegistry(params: {
   return params.channelRuntime?.runtimeContexts ?? null;
 }
 
+/** Registers a channel/account/capability runtime context when a runtime surface is available. */
 export function registerChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
     channelRuntime?: ChannelRuntimeSurface;
@@ -49,6 +50,7 @@ export function registerChannelRuntimeContext(
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
+/** Reads a typed runtime context for a channel/account/capability key. */
 export function getChannelRuntimeContext<T = unknown>(
   params: ChannelRuntimeContextKey & {
     channelRuntime?: ChannelRuntimeSurface;
@@ -65,6 +67,7 @@ export function getChannelRuntimeContext<T = unknown>(
   });
 }
 
+/** Subscribes to runtime context registration changes for one channel/account/capability key. */
 export function watchChannelRuntimeContexts(
   params: ChannelRuntimeContextKey & {
     channelRuntime?: ChannelRuntimeSurface;
@@ -83,6 +86,7 @@ export function watchChannelRuntimeContexts(
   });
 }
 
+/** Wraps a channel runtime so contexts registered during one task are disposed together. */
 export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(params: {
   channelRuntime?: T;
 }): {
