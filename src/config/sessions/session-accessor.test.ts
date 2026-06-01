@@ -7,6 +7,7 @@ import {
   appendTranscriptMessage,
   appendTranscriptEvent,
   listSessionEntries,
+  loadExactSessionEntry,
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
@@ -104,6 +105,35 @@ describe("session accessor file-backed seam", () => {
     expect(listSessionEntries({ clone: false, storePath })[0]?.entry).toBe(
       cachedStore["agent:main:main"],
     );
+  });
+
+  it("keeps exact persisted-key lookup separate from canonical entry reads", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: 10,
+          model: "gpt-5.5",
+        },
+      }),
+      "utf8",
+    );
+
+    const mixedCaseScope = {
+      sessionKey: "AGENT:MAIN:MAIN",
+      storePath,
+    };
+
+    expect(loadSessionEntry(mixedCaseScope)?.sessionId).toBe("session-1");
+    expect(loadExactSessionEntry(mixedCaseScope)).toBeUndefined();
+    expect(loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual({
+      sessionKey: "agent:main:main",
+      entry: expect.objectContaining({
+        sessionId: "session-1",
+        model: "gpt-5.5",
+      }),
+    });
   });
 
   it("updates existing entries without creating missing sessions", async () => {

@@ -58,6 +58,12 @@ export type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
+/** Session entry read by the exact persisted session key, without alias resolution. */
+export type ExactSessionEntry = {
+  sessionKey: string;
+  entry: SessionEntry;
+};
+
 export type TranscriptEvent = unknown;
 
 export type TranscriptMessageAppendOptions<TMessage> = {
@@ -103,6 +109,23 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
     return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;
   }
   return getSessionEntry(scope);
+}
+
+/**
+ * Loads one entry only when the persisted key exactly matches the requested key.
+ * Approval routing uses this to avoid canonical alias lookup crossing accounts.
+ */
+export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
+  const sessionKey = scope.sessionKey.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const store = loadSessionStore(resolveAccessStorePath(scope), {
+    ...(scope.clone === false ? { clone: false } : {}),
+    ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
+  const entry = Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined;
+  return entry ? { sessionKey, entry } : undefined;
 }
 
 /** Lists session entries through the storage-neutral accessor seam. */
