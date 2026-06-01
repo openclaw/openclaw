@@ -14,6 +14,9 @@ import {
 const log = createSubsystemLogger("openrouter-stream");
 const openRouterThinkingStreamHooks = buildProviderStreamFamilyHooks("openrouter-thinking");
 
+// OpenRouter caps the session_id body field at 256 characters.
+const OPENROUTER_SESSION_ID_MAX_LENGTH = 256;
+
 function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() : undefined;
 }
@@ -232,6 +235,33 @@ function injectOpenRouterRouting(
   );
 }
 
+function isOpenRouterSessionIdForwardingEnabled(ctx: ProviderWrapStreamFnContext): boolean {
+  return ctx.config?.plugins?.entries?.openrouter?.config?.forwardSessionId === true;
+}
+
+function injectOpenRouterSessionId(baseStreamFn: StreamFn | undefined): StreamFn {
+  // OpenRouter uses session_id as a sticky routing key (keeps a session on one
+  // upstream provider for better prompt-cache hits) and for observability. The
+  // live OpenClaw session id arrives as options.sessionId; forward it only when
+  // the operator opted in, and never override a caller/config-set value.
+  return createPayloadPatchStreamWrapper(
+    baseStreamFn,
+    ({ payload, options }) => {
+      if (payload.session_id !== undefined) {
+        return;
+      }
+      const sessionId = readString(options?.sessionId);
+      if (!sessionId) {
+        return;
+      }
+      payload.session_id = sessionId.slice(0, OPENROUTER_SESSION_ID_MAX_LENGTH);
+    },
+    {
+      shouldPatch: ({ model }) => shouldPatchOpenRouterRoutingPayload(model),
+    },
+  );
+}
+
 function createOpenRouterAnthropicPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createPayloadPatchStreamWrapper(
     baseStreamFn,
@@ -310,9 +340,12 @@ export function wrapOpenRouterProviderStream(
     ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
       ? (ctx.extraParams.provider as Record<string, unknown>)
       : undefined;
-  const routedStreamFn = providerRouting
-    ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
+  const sessionAwareStreamFn = isOpenRouterSessionIdForwardingEnabled(ctx)
+    ? injectOpenRouterSessionId(ctx.streamFn)
     : ctx.streamFn;
+  const routedStreamFn = providerRouting
+    ? injectOpenRouterRouting(sessionAwareStreamFn, providerRouting)
+    : sessionAwareStreamFn;
   const wrapStreamFn = openRouterThinkingStreamHooks.wrapStreamFn ?? undefined;
   if (!wrapStreamFn) {
     return createOpenRouterAnthropicPrefillWrapper(

@@ -361,6 +361,31 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
 
   </Accordion>
 
+  <Accordion title="Session id forwarding">
+    OpenClaw can forward the active session id to OpenRouter as the
+    chat-completion `session_id`. OpenRouter uses it as a sticky routing key, so
+    all requests in a session route to the same upstream provider for better
+    prompt-cache hits, and groups requests for observability. This is opt-in and
+    off by default. Enable it in the OpenRouter plugin config:
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          openrouter: {
+            config: { forwardSessionId: true },
+          },
+        },
+      },
+    }
+    ```
+
+    Only applied on verified `openrouter.ai` chat-completions routes. The id is
+    clamped to OpenRouter's 256-character limit, and a `session_id` already set
+    on the request is left untouched.
+
+  </Accordion>
+
   <Accordion title="Anthropic cache markers">
     On verified OpenRouter routes, Anthropic model refs keep OpenRouter's
     Anthropic `cache_control` markers for better prompt-cache reuse on
