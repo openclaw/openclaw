@@ -583,8 +583,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "utf8",
     );
     const releaseChecksWorkflow = parse(releaseChecksSource);
+    const runtimeParity = releaseChecksWorkflow.jobs.qa_lab_runtime_parity_release_checks;
     const runtimeToolCoverage = releaseChecksWorkflow.jobs.runtime_tool_coverage_release_checks;
 
+    expect(runtimeParity["runs-on"]).toBe("blacksmith-16vcpu-ubuntu-2404");
     expect(runtimeToolCoverage["continue-on-error"]).toBeUndefined();
     expect(runtimeToolCoverage.needs).toEqual([
       "resolve_target",
