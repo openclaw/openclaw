@@ -1093,6 +1093,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
           timeoutMs: compactionTimeoutMs,
         }),
       }),
+      // Preflight compaction runs as the same logical session writer. If a
+      // previous same-gateway turn times out while cleanup is settling, the
+      // compactor must be able to re-enter that transcript lock instead of
+      // surfacing a generic channel error while the context window is full.
+      allowReentrant: true,
     });
     try {
       await repairSessionFileIfNeeded({
