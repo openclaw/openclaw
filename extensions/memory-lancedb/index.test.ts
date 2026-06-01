@@ -366,7 +366,7 @@ describe("memory plugin e2e", () => {
       ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
       loadLanceDbModule,
       run: async (dynamicMemoryPlugin) => {
-        const registerMemoryCapability = vi.fn();
+        const registerMemoryCapabilityForPlugin = vi.fn();
         const mockApi = {
           id: "memory-lancedb",
           name: "Memory (LanceDB)",
@@ -391,16 +391,16 @@ describe("memory plugin e2e", () => {
           registerTool: vi.fn(),
           registerCli: vi.fn(),
           registerService: vi.fn(),
-          registerMemoryCapability,
+          registerMemoryCapability: registerMemoryCapabilityForPlugin,
           on: vi.fn(),
           resolvePath: (p: string) => p,
         };
 
         dynamicMemoryPlugin.register(mockApi as any);
 
-        expect(registerMemoryCapability).toHaveBeenCalledTimes(1);
+        expect(registerMemoryCapabilityForPlugin).toHaveBeenCalledTimes(1);
         const capability = firstObjectArg(
-          registerMemoryCapability as unknown as MockCallSource,
+          registerMemoryCapabilityForPlugin as unknown as MockCallSource,
           "memory capability",
         );
         const provider = capability.publicArtifacts as {
@@ -470,7 +470,7 @@ describe("memory plugin e2e", () => {
         ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
         loadLanceDbModule,
         run: async (dynamicMemoryPlugin) => {
-          const registerMemoryCapability = vi.fn();
+          const registerMemoryCapabilityForPlugin = vi.fn();
           const resolvePath = vi.fn((p: string) => p);
           const logger = {
             info: vi.fn(),
@@ -502,7 +502,7 @@ describe("memory plugin e2e", () => {
             registerTool: vi.fn(),
             registerCli: vi.fn(),
             registerService: vi.fn(),
-            registerMemoryCapability,
+            registerMemoryCapability: registerMemoryCapabilityForPlugin,
             on: vi.fn(),
             resolvePath,
           };
@@ -510,9 +510,9 @@ describe("memory plugin e2e", () => {
           dynamicMemoryPlugin.register(mockApi as any);
 
           expect(resolvePath).not.toHaveBeenCalled();
-          expect(registerMemoryCapability).toHaveBeenCalledTimes(1);
+          expect(registerMemoryCapabilityForPlugin).toHaveBeenCalledTimes(1);
           const capability = firstObjectArg(
-            registerMemoryCapability as unknown as MockCallSource,
+            registerMemoryCapabilityForPlugin as unknown as MockCallSource,
             "memory capability",
           );
           const provider = capability.publicArtifacts as {

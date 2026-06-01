@@ -19,7 +19,7 @@ import {
 import { BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES } from "openclaw/plugin-sdk/chat-channel-ids";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { type MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
+import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
 import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
