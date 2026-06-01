@@ -32,17 +32,19 @@ import type {
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
+  resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
-  resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -840,8 +842,18 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
 
   const updatedAt = entry?.updatedAt;
+  const sessionStartedAt = resolveSessionLifecycleTimestamps({
+    entry,
+    agentId: args.agentId,
+    storePath: args.sessionStorePath,
+  }).sessionStartedAt;
+  const sessionDuration =
+    typeof sessionStartedAt === "number"
+      ? formatDurationCompact(now - sessionStartedAt)
+      : undefined;
   const sessionLine = [
     `Session: ${args.sessionKey ?? "unknown"}`,
+    sessionDuration ? `duration ${sessionDuration}` : null,
     typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)

@@ -105,6 +105,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
+        sessionStartedAt: 2 * 60_000,
         inputTokens: 1200,
         outputTokens: 800,
         totalTokens: 16_000,
@@ -132,6 +133,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Context: 16k/32k (50%)");
     expect(normalized).toContain("Compactions: 2");
     expect(normalized).toContain("Session: agent:main:main");
+    expect(normalized).toContain("duration 8m");
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Execution: direct");
     expect(normalized).toContain("Runtime: OpenClaw Default");
