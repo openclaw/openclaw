@@ -122,6 +122,7 @@ describe("sendIMessageOutbound", () => {
       to: "chat_id:42",
       text: "hello",
       replyToId: "reply-1",
+      replyToIdSource: "implicit",
       replyRequesterSender: "+15551230000",
     });
 
@@ -130,6 +131,7 @@ describe("sendIMessageOutbound", () => {
       "hello",
       expect.objectContaining({
         replyToId: "reply-1",
+        replyToIdSource: "implicit",
         replyRequesterSender: "+15551230000",
       }),
     );

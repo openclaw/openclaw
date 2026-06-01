@@ -19,6 +19,7 @@ export async function sendIMessageOutbound(params: {
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   replyRequesterSender?: string | null;
 }) {
   const send =
@@ -39,6 +40,7 @@ export async function sendIMessageOutbound(params: {
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,
+    replyToIdSource: params.replyToIdSource ?? undefined,
     replyRequesterSender: params.replyRequesterSender ?? undefined,
   });
 }
