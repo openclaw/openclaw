@@ -669,7 +669,15 @@ describe("renderWorkboard", () => {
           failureCount: 1,
           comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 3 }],
           links: [{ id: "link-1", type: "relates_to", url: "https://example.com", createdAt: 4 }],
-          proof: [{ id: "proof-1", status: "passed", command: "pnpm test", createdAt: 5 }],
+          proof: [
+            {
+              id: "proof-1",
+              status: "passed",
+              command: "pnpm test",
+              url: "https://example.com/proof",
+              createdAt: 5,
+            },
+          ],
           stale: { detectedAt: 6, reason: "No recent activity." },
         },
       },
@@ -725,6 +733,9 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 attempts");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 links");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
+      "https://example.com/proof",
+    );
   });
 
   it("shows stale lifecycle on executed linked cards", () => {

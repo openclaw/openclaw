@@ -912,7 +912,9 @@ function renderCardDetailsPanel(props: WorkboardProps) {
         ${renderDetailList(
           t("workboard.detailProof"),
           proof.map((entry) =>
-            [entry.status, entry.label, entry.command, entry.note].filter(Boolean).join(" - "),
+            [entry.status, entry.label, entry.command, entry.url, entry.note]
+              .filter(Boolean)
+              .join(" - "),
           ),
         )}
         ${renderDetailList(
