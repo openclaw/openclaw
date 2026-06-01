@@ -152,12 +152,28 @@ function resolveDisplayAuthOrder(params: {
   if (codexOrder && codexOrder.length > 0) {
     return { order: normalizeUniqueStringEntries(codexOrder), explicit: true };
   }
+  const openAiOrder =
+    resolveOrder(params.store.order, OPENAI_PROVIDER_ID) ??
+    resolveOrder(params.config?.auth?.order, OPENAI_PROVIDER_ID);
+  if (openAiOrder && openAiOrder.length > 0) {
+    return { order: normalizeUniqueStringEntries(openAiOrder), explicit: true };
+  }
   const order = resolveAuthProfileOrder({
     cfg: params.config,
     store: params.store,
     provider: OPENAI_CODEX_PROVIDER_ID,
   });
-  return { order, explicit: hasExplicitOpenAiAuthOrder(params) };
+  if (order.length > 0) {
+    return { order, explicit: hasExplicitOpenAiAuthOrder(params) };
+  }
+  return {
+    order: resolveAuthProfileOrder({
+      cfg: params.config,
+      store: params.store,
+      provider: OPENAI_PROVIDER_ID,
+    }),
+    explicit: hasExplicitOpenAiAuthOrder(params),
+  };
 }
 
 function hasExplicitOpenAiAuthOrder(params: {
@@ -215,7 +231,7 @@ function resolveActiveProfileId(params: {
         resolveAuthProfileEligibility({
           cfg: params.config,
           store: params.store,
-          provider: OPENAI_CODEX_PROVIDER_ID,
+          provider: authProviderForProfile(params.store.profiles[profileId]),
           profileId,
           now: params.now,
         }).eligible,
@@ -395,7 +411,7 @@ function describeInactiveProfileStatus(params: {
   const eligibility = resolveAuthProfileEligibility({
     cfg: params.config,
     store: params.store,
-    provider: OPENAI_CODEX_PROVIDER_ID,
+    provider: authProviderForProfile(params.credential),
     profileId: params.profileId,
     now: params.now,
   });
@@ -442,6 +458,12 @@ function readString(record: JsonObject, key: string): string | undefined {
 
 function isChatGptSubscriptionProfile(credential: AuthProfileCredential | undefined): boolean {
   return credential?.type === "oauth" || credential?.type === "token";
+}
+
+function authProviderForProfile(credential: AuthProfileCredential | undefined): string {
+  return credential?.provider === OPENAI_PROVIDER_ID
+    ? OPENAI_PROVIDER_ID
+    : OPENAI_CODEX_PROVIDER_ID;
 }
 
 function formatProfileKind(credential: AuthProfileCredential | undefined): string {

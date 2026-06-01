@@ -49,7 +49,6 @@ import {
   isCodexAppServerNativeAuthProfile,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
-  type CodexAppServerCollaborationMode,
   type CodexAppServerAuthProfileLookup,
   type CodexAppServerContextEngineBinding,
   type CodexAppServerContextEngineProjectionBinding,
