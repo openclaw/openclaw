@@ -760,18 +760,18 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     ].join("|");
 
   const reconcileManagedDreamingCron = async (params: {
-    reason: "startup" | "runtime";
+    reason: "startup" | "startup_retry" | "runtime";
     startupConfig?: OpenClawConfig;
     startupCron?: (() => CronServiceLike | null) | null;
   }): Promise<ShortTermPromotionDreamingConfig> => {
     const startupCfg =
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
     const pluginConfig =
-      params.reason === "runtime"
-        ? resolveMemoryCorePluginConfig(startupCfg)
-        : (resolveMemoryCorePluginConfig(startupCfg) ??
+      params.reason === "startup"
+        ? (resolveMemoryCorePluginConfig(startupCfg) ??
           resolveMemoryCorePluginConfig(api.config) ??
-          api.pluginConfig);
+          api.pluginConfig)
+        : resolveMemoryCorePluginConfig(startupCfg);
     const config = resolveShortTermPromotionDreamingConfig({
       pluginConfig,
       cfg: startupCfg,
@@ -784,7 +784,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     // This handles the case where the cron service was not yet available during
     // gateway_start (250ms deferred init race in startGatewaySidecars) but is
     // available now.  Fixes #67362.
-    if (!cron && params.reason === "runtime" && gatewayContext) {
+    if (!cron && params.reason !== "startup" && gatewayContext) {
       try {
         cron = resolveCronServiceFromGatewayContext(gatewayContext);
         if (cron) {
@@ -800,7 +800,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
       // The runtime reconciliation path (heartbeat-driven) will still warn if the
       // cron service remains unavailable after boot.
-      if (params.reason === "startup") {
+      if (params.reason === "startup" || params.reason === "startup_retry") {
         api.logger.debug?.(
           "memory-core: cron service not yet available at gateway_start; deferring to runtime reconciliation.",
         );
@@ -852,10 +852,14 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return;
       }
       startupCronRetryAttempts += 1;
-      void reconcileManagedDreamingCron({ reason: "runtime" })
-        .then(() => {
+      void reconcileManagedDreamingCron({ reason: "startup_retry" })
+        .then(async () => {
           if (disposed || hasStartupCron()) {
             clearStartupCronRetry();
+            return;
+          }
+          if (startupCronRetryAttempts >= STARTUP_CRON_RETRY_MAX_ATTEMPTS) {
+            await reconcileManagedDreamingCron({ reason: "runtime" });
             return;
           }
           scheduleStartupCronRetry();
