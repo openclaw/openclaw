@@ -272,6 +272,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(params.sessionKey).toBe("main");
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await gateway.resolveDeferred("chat.history", {
         messages: [],
         sessionId: "control-ui-e2e-session",
@@ -310,7 +311,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.locator(".chat-queue").getByText("Sending").waitFor({ timeout: 10_000 });
       await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-thread").getByText(prompt).count()).toBe(0);
+      await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
 

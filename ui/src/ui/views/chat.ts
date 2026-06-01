@@ -1308,6 +1308,7 @@ export function renderChat(props: ChatProps) {
     streamSegments: props.streamSegments,
     stream: displayStream,
     streamStartedAt: props.streamStartedAt,
+    queue: props.queue,
     showToolCalls: props.showToolCalls,
     searchOpen: vs.searchOpen,
     searchQuery: vs.searchQuery,
