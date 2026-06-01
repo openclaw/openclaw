@@ -20,6 +20,7 @@ import {
   type SessionAccessScope,
   type SessionEntrySummary,
   type SessionTranscriptAccessScope,
+  type SessionTranscriptReadScope,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
   type TranscriptMessageAppendOptions,
@@ -32,6 +33,7 @@ import {
   listSqliteSessionEntries,
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
+  loadSqliteTranscriptEventsSync,
   patchSqliteSessionEntry,
   publishSqliteTranscriptUpdate,
   readSqliteSessionUpdatedAt,
@@ -44,6 +46,7 @@ import type { SessionEntry } from "./types.js";
 type AccessorAdapter = {
   name: string;
   entryScope(paths: TestPaths): SessionAccessScope;
+  transcriptReadScope(paths: TestPaths, id?: string): SessionTranscriptReadScope;
   transcriptScope(paths: TestPaths, id?: string): SessionTranscriptAccessScope;
   loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined;
   listSessionEntries(scope: Partial<Omit<SessionAccessScope, "sessionKey">>): SessionEntrySummary[];
@@ -65,7 +68,7 @@ type AccessorAdapter = {
     scope: SessionAccessScope,
     update: (entry: SessionEntry) => Partial<SessionEntry> | null,
   ): Promise<SessionEntry | null>;
-  loadTranscriptEvents(scope: SessionTranscriptAccessScope): Promise<TranscriptEvent[]>;
+  loadTranscriptEvents(scope: SessionTranscriptReadScope): Promise<TranscriptEvent[]>;
   appendTranscriptEvent(scope: SessionTranscriptAccessScope, event: TranscriptEvent): Promise<void>;
   appendTranscriptMessage<TMessage>(
     scope: SessionTranscriptWriteScope,
@@ -97,6 +100,11 @@ const fileBackedAdapter: AccessorAdapter = {
     sessionKey: "agent:main:main",
     storePath: paths.storePath,
   }),
+  transcriptReadScope: (paths, id = "session-1") => ({
+    sessionFile: paths.transcriptPath,
+    sessionId: id,
+    storePath: paths.storePath,
+  }),
   loadSessionEntry,
   listSessionEntries,
   readSessionUpdatedAt,
@@ -123,6 +131,12 @@ const sqliteAdapter: AccessorAdapter = {
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
     sessionId: id,
     sessionKey: "agent:main:main",
+    storePath: paths.sqlitePath,
+  }),
+  transcriptReadScope: (paths, id = "session-1") => ({
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
+    sessionId: id,
     storePath: paths.sqlitePath,
   }),
   loadSessionEntry: loadSqliteSessionEntry,
@@ -226,6 +240,7 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
 
     it("conforms for raw transcript event load and append", async () => {
       const scope = adapter.transcriptScope(paths);
+      const readScope = adapter.transcriptReadScope(paths);
       const event = {
         id: "event-1",
         message: { role: "user", content: "hello" },
@@ -236,10 +251,25 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       await adapter.appendTranscriptEvent(scope, { type: "session", sessionId: "session-1" });
       await adapter.appendTranscriptEvent(scope, event);
 
-      await expect(adapter.loadTranscriptEvents(scope)).resolves.toEqual([
+      await expect(adapter.loadTranscriptEvents(readScope)).resolves.toEqual([
         { type: "session", sessionId: "session-1" },
         event,
       ]);
+    });
+
+    it("loads raw SQLite transcript events synchronously through a read scope", async () => {
+      const scope = sqliteAdapter.transcriptScope(paths);
+      const readScope = sqliteAdapter.transcriptReadScope(paths);
+      const event = {
+        id: "event-1",
+        message: { role: "user", content: "hello" },
+        parentId: null,
+        type: "message",
+      };
+
+      await sqliteAdapter.appendTranscriptEvent(scope, event);
+
+      expect(loadSqliteTranscriptEventsSync(readScope)).toEqual([event]);
     });
 
     it("conforms for transcript message append, idempotency, and update publication", async () => {

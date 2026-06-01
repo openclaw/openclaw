@@ -25,6 +25,7 @@ import type {
   SessionEntrySummary,
   SessionEntryUpdateOptions,
   SessionTranscriptAccessScope,
+  SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
@@ -49,7 +50,18 @@ type ResolvedSqliteScope = {
   sessionKey: string;
 };
 
+type ResolvedSqliteReadScope = {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  path?: string;
+  sessionKey?: string;
+};
+
 type ResolvedTranscriptScope = ResolvedSqliteScope & {
+  sessionId: string;
+};
+
+type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
 
@@ -174,9 +186,16 @@ export async function updateSqliteSessionEntry(
 
 /** Loads raw transcript events from the additive SQLite transcript store. */
 export async function loadSqliteTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
+  scope: SessionTranscriptReadScope,
 ): Promise<TranscriptEvent[]> {
-  const resolved = resolveSqliteTranscriptScope(scope);
+  return loadSqliteTranscriptEventsSync(scope);
+}
+
+/** Loads raw transcript events synchronously from the additive SQLite transcript store. */
+export function loadSqliteTranscriptEventsSync(
+  scope: SessionTranscriptReadScope,
+): TranscriptEvent[] {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
@@ -287,6 +306,26 @@ function resolveSqliteScope(
   };
 }
 
+function resolveSqliteReadScope(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionKey" | "storePath">,
+): ResolvedSqliteReadScope {
+  const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
+  const agentId = scope.agentId
+    ? normalizeAgentId(scope.agentId)
+    : sessionKey
+      ? resolveAgentIdFromSessionKey(sessionKey)
+      : undefined;
+  if (!agentId) {
+    throw new Error("Cannot resolve SQLite transcript read scope without an agent id");
+  }
+  return {
+    agentId,
+    ...(scope.env ? { env: scope.env } : {}),
+    ...(scope.storePath ? { path: scope.storePath } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+  };
+}
+
 function resolveSqliteTranscriptScope(
   scope: Pick<
     SessionTranscriptWriteScope,
@@ -304,8 +343,20 @@ function resolveSqliteTranscriptScope(
   };
 }
 
+function resolveSqliteTranscriptReadScope(
+  scope: Pick<
+    SessionTranscriptReadScope,
+    "agentId" | "env" | "sessionId" | "sessionKey" | "storePath"
+  >,
+): ResolvedTranscriptReadScope {
+  return {
+    ...resolveSqliteReadScope(scope),
+    sessionId: scope.sessionId,
+  };
+}
+
 function toDatabaseOptions(
-  scope: Pick<ResolvedSqliteScope, "agentId" | "env" | "path">,
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
 ): OpenClawAgentDatabaseOptions {
   return {
     agentId: scope.agentId,
