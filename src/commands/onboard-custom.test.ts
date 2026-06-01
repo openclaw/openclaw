@@ -56,6 +56,7 @@ function stubFetchSequence(
     fetchMock.mockResolvedValueOnce({
       ok: response.ok,
       status: response.status,
+      headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
       json: async () => ({}),
     });
   }
@@ -179,6 +180,44 @@ describe("promptCustomApiConfig", () => {
 
     expect(prompter.text).toHaveBeenCalledTimes(6);
     expect(prompter.select).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects successful-looking HTML verification responses with a base URL hint", async () => {
+    const prompter = createTestPrompter({
+      text: [
+        "https://proxy.example.com",
+        "test-key",
+        "bad-model",
+        "https://proxy.example.com/v1",
+        "test-key",
+        "custom",
+        "",
+      ],
+      select: ["plaintext", "openai", "baseUrl", "plaintext"],
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+        text: async () => "<html>not the API</html>",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({}),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runPromptCustomApi(prompter);
+
+    expect(prompter.progress.mock.results[0]?.value.stop).toHaveBeenCalledWith(
+      expect.stringContaining("usually need a /v1 path prefix"),
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example.com/chat/completions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://proxy.example.com/v1/chat/completions");
   });
 
   it("detects openai compatibility when unknown", async () => {

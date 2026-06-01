@@ -94,6 +94,18 @@ type VerificationResult = {
   error?: unknown;
 };
 
+function isJsonVerificationResponse(res: Response): boolean {
+  const contentType =
+    typeof res.headers?.get === "function" ? (res.headers.get("content-type") ?? "") : "";
+  if (!contentType.trim()) {
+    return true;
+  }
+  const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    mediaType === "application/json" || (mediaType !== undefined && mediaType.endsWith("+json"))
+  );
+}
+
 async function requestVerification(params: {
   endpoint: string;
   headers: Record<string, string>;
@@ -112,6 +124,13 @@ async function requestVerification(params: {
       },
       VERIFY_TIMEOUT_MS,
     );
+    if (res.ok && !isJsonVerificationResponse(res)) {
+      const contentType = res.headers.get("content-type") || "missing content-type";
+      return {
+        ok: false,
+        error: `Verification returned ${contentType} instead of JSON. Check the provider base URL; OpenAI-compatible endpoints usually need a /v1 path prefix.`,
+      };
+    }
     return { ok: res.ok, status: res.status };
   } catch (error) {
     return { ok: false, error };
@@ -323,15 +342,15 @@ export async function promptCustomApiConfig(params: {
       verifySpinner.stop(t("wizard.customProvider.verificationSuccessful"));
       break;
     }
-    if (result.status !== undefined) {
-      verifySpinner.stop(
-        t("wizard.customProvider.verificationFailedStatus", { status: result.status }),
-      );
-    } else {
+    if (result.error !== undefined) {
       verifySpinner.stop(
         t("wizard.customProvider.verificationFailedError", {
           error: formatVerificationError(result.error),
         }),
+      );
+    } else {
+      verifySpinner.stop(
+        t("wizard.customProvider.verificationFailedStatus", { status: result.status }),
       );
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
