@@ -47,6 +47,8 @@ export function resolveApprovalCommandAuthorization(params: {
   return {
     authorized: resolved.authorized,
     reason: resolved.reason,
+    // Same-chat fallback allows the action but stays non-explicit so callers do not treat it as
+    // configured approver proof.
     explicit: resolved.authorized
       ? !implicitSameChatAuthorization && availability?.kind !== "disabled"
       : true,
