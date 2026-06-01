@@ -710,7 +710,12 @@ test("sessions.compact scopes selected global truncation to the requested agent"
   await fs.writeFile(
     workStorePath,
     JSON.stringify(
-      { global: sessionStoreEntry("sess-work-global", { sessionFile: workTranscript }) },
+      {
+        global: sessionStoreEntry("sess-work-global", {
+          authProfileOverride: "github-copilot:work",
+          sessionFile: workTranscript,
+        }),
+      },
       null,
       2,
     ),
@@ -799,7 +804,12 @@ test("sessions.compact passes the selected global agent into embedded compaction
   await fs.writeFile(
     workStorePath,
     JSON.stringify(
-      { global: sessionStoreEntry("sess-work-global", { sessionFile: workTranscript }) },
+      {
+        global: sessionStoreEntry("sess-work-global", {
+          authProfileOverride: "github-copilot:work",
+          sessionFile: workTranscript,
+        }),
+      },
       null,
       2,
     ),
@@ -851,6 +861,7 @@ test("sessions.compact passes the selected global agent into embedded compaction
     sessionId: "sess-work-global",
     sessionKey: "global",
     agentId: "work",
+    authProfileId: "github-copilot:work",
   });
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;

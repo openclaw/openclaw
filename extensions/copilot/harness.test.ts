@@ -842,6 +842,45 @@ describe("createCopilotAgentHarness", () => {
       expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-sqlite");
     });
 
+    it("resumes shipped schema v1 plugin-state bindings for attempts", async () => {
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-current",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const firstHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await firstHarness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      const stored = sessionStore.entries.get("oc-sess-reuse");
+      if (!stored) {
+        throw new Error("expected persisted binding");
+      }
+      sessionStore.entries.set("oc-sess-reuse", {
+        schemaVersion: 1,
+        sdkSessionId: "sdk-sess-v1",
+        compatKey: stored.compatKey,
+        updatedAt: Date.now(),
+      } as never);
+      mocks.runCopilotAttempt.mockClear();
+      const secondHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await secondHarness.runAttempt(makeAttemptParams({ runId: "t2" }));
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[0]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-v1");
+    });
+
     it("starts a fresh SDK session when persisted binding lookup fails", async () => {
       const sessionStore = makeSessionStoreMock();
       sessionStore.store.lookup.mockImplementation(() => {

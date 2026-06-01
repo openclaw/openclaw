@@ -82,6 +82,15 @@ export type CopilotSessionBinding = {
   updatedAt: number;
 };
 
+type LegacyCopilotSessionBinding = {
+  schemaVersion: 1;
+  sdkSessionId: string;
+  compatKey: string;
+  updatedAt: number;
+};
+
+type CopilotAttemptSessionBinding = Pick<CopilotSessionBinding, "compatKey" | "sdkSessionId">;
+
 type CopilotSessionBindingStore = Pick<
   PluginStateSyncKeyedStore<CopilotSessionBinding>,
   "delete" | "lookup" | "register"
@@ -155,12 +164,36 @@ function normalizeBinding(
   };
 }
 
+function normalizeAttemptBinding(value: unknown): CopilotAttemptSessionBinding | undefined {
+  const current = normalizeBinding(value as CopilotSessionBinding | undefined);
+  if (current) {
+    return current;
+  }
+  const legacy = value as LegacyCopilotSessionBinding | undefined;
+  if (
+    !legacy ||
+    legacy.schemaVersion !== 1 ||
+    typeof legacy.sdkSessionId !== "string" ||
+    legacy.sdkSessionId.trim() === "" ||
+    typeof legacy.compatKey !== "string" ||
+    legacy.compatKey.trim() === "" ||
+    typeof legacy.updatedAt !== "number" ||
+    !Number.isFinite(legacy.updatedAt)
+  ) {
+    return undefined;
+  }
+  return {
+    sdkSessionId: legacy.sdkSessionId.trim(),
+    compatKey: legacy.compatKey,
+  };
+}
+
 function lookupStoredBinding(
   store: CopilotSessionBindingStore | undefined,
   key: string,
-): CopilotSessionBinding | undefined {
+): CopilotAttemptSessionBinding | undefined {
   try {
-    return normalizeBinding(store?.lookup(key));
+    return normalizeAttemptBinding(store?.lookup(key));
   } catch {
     try {
       store?.delete(key);
