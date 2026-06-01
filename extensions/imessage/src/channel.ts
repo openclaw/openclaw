@@ -100,6 +100,7 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
+        replyToIdSource: ctx.replyToIdSource ?? undefined,
         replyRequesterSender: ctx.requesterSenderId ?? undefined,
       });
       return toIMessageMessageSendResult(result, "text", ctx.replyToId);
@@ -116,6 +117,7 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
+        replyToIdSource: ctx.replyToIdSource ?? undefined,
         replyRequesterSender: ctx.requesterSenderId ?? undefined,
       });
       return toIMessageMessageSendResult(result, "media", ctx.replyToId);
@@ -346,7 +348,16 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       },
       attachedResults: {
         channel: "imessage",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId, requesterSenderId }) =>
+        sendText: async ({
+          cfg,
+          to,
+          text,
+          accountId,
+          deps,
+          replyToId,
+          replyToIdSource,
+          requesterSenderId,
+        }) =>
           await (
             await loadIMessageChannelRuntime()
           ).sendIMessageOutbound({
@@ -356,6 +367,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,
+            replyToIdSource: replyToIdSource ?? undefined,
             replyRequesterSender: requesterSenderId ?? undefined,
           }),
         sendMedia: async ({
@@ -367,6 +379,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
           accountId,
           deps,
           replyToId,
+          replyToIdSource,
           requesterSenderId,
         }) =>
           await (
@@ -380,6 +393,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             accountId: accountId ?? undefined,
             deps,
             replyToId: replyToId ?? undefined,
+            replyToIdSource: replyToIdSource ?? undefined,
             replyRequesterSender: requesterSenderId ?? undefined,
           }),
       },

@@ -111,6 +111,7 @@ describe("deliverReplies", () => {
           client,
           accountId: "acct-3",
           replyToId: "reply-3",
+          replyToIdSource: "implicit",
           replyRequesterSender: "+15551230000",
         },
       ],
@@ -194,6 +195,7 @@ describe("deliverReplies", () => {
           client,
           accountId: "acct-4",
           replyToId: "reply-4",
+          replyToIdSource: "implicit",
           replyRequesterSender: "+15551230000",
         },
       ],
@@ -234,7 +236,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("injects trusted requester sender into durable send overrides", async () => {
+  it("does not infer an implicit reply source from durable send defaults", async () => {
     const send = createIMessageEchoCachingSend({
       client,
       accountId: "acct-7",
@@ -272,6 +274,7 @@ describe("deliverReplies", () => {
     await send("chat_id:80", "durable reply", {
       config: IMESSAGE_TEST_CFG,
       replyToId: "reply-8",
+      replyToIdSource: "implicit",
       replyRequesterSender: "+15550009999",
     });
 
@@ -282,6 +285,7 @@ describe("deliverReplies", () => {
         {
           config: IMESSAGE_TEST_CFG,
           replyToId: "reply-8",
+          replyToIdSource: "implicit",
           replyRequesterSender: "+15550009999",
           client,
         },

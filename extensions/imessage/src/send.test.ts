@@ -231,6 +231,7 @@ describe("sendMessageIMessage receipts", () => {
       },
       client,
       replyToId: "inbound-1",
+      replyToIdSource: "implicit",
       replyRequesterSender: "+15551230000",
     });
 
@@ -256,6 +257,7 @@ describe("sendMessageIMessage receipts", () => {
         },
         client,
         replyToId: "inbound-1",
+        replyToIdSource: "implicit",
       }),
     ).rejects.toThrow(
       "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
@@ -278,6 +280,7 @@ describe("sendMessageIMessage receipts", () => {
         },
         client,
         replyToId: "inbound-1",
+        replyToIdSource: "implicit",
         replyRequesterSender: "+15550009999",
       }),
     ).rejects.toThrow(
@@ -301,6 +304,7 @@ describe("sendMessageIMessage receipts", () => {
         },
         client,
         replyToId: "inbound-1",
+        replyToIdSource: "implicit",
         replyRequesterSender: "   \t ",
       }),
     ).rejects.toThrow(
@@ -367,6 +371,54 @@ describe("sendMessageIMessage receipts", () => {
         },
         client,
         replyToId: "[]",
+        replyToIdSource: "implicit",
+        replyRequesterSender: "+15551230000",
+      }),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
+  it("blocks group reply targets when replyToId is explicit", async () => {
+    const client = createClient({ guid: "p:0/group-explicit-reply" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15551230000"],
+            },
+          },
+        },
+        client,
+        replyToId: "inbound-1",
+        replyToIdSource: "explicit",
+        replyRequesterSender: "+15551230000",
+      }),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
+  it("blocks group reply targets when replyToId source is missing", async () => {
+    const client = createClient({ guid: "p:0/group-missing-reply-source" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15551230000"],
+            },
+          },
+        },
+        client,
+        replyToId: "inbound-1",
         replyRequesterSender: "+15551230000",
       }),
     ).rejects.toThrow(
@@ -394,6 +446,65 @@ describe("sendMessageIMessage receipts", () => {
     expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({ chat_identifier: "iMessage;-;+15551230000" }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps malformed email-like chat identifiers on the group policy", async () => {
+    const client = createClient({ guid: "p:0/malformed-email-like-chat" });
+
+    await expect(
+      sendMessageIMessage("chat_identifier:team@", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              groupPolicy: "disabled",
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: group targets are disabled");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
+  it("keeps separator-only phone-like chat identifiers on the group policy", async () => {
+    const client = createClient({ guid: "p:0/malformed-phone-like-chat" });
+
+    await expect(
+      sendMessageIMessage("chat_identifier:+1 () . -", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              groupPolicy: "disabled",
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: group targets are disabled");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
+  it("treats raw direct chat identifiers as DM allowlist targets", async () => {
+    const client = createClient({ guid: "p:0/raw-direct-chat" });
+
+    await sendMessageIMessage("chat_identifier:+15551230000", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+1 (555) 123-0000"],
+            groupPolicy: "disabled",
+          },
+        },
+      },
+      client,
+    });
+
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_identifier: "+15551230000" }),
       expect.any(Object),
     );
   });
@@ -555,6 +666,65 @@ describe("sendMessageIMessage receipts", () => {
       expect.objectContaining({ chat_id: 42 }),
       expect.any(Object),
     );
+  });
+
+  it("blocks direct DM handles when dmPolicy is disabled", async () => {
+    const client = createClient({ guid: "p:0/disabled-dm" });
+
+    await expect(
+      sendMessageIMessage("+15551230000", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "disabled",
+              allowFrom: ["+1 (555) 123-0000"],
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: dm targets are disabled");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
+  it("blocks raw chat identifier DM targets when dmPolicy is disabled", async () => {
+    const client = createClient({ guid: "p:0/disabled-raw-chat-identifier" });
+
+    await expect(
+      sendMessageIMessage("chat_identifier:+15551230000", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "disabled",
+              allowFrom: ["+1 (555) 123-0000"],
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: dm targets are disabled");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
+  it("blocks explicit DM replies when dmPolicy is disabled", async () => {
+    const client = createClient({ guid: "p:0/disabled-explicit-dm-reply" });
+
+    await expect(
+      sendMessageIMessage("+15551230000", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "disabled",
+            },
+          },
+        },
+        client,
+        replyToId: "reply-1",
+        replyToIdSource: "explicit",
+        replyRequesterSender: "+15551230000",
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: dm targets are disabled");
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
   it("allows outbound handles listed by allowlist policy", async () => {

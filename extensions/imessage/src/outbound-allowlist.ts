@@ -22,13 +22,32 @@ function normalizeIMessageOutboundAllowValue(raw: string | number | null | undef
   return normalizeIMessageHandle(value);
 }
 
+function isIMessageDirectEmailHandle(raw: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(raw);
+}
+
+function isIMessageDirectPhoneHandle(raw: string): boolean {
+  if (!/^\+[0-9][0-9\s().-]*$/u.test(raw)) {
+    return false;
+  }
+  const digitCount = raw.replace(/\D/g, "").length;
+  return digitCount >= 7 && digitCount <= 15;
+}
+
 function resolveIMessageDirectChatIdentifier(target: IMessageTarget): string | null {
   if (target.kind !== "chat_identifier") {
     return null;
   }
-  const match = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(target.chatIdentifier.trim());
+  const raw = target.chatIdentifier.trim();
+  const match = /^(?:iMessage|SMS|any);-;(.+)$/iu.exec(raw);
   const handle = match?.[1]?.trim();
-  return handle || null;
+  if (handle) {
+    return handle;
+  }
+  if (isIMessageDirectEmailHandle(raw) || isIMessageDirectPhoneHandle(raw)) {
+    return raw;
+  }
+  return null;
 }
 
 function resolveIMessageDirectChatGuid(target: IMessageTarget): string | null {
@@ -207,6 +226,9 @@ export async function assertIMessageOutboundAllowed(params: {
       );
     }
     return;
+  }
+  if (account.config.dmPolicy === "disabled") {
+    throw new Error("iMessage outbound blocked: dm targets are disabled");
   }
   if (account.config.dmPolicy !== "allowlist") {
     return;

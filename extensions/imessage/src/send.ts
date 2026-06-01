@@ -47,6 +47,7 @@ type IMessageSendOpts = {
   region?: string;
   accountId?: string;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   /** Trusted inbound sender for server-injected reply delivery; never source this from model params. */
   replyRequesterSender?: string | null;
   mediaUrl?: string;
@@ -856,7 +857,10 @@ export async function sendMessageIMessage(
     cfg,
     account,
     target,
-    replyRequesterSender: resolvedReplyToId ? opts.replyRequesterSender : undefined,
+    replyRequesterSender:
+      resolvedReplyToId && opts.replyToIdSource === "implicit"
+        ? opts.replyRequesterSender
+        : undefined,
   });
   const service =
     opts.service ??
