@@ -1117,6 +1117,15 @@ function collectMessagingToolDeliveredMediaUrlsForTarget(
     const targetRecord = target as Record<string, unknown>;
     const targetTo = typeof targetRecord.to === "string" ? targetRecord.to.trim() : "";
     if (!targetTo) {
+      if (
+        !deliveryTarget.to ||
+        !sourceDeliveryTargetsMatch({ ...targetRecord, to: deliveryTarget.to }, deliveryTarget)
+      ) {
+        for (const url of targetMediaUrls) {
+          targetedUrls.add(url);
+        }
+        continue;
+      }
       for (const url of targetMediaUrls) {
         urls.add(url);
       }
