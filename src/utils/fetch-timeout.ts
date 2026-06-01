@@ -6,9 +6,13 @@ const LOG_URL_MAX_CHARS = 500;
 const URL_SECRET_SUFFIX_PATTERN = /[?#]/;
 
 type TimeoutAbortSignalParams = {
+  /** Timeout in milliseconds; omitted/zero leaves timeout scheduling disabled. */
   timeoutMs?: number;
+  /** Parent cancellation source to relay into the returned signal. */
   signal?: AbortSignal;
+  /** Optional operation label included in redacted timeout logs. */
   operation?: string;
+  /** Optional request URL; logs strip credentials, query strings, and fragments. */
   url?: string;
 };
 
@@ -32,6 +36,8 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
   }
   try {
     const parsed = new URL(trimmed);
+    // Timeout logs are often copied into bug reports; keep origin/path context
+    // while dropping credential-bearing URL components.
     parsed.username = "";
     parsed.password = "";
     parsed.search = "";
@@ -39,6 +45,8 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
     const value = parsed.toString();
     return value.length > LOG_URL_MAX_CHARS ? `${value.slice(0, LOG_URL_MAX_CHARS)}...` : value;
   } catch {
+    // Relative or malformed URLs still get logged, but only before query/hash
+    // and after control-character cleanup to avoid leaking secrets or corrupting logs.
     const withoutQueryOrHash = trimmed.split(URL_SECRET_SUFFIX_PATTERN, 1)[0] ?? "";
     const cleaned = withoutQueryOrHash
       .replace(/[\r\n\u2028\u2029]+/g, " ")
@@ -94,8 +102,11 @@ function abortDueToTimeout(
 }
 
 export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
+  /** Signal to pass to fetch/stream consumers. */
   signal?: AbortSignal;
+  /** Clears timers and detaches parent abort listeners. */
   cleanup: () => void;
+  /** Restarts the timeout window after observable stream/request progress. */
   refresh: () => void;
 } {
   const { timeoutMs, signal } = params;
@@ -125,6 +136,8 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   const onAbort = bindAbortRelay(controller);
   if (signal) {
     if (signal.aborted) {
+      // Preserve parent-abort semantics: caller cancellations must not look like
+      // TimeoutError or produce timeout logs.
       controller.abort();
     } else {
       signal.addEventListener("abort", onAbort, { once: true });
@@ -137,6 +150,8 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       if (!active || controller.signal.aborted) {
         return;
       }
+      // Long-lived streams call refresh on progress so only idle periods trip
+      // the timeout; completed/aborted helpers become inert.
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
