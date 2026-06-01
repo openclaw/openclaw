@@ -55,10 +55,12 @@ function normalizeChannelId(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+/** True when a channel's default placement can spawn a child native thread automatically. */
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
   return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
+/** True when `/thread here` requires an existing native thread context for this channel. */
 export function requiresNativeThreadContextForThreadHere(channel: string): boolean {
   return resolveDefaultTopLevelPlacement(channel) === "child";
 }
@@ -277,6 +279,7 @@ function resolveThreadBindingChannelScope(params: {
   });
 }
 
+/** Formats the disabled-bindings error shown before any spawn-family-specific policy check. */
 export function formatThreadBindingDisabledError(params: {
   channel: string;
   accountId: string;
@@ -285,6 +288,7 @@ export function formatThreadBindingDisabledError(params: {
   return `Thread bindings are disabled for ${params.channel} (set channels.${params.channel}.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).`;
 }
 
+/** Formats the disabled-spawn error after bindings are enabled but session spawn is blocked. */
 export function formatThreadBindingSpawnDisabledError(params: {
   channel: string;
   accountId: string;

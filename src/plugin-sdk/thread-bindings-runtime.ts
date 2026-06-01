@@ -1,7 +1,3 @@
-// Narrow thread-binding lifecycle helpers for extensions that need binding
-// expiry and session-binding record types without loading the full
-// conversation-runtime surface.
-
 export { resolveThreadBindingConversationIdFromBindingId } from "../channels/thread-binding-id.js";
 export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
 export {
