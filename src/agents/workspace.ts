@@ -833,26 +833,34 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
   const resolvedDir = resolveUserPath(dir);
 
-  // Resolve glob patterns into concrete file paths
-  const resolvedPaths = new Set<string>();
+  // Resolve glob patterns into concrete file paths. Track provenance: paths
+  // discovered by expanding a glob must be recognized bootstrap basenames
+  // (a broad glob could otherwise sweep in unrelated files), but an
+  // explicitly-listed literal path is operator-intentional and may name any
+  // workspace file — e.g. `memory/ACTIVE_TASKS.md` for live operational
+  // context — so it bypasses the basename allowlist.
+  const resolvedPaths = new Map<string, { fromGlob: boolean }>();
   for (const pattern of extraPatterns) {
     if (hasGlobPattern(pattern)) {
       const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
       for (const match of matches) {
-        resolvedPaths.add(match);
+        if (!resolvedPaths.has(match)) {
+          resolvedPaths.set(match, { fromGlob: true });
+        }
       }
     } else {
-      resolvedPaths.add(pattern);
+      resolvedPaths.set(pattern, { fromGlob: false });
     }
   }
 
   const files: WorkspaceBootstrapFile[] = [];
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
-  for (const relPath of resolvedPaths) {
+  for (const [relPath, { fromGlob }] of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
+    // Glob-discovered paths must be a recognized bootstrap basename; explicit
+    // literal paths are allowed as-is (see provenance note above).
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+    if (fromGlob && !VALID_BOOTSTRAP_NAMES.has(baseName)) {
       diagnostics.push({
         path: filePath,
         reason: "invalid-bootstrap-filename",
