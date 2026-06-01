@@ -1245,6 +1245,71 @@ describe("createCopilotAgentHarness", () => {
       });
     });
 
+    it("disconnects the resumed SDK session when compact aborts after resume", async () => {
+      const abortController = new AbortController();
+      const compact = vi.fn(async () => ({
+        success: true,
+        tokensRemoved: 123,
+        messagesRemoved: 4,
+      }));
+      const disconnect = vi.fn(async () => undefined);
+      const resumeSession = vi.fn(async () => {
+        abortController.abort(new Error("stop compact"));
+        return {
+          disconnect,
+          rpc: { history: { compact } },
+        };
+      });
+      const pool = makePoolMock();
+      pool.acquire = vi.fn(async () => ({
+        key: {} as any,
+        client: { deleteSession: vi.fn(), resumeSession } as any,
+      }));
+      const release = vi.fn(async () => undefined);
+      pool.release = release;
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-abort",
+          pooledClient: {
+            key: {} as any,
+            client: { deleteSession: vi.fn(), resumeSession } as any,
+          },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({ pool });
+
+      await harness.runAttempt(
+        makeCompactParams({
+          agentId: "main",
+          sessionId: "oc-sess-abort",
+          sessionKey: "agent:main:main",
+        }),
+      );
+      const result = await harness.compact?.({
+        ...makeCompactParams({ sessionId: "oc-sess-abort" }),
+        abortSignal: abortController.signal,
+        model: "gpt-4.1",
+        sessionKey: "agent:main:main",
+        sessionId: "oc-sess-abort",
+      });
+
+      expect(resumeSession).toHaveBeenCalledTimes(1);
+      expect(compact).not.toHaveBeenCalled();
+      expect(disconnect).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        ok: false,
+        compacted: false,
+        reason: "copilot-sdk-history-compact-failed",
+        failure: {
+          reason: "copilot-sdk-history-compact-failed",
+          rawError: "stop compact",
+        },
+      });
+    });
+
     it("requires matching token auth before compacting a tracked token-auth SDK session", async () => {
       const compact = vi.fn(async () => ({
         success: true,
