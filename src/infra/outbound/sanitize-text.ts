@@ -47,6 +47,8 @@ function stripDelimitedRuntimeBlock(text: string, begin: string, end: string): s
     `${standaloneLinePattern(begin)}[\\s\\S]*?${standaloneLinePattern(end)}`,
     "g",
   );
+  // If the closing delimiter is missing, drop the rest rather than leaking
+  // internal runtime context to user-visible outbound text.
   const unmatchedBeginRe = new RegExp(`${standaloneLinePattern(begin)}[\\s\\S]*$`, "g");
   return stripStandaloneMarkerLine(
     text.replace(closedBlockRe, "").replace(unmatchedBeginRe, ""),
