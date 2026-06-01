@@ -76,8 +76,9 @@ function resolveTelegramActiveRunIngressId(
   if (typeof updateId === "number" && Number.isSafeInteger(updateId)) {
     return `update:${updateId}`;
   }
-  if (typeof message?.message_id === "number" && Number.isSafeInteger(message.message_id)) {
-    return `message:${message.message_id}`;
+  const messageId = message?.message_id;
+  if (typeof messageId === "number" && Number.isSafeInteger(messageId)) {
+    return `message:${messageId}`;
   }
   return `time:${Date.now()}`;
 }

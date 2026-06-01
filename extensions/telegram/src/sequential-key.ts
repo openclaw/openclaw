@@ -1,4 +1,3 @@
-import type { Message, UserFromGetMe } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   listChatCommands,
@@ -24,22 +23,49 @@ const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
   "whoami",
 ]);
 
+type TelegramSequentialMessage = {
+  caption?: string;
+  chat?: { id?: number; is_forum?: boolean; type?: string };
+  is_topic_message?: boolean;
+  message_id?: number;
+  message_thread_id?: number;
+  text?: string;
+};
+
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
-  me?: UserFromGetMe;
-  message?: Message;
-  channelPost?: Message;
-  editedMessage?: Message;
-  editedChannelPost?: Message;
+  me?: { username?: string } | null;
+  message?: TelegramSequentialMessage;
+  channelPost?: TelegramSequentialMessage;
+  editedMessage?: TelegramSequentialMessage;
+  editedChannelPost?: TelegramSequentialMessage;
   update?: {
-    message?: Message;
-    edited_message?: Message;
-    channel_post?: Message;
-    edited_channel_post?: Message;
-    callback_query?: { message?: Message; data?: string };
+    message?: TelegramSequentialMessage;
+    edited_message?: TelegramSequentialMessage;
+    channel_post?: TelegramSequentialMessage;
+    edited_channel_post?: TelegramSequentialMessage;
+    callback_query?: { message?: TelegramSequentialMessage; data?: string };
     message_reaction?: { chat?: { id?: number } };
+    update_id?: unknown;
   };
 };
+type TelegramForumChatType = NonNullable<
+  Parameters<typeof resolveTelegramMessageForumFlagHint>[0]["chatType"]
+>;
+
+function normalizeTelegramForumChatType(
+  chatType: string | undefined,
+): TelegramForumChatType | undefined {
+  switch (chatType) {
+    case "channel":
+    case "group":
+    case "private":
+    case "supergroup":
+      return chatType;
+    default:
+      return undefined;
+  }
+}
 
 export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
@@ -141,7 +167,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;
   const isForum = resolveTelegramMessageForumFlagHint({
-    chatType: msg?.chat?.type,
+    chatType: normalizeTelegramForumChatType(msg?.chat?.type),
     isForum: msg?.chat?.is_forum,
     isTopicMessage: msg?.is_topic_message,
   });
