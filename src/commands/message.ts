@@ -100,7 +100,7 @@ export async function messageCommand(
       params: opts,
       deps: outboundDeps,
       agentId: resolveDefaultAgentId(cfg),
-      senderIsOwner: opts.senderIsOwner !== false,
+      senderIsOwner: false,
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
