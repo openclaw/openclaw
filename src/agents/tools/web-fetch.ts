@@ -31,6 +31,7 @@ import {
   extractBasicHtmlContent,
   htmlToMarkdown,
   markdownToText,
+  normalizeWhitespace,
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
@@ -196,6 +197,15 @@ function formatWebFetchErrorDetail(params: {
   }
   const truncated = truncateText(text.trim(), maxChars);
   return truncated.text;
+}
+
+function normalizeComparableWebFetchText(value: string | undefined): string {
+  return normalizeWhitespace(value ?? "").toLowerCase();
+}
+
+function hasOnlyReadableTitle(params: { text: string; title?: string }): boolean {
+  const title = normalizeComparableWebFetchText(params.title);
+  return title.length > 0 && normalizeComparableWebFetchText(params.text) === title;
 }
 
 function redactUrlForDebugLog(rawUrl: string): string {
@@ -607,9 +617,25 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           config: params.config,
         });
         if (readable?.text) {
-          text = readable.text;
-          title = readable.title;
-          extractor = readable.extractor;
+          const basic = hasOnlyReadableTitle(readable)
+            ? await extractBasicHtmlContent({
+                html: body,
+                extractMode: params.extractMode,
+              })
+            : null;
+          if (
+            basic?.text &&
+            normalizeComparableWebFetchText(basic.text) !==
+              normalizeComparableWebFetchText(readable.text)
+          ) {
+            text = basic.text;
+            title = basic.title ?? readable.title;
+            extractor = "raw-html";
+          } else {
+            text = readable.text;
+            title = readable.title;
+            extractor = readable.extractor;
+          }
         } else {
           let payload: Record<string, unknown> | null = null;
           try {
