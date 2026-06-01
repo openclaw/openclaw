@@ -54,6 +54,10 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
+const UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS = [
+  "runTimeoutSeconds",
+  "timeoutSeconds",
+] as const;
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
@@ -277,6 +281,14 @@ export function createSessionsSpawnTool(
       if (unsupportedParam) {
         throw new ToolInputError(
           `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
+        );
+      }
+      const unsupportedTimeoutParam = UNSUPPORTED_SESSIONS_SPAWN_TIMEOUT_PARAM_KEYS.find((key) =>
+        Object.hasOwn(params, key),
+      );
+      if (unsupportedTimeoutParam) {
+        throw new ToolInputError(
+          `sessions_spawn does not support per-call "${unsupportedTimeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
         );
       }
       const task = readStringParam(params, "task", { required: true });

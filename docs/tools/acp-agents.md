@@ -549,12 +549,6 @@ Two ways to start an ACP session:
   `streamLogPath` pointing to a session-scoped JSONL log
   (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
 </ParamField>
-<ParamField path="runTimeoutSeconds" type="number">
-  Aborts the ACP child turn after N seconds. `0` keeps the turn on the
-  gateway's no-timeout path. The same value is applied to the Gateway
-  run and ACP runtime so stalled/quota-exhausted harnesses do not
-  occupy the parent agent lane indefinitely.
-</ParamField>
 <ParamField path="model" type="string">
   Explicit model override for the ACP child session. Codex ACP spawns
   normalize OpenAI refs such as `openai/gpt-5.4` to Codex ACP startup

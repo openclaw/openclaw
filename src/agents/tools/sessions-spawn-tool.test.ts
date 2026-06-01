@@ -464,21 +464,25 @@ describe("sessions_spawn tool", () => {
     expect(result.details).not.toHaveProperty("role");
   });
 
-  it("ignores stale timeout override arguments", async () => {
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-    });
+  it.each(["runTimeoutSeconds", "timeoutSeconds"] as const)(
+    "rejects stale timeout override argument %s",
+    async (timeoutParam) => {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+      });
 
-    await tool.execute("call-stale-timeout-override", {
-      task: "do thing",
-      runTimeoutSeconds: 2,
-      timeoutSeconds: 2,
-    });
+      await expect(
+        tool.execute("call-stale-timeout-override", {
+          task: "do thing",
+          [timeoutParam]: 2,
+        }),
+      ).rejects.toThrow(
+        `sessions_spawn does not support per-call "${timeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
+      );
 
-    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
-    expect(spawnArgs.task).toBe("do thing");
-    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
-  });
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
