@@ -210,6 +210,46 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
   });
 
+  it("clears pending final delivery when abort fires after successful final dispatch", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    sessionStoreMocks.currentEntry = {
+      sessionKey: "agent:test:session",
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "durable reply",
+      pendingFinalDeliveryCreatedAt: 1,
+      pendingFinalDeliveryLastAttemptAt: 2,
+      pendingFinalDeliveryAttemptCount: 3,
+      pendingFinalDeliveryLastError: "previous failure",
+      pendingFinalDeliveryContext: { source: "heartbeat" },
+    };
+    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+      existing: sessionStoreMocks.currentEntry,
+    });
+    const abortController = new AbortController();
+    mocks.routeReply.mockImplementation(async () => {
+      abortController.abort();
+      return { ok: true, messageId: "mock" };
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver: async () => ({ text: "durable reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+  });
+
   it("preserves pending final delivery when final dispatch fails", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     sessionStoreMocks.currentEntry = {
