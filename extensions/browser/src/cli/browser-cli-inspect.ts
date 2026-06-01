@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserNonNegativeIntegerValue,
   parseBrowserPositiveIntegerValue,
@@ -41,8 +42,8 @@ export function registerBrowserInspectCommands(
 ) {
   browser
     .command("screenshot")
-    .description("Capture a screenshot (MEDIA:<path>)")
-    .argument("[targetId]", "CDP target id (or unique prefix)")
+    .description("Capture a screenshot (prints the saved path)")
+    .argument("[targetId]", BROWSER_TAB_REFERENCE_HELP)
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
     .option("--element <selector>", "CSS selector for element screenshot")
@@ -73,7 +74,7 @@ export function registerBrowserInspectCommands(
           defaultRuntime.writeJson(result);
           return;
         }
-        defaultRuntime.log(`MEDIA:${shortenHomePath(result.path)}`);
+        defaultRuntime.log(shortenHomePath(result.path));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -84,7 +85,7 @@ export function registerBrowserInspectCommands(
     .command("snapshot")
     .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--limit <n>", "Max nodes (default: 500/800)")
     .option("--mode <efficient>", "Snapshot preset (efficient)")
     .option("--efficient", "Use the efficient snapshot preset", false)
@@ -161,7 +162,7 @@ export function registerBrowserInspectCommands(
           } else {
             defaultRuntime.log(shortenHomePath(opts.out));
             if (result.format === "ai" && result.imagePath) {
-              defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
+              defaultRuntime.log(shortenHomePath(result.imagePath));
             }
           }
           return;
@@ -175,7 +176,7 @@ export function registerBrowserInspectCommands(
         if (result.format === "ai") {
           defaultRuntime.log(result.snapshot);
           if (result.imagePath) {
-            defaultRuntime.log(`MEDIA:${shortenHomePath(result.imagePath)}`);
+            defaultRuntime.log(shortenHomePath(result.imagePath));
           }
           return;
         }

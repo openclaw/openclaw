@@ -1,7 +1,7 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -50,9 +50,8 @@ import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeConfigSnapshot,
 } from "../secrets/runtime-state.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -122,8 +121,9 @@ const loadGatewayModelCatalogModule = async () => {
 };
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
-  const { resetModelCatalogCacheForTest } = await loadGatewayModelCatalogModule();
-  await resetModelCatalogCacheForTest();
+  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+    await loadGatewayModelCatalogModule();
+  await resetModelCatalogCacheForTestLocal();
 }
 
 ensureOpenClawCliOnPath();
@@ -177,23 +177,12 @@ const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
 let cachedChannelRuntimePromise: Promise<PluginRuntime["channel"]> | null = null;
-let cachedStartupChannelRuntimePromise: Promise<ChannelRuntimeSurface> | null = null;
 
 function getChannelRuntime() {
   cachedChannelRuntimePromise ??= import("../plugins/runtime/runtime-channel.js").then(
     ({ createRuntimeChannel }) => createRuntimeChannel(),
   );
   return cachedChannelRuntimePromise;
-}
-
-function getStartupChannelRuntime() {
-  cachedStartupChannelRuntimePromise ??=
-    import("../plugins/runtime/channel-runtime-contexts.js").then(
-      ({ createChannelRuntimeContextRegistry }) => ({
-        runtimeContexts: createChannelRuntimeContextRegistry(),
-      }),
-    );
-  return cachedStartupChannelRuntimePromise;
 }
 
 async function closeMcpLoopbackServerOnDemand(): Promise<void> {
@@ -779,7 +768,8 @@ export async function startGatewayServer(
   const getResolvedAuth = () =>
     resolveGatewayAuth({
       authConfig:
-        getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth ?? getRuntimeConfig().gateway?.auth,
+        getActiveSecretsRuntimeConfigSnapshot()?.config.gateway?.auth ??
+        getRuntimeConfig().gateway?.auth,
       authOverride: opts.auth,
       env: process.env,
       tailscaleMode,
@@ -855,15 +845,14 @@ export async function startGatewayServer(
   const { createChannelManager } = await import("./server-channels.js");
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
-      const runtimeConfig = getRuntimeConfig();
+      const runtimeConfigLocal = getRuntimeConfig();
       return resolveGatewayPluginConfig({
-        config: runtimeConfig,
+        config: runtimeConfigLocal,
       });
     },
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
-    resolveStartupChannelRuntime: getStartupChannelRuntime,
     getPluginHttpRouteRegistry: () => pluginRegistry,
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
@@ -1004,9 +993,11 @@ export async function startGatewayServer(
   };
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
-  const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (opts) =>
+  const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (
+    optsResult,
+  ) =>
     refreshGatewayHealthSnapshot({
-      ...opts,
+      ...optsResult,
       getRuntimeSnapshot,
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
     });
@@ -1024,7 +1015,7 @@ export async function startGatewayServer(
       await gatewayLifetimeSidecar.stop();
     }
   };
-  const createCloseHandler = () => async (opts?: GatewayCloseOptions) => {
+  const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
@@ -1062,7 +1053,7 @@ export async function startGatewayServer(
       httpServer,
       httpServers,
       drainActiveSessionsForShutdown,
-    })(opts);
+    })(optsValue);
   };
   let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
@@ -1159,10 +1150,8 @@ export async function startGatewayServer(
 
     const { execApprovalManager, pluginApprovalManager, extraHandlers, coreGatewayHandlers } =
       await startupTrace.measure("gateway.handlers", async () => {
-        const [{ createGatewayAuxHandlers }, { coreGatewayHandlers }] = await Promise.all([
-          import("./server-aux-handlers.js"),
-          import("./server-methods.js"),
-        ]);
+        const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
+          await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
         return {
           ...createGatewayAuxHandlers({
             log,
@@ -1174,7 +1163,7 @@ export async function startGatewayServer(
             stopChannel,
             logChannels,
           }),
-          coreGatewayHandlers,
+          coreGatewayHandlers: coreGatewayHandlersLocal,
         };
       });
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
@@ -1338,7 +1327,7 @@ export async function startGatewayServer(
       const previousPluginServices = runtimeState.pluginServices;
       runtimeState.pluginServices = null;
       if (previousPluginServices) {
-        await previousPluginServices.stop().catch((err) => {
+        await previousPluginServices.stop().catch((err: unknown) => {
           log.warn(`plugin services stop failed during reload: ${String(err)}`);
         });
       }
@@ -1583,6 +1572,7 @@ export async function startGatewayServer(
             broadcast,
             tailscaleMode,
             resetOnExit: tailscaleConfig.resetOnExit ?? false,
+            serviceName: tailscaleConfig.serviceName,
             preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
             controlUiBasePath,
             logTailscale,
@@ -1716,7 +1706,7 @@ export async function startGatewayServer(
       sharedGatewaySessionGenerationState,
       clients,
     });
-    await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err) => {
+    await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
     if (!minimalTestGateway) {
@@ -1770,7 +1760,7 @@ export async function startGatewayServer(
   const close = createCloseHandler();
 
   return {
-    close: async (opts) => {
+    close: async (optsLocal) => {
       try {
         markClosePreludeStarted();
         await stopRegisteredGatewayLifetimeSidecars();
@@ -1778,12 +1768,12 @@ export async function startGatewayServer(
         // Run gateway_stop plugin hook before shutdown
         const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
         await runGlobalGatewayStopSafely({
-          event: { reason: opts?.reason ?? "gateway stopping" },
+          event: { reason: optsLocal?.reason ?? "gateway stopping" },
           ctx: { port },
           onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
         });
         await runClosePrelude();
-        await close(opts);
+        await close(optsLocal);
       } finally {
         clearFallbackGatewayContextForServer();
       }

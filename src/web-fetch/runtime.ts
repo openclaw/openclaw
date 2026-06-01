@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import type {
@@ -11,7 +12,6 @@ import {
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -198,11 +198,11 @@ export function resolveWebFetchDefinition(
         fetch: toolConfig as WebFetchConfig | undefined,
         sandboxed,
       }),
-    resolveAutoProviderId: ({ config, toolConfig, providers }) =>
+    resolveAutoProviderId: ({ config, toolConfig, providers: providersLocal }) =>
       resolveWebFetchProviderId({
         config,
         fetch: toolConfig as WebFetchConfig | undefined,
-        providers,
+        providers: providersLocal,
       }),
     createTool: ({ provider, config, toolConfig, runtimeMetadata }) =>
       provider.createTool({

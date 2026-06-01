@@ -63,10 +63,10 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     const normalized = hooks.normalizeToolSchemas({
       provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: {
         provider: "openai",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         id: "gpt-5.4",
       } as never,
@@ -435,12 +435,12 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
 
     const diagnostics = hooks.inspectToolSchemas({
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.4",
-      modelApi: "openai-codex-responses",
+      modelApi: "openai-chatgpt-responses",
       model: {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         id: "gpt-5.4",
       } as never,

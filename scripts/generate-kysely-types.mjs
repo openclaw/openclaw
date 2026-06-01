@@ -12,6 +12,13 @@ const SCHEMAS = [
     schemaOutFile: "src/state/openclaw-state-schema.generated.ts",
     schemaExport: "OPENCLAW_STATE_SCHEMA_SQL",
   },
+  {
+    name: "openclaw-agent",
+    schema: "src/state/openclaw-agent-schema.sql",
+    outFile: "src/state/openclaw-agent-db.generated.d.ts",
+    schemaOutFile: "src/state/openclaw-agent-schema.generated.ts",
+    schemaExport: "OPENCLAW_AGENT_SCHEMA_SQL",
+  },
 ];
 
 const verify = process.argv.includes("--verify") || process.argv.includes("--check");
@@ -23,8 +30,8 @@ function toInterfaceName(tableName) {
     .join("");
 }
 
-function columnBaseType(columnType) {
-  const normalized = columnType.toUpperCase();
+function columnBaseType(columnTypeLocal) {
+  const normalized = columnTypeLocal.toUpperCase();
   if (normalized.includes("BLOB")) {
     return "Uint8Array";
   }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { RawData, WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -83,7 +84,6 @@ import {
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
-import { uniqueStrings } from "../../../shared/string-normalization.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import {
   isBrowserOperatorUiClient,
@@ -116,7 +116,7 @@ import {
   indexPluginNodeCapabilitySurfaces,
   mintPluginNodeCapabilityToken,
   type PluginNodeCapabilitySurface,
-  resolvePluginNodeCapabilityTtlMs,
+  resolvePluginNodeCapabilityExpiresAtMs,
   setClientPluginNodeCapability,
 } from "../../plugin-node-capability.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -728,16 +728,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceRaw,
         });
         const device = controlUiAuthPolicy.device;
-
-        let {
-          authResult,
-          authOk,
-          authMethod,
-          sharedAuthOk,
-          bootstrapTokenCandidate,
-          deviceTokenCandidate,
-          deviceTokenCandidateSource,
-        } = await resolveConnectAuthState({
+        const connectAuthState = await resolveConnectAuthState({
           resolvedAuth,
           connectAuth: connectParams.auth,
           hasDeviceIdentity: Boolean(device),
@@ -747,6 +738,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
         });
+        const {
+          sharedAuthOk,
+          bootstrapTokenCandidate,
+          deviceTokenCandidate,
+          deviceTokenCandidateSource,
+        } = connectAuthState;
+        let { authResult, authOk, authMethod } = connectAuthState;
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
             resolveUnauthorizedHandshakeContext({
@@ -988,17 +986,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           scopes,
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
-          verifyBootstrapToken: async ({ deviceId, publicKey, token, role, scopes }) =>
+          verifyBootstrapToken: async ({
+            deviceId,
+            publicKey,
+            token,
+            role: roleLocal,
+            scopes: scopesLocal,
+          }) =>
             await verifyDeviceBootstrapToken({
               deviceId,
               publicKey,
               token,
-              role,
-              scopes,
+              role: roleLocal,
+              scopes: scopesLocal,
             }),
-          verifyDeviceToken: async (params) =>
+          verifyDeviceToken: async (paramsLocal) =>
             await verifyDeviceToken({
-              ...params,
+              ...paramsLocal,
               requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
             }),
         });
@@ -1116,6 +1120,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const clientAccessMetadata = {
             displayName: connectParams.client.displayName,
             remoteIp: reportedClientIp,
+            lastSeenAtMs: Date.now(),
+            lastSeenReason: "connect",
           };
           const requirePairing = async (
             reason: ConnectPairingRequiredReason,
@@ -1230,7 +1236,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             let resolvedByConcurrentApproval = false;
-            let recoveryRequestId: string | undefined = pairing.request.requestId;
+            let recoveryRequestId: string | undefined;
             const resolveLivePendingRequestId = async (): Promise<string | undefined> => {
               const pendingList = await listDevicePairing();
               const exactPending = pendingList.pending.find(
@@ -1251,9 +1257,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   ? await approveBootstrapDevicePairing(
                       pairing.request.requestId,
                       boundBootstrapProfile,
+                      { accessMetadata: clientAccessMetadata },
                     )
                   : await approveDevicePairing(pairing.request.requestId, {
                       callerScopes: scopes,
+                      accessMetadata: clientAccessMetadata,
                     });
               if (approved?.status === "approved") {
                 if (allowSilentBootstrapPairing && boundBootstrapProfile) {
@@ -1635,8 +1643,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (pluginSurfaceBaseUrl) {
           for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
             const capability = mintPluginNodeCapabilityToken();
-            const expiresAtMs =
-              Date.now() + resolvePluginNodeCapabilityTtlMs(pluginCapabilitySurface);
+            const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
+            if (expiresAtMs === undefined) {
+              continue;
+            }
             const scopedUrl =
               buildPluginNodeCapabilityScopedHostUrl(pluginSurfaceBaseUrl, capability) ??
               pluginSurfaceBaseUrl;
@@ -1761,15 +1771,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             remoteIp: reportedClientIp,
           });
           const instanceIdRaw = connectParams.client.instanceId;
-          const instanceId = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
+          const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-          if (instanceId) {
-            nodeIdsForPairing.add(instanceId);
+          if (instanceIdLocal) {
+            nodeIdsForPairing.add(instanceIdLocal);
           }
           for (const nodeId of nodeIdsForPairing) {
             void updatePairedNodeMetadata(nodeId, {
               lastConnectedAtMs: nodeSession.connectedAtMs,
-            }).catch((err) =>
+            }).catch((err: unknown) =>
               logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
             );
           }
@@ -1787,7 +1797,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             deviceFamily: nodeSession.deviceFamily,
             commands: nodeSession.commands,
             cfg: getRuntimeConfig(),
-          }).catch((err) =>
+          }).catch((err: unknown) =>
             logGateway.warn(
               `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
             ),
@@ -1798,7 +1808,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 triggers: cfg.triggers,
               });
             })
-            .catch((err) =>
+            .catch((err: unknown) =>
               logGateway.warn(
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
@@ -1809,7 +1819,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 config: routing,
               });
             })
-            .catch((err) =>
+            .catch((err: unknown) =>
               logGateway.warn(
                 `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
@@ -1911,7 +1921,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         // Post-connect refresh only needs a cached/config snapshot for UI state;
         // live channel probes here pulled slow Discord/Telegram HTTP checks into
         // reply-adjacent websocket handshakes.
-        void refreshHealthSnapshot({ probe: false }).catch((err) =>
+        void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;
@@ -2016,7 +2026,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           methodRegistry: getMethodRegistry?.(),
           context: buildRequestContext(),
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
       });

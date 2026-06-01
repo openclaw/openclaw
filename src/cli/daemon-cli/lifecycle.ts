@@ -1,7 +1,13 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  findInstalledSystemdGatewayScope,
+  restartSystemdService,
+  stopSystemdService,
+} from "../../daemon/systemd.js";
 import { callGatewayCli } from "../../gateway/call.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
@@ -12,10 +18,10 @@ import {
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import { type GatewayRestartIntent, writeGatewayRestartIntentSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
+import { createNullWriter } from "./response.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -85,7 +91,7 @@ function resolveGatewayPortFallback(): Promise<number> {
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
   const cfg = await readBestEffortConfig().catch(() => undefined);
-  const tlsEnabled = !!cfg?.gateway?.tls?.enabled;
+  const tlsEnabled = Boolean(cfg?.gateway?.tls?.enabled);
   const scheme = tlsEnabled ? "wss" : "ws";
   const probe = await probeGateway({
     url: `${scheme}://127.0.0.1:${port}`,
@@ -112,7 +118,36 @@ function resolveVerifiedGatewayListenerPids(port: number): number[] {
   );
 }
 
+async function handleSystemScopeSystemdGateway(
+  action: "stop" | "restart",
+): Promise<{ result: "stopped" | "restarted"; message: string } | null> {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  const installed = await findInstalledSystemdGatewayScope(process.env).catch(() => null);
+  if (installed?.scope !== "system") {
+    return null;
+  }
+  const stdout = createNullWriter();
+  if (action === "stop") {
+    await stopSystemdService({ stdout, env: process.env });
+    return {
+      result: "stopped",
+      message: `Gateway stopped via system-scope systemd unit ${installed.unitName}.`,
+    };
+  }
+  await restartSystemdService({ stdout, env: process.env });
+  return {
+    result: "restarted",
+    message: `Gateway restarted via system-scope systemd unit ${installed.unitName}.`,
+  };
+}
+
 async function stopGatewayWithoutServiceManager(port: number) {
+  const managed = await handleSystemScopeSystemdGateway("stop");
+  if (managed) {
+    return managed;
+  }
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {
     return null;
@@ -196,6 +231,10 @@ async function restartGatewayWithoutServiceManager(
   port: number,
   restartIntent?: GatewayRestartIntent,
 ) {
+  const managed = await handleSystemScopeSystemdGateway("restart");
+  if (managed) {
+    return managed;
+  }
   await assertUnmanagedGatewayRestartEnabled(port);
   const pids = resolveVerifiedGatewayListenerPids(port);
   if (pids.length === 0) {

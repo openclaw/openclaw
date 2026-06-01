@@ -66,8 +66,8 @@ function assistantMessage(text: string, timestamp: number): AgentMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
     model: "gpt-5.4-codex",
     usage: {
       input: 0,
@@ -334,16 +334,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     if (!contextEngine.bootstrap) {
       throw new Error("expected bootstrap hook");
     }
-    expect(contextEngine.bootstrap).toHaveBeenCalledTimes(1);
-    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
-      NonNullable<ContextEngine["bootstrap"]>
-    >[0];
+    expect(contextEngine["bootstrap"]).toHaveBeenCalledTimes(1);
+    const bootstrapParams = requireFirstCallArg(
+      contextEngine["bootstrap"],
+      "bootstrap",
+    ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
     expect(bootstrapParams.sessionId).toBe("session-1");
     expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
     expect(bootstrapParams.sessionFile).toBe(sessionFile);
 
-    expect(contextEngine.assemble).toHaveBeenCalledTimes(1);
-    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+    expect(contextEngine["assemble"]).toHaveBeenCalledTimes(1);
+    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
       ContextEngine["assemble"]
     >[0];
     expect(assembleParams.sessionId).toBe("session-1");
@@ -385,12 +386,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     if (!contextEngine.bootstrap) {
       throw new Error("expected bootstrap hook");
     }
-    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
-      NonNullable<ContextEngine["bootstrap"]>
-    >[0];
+    const bootstrapParams = requireFirstCallArg(
+      contextEngine["bootstrap"],
+      "bootstrap",
+    ) as Parameters<NonNullable<ContextEngine["bootstrap"]>>[0];
     expect(bootstrapParams.sessionKey).toBe("agent:main:main");
 
-    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
       ContextEngine["assemble"]
     >[0];
     expect(assembleParams.sessionKey).toBe("agent:main:main");
@@ -1035,7 +1037,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       await vi.waitFor(
         () => {
           if (runError) {
-            throw runError;
+            throw toLintErrorObject(runError, "Non-Error thrown");
           }
           expect(harness.requests.map((request) => request.method)).toContain("turn/start");
         },
@@ -1640,7 +1642,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
 
-    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
       ContextEngine["assemble"]
     >[0];
     expect(assembleParams.messages.map((message) => message.role)).toEqual([
@@ -1707,3 +1709,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(maintain).not.toHaveBeenCalled();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

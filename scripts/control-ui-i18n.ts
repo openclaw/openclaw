@@ -4,12 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  completeSimple,
-  type Api,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 
@@ -606,7 +601,9 @@ function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
 }
 
 function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function formatDuration(ms: number): string {
@@ -882,7 +879,7 @@ async function syncControlUiRawCopyBaseline(options: { checkOnly: boolean; write
     await writeFile(RAW_COPY_BASELINE_PATH, expected, "utf8");
   }
   if (options.checkOnly && current !== expected) {
-    let currentEntries: RawCopyBaselineEntry[] = [];
+    let currentEntries: RawCopyBaselineEntry[];
     try {
       const parsed = JSON.parse(current) as Partial<RawCopyBaseline>;
       currentEntries = Array.isArray(parsed.entries) ? parsed.entries : [];
@@ -1195,10 +1192,10 @@ class TranslationClient {
             clearInterval(heartbeat);
             resolve(extractTranslationResult(assistantMessage));
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            reject(error);
+            reject(toLintErrorObject(error, "Non-Error rejection"));
           });
       });
     });
@@ -1663,8 +1660,22 @@ function isCliEntrypoint() {
 }
 
 if (isCliEntrypoint()) {
-  await main().catch((error) => {
+  await main().catch((error: unknown) => {
     console.error(formatErrorMessage(error));
     process.exit(1);
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -10,6 +10,7 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
+import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -106,7 +107,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
       return false;
     }
     const haystack = normalizedLogHaystack(log);
-    return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
+    return SUPPRESSED_EVAL_WARNING_PATHS.some((pathLocal) => haystack.includes(pathLocal));
   }
 
   return {
@@ -214,6 +215,12 @@ function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "@openclaw/fs-safe" ||
     id.startsWith("@openclaw/fs-safe/") ||
+    id === "@openclaw/normalization-core" ||
+    id.startsWith("@openclaw/normalization-core/") ||
+    id === "@openclaw/media-core" ||
+    id.startsWith("@openclaw/media-core/") ||
+    id === "@openclaw/acp-core" ||
+    id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
   );
@@ -313,7 +320,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "infra/ws": "src/infra/ws.ts",
     "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
     "plugins/tools": "src/plugins/tools.ts",
-    "shared/string-coerce": "src/shared/string-coerce.ts",
+    "normalization-core/string-coerce": "packages/normalization-core/src/string-coerce.ts",
   };
 }
 
@@ -424,6 +431,63 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildNormalizationCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/normalization-core/src/index.ts",
+    "number-coercion": "packages/normalization-core/src/number-coercion.ts",
+    "record-coerce": "packages/normalization-core/src/record-coerce.ts",
+    "string-coerce": "packages/normalization-core/src/string-coerce.ts",
+    "string-normalization": "packages/normalization-core/src/string-normalization.ts",
+  };
+}
+
+function buildMediaCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-core/src/index.ts",
+    base64: "packages/media-core/src/base64.ts",
+    constants: "packages/media-core/src/constants.ts",
+    "content-length": "packages/media-core/src/content-length.ts",
+    "file-name": "packages/media-core/src/file-name.ts",
+    "inbound-path-policy": "packages/media-core/src/inbound-path-policy.ts",
+    "inline-image-data-url": "packages/media-core/src/inline-image-data-url.ts",
+    "media-source-url": "packages/media-core/src/media-source-url.ts",
+    mime: "packages/media-core/src/mime.ts",
+    "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
+    "read-response-with-limit": "packages/media-core/src/read-response-with-limit.ts",
+  };
+}
+
+function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
+  const packageJsonPath = path.join("packages", packageDir, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    exports?: Record<string, unknown>;
+  };
+  const entries: Record<string, string> = {};
+  for (const [exportKey, value] of Object.entries(packageJson.exports ?? {})) {
+    const entry =
+      exportKey === "." ? "index" : exportKey.startsWith("./") ? exportKey.slice(2) : "";
+    if (!entry || entry.includes("..")) {
+      continue;
+    }
+    const importPath =
+      typeof value === "object" && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>).import
+        : value;
+    if (typeof importPath !== "string" || !importPath.startsWith("./dist/")) {
+      continue;
+    }
+    const sourcePath = importPath
+      .replace(/^\.\/dist\//u, `packages/${packageDir}/src/`)
+      .replace(/\.mjs$/u, ".ts");
+    entries[entry] = sourcePath;
+  }
+  return Object.fromEntries(Object.entries(entries).toSorted(([a], [b]) => a.localeCompare(b)));
+}
+
+function buildAcpCoreDistEntries(): Record<string, string> {
+  return buildPackageDistEntriesFromExports("acp-core");
+}
+
 function buildTerminalCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/terminal-core/src/index.ts",
@@ -447,6 +511,13 @@ function buildTerminalCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildWebContentCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/web-content-core/src/index.ts",
+    "provider-runtime-shared": "packages/web-content-core/src/provider-runtime-shared.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -463,6 +534,20 @@ function buildLlmCoreDistEntries(): Record<string, string> {
     "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
     "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
     validation: "packages/llm-core/src/validation.ts",
+  };
+}
+
+function buildModelCatalogCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/model-catalog-core/src/index.ts",
+    "configured-model-refs": "packages/model-catalog-core/src/configured-model-refs.ts",
+    "model-catalog-normalize": "packages/model-catalog-core/src/model-catalog-normalize.ts",
+    "model-catalog-refs": "packages/model-catalog-core/src/model-catalog-refs.ts",
+    "model-catalog-types": "packages/model-catalog-core/src/model-catalog-types.ts",
+    "provider-id": "packages/model-catalog-core/src/provider-id.ts",
+    "provider-model-id-normalization":
+      "packages/model-catalog-core/src/provider-model-id-normalization.ts",
+    "provider-model-id-normalize": "packages/model-catalog-core/src/provider-model-id-normalize.ts",
   };
 }
 
@@ -538,6 +623,24 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
     ...Object.fromEntries(
+      Object.entries(buildNormalizationCoreDistEntries()).map(([entry, source]) => [
+        `normalization-core/${entry}`,
+        source,
+      ]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(buildMediaCoreDistEntries()).map(([entry, source]) => [
+        `media-core/${entry}`,
+        source,
+      ]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(buildAcpCoreDistEntries()).map(([entry, source]) => [
+        `acp-core/${entry}`,
+        source,
+      ]),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildTerminalCoreDistEntries()).map(([entry, source]) => [
         `terminal-core/${entry}`,
         source,
@@ -570,7 +673,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildAgentCoreDistEntries(),
-    outDir: "packages/agent-core/dist",
+    outDir: tsdownPackageOutputRoot("agent-core"),
     deps: {
       neverBundle: shouldExternalizeAgentCoreDependency,
     },
@@ -579,7 +682,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildGatewayProtocolDistEntries(),
-    outDir: "packages/gateway-protocol/dist",
+    outDir: tsdownPackageOutputRoot("gateway-protocol"),
     deps: {
       neverBundle: shouldExternalizeGatewayProtocolDependency,
     },
@@ -588,7 +691,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildGatewayClientDistEntries(),
-    outDir: "packages/gateway-client/dist",
+    outDir: tsdownPackageOutputRoot("gateway-client"),
     deps: {
       neverBundle: shouldExternalizeGatewayClientDependency,
     },
@@ -597,7 +700,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildNetPolicyDistEntries(),
-    outDir: "packages/net-policy/dist",
+    outDir: tsdownPackageOutputRoot("net-policy"),
     deps: {
       neverBundle: shouldExternalizeNetPolicyDependency,
     },
@@ -606,19 +709,19 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMediaGenerationCoreDistEntries(),
-    outDir: "packages/media-generation-core/dist",
+    outDir: tsdownPackageOutputRoot("media-generation-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMediaUnderstandingCoreDistEntries(),
-    outDir: "packages/media-understanding-common/dist",
+    outDir: tsdownPackageOutputRoot("media-understanding-common"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMarkdownCoreDistEntries(),
-    outDir: "packages/markdown-core/dist",
+    outDir: tsdownPackageOutputRoot("markdown-core"),
     deps: {
       neverBundle: shouldExternalizeMarkdownCoreDependency,
     },
@@ -626,8 +729,26 @@ export default defineConfig([
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildNormalizationCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("normalization-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("media-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildAcpCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("acp-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildTerminalCoreDistEntries(),
-    outDir: "packages/terminal-core/dist",
+    outDir: tsdownPackageOutputRoot("terminal-core"),
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
@@ -635,8 +756,14 @@ export default defineConfig([
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildWebContentCoreDistEntries(),
+    outDir: "packages/web-content-core/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildSpeechCoreDistEntries(),
-    outDir: "packages/speech-core/dist",
+    outDir: tsdownPackageOutputRoot("speech-core"),
     deps: {
       neverBundle: shouldExternalizeSpeechCoreDependency,
     },
@@ -645,7 +772,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildLlmCoreDistEntries(),
-    outDir: "packages/llm-core/dist",
+    outDir: tsdownPackageOutputRoot("llm-core"),
     deps: {
       neverBundle: shouldExternalizeLlmCoreDependency,
     },
@@ -653,8 +780,14 @@ export default defineConfig([
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildModelCatalogCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("model-catalog-core"),
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildLlmRuntimeDistEntries(),
-    outDir: "packages/llm-runtime/dist",
+    outDir: tsdownPackageOutputRoot("llm-runtime"),
     deps: {
       neverBundle: shouldExternalizeLlmRuntimeDependency,
     },

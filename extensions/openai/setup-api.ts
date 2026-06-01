@@ -73,7 +73,6 @@ export function buildOpenAISetupProvider(): ProviderPlugin {
 
   return {
     id: "openai",
-    aliases: ["openai-codex"],
     label: "OpenAI",
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],

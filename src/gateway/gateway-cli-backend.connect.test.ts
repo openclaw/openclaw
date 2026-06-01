@@ -80,7 +80,9 @@ async function startMinimalGatewayServer(params: { token: string }) {
     });
   });
 
-  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    httpServer.listen(0, "127.0.0.1", resolve);
+  });
   const address = httpServer.address() as AddressInfo;
   return {
     requests,

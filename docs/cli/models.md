@@ -193,7 +193,7 @@ specific configured agent store. The parent `--agent` flag is honored by
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
 Use `--method api-key` only when you want to add an OpenAI API-key profile,
 usually as a backup for Codex subscription limits. Run `openclaw doctor --fix`
-to migrate older `openai-codex` auth/profile state to `openai`.
+to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
 Examples:
 

@@ -50,6 +50,7 @@ Options:
 }
 
 export function parseArgs(argv: string[]): Options {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options: Options = {
     beta: "beta",
     model: "openai/gpt-5.4",
@@ -59,25 +60,25 @@ export function parseArgs(argv: string[]): Options {
     skipParallels: false,
     skipTelegram: false,
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  parseArgv: for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--beta":
-        options.beta = requireValue(argv, ++i, arg);
+        options.beta = requireValue(args, ++i, arg);
         break;
       case "--model":
-        options.model = requireValue(argv, ++i, arg);
+        options.model = requireValue(args, ++i, arg);
         break;
       case "--provider-mode":
-        options.providerMode = requireValue(argv, ++i, arg);
+        options.providerMode = requireValue(args, ++i, arg);
         break;
       case "--ref":
-        options.ref = requireValue(argv, ++i, arg);
+        options.ref = requireValue(args, ++i, arg);
         break;
       case "--repo":
-        options.repo = requireValue(argv, ++i, arg);
+        options.repo = requireValue(args, ++i, arg);
         break;
       case "--skip-parallels":
         options.skipParallels = true;
@@ -97,6 +98,10 @@ export function parseArgs(argv: string[]): Options {
     throw new Error("--skip-parallels and --skip-telegram cannot be used together");
   }
   return options;
+}
+
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 function requireValue(argv: string[], index: number, flag: string): string {
@@ -300,7 +305,9 @@ async function findDispatchedWorkflowRunId(params: {
     if (runId) {
       return runId;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5_000);
+    });
   }
   throw new Error(`could not find dispatched run for ${params.workflow}`);
 }
@@ -350,7 +357,11 @@ export async function pollRun(
   const timeoutMs = Math.max(1, options.timeoutMs ?? TELEGRAM_POLL_TIMEOUT_MS);
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? TELEGRAM_POLL_INTERVAL_MS);
   const sleep =
-    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const readRun =
     options.readRun ??
     ((currentRepo: string, currentRunId: string) =>

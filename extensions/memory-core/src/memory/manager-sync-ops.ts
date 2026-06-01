@@ -33,6 +33,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
@@ -168,7 +169,7 @@ function shouldIgnoreMemoryWatchPath(
 }
 
 export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
-  void sync().catch((err) => {
+  void sync().catch((err: unknown) => {
     log.warn(`memory sync failed (${reason}): ${String(err)}`);
   });
 }
@@ -281,7 +282,7 @@ export abstract class MemoryManagerSyncOps {
         `sqlite-vec load timed out after ${Math.round(VECTOR_LOAD_TIMEOUT_MS / 1000)}s`,
       );
     }
-    let ready = false;
+    let ready;
     try {
       ready = (await this.vectorReady) || false;
     } catch (err) {
@@ -791,7 +792,7 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("sessions")) {
       return;
     }
-    void this.runSessionStartupCatchup().catch((err) => {
+    void this.runSessionStartupCatchup().catch((err: unknown) => {
       log.warn("memory session startup catch-up failed: " + String(err));
     });
   }
@@ -848,7 +849,7 @@ export abstract class MemoryManagerSyncOps {
     if (dirtyFiles.length === 0 || this.closed) {
       return dirtyFiles;
     }
-    void this.sync({ reason: "session-startup-catchup" }).catch((err) => {
+    void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {
       log.warn("memory sync failed (session-startup-catchup): " + String(err));
     });
     return dirtyFiles;
@@ -861,7 +862,7 @@ export abstract class MemoryManagerSyncOps {
     }
     this.sessionWatchTimer = setTimeout(() => {
       this.sessionWatchTimer = null;
-      void this.processSessionDeltaBatch().catch((err) => {
+      void this.processSessionDeltaBatch().catch((err: unknown) => {
         log.warn(`memory session delta failed: ${String(err)}`);
       });
     }, SESSION_DIRTY_DEBOUNCE_MS);
@@ -917,7 +918,7 @@ export abstract class MemoryManagerSyncOps {
       shouldSync = true;
     }
     if (shouldSync) {
-      void this.sync({ reason: "session-delta" }).catch((err) => {
+      void this.sync({ reason: "session-delta" }).catch((err: unknown) => {
         log.warn(`memory sync failed (session-delta): ${String(err)}`);
       });
     }
@@ -1061,7 +1062,10 @@ export abstract class MemoryManagerSyncOps {
     if (!minutes || minutes <= 0 || this.intervalTimer) {
       return;
     }
-    const ms = minutes * 60 * 1000;
+    const ms = resolveTimerTimeoutMs(minutes * 60 * 1000, 0, 0);
+    if (ms <= 0) {
+      return;
+    }
     this.intervalTimer = setInterval(() => {
       runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
     }, ms);
@@ -1564,7 +1568,7 @@ export abstract class MemoryManagerSyncOps {
       wait: batch?.wait ?? true,
       concurrency: Math.max(1, batch?.concurrency ?? 2),
       pollIntervalMs: batch?.pollIntervalMs ?? 2000,
-      timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
+      timeoutMs: resolveTimerTimeoutMs((batch?.timeoutMinutes ?? 60) * 60 * 1000, 60 * 60_000),
     };
   }
 
@@ -1663,7 +1667,7 @@ export abstract class MemoryManagerSyncOps {
     this.fts.loadError = undefined;
     this.ensureSchema();
 
-    let nextMeta: MemoryIndexMeta | null = null;
+    let nextMeta: MemoryIndexMeta | null;
 
     try {
       nextMeta = await runMemoryAtomicReindex({

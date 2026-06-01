@@ -127,6 +127,7 @@ function spawnInvocation(command, commandArgs, env, platform) {
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;
 const jsRuntimeEntrypoints = new Set(["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"]);
 const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
+const minimumBlacksmithCrabboxVersion = [0, 22, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
   "while",
@@ -139,6 +140,11 @@ const shellControlCommandPrefixes = new Set([
 ]);
 const shellCommandExecutionPrefixes = new Set(["exec"]);
 const shellInlineCommandInterpreters = new Set(["bash", "dash", "ksh", "sh", "zsh"]);
+const remoteChangedGateEnv = [
+  "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+  "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+  "CI=1",
+];
 const shellInlineCommandOptionsWithNextValue = new Set([
   "+O",
   "+o",
@@ -174,12 +180,56 @@ function checkedOutput(command, commandArgs) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    timeout: 5_000,
+    killSignal: "SIGKILL",
   });
+  const timedOut = result.error?.name === "Error" && result.signal === "SIGKILL";
   return {
-    status: result.status ?? 1,
+    status: timedOut ? 124 : (result.status ?? 1),
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
   };
+}
+
+function parseCrabboxVersion(value) {
+  const match = `${value}`.match(/\bv?(\d+)\.(\d+)\.(\d+)(?:-([^\s+]+))?(?:\+[^\s]+)?\b/u);
+  if (!match) {
+    return null;
+  }
+  return {
+    tuple: match.slice(1, 4).map((part) => Number.parseInt(part, 10)),
+    suffix: match[4] ?? "",
+  };
+}
+
+function compareVersionTuples(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    const diff = left[index] - right[index];
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+function formatVersionTuple(version) {
+  return version.join(".");
+}
+
+function isPostReleaseDescribeSuffix(suffix) {
+  return /^\d+-g[0-9a-f]+(?:-dirty)?$/iu.test(suffix);
+}
+
+function satisfiesMinimumCrabboxVersion(version, minimum) {
+  const parsed = parseCrabboxVersion(version);
+  if (!parsed) {
+    return false;
+  }
+  const comparison = compareVersionTuples(parsed.tuple, minimum);
+  if (comparison !== 0) {
+    return comparison > 0;
+  }
+  return !parsed.suffix || isPostReleaseDescribeSuffix(parsed.suffix);
 }
 
 function gitOutput(commandArgs) {
@@ -199,9 +249,9 @@ function gitOutput(commandArgs) {
 }
 
 function envProvider() {
-  const envProvider = process.env.CRABBOX_PROVIDER?.trim();
-  if (envProvider) {
-    return envProvider;
+  const envProviderValue = process.env.CRABBOX_PROVIDER?.trim();
+  if (envProviderValue) {
+    return envProviderValue;
   }
   return "";
 }
@@ -382,11 +432,12 @@ function crabboxOptionArgs(commandArgs) {
   if (commandArgs[0] === "run") {
     return commandArgs.slice(0, bounds.optionEnd);
   }
-  const delimiter = commandArgs.indexOf("--");
-  return delimiter >= 0 ? commandArgs.slice(0, delimiter) : commandArgs;
+  const delimiterCandidate = commandArgs.indexOf("--");
+  return delimiterCandidate >= 0 ? commandArgs.slice(0, delimiterCandidate) : commandArgs;
 }
 
-function commandProvider(commandArgs) {
+function commandProvider(commandArgsInput) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
@@ -453,7 +504,8 @@ function enforceBrokeredAws(commandArgs, providerName) {
   process.exit(2);
 }
 
-function optionValue(commandArgs, name) {
+function optionValue(commandArgsInput, name) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   for (let index = 0; index < commandArgs.length; index += 1) {
     const arg = commandArgs[index];
@@ -467,7 +519,8 @@ function optionValue(commandArgs, name) {
   return "";
 }
 
-function hasOption(commandArgs, name) {
+function hasOption(commandArgsInput, name) {
+  let commandArgs = commandArgsInput;
   commandArgs = crabboxOptionArgs(commandArgs);
   const shortName = name.replace(/^--/u, "-");
   for (const arg of commandArgs) {
@@ -487,8 +540,8 @@ function commandOptionEnd(commandArgs) {
   if (commandArgs[0] === "run") {
     return runCommandBounds(commandArgs).optionEnd;
   }
-  const delimiter = commandArgs.indexOf("--");
-  return delimiter >= 0 ? delimiter : commandArgs.length;
+  const delimiterEntry = commandArgs.indexOf("--");
+  return delimiterEntry >= 0 ? delimiterEntry : commandArgs.length;
 }
 
 function shouldPreferAzureForWindows(commandArgs, advertisedProviders = []) {
@@ -639,6 +692,21 @@ function shellJoin(commandArgs) {
   return commandArgs.map(shellQuote).join(" ");
 }
 
+function powershellQuote(value) {
+  const text = `${value}`;
+  if (text === "") {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=%+-]+$/u.test(text)) {
+    return text;
+  }
+  return `'${text.replaceAll("'", "''")}'`;
+}
+
+function powershellJoin(commandArgs) {
+  return commandArgs.map(powershellQuote).join(" ");
+}
+
 function isLocalContainerProvider(providerName) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
@@ -674,7 +742,8 @@ function commandRuntimeEntrypoint(commandArgs) {
   return "";
 }
 
-function commandWordsRuntimeEntrypoint(words) {
+function commandWordsRuntimeEntrypoint(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
   if (jsRuntimeEntrypoints.has(first)) {
@@ -704,7 +773,8 @@ function commandNeedsAwsMacosPackageManager(commandArgs) {
   return commandWordsNeedAwsMacosPackageManager(normalizedCommandWords(commandArgs));
 }
 
-function commandWordsNeedAwsMacosPackageManager(words) {
+function commandWordsNeedAwsMacosPackageManager(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
   if (awsMacosCorepackEntrypoints.has(first)) {
@@ -726,7 +796,8 @@ function isChangedGateCommand(commandArgs) {
   return isChangedGateCommandWords(words);
 }
 
-function isChangedGateCommandWords(words) {
+function isChangedGateCommandWords(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   if (isChangedGateWords(words)) {
     return true;
@@ -738,7 +809,8 @@ function isChangedGateCommandWords(words) {
     : false;
 }
 
-function isChangedGateWords(words) {
+function isChangedGateWords(wordsInput) {
+  let words = wordsInput;
   words = normalizeExecutableWords(words);
   if (words[0] === "corepack") {
     words.shift();
@@ -806,7 +878,8 @@ function normalizeExecutableWords(words) {
   return normalizedCommandWords(stripShellExecutionPrefixes(words));
 }
 
-function stripShellExecutionPrefixes(words) {
+function stripShellExecutionPrefixes(wordsInput) {
+  let words = wordsInput;
   words = [...words];
   for (;;) {
     const first = shellWordBasename(words[0]);
@@ -1095,7 +1168,7 @@ function lineHeredocDelimiters(line) {
 }
 
 function readHeredocDelimiter(line, startIndex) {
-  let delimiter = "";
+  let delimiterResult = "";
   let quote = "";
   let escaped = false;
   let quoted = false;
@@ -1103,7 +1176,7 @@ function readHeredocDelimiter(line, startIndex) {
   for (; index < line.length; index += 1) {
     const char = line[index];
     if (escaped) {
-      delimiter += char;
+      delimiterResult += char;
       escaped = false;
       continue;
     }
@@ -1116,7 +1189,7 @@ function readHeredocDelimiter(line, startIndex) {
       if (char === quote) {
         quote = "";
       } else {
-        delimiter += char;
+        delimiterResult += char;
       }
       continue;
     }
@@ -1128,9 +1201,9 @@ function readHeredocDelimiter(line, startIndex) {
     if (/\s/u.test(char) || /[;&|()<>]/u.test(char)) {
       break;
     }
-    delimiter += char;
+    delimiterResult += char;
   }
-  return { delimiter, endIndex: Math.max(startIndex, index), quoted };
+  return { delimiter: delimiterResult, endIndex: Math.max(startIndex, index), quoted };
 }
 
 function extractCommandSubstitutionBodies(line) {
@@ -1384,10 +1457,90 @@ function remoteGitBootstrapForChangedGate(changedGateBase) {
   ].join(" ");
 }
 
+function injectRemoteChangedGateEnvironment(commandArgs) {
+  if (commandArgs[0] !== "run" || isWindowsRemoteTarget(commandArgs)) {
+    return commandArgs;
+  }
+
+  const { start } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const remoteCommand = commandArgs.slice(start);
+  if (!isChangedGateCommand(remoteCommand)) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const markedRemoteCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? [markShellChangedGateAsRemoteChild(remoteCommand[0])]
+      : markDirectChangedGateAsRemoteChild(remoteCommand);
+  normalizedArgs.splice(start, normalizedArgs.length - start, ...markedRemoteCommand);
+  return normalizedArgs;
+}
+
+function markShellChangedGateAsRemoteChild(command) {
+  const missingEnv = remoteChangedGateEnv.filter((assignment) => !command.includes(assignment));
+  if (missingEnv.length === 0) {
+    return command;
+  }
+  return `export ${missingEnv.join(" ")}; ${command}`;
+}
+
+function markDirectChangedGateAsRemoteChild(commandArgs) {
+  const missingEnv = remoteChangedGateEnv.filter((assignment) => !commandArgs.includes(assignment));
+  if (missingEnv.length === 0) {
+    return commandArgs;
+  }
+
+  const markedCommandArgs = [...commandArgs];
+  if (shellWordBasename(markedCommandArgs[0]) !== "env") {
+    return ["env", ...missingEnv, ...markedCommandArgs];
+  }
+
+  markedCommandArgs.splice(envAssignmentInsertIndex(markedCommandArgs), 0, ...missingEnv);
+  return markedCommandArgs;
+}
+
+function envAssignmentInsertIndex(words) {
+  let index = 1;
+  for (;;) {
+    const word = words[index] ?? "";
+    if (!word) {
+      return 1;
+    }
+    if (word === "--") {
+      return index + 1;
+    }
+    if (word === "-S" || word === "--split-string" || (word.startsWith("-S") && word !== "-S")) {
+      return index;
+    }
+    if (word === "-u" || word === "--unset" || word === "-C" || word === "--chdir") {
+      index += 2;
+      continue;
+    }
+    if (word.startsWith("--unset=") || word.startsWith("--chdir=")) {
+      index += 1;
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      index += 1;
+      continue;
+    }
+    return index;
+  }
+}
+
 function isWindowsRemoteTarget(commandArgs) {
   return (
     optionValue(commandArgs, "--target") === "windows" || hasOption(commandArgs, "--windows-mode")
   );
+}
+
+function isNativeWindowsRemoteTarget(commandArgs) {
+  return isWindowsRemoteTarget(commandArgs) && optionValue(commandArgs, "--windows-mode") !== "wsl2";
 }
 
 function isAwsMacosRemoteTarget(commandArgs, providerName) {
@@ -1396,6 +1549,57 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
     providerName === "aws" &&
     optionValue(commandArgs, "--target") === "macos"
   );
+}
+
+function remoteWindowsHydratedNodeModulesBootstrap() {
+  return [
+    '$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR',
+    'if ($openclawModulesDir) {',
+    'if (-not (Test-Path $openclawModulesDir)) { throw "PNPM_CONFIG_MODULES_DIR does not exist: $openclawModulesDir" }',
+    '$openclawWorkspaceModules = Join-Path (Get-Location).Path "node_modules"',
+    '$openclawSelfModules = Join-Path $openclawModulesDir "node_modules"',
+    'if (-not (Test-Path $openclawSelfModules)) { cmd /c mklink /J "$openclawSelfModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link hydrated pnpm node_modules" } }',
+    'if (-not (Test-Path $openclawWorkspaceModules)) { cmd /c mklink /J "$openclawWorkspaceModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link workspace node_modules" } }',
+    '}',
+  ].join("; ");
+}
+
+function injectRemoteWindowsHydratedNodeModulesBootstrap(commandArgs, providerName) {
+  const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(commandArgs));
+  if (
+    commandArgs[0] !== "run" ||
+    providerName !== "aws" ||
+    !isNativeWindowsRemoteTarget(commandArgs) ||
+    !hasOption(commandArgs, "--id") ||
+    !runtimeEntrypoint
+  ) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : powershellJoin(remoteCommand);
+  const shellCommand = `${remoteWindowsHydratedNodeModulesBootstrap()}; ${originalShellCommand}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
 }
 
 function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
@@ -1620,15 +1824,15 @@ function createAwsMacosScriptStdinWrapper(script) {
   if (!script.startsWith("#!")) {
     return `${remoteAwsMacosJsBootstrap({ packageManager })} || exit $?\n${script}`;
   }
-  const delimiter = uniqueHereDocDelimiter(script);
+  const delimiterValue = uniqueHereDocDelimiter(script);
   return [
     `${remoteAwsMacosJsBootstrap({ packageManager })} || exit $?`,
     'tmp_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-crabbox-script.XXXXXX")" || exit $?',
     'cleanup_openclaw_crabbox_script() { rm -f "$tmp_script"; }',
     "trap cleanup_openclaw_crabbox_script EXIT",
-    `cat >"$tmp_script" <<'${delimiter}'`,
+    `cat >"$tmp_script" <<'${delimiterValue}'`,
     script.endsWith("\n") ? script.slice(0, -1) : script,
-    delimiter,
+    delimiterValue,
     'chmod 700 "$tmp_script" || exit $?',
     '"$tmp_script" "$@"',
     "",
@@ -1655,9 +1859,9 @@ function scriptNeedsAwsMacosPackageManager(script) {
 function uniqueHereDocDelimiter(script) {
   let index = 0;
   for (;;) {
-    const delimiter = `OPENCLAW_CRABBOX_SCRIPT_${index}`;
-    if (!new RegExp(`^${delimiter}$`, "mu").test(script)) {
-      return delimiter;
+    const delimiterLocal = `OPENCLAW_CRABBOX_SCRIPT_${index}`;
+    if (!new RegExp(`^${delimiterLocal}$`, "mu").test(script)) {
+      return delimiterLocal;
     }
     index += 1;
   }
@@ -1676,7 +1880,7 @@ function isWorktreeClean() {
   return gitOutput(["status", "--porcelain=v1"]).stdout === "";
 }
 
-function shouldUseFullCheckoutForCleanSparseRemoteSync(commandArgs, providerName) {
+function shouldUseFullCheckoutForCleanSparseRemoteSync(commandArgs, _providerName) {
   if (commandArgs[0] !== "run") {
     return false;
   }
@@ -1826,6 +2030,7 @@ function isProviderAdvertised(provider, advertisedProviders) {
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args, providers);
+const canonicalProvider = providerAliases.get(provider) ?? provider;
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
   ensureAzureWindowsProvider(args, provider, providers),
@@ -1854,18 +2059,31 @@ if (provider && !isProviderAdvertised(provider, providers)) {
   process.exit(2);
 }
 
+if (canonicalProvider === "blacksmith-testbox") {
+  if (!satisfiesMinimumCrabboxVersion(version.text, minimumBlacksmithCrabboxVersion)) {
+    console.error(
+      [
+        `[crabbox] provider=blacksmith-testbox requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for current Testbox sync, queue, and cleanup behavior.`,
+        `[crabbox] selected binary reported version=${version.text || "unknown"}.`,
+        "[crabbox] if using ../crabbox, rebuild it: version=$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//') && go build -C ../crabbox -trimpath -ldflags \"-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}\" -o bin/crabbox ./cmd/crabbox",
+      ].join("\n"),
+    );
+    process.exit(2);
+  }
+}
+
 enforceBrokeredAws(normalizedArgs, provider);
 
-if (provider === "blacksmith-testbox") {
-  const envProvider = process.env.CRABBOX_PROVIDER?.trim();
+if (canonicalProvider === "blacksmith-testbox") {
+  const envProviderLocal = process.env.CRABBOX_PROVIDER?.trim();
   const source = commandProviderValue
     ? "explicit"
-    : envProvider
+    : envProviderLocal
       ? "from CRABBOX_PROVIDER"
       : "from config";
   const fallback = commandProviderValue
     ? "rerun without --provider to use .crabbox.yaml"
-    : envProvider
+    : envProviderLocal
       ? "unset CRABBOX_PROVIDER to use .crabbox.yaml"
       : "pass another --provider to override it";
   console.error(
@@ -1877,10 +2095,9 @@ let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
 let remoteChangedGateBase = "";
-let scriptStdinPrepared = false;
 const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
 normalizedArgs = scriptBootstrap.args;
-scriptStdinPrepared = scriptBootstrap.prepared;
+const scriptStdinPrepared = scriptBootstrap.prepared;
 try {
   if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
     const runWords = runCommandArgs(normalizedArgs);
@@ -1957,11 +2174,18 @@ if (
   );
 }
 
+const remoteMarkedArgs = injectRemoteChangedGateEnvironment(normalizedArgs);
 const childArgs =
   childCwd === repoRoot
-    ? injectRemoteAwsMacosJsBootstrap(normalizedArgs, provider)
+    ? injectRemoteWindowsHydratedNodeModulesBootstrap(
+        injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider),
+        provider,
+      )
     : injectRemoteChangedGateGitBootstrap(
-        injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(normalizedArgs), provider),
+        injectRemoteWindowsHydratedNodeModulesBootstrap(
+          injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
+          provider,
+        ),
         remoteChangedGateBase,
       );
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);

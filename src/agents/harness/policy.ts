@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AUTO_AGENT_RUNTIME_ID, type EmbeddedAgentRuntime } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
-import { openAIProviderUsesCodexRuntimeByDefault } from "../openai-codex-routing.js";
+import { openAIProviderUsesCodexRuntimeByDefault } from "../openai-routing.js";
 
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
