@@ -181,20 +181,32 @@ function asNonEmptyString(value: unknown): string | undefined {
 function extractAgentMetaFromLifecyclePayload(
   value: unknown,
 ): AgentWaitTerminalSnapshot["agentMeta"] | undefined {
-  const raw = typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  const raw =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   if (!raw) {
     return undefined;
   }
-  const rawUsage = typeof raw.usage === "object" && raw.usage !== null && !Array.isArray(raw.usage)
-    ? (raw.usage as Record<string, unknown>)
-    : undefined;
+  const rawUsage =
+    typeof raw.usage === "object" && raw.usage !== null && !Array.isArray(raw.usage)
+      ? (raw.usage as Record<string, unknown>)
+      : undefined;
   const usage = rawUsage
     ? (() => {
-        const inputTokens = typeof rawUsage.inputTokens === "number" && Number.isFinite(rawUsage.inputTokens) ? rawUsage.inputTokens : undefined;
-        const outputTokens = typeof rawUsage.outputTokens === "number" && Number.isFinite(rawUsage.outputTokens) ? rawUsage.outputTokens : undefined;
-        const cachedInputTokens = typeof rawUsage.cachedInputTokens === "number" && Number.isFinite(rawUsage.cachedInputTokens) ? rawUsage.cachedInputTokens : undefined;
+        const inputTokens =
+          typeof rawUsage.inputTokens === "number" && Number.isFinite(rawUsage.inputTokens)
+            ? rawUsage.inputTokens
+            : undefined;
+        const outputTokens =
+          typeof rawUsage.outputTokens === "number" && Number.isFinite(rawUsage.outputTokens)
+            ? rawUsage.outputTokens
+            : undefined;
+        const cachedInputTokens =
+          typeof rawUsage.cachedInputTokens === "number" &&
+          Number.isFinite(rawUsage.cachedInputTokens)
+            ? rawUsage.cachedInputTokens
+            : undefined;
         if (
           inputTokens === undefined &&
           outputTokens === undefined &&
@@ -205,8 +217,10 @@ function extractAgentMetaFromLifecyclePayload(
         return { inputTokens, outputTokens, cachedInputTokens };
       })()
     : undefined;
-  const costUsd = typeof raw.costUsd === "number" && Number.isFinite(raw.costUsd) ? raw.costUsd : undefined;
-  const provider = typeof raw.provider === "string" && raw.provider.trim() ? raw.provider : undefined;
+  const costUsd =
+    typeof raw.costUsd === "number" && Number.isFinite(raw.costUsd) ? raw.costUsd : undefined;
+  const provider =
+    typeof raw.provider === "string" && raw.provider.trim() ? raw.provider : undefined;
   const model = typeof raw.model === "string" && raw.model.trim() ? raw.model : undefined;
   if (
     usage === undefined &&
